@@ -1,0 +1,85 @@
+# Host networking: required on environments where Docker bridge inter-container
+# TCP is broken. All services bind on the host loopback/LAN interfaces.
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-classroom}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-classroom_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-classroom}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-classroom} -d ${POSTGRES_DB:-classroom} -h 127.0.0.1"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    network_mode: host
+    command: ["redis-server", "--appendonly", "yes", "--bind", "127.0.0.1", "--port", "6379"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-h", "127.0.0.1", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  livekit:
+    image: livekit/livekit-server:v1.12.0
+    restart: unless-stopped
+    network_mode: host
+    command: ["--config", "/etc/livekit.yaml"]
+    volumes:
+      - ./infra/livekit.yaml:/etc/livekit.yaml:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_LIVEKIT_URL: ${NEXT_PUBLIC_LIVEKIT_URL:-ws://localhost:7880}
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-classroom}:${POSTGRES_PASSWORD:-classroom_dev_password}@127.0.0.1:5432/${POSTGRES_DB:-classroom}
+      REDIS_URL: redis://127.0.0.1:6379
+      LIVEKIT_URL: ws://127.0.0.1:7880
+      LIVEKIT_INTERNAL_URL: http://127.0.0.1:7880
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+      NEXT_PUBLIC_LIVEKIT_URL: ${NEXT_PUBLIC_LIVEKIT_URL:-ws://localhost:7880}
+      MAX_VISIBLE_STUDENT_VIDEOS: ${MAX_VISIBLE_STUDENT_VIDEOS:-10}
+      SAMPLE_ROTATION_SECONDS: ${SAMPLE_ROTATION_SECONDS:-8}
+      SPEAKER_PIN_TTL_SECONDS: ${SPEAKER_PIN_TTL_SECONDS:-18}
+      NODE_ENV: production
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      livekit:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 45s
+
+volumes:
+  postgres_data:
+  redis_data:

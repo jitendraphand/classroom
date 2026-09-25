@@ -1,0 +1,9 @@
+node_modules
+.next
+.env
+*.log
+dist
+.DS_Store
+apps/web/.next
+apps/web/node_modules
+# already have base; ensure common junk

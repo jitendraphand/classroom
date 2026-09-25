@@ -1,0 +1,96 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Teacher {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  rooms        Room[]
+}
+
+enum RoomStatus {
+  WAITING
+  LIVE
+  ENDED
+}
+
+model Room {
+  id               String        @id @default(cuid())
+  code             String        @unique
+  name             String
+  teacherId        String
+  teacher          Teacher       @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  maxVisibleVideos Int           @default(10)
+  status           RoomStatus    @default(WAITING)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  endedAt          DateTime?
+  participants     Participant[]
+  messages         Message[]
+
+  @@index([teacherId])
+  @@index([status])
+}
+
+enum ParticipantRole {
+  TEACHER
+  STUDENT
+}
+
+enum ParticipantStatus {
+  WAITING
+  ADMITTED
+  LEFT
+}
+
+model Participant {
+  id              String            @id @default(cuid())
+  roomId          String
+  room            Room              @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  displayName     String
+  role            ParticipantRole   @default(STUDENT)
+  status          ParticipantStatus @default(WAITING)
+  livekitIdentity String            @unique
+  sessionToken    String            @unique
+  mutedByTeacher  Boolean           @default(false)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  leftAt          DateTime?
+  sentMessages    Message[]         @relation("MessageSender")
+  receivedMessages Message[]        @relation("MessageRecipient")
+
+  @@index([roomId, status])
+  @@index([sessionToken])
+}
+
+enum MessageScope {
+  TEACHER
+  BROADCAST
+  DIRECT
+}
+
+model Message {
+  id                     String       @id @default(cuid())
+  roomId                 String
+  room                   Room         @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  senderParticipantId    String
+  sender                 Participant  @relation("MessageSender", fields: [senderParticipantId], references: [id], onDelete: Cascade)
+  body                   String
+  scope                  MessageScope
+  recipientParticipantId String?
+  recipient              Participant? @relation("MessageRecipient", fields: [recipientParticipantId], references: [id], onDelete: SetNull)
+  createdAt              DateTime     @default(now())
+
+  @@index([roomId, createdAt])
+  @@index([senderParticipantId])
+  @@index([recipientParticipantId])
+}

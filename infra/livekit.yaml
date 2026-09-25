@@ -1,0 +1,18 @@
+port: 7880
+bind_addresses:
+  - 0.0.0.0
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 50100
+  use_external_ip: false
+redis:
+  address: 127.0.0.1:6379
+keys:
+  devkey: 89ee516826cc409874f95077fc5695610c8639cf6bfbce9e9f5b57887a957b68
+logging:
+  level: info
+room:
+  auto_create: true
+  empty_timeout: 300
+  max_participants: 200

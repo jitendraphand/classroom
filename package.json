@@ -1,0 +1,11 @@
+{
+  "name": "classroom",
+  "private": true,
+  "scripts": {
+    "sync-keys": "./scripts/sync-livekit-keys.sh",
+    "up": "./scripts/sync-livekit-keys.sh && docker compose up --build -d",
+    "down": "docker compose down",
+    "logs": "docker compose logs -f web",
+    "health": "curl -s http://localhost:3000/api/health"
+  }
+}
