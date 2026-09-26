@@ -89,6 +89,14 @@ export default function JoinRoomPage() {
     window.history.replaceState({}, '', url.toString());
   }
 
+  async function joinAsDifferentStudent() {
+    setError('');
+    await fetch('/api/auth/clear-student', { method: 'POST' });
+    setWaiting(false);
+    setRoomInfo((prev) => (prev ? { ...prev, me: undefined } : prev));
+    setDisplayName('');
+  }
+
   async function join(e: React.FormEvent) {
     e.preventDefault();
     if (teacherSession && !continueAsStudent) {
@@ -136,6 +144,9 @@ export default function JoinRoomPage() {
           <p className="mt-2 text-sm text-slate-400">
             Your teacher will admit you shortly. Keep this tab open.
           </p>
+          <Button type="button" variant="secondary" className="mt-6 w-full" onClick={joinAsDifferentStudent}>
+            Not you? Join with a different name
+          </Button>
           <p className="mt-8 font-display text-3xl tracking-[0.3em] text-brand-300">{code}</p>
         </Card>
         <Link href="/" className="mt-6 text-sm text-slate-500 transition hover:text-slate-300">

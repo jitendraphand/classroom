@@ -93,7 +93,7 @@ curl -sI http://localhost:3000/favicon.ico | head -1
 
 ## Rebuild / health
 ```bash
-cd /workspace/classroom && docker compose build web && docker compose up -d web
+docker compose build web && docker compose up -d web
 curl -s http://localhost:3000/api/health
 # expect "status":"healthy"
 ```

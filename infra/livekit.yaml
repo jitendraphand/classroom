@@ -9,7 +9,7 @@ rtc:
 redis:
   address: 127.0.0.1:6379
 keys:
-  devkey: 89ee516826cc409874f95077fc5695610c8639cf6bfbce9e9f5b57887a957b68
+  devkey: replace-with-long-random-secret
 logging:
   level: info
 room:

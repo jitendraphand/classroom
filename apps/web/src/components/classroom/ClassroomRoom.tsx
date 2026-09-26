@@ -44,14 +44,20 @@ type TokenPayload = {
   mutedByTeacher: boolean;
 };
 
-function isTeacherParticipant(p: { metadata?: string; identity: string }, teacherIdentities: Set<string>) {
+function isTeacherParticipant(
+  p: { metadata?: string; identity: string; name?: string },
+  teacherIdentities: Set<string>
+) {
   if (teacherIdentities.has(p.identity)) return true;
+  if (p.identity.startsWith('teacher_')) return true;
+  if (p.identity.startsWith('student_')) return false;
   try {
     const meta = p.metadata ? JSON.parse(p.metadata) : {};
-    return meta.role === 'TEACHER';
+    if (meta.role === 'TEACHER') return true;
   } catch {
-    return false;
+    /* ignore */
   }
+  return false;
 }
 
 function ParticipantGrid({
@@ -231,6 +237,104 @@ function TeacherScreenStage({ teacherIdentities }: { teacherIdentities: string[]
   );
 }
 
+function TeacherCameraFloat({ teacherIdentities }: { teacherIdentities: string[] }) {
+  const room = useRoomContext();
+  const teacherSet = new Set(teacherIdentities);
+  const [tick, setTick] = useState(0);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    if (!room) return;
+    const bump = () => setTick((n) => n + 1);
+    const ensure = () => {
+      for (const p of Array.from(room.remoteParticipants.values())) {
+        if (!isTeacherParticipant(p, teacherSet)) continue;
+        const pub = p.getTrackPublication(Track.Source.Camera);
+        if (pub && !pub.isSubscribed) {
+          try {
+            pub.setSubscribed(true);
+          } catch (e) {
+            console.warn('subscribe teacher cam', e);
+          }
+        }
+      }
+      bump();
+    };
+    ensure();
+    room.on(RoomEvent.TrackPublished, ensure);
+    room.on(RoomEvent.TrackSubscribed, ensure);
+    room.on(RoomEvent.TrackUnsubscribed, bump);
+    room.on(RoomEvent.ParticipantConnected, ensure);
+    room.on(RoomEvent.ParticipantDisconnected, bump);
+    room.on(RoomEvent.TrackSubscriptionFailed, ensure);
+    const iv = window.setInterval(ensure, 1500);
+    return () => {
+      room.off(RoomEvent.TrackPublished, ensure);
+      room.off(RoomEvent.TrackSubscribed, ensure);
+      room.off(RoomEvent.TrackUnsubscribed, bump);
+      room.off(RoomEvent.ParticipantConnected, ensure);
+      room.off(RoomEvent.ParticipantDisconnected, bump);
+      room.off(RoomEvent.TrackSubscriptionFailed, ensure);
+      window.clearInterval(iv);
+    };
+  }, [room, teacherIdentities]);
+
+  void tick;
+
+  let teacherPub: { track?: { mediaStreamTrack?: MediaStreamTrack } | null; isSubscribed?: boolean } | null =
+    null;
+  let teacherName = 'Teacher';
+  if (room) {
+    for (const p of Array.from(room.remoteParticipants.values())) {
+      if (!isTeacherParticipant(p, teacherSet)) continue;
+      teacherName = p.name || p.identity || 'Teacher';
+      teacherPub = p.getTrackPublication(Track.Source.Camera) ?? null;
+      break;
+    }
+  }
+
+  const mediaTrack = teacherPub?.track?.mediaStreamTrack ?? null;
+
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    if (!mediaTrack) {
+      el.srcObject = null;
+      return;
+    }
+    el.srcObject = new MediaStream([mediaTrack]);
+    void el.play().catch(() => {});
+    return () => {
+      el.srcObject = null;
+    };
+  }, [mediaTrack]);
+
+  const hasVideo = !!mediaTrack;
+  return (
+    <div className="teacher-float-pane" aria-label="Teacher camera">
+      {hasVideo ? (
+        <video
+          ref={videoRef}
+          className="h-full w-full object-cover"
+          autoPlay
+          playsInline
+          muted
+        />
+      ) : (
+        <div className="flex h-full flex-col items-center justify-center gap-2 bg-gradient-to-br from-surface-3 to-ink-950 text-slate-300">
+          <Avatar name={teacherName} size="lg" />
+          <span className="text-xs">{teacherPub ? 'Camera off' : 'Waiting…'}</span>
+        </div>
+      )}
+      {hasVideo && (
+        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-2.5 pb-2 pt-6">
+          <span className="text-2xs font-semibold tracking-wide text-white">{teacherName}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function useHasTeacherScreen(teacherIdentities: string[]) {
   const tracks = useTracks(
     [{ source: Track.Source.ScreenShare, withPlaceholder: false }],
@@ -242,6 +346,51 @@ function useHasTeacherScreen(teacherIdentities: string[]) {
     if (t.participant.isLocal) return false;
     return isTeacherParticipant(t.participant, teacherSet);
   });
+}
+
+
+function createCanvasCameraTrack(): { track: LocalVideoTrack; stopExtra: () => void } {
+  const canvas = document.createElement('canvas');
+  canvas.width = 640;
+  canvas.height = 360;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('canvas unsupported');
+  let frame = 0;
+  const draw = () => {
+    frame += 1;
+    const g = ctx.createLinearGradient(0, 0, 640, 360);
+    g.addColorStop(0, '#1e3a5f');
+    g.addColorStop(1, '#0f172a');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 640, 360);
+    ctx.fillStyle = '#38bdf8';
+    ctx.beginPath();
+    ctx.arc(320 + Math.sin(frame / 18) * 90, 170, 52, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = 'bold 26px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Teacher', 320, 270);
+    ctx.font = '14px system-ui, sans-serif';
+    ctx.fillStyle = '#94a3b8';
+    ctx.fillText('Demo camera (no webcam)', 320, 298);
+  };
+  draw();
+  const timer = window.setInterval(draw, 66);
+  const stream = canvas.captureStream(15);
+  const mediaTrack = stream.getVideoTracks()[0];
+  if (!mediaTrack) {
+    clearInterval(timer);
+    throw new Error('no canvas video track');
+  }
+  const track = new LocalVideoTrack(mediaTrack);
+  return {
+    track,
+    stopExtra: () => {
+      clearInterval(timer);
+      stream.getTracks().forEach((t) => t.stop());
+    },
+  };
 }
 
 function SelectivePublisher({
@@ -276,10 +425,27 @@ function SelectivePublisher({
         return;
       }
       try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 640, height: 360, frameRate: 15 },
-          audio: false,
-        });
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { width: 640, height: 360, frameRate: 15 },
+            audio: false,
+          });
+        } catch (deviceErr) {
+          console.warn('local webcam unavailable, demo canvas preview', deviceErr);
+          const canvas = document.createElement('canvas');
+          canvas.width = 640;
+          canvas.height = 360;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.fillStyle = '#0f172a';
+            ctx.fillRect(0, 0, 640, 360);
+            ctx.fillStyle = '#38bdf8';
+            ctx.font = '20px system-ui, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('Demo camera', 320, 180);
+          }
+          stream = canvas.captureStream(5);
+        }
         if (cancelled) {
           stream.getTracks().forEach((t) => t.stop());
           return;
@@ -319,16 +485,36 @@ function SelectivePublisher({
         return;
       }
 
-      if (publishingVideo.current && camTrackRef.current) return;
+      const existingCam = localParticipant.getTrackPublication(Track.Source.Camera);
+      if (existingCam?.track && camTrackRef.current) {
+        publishingVideo.current = true;
+        return;
+      }
+      if (publishingVideo.current && camTrackRef.current && existingCam?.track) return;
+      // Stale publish flag after a failed/replaced track — allow retry
+      if (publishingVideo.current && !existingCam?.track) {
+        publishingVideo.current = false;
+        camTrackRef.current = null;
+      }
 
+      let stopExtra: (() => void) | null = null;
       try {
         publishingVideo.current = true;
-        const track = await createLocalVideoTrack({
-          resolution: { width: 640, height: 360 },
-          frameRate: 15,
-        });
+        let track: LocalVideoTrack;
+        try {
+          track = await createLocalVideoTrack({
+            resolution: { width: 640, height: 360 },
+            frameRate: 15,
+          });
+        } catch (deviceErr) {
+          console.warn('webcam unavailable, using demo canvas camera', deviceErr);
+          const fallback = createCanvasCameraTrack();
+          track = fallback.track;
+          stopExtra = fallback.stopExtra;
+        }
         if (cancelled || !(camDesired && canPublishVideo)) {
           track.stop();
+          stopExtra?.();
           publishingVideo.current = false;
           return;
         }
@@ -336,6 +522,7 @@ function SelectivePublisher({
         camTrackRef.current = track;
       } catch (e) {
         publishingVideo.current = false;
+        stopExtra?.();
         console.warn('publish video', e);
       }
     }
@@ -453,9 +640,6 @@ function RoomInner({
   const hasTeacherScreen = useHasTeacherScreen(teacherIdentities);
   const effectiveStage =
     stageMode !== 'idle' ? stageMode : hasTeacherScreen ? 'screen' : 'idle';
-  const studentPresent =
-    !isTeacher && (effectiveStage === 'screen' || effectiveStage === 'whiteboard');
-
   useEffect(() => {
     if (!isTeacher) setSideTab('chat');
   }, [isTeacher]);
@@ -563,20 +747,20 @@ function RoomInner({
   const bumpChrome = useCallback(() => {
     setChromeVisible(true);
     if (chromeTimer.current) clearTimeout(chromeTimer.current);
-    chromeTimer.current = setTimeout(() => setChromeVisible(false), 3000);
+    // Keep student controls visible — tap still refreshes visibility if ever hidden.
   }, []);
 
   useEffect(() => {
-    if (!studentPresent) {
+    if (isTeacher) {
       if (chromeTimer.current) clearTimeout(chromeTimer.current);
       setChatDrawerOpen(false);
       return;
     }
-    bumpChrome();
+    setChromeVisible(true);
     return () => {
       if (chromeTimer.current) clearTimeout(chromeTimer.current);
     };
-  }, [studentPresent, bumpChrome]);
+  }, [isTeacher]);
 
   const stopScreenShare = useCallback(async () => {
     if (!localParticipant) return;
@@ -689,14 +873,16 @@ function RoomInner({
     showScreenShare: isTeacher,
   };
 
-  // —— Student exclusive present mode (screen or whiteboard) ——
-  if (studentPresent) {
+  // —— Student path: always fullscreen stage + floating teacher cam + float chrome ——
+  if (!isTeacher) {
     const badge =
       effectiveStage === 'screen'
         ? 'Teacher screen'
-        : whiteboardCanWrite
-          ? 'Whiteboard · drawing allowed'
-          : 'Whiteboard · view only';
+        : effectiveStage === 'whiteboard'
+          ? whiteboardCanWrite
+            ? 'Whiteboard · drawing allowed'
+            : 'Whiteboard · view only'
+          : 'Waiting for teacher…';
 
     return (
       <div
@@ -719,7 +905,7 @@ function RoomInner({
         <div className="absolute inset-0 z-10">
           {effectiveStage === 'screen' ? (
             <TeacherScreenStage teacherIdentities={teacherIdentities} />
-          ) : (
+          ) : effectiveStage === 'whiteboard' ? (
             <div className="h-full w-full p-0">
               <Whiteboard
                 code={code}
@@ -728,8 +914,15 @@ function RoomInner({
                 isTeacher={false}
               />
             </div>
+          ) : (
+            <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-ink-950 text-slate-400">
+              <IconVideo size={32} />
+              <p className="text-sm">Waiting for teacher…</p>
+            </div>
           )}
         </div>
+
+        <TeacherCameraFloat teacherIdentities={teacherIdentities} />
 
         <div
           className={cn(

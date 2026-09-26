@@ -236,6 +236,11 @@ body {
     padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
   }
 
+  .teacher-float-pane {
+    @apply absolute right-3 z-[35] aspect-video w-[min(48vw,240px)] overflow-hidden rounded-2xl border border-white/20 bg-black shadow-lift;
+    bottom: 5.5rem;
+  }
+
   .stage-chat-drawer {
     @apply absolute inset-y-0 right-0 z-50 flex w-[min(100%,320px)] flex-col border-l border-white/10 bg-surface-1/95 p-3 shadow-lift backdrop-blur-xl;
   }

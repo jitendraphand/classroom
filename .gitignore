@@ -1,9 +1,19 @@
 node_modules
 .next
-.env
-*.log
 dist
+.turbo
+coverage
+*.log
+*.tsbuildinfo
 .DS_Store
+.vercel
+
+# Env — keep only the example template
+.env
+.env.*
+!.env.example
+
+# App build / deps
 apps/web/.next
 apps/web/node_modules
-# already have base; ensure common junk
+apps/web/coverage

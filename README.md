@@ -2,8 +2,6 @@
 
 Privacy-minded live classes: teachers sign in, students join with a room code, waiting-room admit, **selective student video** (only a rotating sample publishes to LiveKit), shared tldraw whiteboard, **in-class chat** (student→teacher + teacher broadcast/DM), screen share, mute controls. **No recording.**
 
-**Project path:** `/workspace/classroom`
-
 ## Architecture
 
 ```mermaid
@@ -45,21 +43,33 @@ flowchart LR
 
 Non-sampled video **never leaves the student device**.
 
+### Student live view
+
+Students get a fullscreen exclusive stage — **either** teacher screen share **or** whiteboard (not a student video grid; no screen-share control for students):
+
+- **Floating teacher camera** in the corner (subscribes to the teacher cam track; avatar placeholder when off)
+- **Always-visible floating controls** — mic, cam, chat, leave
+- Chat opens as a side drawer over the stage
+- Waiting state when the teacher has not started screen/whiteboard yet
+
+If no webcam is available, the app falls back to a **canvas demo camera** so publish/preview still works in headless or permission-denied environments.
+
+On the waiting-room screen, **Not you? Join with a different name** calls `POST /api/auth/clear-student` to drop the student session cookie so another display name can join in the same browser.
+
 ## Quick start
 
 ### Prerequisites
 
-- Docker Engine + Compose plugin (installed on this box via `docker.io`)
+- Docker Engine + Compose plugin
 - Ports free: **3000** (web), **5432** (Postgres), **6379** (Redis), **7880/7881** (LiveKit), **50000–50100/udp** (WebRTC)
 
 ### Run
 
 ```bash
-cd /workspace/classroom
+cd classroom   # or: git clone … && cd classroom
 
-# Ensure .env exists (a generated one is already present) and LiveKit keys match
 cp -n .env.example .env   # only if you need a fresh copy
-./scripts/sync-livekit-keys.sh
+./scripts/sync-livekit-keys.sh   # writes LIVEKIT_* into infra/livekit.yaml
 
 docker compose up --build -d
 ```
@@ -79,8 +89,8 @@ curl -s http://localhost:3000/api/health
 2. Dashboard → **Create room** → copy join code/link
 3. Teacher lobby → **Enter classroom** (allow camera/mic)
 4. **Student** (incognito / second browser) → http://localhost:3000/join/{CODE} → name → waiting room
-5. Teacher **Admit** → student enters class
-6. Try whiteboard, **Chat** (broadcast / student→teacher / DM), mute / mute-all, screen share, **Rotate sample**, speak as a student to force pin into sample
+5. Teacher **Admit** → student enters class (floating teacher cam + float controls)
+6. Try whiteboard, **Chat**, mute / mute-all, screen share, **Rotate sample**, speak as a student to force pin into sample
 
 ### Stop
 
@@ -100,6 +110,7 @@ docker compose down -v
 | http://localhost:3000/join | Student join (enter code) |
 | http://localhost:3000/join/{CODE} | Direct join link |
 | http://localhost:3000/api/health | Health check |
+| http://localhost:3000/api/auth/clear-student | `POST` — clear student cookie (rejoin as different name) |
 | ws://localhost:7880 | LiveKit WebSocket |
 
 ## Environment variables
@@ -120,10 +131,10 @@ See `.env.example`. Important:
 ## Project layout
 
 ```
-/workspace/classroom
+.
 ├── docker-compose.yml          # host networking stack
-├── .env / .env.example
-├── infra/livekit.yaml
+├── .env.example                # copy to .env (gitignored)
+├── infra/livekit.yaml          # keys synced from .env
 ├── scripts/sync-livekit-keys.sh
 ├── README.md
 └── apps/web                    # Next.js app
@@ -141,7 +152,8 @@ See `.env.example`. Important:
 | File | Purpose |
 |------|---------|
 | `apps/web/src/lib/sample.ts` | Visible-sample rotation in Redis |
-| `apps/web/src/components/classroom/ClassroomRoom.tsx` | LiveKit room + selective publish |
+| `apps/web/src/components/classroom/ClassroomRoom.tsx` | LiveKit room, selective publish, student float UI |
+| `apps/web/src/app/api/auth/clear-student/route.ts` | Clear student cookie for rejoin |
 | `apps/web/src/app/api/rooms/[code]/*/route.ts` | Join, admit, token, mute, state, end |
 | `apps/web/src/components/classroom/Whiteboard.tsx` | tldraw + Redis snapshot sync |
 | `apps/web/src/components/classroom/Chat.tsx` | In-class messaging UI |
@@ -162,8 +174,8 @@ Targets: ~20 concurrent rooms × ~150 attendees. Selective publish is the main l
 - Chat persists in Postgres while the room is LIVE/WAITING; GET returns empty after ENDED. No student-to-student chat.
 - LiveKit `use_external_ip: false` suits local demos; remote clients may need public IP / TURN.
 - No recording (by design).
-- Student sessions are cookie-bound to the joining browser.
-- Docker **bridge** ICC was broken on this host; compose therefore uses **host** networking.
+- Student sessions are cookie-bound to the joining browser (`POST /api/auth/clear-student` to switch names).
+- Docker **bridge** ICC was broken on some hosts; compose therefore uses **host** networking.
 
 ## License
 
