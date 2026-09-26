@@ -30,12 +30,13 @@ export async function POST(req: Request, { params }: { params: { code: string } 
   try {
     const body = schema.parse(await req.json());
     const redis = await ensureRedis();
-    const access = await resolveRoomAccess(room, { forceStudent });
 
-    // Teacher lowering (or raising) a specific student's hand
+    // Teacher lowering (or raising) a specific student's hand — authorize like mute
+    // (getTeacherSession only). Do not fail on access.mode === 'student' from
+    // as=student / x-classroom-as headers that roomFetch may send.
     if ('participantId' in body) {
       const teacher = await getTeacherSession();
-      if (!teacher || room.teacherId !== teacher.id || access.mode === 'student') {
+      if (!teacher || room.teacherId !== teacher.id) {
         return jsonError('Unauthorized', 401);
       }
       const participant = await prisma.participant.findFirst({
@@ -49,6 +50,7 @@ export async function POST(req: Request, { params }: { params: { code: string } 
     }
 
     // Student toggles own hand
+    const access = await resolveRoomAccess(room, { forceStudent });
     if (access.mode !== 'student' || !access.student) {
       return jsonError('Unauthorized', 401);
     }

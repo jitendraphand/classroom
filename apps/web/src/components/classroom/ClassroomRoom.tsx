@@ -498,16 +498,14 @@ function TeacherCameraFloat({
   );
 }
 
-function StudentPeersFloat({
+function TeacherPeersFloat({
   roomCode,
   teacherIdentities,
   visibleIdentities,
-  localIdentity,
 }: {
   roomCode: string;
   teacherIdentities: string[];
   visibleIdentities: string[];
-  localIdentity?: string | null;
 }) {
   const room = useRoomContext();
   const teacherSet = new Set(teacherIdentities);
@@ -568,10 +566,7 @@ function StudentPeersFloat({
     if (!room) return;
     const onSpeakers = (speakers: Participant[]) => {
       const studentSpeaker = speakers.find(
-        (s) =>
-          !s.isLocal &&
-          !isTeacherParticipant(s, teacherSet) &&
-          (!localIdentity || s.identity !== localIdentity)
+        (s) => !s.isLocal && !isTeacherParticipant(s, teacherSet)
       );
       setSpeakingId(studentSpeaker?.identity ?? null);
     };
@@ -579,7 +574,7 @@ function StudentPeersFloat({
     return () => {
       room.off(RoomEvent.ActiveSpeakersChanged, onSpeakers);
     };
-  }, [room, teacherIdentities, localIdentity]);
+  }, [room, teacherIdentities]);
 
   // Ensure peer cameras in sample are subscribed
   useEffect(() => {
@@ -587,7 +582,6 @@ function StudentPeersFloat({
     const ensure = () => {
       for (const p of Array.from(room.remoteParticipants.values())) {
         if (isTeacherParticipant(p, teacherSet)) continue;
-        if (localIdentity && p.identity === localIdentity) continue;
         const pub = p.getTrackPublication(Track.Source.Camera);
         if (pub && !pub.isSubscribed) {
           try {
@@ -612,21 +606,21 @@ function StudentPeersFloat({
       room.off(RoomEvent.ParticipantDisconnected, ensure);
       window.clearInterval(iv);
     };
-  }, [room, teacherIdentities, localIdentity, visibleIdentities]);
+  }, [room, teacherIdentities, visibleIdentities]);
 
   void tick;
   void rotationTick;
 
   const peerIds = useMemo(() => {
     const tSet = new Set(teacherIdentities);
+    // Teacher is local — include all sampled student cams (do not exclude a localIdentity peer)
     const fromSample = visibleIdentities.filter(
-      (id) => id !== localIdentity && !tSet.has(id) && !id.startsWith('teacher_')
+      (id) => !tSet.has(id) && !id.startsWith('teacher_')
     );
     const remote: string[] = [];
     if (room) {
       for (const p of Array.from(room.remoteParticipants.values())) {
         if (isTeacherParticipant(p, tSet)) continue;
-        if (localIdentity && p.identity === localIdentity) continue;
         if (!remote.includes(p.identity)) remote.push(p.identity);
       }
     }
@@ -651,7 +645,6 @@ function StudentPeersFloat({
     return slots.slice(0, slotCount);
   }, [
     visibleIdentities,
-    localIdentity,
     teacherIdentities,
     room,
     speakingId,
@@ -668,11 +661,11 @@ function StudentPeersFloat({
       ref={paneRef}
       className="peers-float-pane"
       style={style}
-      aria-label="Classmates — drag to move"
+      aria-label="Students — drag to move"
       {...dragHandlers}
     >
       <div className="peers-float-header">
-        <span className="text-2xs font-semibold text-slate-200">Classmates</span>
+        <span className="text-2xs font-semibold text-slate-200">Students</span>
         <div className="flex items-center gap-1" onPointerDown={(e) => e.stopPropagation()}>
           {([2, 4, 6] as const).map((n) => (
             <button
@@ -698,7 +691,7 @@ function StudentPeersFloat({
       >
         {peerIds.length === 0 && (
           <div className="col-span-full flex aspect-video items-center justify-center rounded-lg bg-black/40 text-2xs text-slate-400">
-            No classmates yet
+            No students in sample yet
           </div>
         )}
         {peerIds.map((identity) => {
@@ -1391,15 +1384,6 @@ function RoomInner({
 
         <TeacherCameraFloat teacherIdentities={teacherIdentities} roomCode={code} />
 
-        {(effectiveStage === 'screen' || effectiveStage === 'whiteboard') && (
-          <StudentPeersFloat
-            roomCode={code}
-            teacherIdentities={teacherIdentities}
-            visibleIdentities={visibles}
-            localIdentity={state?.me?.livekitIdentity}
-          />
-        )}
-
         <div
           className={cn(
             'stage-float-chrome',
@@ -1743,12 +1727,26 @@ function RoomInner({
                             type="button"
                             className="text-xs font-medium text-amber-300 hover:underline"
                             onClick={async () => {
-                              await roomFetch(code, '/hand', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ participantId: p.id, raised: false }),
-                              });
-                              refresh();
+                              try {
+                                const res = await roomFetch(code, '/hand', {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ participantId: p.id, raised: false }),
+                                });
+                                if (!res.ok) {
+                                  const data = await res.json().catch(() => ({}));
+                                  console.error('Lower hand failed', res.status, data);
+                                  alert(
+                                    (data as { error?: string }).error ||
+                                      `Could not lower hand (${res.status})`
+                                  );
+                                  return;
+                                }
+                                refresh();
+                              } catch (e) {
+                                console.error('Lower hand error', e);
+                                alert('Could not lower hand');
+                              }
                             }}
                           >
                             Lower hand
@@ -1798,6 +1796,17 @@ function RoomInner({
           )}
         </aside>
       </div>
+
+      {(stageMode === 'screen' ||
+        stageMode === 'whiteboard' ||
+        effectiveStage === 'screen' ||
+        effectiveStage === 'whiteboard') && (
+        <TeacherPeersFloat
+          roomCode={code}
+          teacherIdentities={teacherIdentities}
+          visibleIdentities={visibles}
+        />
+      )}
 
       {/* Bottom dock — never covers content */}
       <footer className="shrink-0 border-t border-white/[0.06] bg-surface-1/90 px-3 py-2.5 backdrop-blur-xl sm:px-4">

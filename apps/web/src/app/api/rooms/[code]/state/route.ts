@@ -73,7 +73,7 @@ export async function GET(req: Request, { params }: { params: { code: string } }
   const { visible } = await getVisibleSample(code);
   const redis = await ensureRedis();
   const mutedIds = await redis.smembers(keys.muted(code));
-  const raisedHands = await redis.smembers(keys.hands(code));
+  const raisedHands = (await redis.smembers(keys.hands(code))).map(String);
   const stageRaw = await redis.get(keys.stage(code));
   const stageMode =
     stageRaw === 'screen' || stageRaw === 'whiteboard' || stageRaw === 'idle'
