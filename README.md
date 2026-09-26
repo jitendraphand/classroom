@@ -27,7 +27,7 @@ flowchart LR
 | **postgres** | Teachers, rooms, participants, chat messages |
 | **redis** | Waiting/admitted sets, visible-sample identities, whiteboard snapshots |
 
-> **Networking:** `docker-compose.yml` uses `network_mode: host` on a single Linux VM so LiveKit WebRTC UDP/TCP bind on the host NICs and services talk over `127.0.0.1`. Ideal for local demos **and** bare public-IP VPS deploys (see [docs/DEPLOY-VPS.md](docs/DEPLOY-VPS.md)).
+> **Networking:** `docker-compose.yml` uses `network_mode: host` on a single Linux VM so LiveKit WebRTC UDP/TCP bind on the host NICs and services talk over `127.0.0.1`. Ideal for local demos **and** bare public-IP VPS deploys (see [docs/DEPLOY-VPS.md](docs/DEPLOY-VPS.md)). Optional **Caddy** TLS uses the same host networking via Compose profile `tls` ([docs/DEPLOY-CADDY.md](docs/DEPLOY-CADDY.md)).
 
 ### How sampled video works
 
@@ -112,6 +112,20 @@ docker compose up --build -d
 
 Open `http://PUBLIC_IP:3000`. Firewall must allow **3000/tcp**, **7880/tcp**, **7881/tcp**, and **50000–50100/udp**. Full steps: [docs/DEPLOY-VPS.md](docs/DEPLOY-VPS.md).
 
+## Deploy with HTTPS (Caddy + Let's Encrypt)
+
+Requires a **domain** (Let's Encrypt will not certify a bare IP). Point `DOMAIN` and `livekit.DOMAIN` at the VM, then:
+
+```bash
+DOMAIN=class.example.com PUBLIC_IP=203.0.113.10 ACME_EMAIL=admin@example.com \
+  ./scripts/configure-domain-tls.sh
+./scripts/sync-livekit-keys.sh
+docker compose --profile tls up --build -d
+```
+
+Opens `https://DOMAIN` and `wss://livekit.DOMAIN`. Firewall: **80/443**, **7881/tcp**, **50000–50100/udp**; do **not** expose **3000** or **7880** publicly. Full steps: [docs/DEPLOY-CADDY.md](docs/DEPLOY-CADDY.md).
+
+
 ## URLs & ports
 
 | URL | Purpose |
@@ -135,11 +149,12 @@ See `.env.example`. Important:
 | `SAMPLE_ROTATION_SECONDS` | `8` | Auto-rotation interval for visible student cameras (5–10s recommended) |
 | `SPEAKER_PIN_TTL_SECONDS` | `18` | How long an active-speaker pin protects a student from random ejection |
 | `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | generated | Must match `infra/livekit.yaml` (`scripts/sync-livekit-keys.sh`) |
-| `APP_URL` / `NEXT_PUBLIC_APP_URL` | `http://localhost:3000` | Browser-facing app origin — set to `http://PUBLIC_IP:3000` on a VPS |
-| `NEXT_PUBLIC_LIVEKIT_URL` | `ws://localhost:7880` | Browser-facing LiveKit URL — set to `ws://PUBLIC_IP:7880` on a VPS |
+| `APP_URL` / `NEXT_PUBLIC_APP_URL` | `http://localhost:3000` | Browser-facing app origin — `http://PUBLIC_IP:3000` (bare IP) or `https://DOMAIN` (Caddy) |
+| `NEXT_PUBLIC_LIVEKIT_URL` | `ws://localhost:7880` | Browser-facing LiveKit — `ws://PUBLIC_IP:7880` or `wss://livekit.DOMAIN` |
+| `DOMAIN` / `ACME_EMAIL` | _(unset)_ | Domain TLS via `configure-domain-tls.sh`; optional LE account email |
 | `LIVEKIT_USE_EXTERNAL_IP` | `false` | `true` on VPS so ICE advertises the public IP (`sync-livekit-keys.sh`) |
-| `LIVEKIT_NODE_IP` | _(unset)_ | Optional pin of advertised IP (set by `configure-public-ip.sh`) |
-| `COOKIE_SECURE` | derived from `APP_URL` | `false` for HTTP / bare IP; `true` only behind HTTPS |
+| `LIVEKIT_NODE_IP` | _(unset)_ | Optional pin of advertised IP (set by configure-public-ip / configure-domain-tls) |
+| `COOKIE_SECURE` | derived from `APP_URL` | `false` for HTTP / bare IP; `true` behind HTTPS (Caddy) |
 | `NEXTAUTH_SECRET` | generated | JWT signing for teachers |
 | `DATABASE_URL` | `postgresql://…@127.0.0.1:5432/…` | Host-network Postgres |
 | `REDIS_URL` | `redis://127.0.0.1:6379` | Host-network Redis |
@@ -148,12 +163,15 @@ See `.env.example`. Important:
 
 ```
 .
-├── docker-compose.yml          # host networking stack
+├── docker-compose.yml          # host networking stack (+ optional profile tls / Caddy)
 ├── .env.example                # copy to .env (gitignored)
 ├── infra/livekit.yaml          # keys synced from .env
+├── infra/Caddyfile             # written by configure-domain-tls.sh
 ├── scripts/sync-livekit-keys.sh
 ├── scripts/configure-public-ip.sh
+├── scripts/configure-domain-tls.sh
 ├── docs/DEPLOY-VPS.md          # bare public-IP VPS guide
+├── docs/DEPLOY-CADDY.md        # domain + Caddy Let's Encrypt
 ├── README.md
 └── apps/web                    # Next.js app
     ├── Dockerfile
@@ -191,7 +209,7 @@ Targets: ~20 concurrent rooms × ~150 attendees. Selective publish is the main l
 - Whiteboard sync uses **LiveKit reliable data messages** (tldraw store diffs) plus Redis snapshots for late joiners.
 - Chat persists in Postgres while the room is LIVE/WAITING; GET returns empty after ENDED. No student-to-student chat.
 - Local demos keep `use_external_ip: false`; VPS deploys set it `true` (and usually `LIVEKIT_NODE_IP`) via `configure-public-ip.sh`.
-- Bare HTTP on a public IP works (cookies `Secure=false`); browsers may still warn about camera/mic permissions compared to HTTPS.
+- Bare HTTP on a public IP works (cookies `Secure=false`); browsers may still warn about camera/mic permissions compared to HTTPS. Prefer domain + Caddy (`--profile tls`) for production.
 - No built-in TURN — restrictive NATs may need a TURN server for media.
 - No recording (by design).
 - Student sessions are cookie-bound to the joining browser (`POST /api/auth/clear-student` to switch names).

@@ -1,8 +1,10 @@
 # Host networking on a single Linux VM/VPS:
 # - LiveKit WebRTC UDP/TCP bind directly on the host (best path for public IP).
 # - Postgres/Redis/LiveKit/web share 127.0.0.1 for server-side traffic.
-# - Set APP_URL / NEXT_PUBLIC_* to http://PUBLIC_IP:3000 and ws://PUBLIC_IP:7880
-#   (see docs/DEPLOY-VPS.md). Do not expose 5432/6379 on the public firewall.
+# - Bare IP HTTP: set APP_URL / NEXT_PUBLIC_* to http://PUBLIC_IP:3000 and
+#   ws://PUBLIC_IP:7880 (see docs/DEPLOY-VPS.md + scripts/configure-public-ip.sh).
+# - Domain HTTPS: DOMAIN + Caddy profile tls (see docs/DEPLOY-CADDY.md +
+#   scripts/configure-domain-tls.sh). Do not expose 5432/6379 on the public firewall.
 services:
   postgres:
     image: postgres:16-alpine
@@ -85,6 +87,24 @@ services:
       retries: 18
       start_period: 45s
 
+  # Optional HTTPS/WSS terminator (Let's Encrypt). Not started unless profile tls:
+  #   docker compose --profile tls up -d
+  # Needs DOMAIN in .env + DNS A/AAAA; see docs/DEPLOY-CADDY.md
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["tls"]
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   redis_data:
+  caddy_data:
+  caddy_config:

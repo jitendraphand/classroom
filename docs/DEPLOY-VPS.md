@@ -110,17 +110,18 @@ Always set env to the public IP so rebuilds and server-side defaults stay correc
 
 ## 5. TLS / WSS later (optional)
 
-Browsers allow `ws://` on `http://` IP pages. If you add HTTPS (domain or IP cert):
+Browsers allow `ws://` on `http://` IP pages. **Let's Encrypt needs a domain** (A/AAAA → this VM); it will not issue certificates for a bare public IP.
 
-1. Terminate TLS in front of `:3000` (Caddy/nginx).
-2. Prefer `wss://` for LiveKit (proxy `/` on 7880 or a subdomain, or LiveKit’s own TLS).
-3. Re-run configure with `SCHEME=https`:
+For production HTTPS/WSS with **Caddy + Let's Encrypt**, see **[DEPLOY-CADDY.md](DEPLOY-CADDY.md)**:
 
 ```bash
-PUBLIC_IP=203.0.113.10 SCHEME=https ./scripts/configure-public-ip.sh
+DOMAIN=class.example.com PUBLIC_IP=203.0.113.10 ACME_EMAIL=admin@example.com \
+  ./scripts/configure-domain-tls.sh
 ./scripts/sync-livekit-keys.sh
-docker compose up --build -d
+docker compose --profile tls up --build -d
 ```
+
+That proxies Next.js and LiveKit **signaling** (WSS) through Caddy; WebRTC media UDP/TCP stays direct to LiveKit. Camera permissions and Secure cookies work reliably on HTTPS.
 
 Without a trusted cert, getUserMedia / Secure cookies may still be limited on some browsers.
 

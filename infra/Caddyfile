@@ -1,0 +1,26 @@
+# Caddy reverse proxy + automatic HTTPS (Let's Encrypt).
+# Generated/updated by: scripts/configure-domain-tls.sh
+#
+# Requirements:
+#   - DNS A/AAAA for DOMAIN and livekit.DOMAIN → PUBLIC_IP
+#   - Compose profile: docker compose --profile tls up -d
+#   - Ports 80/443 public; do NOT expose :3000 publicly when using Caddy
+#   - LiveKit media stays direct: TCP 7881 + UDP 50000–50100 (Caddy cannot terminate WebRTC UDP)
+#
+# Replace example.com via configure-domain-tls.sh before first tls bring-up.
+# Optional ACME email: set ACME_EMAIL when running the configure script (written below).
+
+{
+	# email admin@example.com
+}
+
+example.com {
+	encode gzip
+	reverse_proxy 127.0.0.1:3000
+}
+
+livekit.example.com {
+	encode gzip
+	# WebSocket upgrade is automatic in Caddy
+	reverse_proxy 127.0.0.1:7880
+}
