@@ -22,6 +22,7 @@ export type RoomState = {
     mutedByTeacher: boolean;
     canPublishVideo: boolean;
     inVisibleSample: boolean;
+    handRaised?: boolean;
   } | null;
   waiting?: { id: string; displayName: string }[];
   admitted: {
@@ -31,9 +32,11 @@ export type RoomState = {
     livekitIdentity: string;
     mutedByTeacher: boolean;
     isVisible: boolean;
+    handRaised?: boolean;
   }[];
   visibleIdentities: string[];
   visibleCount: number;
+  raisedHands?: string[];
   stageMode?: 'idle' | 'screen' | 'whiteboard';
   whiteboardCanWrite?: boolean;
   /** Raw Redis flag: students may draw when true. */

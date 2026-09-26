@@ -237,8 +237,27 @@ body {
   }
 
   .teacher-float-pane {
-    @apply absolute right-3 z-[35] aspect-video w-[min(48vw,240px)] overflow-hidden rounded-2xl border border-white/20 bg-black shadow-lift;
-    bottom: 5.5rem;
+    @apply absolute z-[35] aspect-video w-[min(42vw,186px)] overflow-hidden rounded-2xl border border-white/20 bg-black shadow-lift;
+    touch-action: none;
+    cursor: grab;
+  }
+  .teacher-float-pane:active {
+    cursor: grabbing;
+  }
+
+  .peers-float-pane {
+    @apply absolute z-[34] overflow-hidden rounded-2xl border border-white/20 bg-surface-1/95 shadow-lift backdrop-blur-xl;
+    touch-action: none;
+    width: min(52vw, 280px);
+  }
+  .peers-float-pane:active {
+    cursor: grabbing;
+  }
+  .peers-float-header {
+    @apply flex cursor-grab items-center justify-between gap-2 border-b border-white/10 bg-black/40 px-2 py-1.5;
+  }
+  .peers-float-grid {
+    @apply grid gap-1 p-1.5;
   }
 
   .stage-chat-drawer {

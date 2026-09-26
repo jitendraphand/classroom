@@ -73,6 +73,7 @@ export async function GET(req: Request, { params }: { params: { code: string } }
   const { visible } = await getVisibleSample(code);
   const redis = await ensureRedis();
   const mutedIds = await redis.smembers(keys.muted(code));
+  const raisedHands = await redis.smembers(keys.hands(code));
   const stageRaw = await redis.get(keys.stage(code));
   const stageMode =
     stageRaw === 'screen' || stageRaw === 'whiteboard' || stageRaw === 'idle'
@@ -112,6 +113,7 @@ export async function GET(req: Request, { params }: { params: { code: string } }
           mutedByTeacher: me.mutedByTeacher || mutedIds.includes(me.id),
           canPublishVideo,
           inVisibleSample: canPublishVideo,
+          handRaised: raisedHands.includes(me.id),
         }
       : null,
     waiting: isTeacher
@@ -128,9 +130,11 @@ export async function GET(req: Request, { params }: { params: { code: string } }
       livekitIdentity: p.livekitIdentity,
       mutedByTeacher: p.mutedByTeacher || mutedIds.includes(p.id),
       isVisible: p.role === 'TEACHER' || visible.includes(p.livekitIdentity),
+      handRaised: p.role === 'STUDENT' && raisedHands.includes(p.id),
     })),
     visibleIdentities: visible,
     visibleCount: visible.length,
+    raisedHands,
     stageMode,
     whiteboardCanWrite,
     /** Raw Redis wb-write flag (students may draw when true). */

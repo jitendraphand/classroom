@@ -18,7 +18,16 @@ import {
   RoomEvent,
   type Participant,
 } from 'livekit-client';
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import { useRouter } from 'next/navigation';
 import { useRoomState } from '@/hooks/useRoomState';
 import { Controls } from './Controls';
@@ -31,7 +40,7 @@ import { Button } from '@/components/ui/Button';
 import { Tabs } from '@/components/ui/Tabs';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageLoading } from '@/components/ui/Skeleton';
-import { IconBoard, IconScreen, IconSidebar, IconUsers, IconVideo } from '@/components/ui/Icons';
+import { IconBoard, IconHand, IconScreen, IconSidebar, IconUsers, IconVideo } from '@/components/ui/Icons';
 import { cn } from '@/lib/cn';
 import { roomFetch, rememberClassroomRole } from '@/lib/classroomClient';
 
@@ -237,11 +246,156 @@ function TeacherScreenStage({ teacherIdentities }: { teacherIdentities: string[]
   );
 }
 
-function TeacherCameraFloat({ teacherIdentities }: { teacherIdentities: string[] }) {
+
+type FloatPos = { x: number; y: number };
+
+function clampFloatPos(x: number, y: number, w: number, h: number): FloatPos {
+  const margin = 8;
+  const chromeBottom = 96; // keep above student control chrome
+  const maxX = Math.max(margin, window.innerWidth - w - margin);
+  const maxY = Math.max(margin, window.innerHeight - h - chromeBottom);
+  return {
+    x: Math.min(maxX, Math.max(margin, x)),
+    y: Math.min(maxY, Math.max(margin, y)),
+  };
+}
+
+function useDraggableFloat(
+  storageKey: string,
+  defaultPos: () => FloatPos,
+  sizeRef: RefObject<{ w: number; h: number }>
+) {
+  const [pos, setPos] = useState<FloatPos | null>(null);
+  const dragging = useRef(false);
+  const origin = useRef({ px: 0, py: 0, x: 0, y: 0 });
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(storageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw) as FloatPos;
+        if (typeof parsed.x === 'number' && typeof parsed.y === 'number') {
+          const sz = sizeRef.current || { w: 186, h: 105 };
+          setPos(clampFloatPos(parsed.x, parsed.y, sz.w, sz.h));
+          return;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    setPos(defaultPos());
+  }, [storageKey]);
+
+  useEffect(() => {
+    const onResize = () => {
+      setPos((prev) => {
+        if (!prev) return prev;
+        const sz = sizeRef.current || { w: 186, h: 105 };
+        return clampFloatPos(prev.x, prev.y, sz.w, sz.h);
+      });
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [sizeRef]);
+
+  const onPointerDown = useCallback(
+    (e: ReactPointerEvent) => {
+      if (e.button !== 0) return;
+      const target = e.target as HTMLElement;
+      if (target.closest('button, select, input, a')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const cur = pos || defaultPos();
+      dragging.current = true;
+      origin.current = { px: e.clientX, py: e.clientY, x: cur.x, y: cur.y };
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    },
+    [pos, defaultPos]
+  );
+
+  const onPointerMove = useCallback(
+    (e: ReactPointerEvent) => {
+      if (!dragging.current) return;
+      const dx = e.clientX - origin.current.px;
+      const dy = e.clientY - origin.current.py;
+      const sz = sizeRef.current || { w: 186, h: 105 };
+      const next = clampFloatPos(origin.current.x + dx, origin.current.y + dy, sz.w, sz.h);
+      setPos(next);
+    },
+    [sizeRef]
+  );
+
+  const onPointerUp = useCallback(
+    (e: ReactPointerEvent) => {
+      if (!dragging.current) return;
+      dragging.current = false;
+      try {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      setPos((prev) => {
+        if (!prev) return prev;
+        try {
+          sessionStorage.setItem(storageKey, JSON.stringify(prev));
+        } catch {
+          /* ignore */
+        }
+        return prev;
+      });
+    },
+    [storageKey]
+  );
+
+  return {
+    pos,
+    dragHandlers: {
+      onPointerDown,
+      onPointerMove,
+      onPointerUp,
+      onPointerCancel: onPointerUp,
+    },
+  };
+}
+
+
+function TeacherCameraFloat({
+  teacherIdentities,
+  roomCode,
+}: {
+  teacherIdentities: string[];
+  roomCode: string;
+}) {
   const room = useRoomContext();
   const teacherSet = new Set(teacherIdentities);
   const [tick, setTick] = useState(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const paneRef = useRef<HTMLDivElement | null>(null);
+  const sizeRef = useRef({ w: 186, h: 105 });
+
+  const defaultPos = useCallback((): FloatPos => {
+    const w = sizeRef.current.w;
+    const h = sizeRef.current.h;
+    return clampFloatPos(window.innerWidth - w - 12, window.innerHeight - h - 100, w, h);
+  }, []);
+
+  const { pos, dragHandlers } = useDraggableFloat(
+    `teacher_cam_pos_${roomCode.toUpperCase()}`,
+    defaultPos,
+    sizeRef
+  );
+
+  useEffect(() => {
+    const el = paneRef.current;
+    if (!el) return;
+    const sync = () => {
+      sizeRef.current = { w: el.offsetWidth || 186, h: el.offsetHeight || 105 };
+    };
+    sync();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null;
+    ro?.observe(el);
+    return () => ro?.disconnect();
+  }, []);
 
   useEffect(() => {
     if (!room) return;
@@ -310,9 +464,305 @@ function TeacherCameraFloat({ teacherIdentities }: { teacherIdentities: string[]
   }, [mediaTrack]);
 
   const hasVideo = !!mediaTrack;
+  const style = pos ? { left: pos.x, top: pos.y } : { right: 12, bottom: 88 };
+
   return (
-    <div className="teacher-float-pane" aria-label="Teacher camera">
+    <div
+      ref={paneRef}
+      className="teacher-float-pane"
+      style={style}
+      aria-label="Teacher camera — drag to move"
+      title="Drag to move"
+      {...dragHandlers}
+    >
       {hasVideo ? (
+        <video
+          ref={videoRef}
+          className="pointer-events-none h-full w-full object-cover"
+          autoPlay
+          playsInline
+          muted
+        />
+      ) : (
+        <div className="pointer-events-none flex h-full flex-col items-center justify-center gap-2 bg-gradient-to-br from-surface-3 to-ink-950 text-slate-300">
+          <Avatar name={teacherName} size="lg" />
+          <span className="text-xs">{teacherPub ? 'Camera off' : 'Waiting…'}</span>
+        </div>
+      )}
+      {hasVideo && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-2.5 pb-2 pt-6">
+          <span className="text-2xs font-semibold tracking-wide text-white">{teacherName}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StudentPeersFloat({
+  roomCode,
+  teacherIdentities,
+  visibleIdentities,
+  localIdentity,
+}: {
+  roomCode: string;
+  teacherIdentities: string[];
+  visibleIdentities: string[];
+  localIdentity?: string | null;
+}) {
+  const room = useRoomContext();
+  const teacherSet = new Set(teacherIdentities);
+  const paneRef = useRef<HTMLDivElement | null>(null);
+  const sizeRef = useRef({ w: 280, h: 220 });
+  const [slotCount, setSlotCount] = useState<2 | 4 | 6>(() => {
+    try {
+      const v = sessionStorage.getItem(`peers_slots_${roomCode.toUpperCase()}`);
+      if (v === '2' || v === '4' || v === '6') return Number(v) as 2 | 4 | 6;
+    } catch {
+      /* ignore */
+    }
+    return 4;
+  });
+  const [rotationTick, setRotationTick] = useState(0);
+  const [speakingId, setSpeakingId] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
+
+  const defaultPos = useCallback((): FloatPos => {
+    const w = sizeRef.current.w;
+    const h = sizeRef.current.h;
+    return clampFloatPos(12, window.innerHeight - h - 100, w, h);
+  }, []);
+
+  const { pos, dragHandlers } = useDraggableFloat(
+    `peers_float_pos_${roomCode.toUpperCase()}`,
+    defaultPos,
+    sizeRef
+  );
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(`peers_slots_${roomCode.toUpperCase()}`, String(slotCount));
+    } catch {
+      /* ignore */
+    }
+  }, [slotCount, roomCode]);
+
+  useEffect(() => {
+    const el = paneRef.current;
+    if (!el) return;
+    const sync = () => {
+      sizeRef.current = { w: el.offsetWidth || 280, h: el.offsetHeight || 220 };
+    };
+    sync();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null;
+    ro?.observe(el);
+    return () => ro?.disconnect();
+  }, [slotCount]);
+
+  // Rotate fill slots ~8s to match server sample cadence
+  useEffect(() => {
+    const iv = window.setInterval(() => setRotationTick((n) => n + 1), 8000);
+    return () => window.clearInterval(iv);
+  }, []);
+
+  useEffect(() => {
+    if (!room) return;
+    const onSpeakers = (speakers: Participant[]) => {
+      const studentSpeaker = speakers.find(
+        (s) =>
+          !s.isLocal &&
+          !isTeacherParticipant(s, teacherSet) &&
+          (!localIdentity || s.identity !== localIdentity)
+      );
+      setSpeakingId(studentSpeaker?.identity ?? null);
+    };
+    room.on(RoomEvent.ActiveSpeakersChanged, onSpeakers);
+    return () => {
+      room.off(RoomEvent.ActiveSpeakersChanged, onSpeakers);
+    };
+  }, [room, teacherIdentities, localIdentity]);
+
+  // Ensure peer cameras in sample are subscribed
+  useEffect(() => {
+    if (!room) return;
+    const ensure = () => {
+      for (const p of Array.from(room.remoteParticipants.values())) {
+        if (isTeacherParticipant(p, teacherSet)) continue;
+        if (localIdentity && p.identity === localIdentity) continue;
+        const pub = p.getTrackPublication(Track.Source.Camera);
+        if (pub && !pub.isSubscribed) {
+          try {
+            pub.setSubscribed(true);
+          } catch (e) {
+            console.warn('subscribe peer cam', e);
+          }
+        }
+      }
+      setTick((n) => n + 1);
+    };
+    ensure();
+    room.on(RoomEvent.TrackPublished, ensure);
+    room.on(RoomEvent.TrackSubscribed, ensure);
+    room.on(RoomEvent.ParticipantConnected, ensure);
+    room.on(RoomEvent.ParticipantDisconnected, ensure);
+    const iv = window.setInterval(ensure, 2000);
+    return () => {
+      room.off(RoomEvent.TrackPublished, ensure);
+      room.off(RoomEvent.TrackSubscribed, ensure);
+      room.off(RoomEvent.ParticipantConnected, ensure);
+      room.off(RoomEvent.ParticipantDisconnected, ensure);
+      window.clearInterval(iv);
+    };
+  }, [room, teacherIdentities, localIdentity, visibleIdentities]);
+
+  void tick;
+  void rotationTick;
+
+  const peerIds = useMemo(() => {
+    const tSet = new Set(teacherIdentities);
+    const fromSample = visibleIdentities.filter(
+      (id) => id !== localIdentity && !tSet.has(id) && !id.startsWith('teacher_')
+    );
+    const remote: string[] = [];
+    if (room) {
+      for (const p of Array.from(room.remoteParticipants.values())) {
+        if (isTeacherParticipant(p, tSet)) continue;
+        if (localIdentity && p.identity === localIdentity) continue;
+        if (!remote.includes(p.identity)) remote.push(p.identity);
+      }
+    }
+    const pool = fromSample.length ? fromSample : remote;
+    const slots: string[] = [];
+    if (speakingId && (pool.includes(speakingId) || remote.includes(speakingId))) {
+      slots.push(speakingId);
+    }
+    const rest = pool.filter((id) => !slots.includes(id));
+    const offset = rotationTick % Math.max(1, rest.length);
+    const rotated = rest.length ? [...rest.slice(offset), ...rest.slice(0, offset)] : [];
+    for (const id of rotated) {
+      if (slots.length >= slotCount) break;
+      slots.push(id);
+    }
+    if (slots.length < slotCount) {
+      for (const id of remote) {
+        if (slots.length >= slotCount) break;
+        if (!slots.includes(id)) slots.push(id);
+      }
+    }
+    return slots.slice(0, slotCount);
+  }, [
+    visibleIdentities,
+    localIdentity,
+    teacherIdentities,
+    room,
+    speakingId,
+    rotationTick,
+    slotCount,
+    tick,
+  ]);
+
+  const cols = slotCount === 2 ? 1 : 2;
+  const style = pos ? { left: pos.x, top: pos.y } : { left: 12, bottom: 88 };
+
+  return (
+    <div
+      ref={paneRef}
+      className="peers-float-pane"
+      style={style}
+      aria-label="Classmates — drag to move"
+      {...dragHandlers}
+    >
+      <div className="peers-float-header">
+        <span className="text-2xs font-semibold text-slate-200">Classmates</span>
+        <div className="flex items-center gap-1" onPointerDown={(e) => e.stopPropagation()}>
+          {([2, 4, 6] as const).map((n) => (
+            <button
+              key={n}
+              type="button"
+              className={cn(
+                'rounded px-1.5 py-0.5 text-[10px] font-bold transition',
+                slotCount === n
+                  ? 'bg-brand-600 text-white'
+                  : 'bg-white/10 text-slate-300 hover:bg-white/20'
+              )}
+              onClick={() => setSlotCount(n)}
+              aria-label={`Show ${n} videos`}
+            >
+              {n}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div
+        className="peers-float-grid"
+        style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+      >
+        {peerIds.length === 0 && (
+          <div className="col-span-full flex aspect-video items-center justify-center rounded-lg bg-black/40 text-2xs text-slate-400">
+            No classmates yet
+          </div>
+        )}
+        {peerIds.map((identity) => {
+          let name = identity;
+          let mediaTrack: MediaStreamTrack | null = null;
+          let speaking = false;
+          if (room) {
+            const p = room.remoteParticipants.get(identity);
+            if (p) {
+              name = p.name || p.identity;
+              speaking = p.isSpeaking || speakingId === identity;
+              const pub = p.getTrackPublication(Track.Source.Camera);
+              mediaTrack = pub?.track?.mediaStreamTrack ?? null;
+            }
+          }
+          return (
+            <PeerCamTile
+              key={identity}
+              name={name}
+              mediaTrack={mediaTrack}
+              speaking={speaking}
+              pinned={speakingId === identity}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function PeerCamTile({
+  name,
+  mediaTrack,
+  speaking,
+  pinned,
+}: {
+  name: string;
+  mediaTrack: MediaStreamTrack | null;
+  speaking: boolean;
+  pinned: boolean;
+}) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    if (!mediaTrack) {
+      el.srcObject = null;
+      return;
+    }
+    el.srcObject = new MediaStream([mediaTrack]);
+    void el.play().catch(() => {});
+    return () => {
+      el.srcObject = null;
+    };
+  }, [mediaTrack]);
+
+  return (
+    <div
+      className={cn(
+        'relative aspect-video overflow-hidden rounded-lg bg-black',
+        speaking && 'ring-2 ring-brand-400'
+      )}
+    >
+      {mediaTrack ? (
         <video
           ref={videoRef}
           className="h-full w-full object-cover"
@@ -321,16 +771,14 @@ function TeacherCameraFloat({ teacherIdentities }: { teacherIdentities: string[]
           muted
         />
       ) : (
-        <div className="flex h-full flex-col items-center justify-center gap-2 bg-gradient-to-br from-surface-3 to-ink-950 text-slate-300">
-          <Avatar name={teacherName} size="lg" />
-          <span className="text-xs">{teacherPub ? 'Camera off' : 'Waiting…'}</span>
+        <div className="flex h-full items-center justify-center bg-gradient-to-br from-surface-3 to-ink-950">
+          <Avatar name={name} size="sm" />
         </div>
       )}
-      {hasVideo && (
-        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-2.5 pb-2 pt-6">
-          <span className="text-2xs font-semibold tracking-wide text-white">{teacherName}</span>
-        </div>
-      )}
+      <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-1 bg-gradient-to-t from-black/75 to-transparent px-1.5 pb-1 pt-4">
+        <span className="truncate text-[10px] font-medium text-white">{name}</span>
+        {pinned && <span className="shrink-0 text-[9px] text-brand-300">Speaking</span>}
+      </div>
     </div>
   );
 }
@@ -854,6 +1302,23 @@ function RoomInner({
     refresh();
   }
 
+  const handRaised = !!(state?.me?.handRaised ?? (state?.raisedHands ?? []).includes(state?.me?.id || ''));
+
+  async function toggleHand() {
+    if (isTeacher) return;
+    const next = !handRaised;
+    try {
+      await roomFetch(code, '/hand', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ raised: next }),
+      });
+      refresh();
+    } catch (e) {
+      console.warn('hand', e);
+    }
+  }
+
   const studentCount = state?.admitted?.filter((a) => a.role === 'STUDENT').length ?? 0;
   const waitingCount = state?.waiting?.length ?? 0;
   const controlsProps = {
@@ -871,6 +1336,8 @@ function RoomInner({
     canPublishVideo: effectiveCanPublish,
     mutedByTeacher: effectiveMuted,
     showScreenShare: isTeacher,
+    handRaised,
+    onToggleHand: isTeacher ? undefined : toggleHand,
   };
 
   // —— Student path: always fullscreen stage + floating teacher cam + float chrome ——
@@ -922,7 +1389,16 @@ function RoomInner({
           )}
         </div>
 
-        <TeacherCameraFloat teacherIdentities={teacherIdentities} />
+        <TeacherCameraFloat teacherIdentities={teacherIdentities} roomCode={code} />
+
+        {(effectiveStage === 'screen' || effectiveStage === 'whiteboard') && (
+          <StudentPeersFloat
+            roomCode={code}
+            teacherIdentities={teacherIdentities}
+            visibleIdentities={visibles}
+            localIdentity={state?.me?.livekitIdentity}
+          />
+        )}
 
         <div
           className={cn(
@@ -1202,21 +1678,48 @@ function RoomInner({
                     className="py-6"
                   />
                 )}
-                {state?.admitted?.map((p) => (
+                {[...(state?.admitted ?? [])]
+                  .sort((a, b) => {
+                    const ah = a.role === 'STUDENT' && (a.handRaised || (state?.raisedHands ?? []).includes(a.id)) ? 1 : 0;
+                    const bh = b.role === 'STUDENT' && (b.handRaised || (state?.raisedHands ?? []).includes(b.id)) ? 1 : 0;
+                    if (ah !== bh) return bh - ah;
+                    if (a.role !== b.role) return a.role === 'TEACHER' ? -1 : 1;
+                    return a.displayName.localeCompare(b.displayName);
+                  })
+                  .map((p) => {
+                  const raised =
+                    p.role === 'STUDENT' &&
+                    (p.handRaised || (state?.raisedHands ?? []).includes(p.id));
+                  return (
                   <li
                     key={p.id}
-                    className="rounded-xl border border-white/[0.05] bg-black/20 px-3 py-2.5"
+                    className={cn(
+                      'rounded-xl border bg-black/20 px-3 py-2.5',
+                      raised ? 'border-amber-400/40 bg-amber-500/10' : 'border-white/[0.05]'
+                    )}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex min-w-0 items-center gap-2.5">
                         <Avatar name={p.displayName} size="sm" />
                         <div className="min-w-0">
-                          <p className="truncate font-medium text-slate-100">
-                            {p.displayName}
-                            {p.role === 'TEACHER' ? ' · Teacher' : ''}
+                          <p className="flex items-center gap-1.5 truncate font-medium text-slate-100">
+                            {raised && (
+                              <span className="inline-flex shrink-0 text-amber-300" title="Hand raised" aria-label="Hand raised">
+                                <IconHand size={14} />
+                              </span>
+                            )}
+                            <span className="truncate">
+                              {p.displayName}
+                              {p.role === 'TEACHER' ? ' · Teacher' : ''}
+                            </span>
                           </p>
                           {p.mutedByTeacher && p.role === 'STUDENT' && (
                             <span className="chip-muted mt-0.5">Muted by teacher</span>
+                          )}
+                          {raised && (
+                            <span className="mt-0.5 inline-flex items-center gap-1 text-2xs font-semibold text-amber-300">
+                              ✋ Hand raised
+                            </span>
                           )}
                         </div>
                       </div>
@@ -1227,16 +1730,35 @@ function RoomInner({
                       )}
                     </div>
                     {isTeacher && p.role === 'STUDENT' && (
-                      <button
-                        type="button"
-                        className="mt-2 text-xs font-medium text-brand-300 hover:underline"
-                        onClick={() => muteStudent(p.id, !p.mutedByTeacher)}
-                      >
-                        {p.mutedByTeacher ? 'Unmute student' : 'Mute student'}
-                      </button>
+                      <div className="mt-2 flex flex-wrap gap-3">
+                        <button
+                          type="button"
+                          className="text-xs font-medium text-brand-300 hover:underline"
+                          onClick={() => muteStudent(p.id, !p.mutedByTeacher)}
+                        >
+                          {p.mutedByTeacher ? 'Unmute student' : 'Mute student'}
+                        </button>
+                        {raised && (
+                          <button
+                            type="button"
+                            className="text-xs font-medium text-amber-300 hover:underline"
+                            onClick={async () => {
+                              await roomFetch(code, '/hand', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ participantId: p.id, raised: false }),
+                              });
+                              refresh();
+                            }}
+                          >
+                            Lower hand
+                          </button>
+                        )}
+                      </div>
                     )}
                   </li>
-                ))}
+                  );
+                })}
               </ul>
               {isTeacher && waitingCount > 0 && (
                 <div className="shrink-0 border-t border-white/5 pt-3">

@@ -11,6 +11,7 @@ import {
   IconLeave,
   IconRotate,
   IconChat,
+  IconHand,
 } from '@/components/ui/Icons';
 import { cn } from '@/lib/cn';
 
@@ -36,6 +37,9 @@ type Props = {
   /** Float mode: open chat overlay */
   onOpenChat?: () => void;
   chatUnread?: number;
+  /** Student raise-hand */
+  handRaised?: boolean;
+  onToggleHand?: () => void;
 };
 
 export function Controls({
@@ -57,6 +61,8 @@ export function Controls({
   variant = 'dock',
   onOpenChat,
   chatUnread = 0,
+  handRaised,
+  onToggleHand,
 }: Props) {
   void _canPublishVideo;
   const micLocked = !!mutedByTeacher && !isTeacher;
@@ -106,6 +112,16 @@ export function Controls({
             onClick={onToggleScreen}
           >
             <IconScreen />
+          </IconButton>
+        )}
+
+        {!isTeacher && onToggleHand && (
+          <IconButton
+            label={handRaised ? 'Lower hand' : 'Raise hand'}
+            active={!!handRaised}
+            onClick={onToggleHand}
+          >
+            <IconHand />
           </IconButton>
         )}
 

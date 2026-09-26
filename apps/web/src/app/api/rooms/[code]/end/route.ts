@@ -28,7 +28,11 @@ export async function POST(_req: Request, { params }: { params: { code: string }
     keys.visible(code),
     keys.muted(code),
     keys.rotation(code),
-    keys.whiteboard(code)
+    keys.whiteboard(code),
+    keys.hands(code),
+    keys.stage(code),
+    keys.wbWrite(code),
+    keys.pinnedSpeakers(code)
   );
 
   try {

@@ -126,3 +126,17 @@ export function IconSend(p: P) {
     </svg>
   );
 }
+
+export function IconHand(p: P) {
+  return (
+    <svg {...base(p)}>
+      <path
+        d="M8.5 13V6.5a1.5 1.5 0 0 1 3 0V12M11.5 12V5a1.5 1.5 0 0 1 3 0v7M14.5 12V6.5a1.5 1.5 0 0 1 3 0V14a5.5 5.5 0 0 1-5.5 5.5h-.2A5.3 5.3 0 0 1 7 14.7V11a1.5 1.5 0 0 1 3 0v2"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}

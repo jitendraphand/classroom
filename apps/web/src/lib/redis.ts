@@ -41,6 +41,8 @@ export const keys = {
   pinnedSpeakers: (code: string) => `room:${code}:pinned-speakers`,
   /** Per-identity pin rate limit */
   pinRate: (code: string, identity: string) => `room:${code}:pin-rate:${identity}`,
+  /** Set of participant ids with raised hands */
+  hands: (code: string) => `room:${code}:hands`,
 };
 
 export type StageMode = 'idle' | 'screen' | 'whiteboard';
@@ -57,3 +59,4 @@ export async function getWhiteboardWriteAllowed(code: string): Promise<boolean> 
   const v = await redis.get(keys.wbWrite(code));
   return v === '1';
 }
+
