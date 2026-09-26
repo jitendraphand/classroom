@@ -4,6 +4,7 @@ import { getTeacherSession } from '@/lib/auth';
 import { generateRoomCode, generateIdentity, generateSessionToken } from '@/lib/codes';
 import { jsonError, jsonOk } from '@/lib/response';
 import { sampleConfig } from '@/lib/sample';
+import { resolveAppUrl } from '@/lib/url';
 
 const schema = z.object({
   name: z.string().min(1).max(120),
@@ -47,7 +48,7 @@ export async function POST(req: Request) {
       },
     });
 
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || 'http://localhost:3000';
+    const appUrl = resolveAppUrl(req);
 
     return jsonOk({
       id: room.id,

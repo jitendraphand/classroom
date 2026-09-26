@@ -62,7 +62,7 @@ export async function GET(req: Request, { params }: { params: { code: string } }
 
   return jsonOk({
     token,
-    url: getPublicLiveKitUrl(),
+    url: getPublicLiveKitUrl(req),
     roomName: livekitRoomName(code),
     identity: participant.livekitIdentity,
     canPublishVideo,

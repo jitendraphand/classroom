@@ -27,7 +27,7 @@ flowchart LR
 | **postgres** | Teachers, rooms, participants, chat messages |
 | **redis** | Waiting/admitted sets, visible-sample identities, whiteboard snapshots |
 
-> **Networking:** `docker-compose.yml` uses `network_mode: host` so services talk over `127.0.0.1`. This avoids broken Docker bridge inter-container TCP on some sandboxed Linux hosts. Ports bind on the host directly.
+> **Networking:** `docker-compose.yml` uses `network_mode: host` on a single Linux VM so LiveKit WebRTC UDP/TCP bind on the host NICs and services talk over `127.0.0.1`. Ideal for local demos **and** bare public-IP VPS deploys (see [docs/DEPLOY-VPS.md](docs/DEPLOY-VPS.md)).
 
 ### How sampled video works
 
@@ -100,6 +100,18 @@ docker compose down
 docker compose down -v
 ```
 
+
+## Deploy on a VPS (public IP, no domain)
+
+```bash
+cp -n .env.example .env
+PUBLIC_IP=203.0.113.10 ./scripts/configure-public-ip.sh   # your VM public IPv4
+./scripts/sync-livekit-keys.sh
+docker compose up --build -d
+```
+
+Open `http://PUBLIC_IP:3000`. Firewall must allow **3000/tcp**, **7880/tcp**, **7881/tcp**, and **50000–50100/udp**. Full steps: [docs/DEPLOY-VPS.md](docs/DEPLOY-VPS.md).
+
 ## URLs & ports
 
 | URL | Purpose |
@@ -123,7 +135,11 @@ See `.env.example`. Important:
 | `SAMPLE_ROTATION_SECONDS` | `8` | Auto-rotation interval for visible student cameras (5–10s recommended) |
 | `SPEAKER_PIN_TTL_SECONDS` | `18` | How long an active-speaker pin protects a student from random ejection |
 | `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | generated | Must match `infra/livekit.yaml` (`scripts/sync-livekit-keys.sh`) |
-| `NEXT_PUBLIC_LIVEKIT_URL` | `ws://localhost:7880` | Browser-facing LiveKit URL |
+| `APP_URL` / `NEXT_PUBLIC_APP_URL` | `http://localhost:3000` | Browser-facing app origin — set to `http://PUBLIC_IP:3000` on a VPS |
+| `NEXT_PUBLIC_LIVEKIT_URL` | `ws://localhost:7880` | Browser-facing LiveKit URL — set to `ws://PUBLIC_IP:7880` on a VPS |
+| `LIVEKIT_USE_EXTERNAL_IP` | `false` | `true` on VPS so ICE advertises the public IP (`sync-livekit-keys.sh`) |
+| `LIVEKIT_NODE_IP` | _(unset)_ | Optional pin of advertised IP (set by `configure-public-ip.sh`) |
+| `COOKIE_SECURE` | derived from `APP_URL` | `false` for HTTP / bare IP; `true` only behind HTTPS |
 | `NEXTAUTH_SECRET` | generated | JWT signing for teachers |
 | `DATABASE_URL` | `postgresql://…@127.0.0.1:5432/…` | Host-network Postgres |
 | `REDIS_URL` | `redis://127.0.0.1:6379` | Host-network Redis |
@@ -136,6 +152,8 @@ See `.env.example`. Important:
 ├── .env.example                # copy to .env (gitignored)
 ├── infra/livekit.yaml          # keys synced from .env
 ├── scripts/sync-livekit-keys.sh
+├── scripts/configure-public-ip.sh
+├── docs/DEPLOY-VPS.md          # bare public-IP VPS guide
 ├── README.md
 └── apps/web                    # Next.js app
     ├── Dockerfile
@@ -172,10 +190,12 @@ Targets: ~20 concurrent rooms × ~150 attendees. Selective publish is the main l
 
 - Whiteboard sync uses **LiveKit reliable data messages** (tldraw store diffs) plus Redis snapshots for late joiners.
 - Chat persists in Postgres while the room is LIVE/WAITING; GET returns empty after ENDED. No student-to-student chat.
-- LiveKit `use_external_ip: false` suits local demos; remote clients may need public IP / TURN.
+- Local demos keep `use_external_ip: false`; VPS deploys set it `true` (and usually `LIVEKIT_NODE_IP`) via `configure-public-ip.sh`.
+- Bare HTTP on a public IP works (cookies `Secure=false`); browsers may still warn about camera/mic permissions compared to HTTPS.
+- No built-in TURN — restrictive NATs may need a TURN server for media.
 - No recording (by design).
 - Student sessions are cookie-bound to the joining browser (`POST /api/auth/clear-student` to switch names).
-- Docker **bridge** ICC was broken on some hosts; compose therefore uses **host** networking.
+- Compose uses **host** networking on a single VM (best for LiveKit UDP on a public IP).
 
 ## License
 

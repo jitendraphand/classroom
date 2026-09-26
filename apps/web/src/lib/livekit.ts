@@ -4,6 +4,7 @@ import {
   TrackSource,
   TrackType,
 } from 'livekit-server-sdk';
+import { resolvePublicLiveKitUrl } from './url';
 
 export function getLiveKitHttpUrl() {
   return (
@@ -13,8 +14,8 @@ export function getLiveKitHttpUrl() {
   );
 }
 
-export function getPublicLiveKitUrl() {
-  return process.env.NEXT_PUBLIC_LIVEKIT_URL || 'ws://localhost:7880';
+export function getPublicLiveKitUrl(req?: Request) {
+  return resolvePublicLiveKitUrl(req);
 }
 
 export function roomService() {

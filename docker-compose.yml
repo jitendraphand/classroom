@@ -1,5 +1,8 @@
-# Host networking: required on environments where Docker bridge inter-container
-# TCP is broken. All services bind on the host loopback/LAN interfaces.
+# Host networking on a single Linux VM/VPS:
+# - LiveKit WebRTC UDP/TCP bind directly on the host (best path for public IP).
+# - Postgres/Redis/LiveKit/web share 127.0.0.1 for server-side traffic.
+# - Set APP_URL / NEXT_PUBLIC_* to http://PUBLIC_IP:3000 and ws://PUBLIC_IP:7880
+#   (see docs/DEPLOY-VPS.md). Do not expose 5432/6379 on the public firewall.
 services:
   postgres:
     image: postgres:16-alpine
@@ -46,6 +49,7 @@ services:
       context: ./apps/web
       dockerfile: Dockerfile
       args:
+        # Build-time fallbacks; runtime token API also uses env / request Host
         NEXT_PUBLIC_LIVEKIT_URL: ${NEXT_PUBLIC_LIVEKIT_URL:-ws://localhost:7880}
         NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
     restart: unless-stopped
@@ -60,6 +64,7 @@ services:
       APP_URL: ${APP_URL:-http://localhost:3000}
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
       NEXT_PUBLIC_LIVEKIT_URL: ${NEXT_PUBLIC_LIVEKIT_URL:-ws://localhost:7880}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
       MAX_VISIBLE_STUDENT_VIDEOS: ${MAX_VISIBLE_STUDENT_VIDEOS:-10}
       SAMPLE_ROTATION_SECONDS: ${SAMPLE_ROTATION_SECONDS:-8}
       SPEAKER_PIN_TTL_SECONDS: ${SPEAKER_PIN_TTL_SECONDS:-18}

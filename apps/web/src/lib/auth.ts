@@ -2,6 +2,7 @@ import { SignJWT, jwtVerify } from 'jose';
 import { cookies } from 'next/headers';
 import bcrypt from 'bcryptjs';
 import { prisma } from './db';
+import { cookieSecureFlag } from './url';
 
 const COOKIE = 'classroom_teacher';
 const STUDENT_COOKIE = 'classroom_student';
@@ -32,14 +33,14 @@ export async function setTeacherCookie(token: string) {
   cookies().set(COOKIE, token, {
     httpOnly: true,
     sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    secure: cookieSecureFlag(),
     path: '/',
     maxAge: 60 * 60 * 24 * 7,
   });
 }
 
 export async function clearTeacherCookie() {
-  cookies().set(COOKIE, '', { httpOnly: true, path: '/', maxAge: 0 });
+  cookies().set(COOKIE, '', { httpOnly: true, sameSite: 'lax', secure: cookieSecureFlag(), path: '/', maxAge: 0 });
 }
 
 export async function getTeacherSession() {
@@ -66,14 +67,14 @@ export function setStudentCookie(sessionToken: string) {
   cookies().set(STUDENT_COOKIE, sessionToken, {
     httpOnly: true,
     sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    secure: cookieSecureFlag(),
     path: '/',
     maxAge: 60 * 60 * 12,
   });
 }
 
 export function clearStudentCookie() {
-  cookies().set(STUDENT_COOKIE, '', { httpOnly: true, path: '/', maxAge: 0 });
+  cookies().set(STUDENT_COOKIE, '', { httpOnly: true, sameSite: 'lax', secure: cookieSecureFlag(), path: '/', maxAge: 0 });
 }
 
 export function getStudentSessionToken() {
@@ -96,14 +97,14 @@ export function setActAsStudent() {
   cookies().set(ACT_AS_COOKIE, 'student', {
     httpOnly: true,
     sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    secure: cookieSecureFlag(),
     path: '/',
     maxAge: 60 * 60 * 12,
   });
 }
 
 export function clearActAs() {
-  cookies().set(ACT_AS_COOKIE, '', { httpOnly: true, path: '/', maxAge: 0 });
+  cookies().set(ACT_AS_COOKIE, '', { httpOnly: true, sameSite: 'lax', secure: cookieSecureFlag(), path: '/', maxAge: 0 });
 }
 
 export function getActAs(): 'student' | null {
