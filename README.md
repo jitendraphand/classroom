@@ -114,7 +114,9 @@ Open `http://PUBLIC_IP:3000`. Firewall must allow **3000/tcp**, **7880/tcp**, **
 
 ## Deploy with HTTPS (Caddy + Let's Encrypt)
 
-Requires a **domain** (Let's Encrypt will not certify a bare IP). Point `DOMAIN` and `livekit.DOMAIN` at the VM, then:
+Needs a **hostname** (not `https://1.2.3.4`). Use your domain, or a free IP name from [sslip.io](https://sslip.io) (e.g. `81-223-254-76.sslip.io` → `81.223.254.76`).
+
+**Own domain:**
 
 ```bash
 DOMAIN=class.example.com PUBLIC_IP=203.0.113.10 ACME_EMAIL=admin@example.com \
@@ -123,7 +125,16 @@ DOMAIN=class.example.com PUBLIC_IP=203.0.113.10 ACME_EMAIL=admin@example.com \
 docker compose --profile tls up --build -d
 ```
 
-Opens `https://DOMAIN` and `wss://livekit.DOMAIN`. Firewall: **80/443**, **7881/tcp**, **50000–50100/udp**; do **not** expose **3000** or **7880** publicly. Full steps: [docs/DEPLOY-CADDY.md](docs/DEPLOY-CADDY.md).
+**No domain (sslip.io):**
+
+```bash
+PUBLIC_IP=81.223.254.76 ACME_EMAIL=admin@example.com \
+  ./scripts/configure-sslip-tls.sh
+./scripts/sync-livekit-keys.sh
+docker compose --profile tls up --build -d
+```
+
+Opens `https://…` and `wss://livekit.…`. Firewall: **80/443**, **7881/tcp**, **50000–50100/udp**; do **not** expose **3000** or **7880** publicly. Full steps: [docs/DEPLOY-CADDY.md](docs/DEPLOY-CADDY.md).
 
 
 ## URLs & ports

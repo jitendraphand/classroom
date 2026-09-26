@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Wire .env + infra/Caddyfile for HTTPS/WSS via Caddy + Let's Encrypt.
-# Requires a real domain (A/AAAA → VM). For bare public-IP HTTP, use configure-public-ip.sh instead.
+# Requires a DNS hostname → VM (your domain, or sslip.io via configure-sslip-tls.sh).
+# For bare public-IP HTTP (no TLS), use configure-public-ip.sh instead.
 #
 # Usage:
 #   DOMAIN=class.example.com PUBLIC_IP=203.0.113.10 ./scripts/configure-domain-tls.sh
@@ -14,7 +15,8 @@ if [[ -z "${DOMAIN:-}" || -z "${PUBLIC_IP:-}" ]]; then
   echo "Usage: DOMAIN=<hostname> PUBLIC_IP=<vps-public-ip> $0" >&2
   echo "Example: DOMAIN=class.example.com PUBLIC_IP=203.0.113.10 ACME_EMAIL=admin@example.com $0" >&2
   echo >&2
-  echo "Let's Encrypt needs a domain pointed at this VM." >&2
+  echo "Let's Encrypt needs a hostname pointed at this VM." >&2
+  echo "For free IP hostname TLS (sslip.io): PUBLIC_IP=… ./scripts/configure-sslip-tls.sh" >&2
   echo "For bare public-IP HTTP (no TLS): PUBLIC_IP=… ./scripts/configure-public-ip.sh" >&2
   exit 1
 fi
@@ -34,7 +36,8 @@ if [[ ! -f "$ENV_FILE" ]]; then
 fi
 
 upsert() {
-  local key="$1" val="$2"
+  local key="$1"
+  local val="$2"
   if grep -q "^${key}=" "$ENV_FILE"; then
     awk -v k="$key" -v v="$val" 'BEGIN{FS=OFS="="} $1==k {$0=k"="v} {print}' "$ENV_FILE" > "$ENV_FILE.tmp"
     mv "$ENV_FILE.tmp" "$ENV_FILE"
@@ -61,7 +64,6 @@ if [[ -n "$ACME_EMAIL" ]]; then
   upsert ACME_EMAIL "$ACME_EMAIL"
 fi
 
-# Write Caddyfile with concrete hostnames
 EMAIL_LINE="# email admin@example.com  # set ACME_EMAIL=… when running configure-domain-tls.sh"
 if [[ -n "$ACME_EMAIL" ]]; then
   EMAIL_LINE="email ${ACME_EMAIL}"

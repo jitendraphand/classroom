@@ -2,7 +2,12 @@
 
 Goal: serve the app at `https://DOMAIN` and LiveKit signaling at `wss://livekit.DOMAIN`, with automatic TLS from Let's Encrypt via Caddy.
 
-> **Domain required.** Let's Encrypt will not issue certificates for a bare public IP. For HTTP on `http://PUBLIC_IP:3000` without DNS, use [DEPLOY-VPS.md](DEPLOY-VPS.md) and `scripts/configure-public-ip.sh` instead.
+> **Hostname required (not a bare IP in the browser URL).** Let's Encrypt will not issue certificates for `https://1.2.3.4`. You need a DNS name that points at the VM.
+>
+> Options:
+> - **Your own domain** — A records you control (sections below).
+> - **Free IP hostname** — [sslip.io](https://sslip.io) / [nip.io](https://nip.io) map a name to your IP (e.g. `https://81-223-254-76.sslip.io`). Use `scripts/configure-sslip-tls.sh` (see § sslip.io below).
+> - **HTTP only, no TLS** — [DEPLOY-VPS.md](DEPLOY-VPS.md) + `configure-public-ip.sh`.
 
 ## What Caddy proxies (and what it does not)
 
@@ -22,6 +27,39 @@ All Compose services (including Caddy) use **`network_mode: host`** so Caddy can
 - A domain you control (example: `class.example.com`)
 - Public IPv4 (and optionally IPv6)
 - DNS ready **before** first Caddy start (LE HTTP-01 needs `DOMAIN` reachable on port 80)
+
+
+## sslip.io / nip.io (no custom domain)
+
+Services like **sslip.io** publish DNS for names derived from your public IP. Caddy treats them like any other hostname and can get a Let's Encrypt cert.
+
+| Public IP | App URL | LiveKit WSS |
+|-----------|---------|-------------|
+| `81.223.254.76` | `https://81-223-254-76.sslip.io` | `wss://livekit.81-223-254-76.sslip.io` |
+
+Subdomains such as `livekit.81-223-254-76.sslip.io` also resolve to that same IP (sslip.io behavior), so the existing Caddyfile layout works unchanged.
+
+```bash
+cp -n .env.example .env
+
+PUBLIC_IP=81.223.254.76 ACME_EMAIL=admin@example.com \
+  ./scripts/configure-sslip-tls.sh
+
+# Optional: nip.io instead
+# SSLIP_BASE=nip.io PUBLIC_IP=81.223.254.76 ./scripts/configure-sslip-tls.sh
+
+./scripts/sync-livekit-keys.sh
+docker compose --profile tls up --build -d
+```
+
+No registrar or manual A records. Still open firewall **80/443**, **7881**, and UDP **50000–50100** as in §2. Confirm resolution first:
+
+```bash
+getent ahostsv4 81-223-254-76.sslip.io
+# expect your PUBLIC_IP
+```
+
+**Caveats:** you depend on sslip.io/nip.io availability and their rate limits; for production teaching, prefer a domain you control. Some corporate filters block `*.sslip.io`.
 
 ## 1. DNS
 
