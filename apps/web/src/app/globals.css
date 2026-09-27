@@ -306,11 +306,10 @@ body {
   }
 
 
-  /* View-only whiteboard: hide editing chrome, block UI pointer events */
+  /* View-only whiteboard: hide editing chrome, but keep pan/zoom controls. */
   .tldraw-readonly .tlui-layout .tlui-toolbar,
   .tldraw-readonly .tlui-toolbar,
   .tldraw-readonly .tlui-style-panel,
-  .tldraw-readonly .tlui-navigation-panel,
   .tldraw-readonly .tlui-help-menu,
   .tldraw-readonly .tlui-menu-zone,
   .tldraw-readonly .tlui-main-toolbar,
@@ -322,6 +321,10 @@ body {
   .tldraw-readonly [class^='tlui-'],
   .tldraw-readonly [class*=' tlui-'] {
     pointer-events: none !important;
+  }
+  .tldraw-readonly .tlui-navigation-panel,
+  .tldraw-readonly .tlui-navigation-panel * {
+    pointer-events: all !important;
   }
 
 }
@@ -412,9 +415,9 @@ body {
   opacity: 0 !important;
 }
 
-/* Teacher whiteboard camera (zoom / minimap) sits top-right so the Students
-   float can occupy the bottom-left without covering zoom in/out. */
-.tldraw-teacher .tlui-navigation-panel {
+/* Zoom / minimap sits top-right so pan-zoom stays usable beside the Students float.
+   position:fixed is contained by tldraw's transformed layout, i.e. the board itself. */
+.tldraw-wrap .tlui-navigation-panel {
   position: fixed !important;
   left: auto !important;
   right: 8px !important;
@@ -422,7 +425,7 @@ body {
   bottom: auto !important;
   z-index: 400 !important;
 }
-.tldraw-teacher.tldraw-styles-open .tlui-navigation-panel {
+.tldraw-wrap.tldraw-styles-open .tlui-navigation-panel {
   right: 164px !important;
 }
 

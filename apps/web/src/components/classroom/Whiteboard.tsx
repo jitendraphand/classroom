@@ -47,6 +47,36 @@ type WbMessage =
 type StylesCtxValue = { open: boolean };
 const StylesCtx = createContext<StylesCtxValue>({ open: false });
 
+/**
+ * Unbounded camera. No `constraints`, so pan is not clipped to a page.
+ * Zoom steps run from 2% to 1600%; trackpad pinch and ctrl/⌘+wheel are continuous.
+ * Plain wheel pans. Each viewer keeps their own camera (not part of the shared document).
+ */
+const WB_CAMERA = {
+  isLocked: false,
+  wheelBehavior: 'pan' as const,
+  panSpeed: 1,
+  zoomSpeed: 1,
+  zoomSteps: [0.02, 0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8, 16],
+};
+
+const SESSION_RECORD_TYPES = new Set([
+  'camera',
+  'instance',
+  'instance_page_state',
+  'instance_presence',
+  'pointer',
+]);
+
+/** Drop per-user camera/session so a snapshot cannot yank someone else's pan or zoom. */
+function documentOnlySnapshot(snapshot: unknown): unknown {
+  if (!snapshot || typeof snapshot !== 'object') return snapshot;
+  if ('document' in snapshot) {
+    return { document: (snapshot as { document: unknown }).document };
+  }
+  return snapshot;
+}
+
 /** tldraw StylePanel slot — renders nothing until Colors toggle opens it. */
 function GatedStylePanel(props: ComponentProps<typeof DefaultStylePanel>) {
   const { open } = useContext(StylesCtx);
@@ -198,6 +228,7 @@ export function Whiteboard({ code, onEnded, canWrite = false, isTeacher }: Props
   const applyDiff = useCallback((changes: any) => {
     const editor = editorRef.current;
     if (!editor || !changes) return;
+    const keep = (record: any) => record && !SESSION_RECORD_TYPES.has(record.typeName);
     applyingRemote.current = true;
     try {
       editor.store.mergeRemoteChanges(() => {
@@ -205,14 +236,14 @@ export function Whiteboard({ code, onEnded, canWrite = false, isTeacher }: Props
         const updated = changes.updated ? Object.values(changes.updated) : [];
         const removed = changes.removed ? Object.values(changes.removed) : [];
         for (const record of added as any[]) {
-          editor.store.put([record]);
+          if (keep(record)) editor.store.put([record]);
         }
         for (const entry of updated as any[]) {
           const to = Array.isArray(entry) ? entry[1] : entry;
-          if (to) editor.store.put([to]);
+          if (keep(to)) editor.store.put([to]);
         }
         for (const record of removed as any[]) {
-          if (record?.id) editor.store.remove([record.id]);
+          if (record?.id && keep(record)) editor.store.remove([record.id]);
         }
       });
     } catch (e) {
@@ -222,12 +253,19 @@ export function Whiteboard({ code, onEnded, canWrite = false, isTeacher }: Props
     }
   }, []);
 
-  const applySnapshot = useCallback((snapshot: unknown) => {
+  const applySnapshot = useCallback((snapshot: unknown, fitView = false) => {
     const editor = editorRef.current;
     if (!editor || !snapshot) return;
+    const cam = editor.getCamera();
     applyingRemote.current = true;
     try {
-      loadSnapshot(editor.store, snapshot as any);
+      loadSnapshot(editor.store, documentOnlySnapshot(snapshot) as any);
+      editor.setCameraOptions(WB_CAMERA);
+      if (fitView && editor.getCurrentPageShapes().length > 0) {
+        editor.zoomToFit({ force: true, immediate: true });
+      } else {
+        editor.setCamera({ x: cam.x, y: cam.y, z: cam.z }, { force: true, immediate: true });
+      }
     } catch (e) {
       console.warn('wb apply snapshot', e);
     } finally {
@@ -353,12 +391,15 @@ export function Whiteboard({ code, onEnded, canWrite = false, isTeacher }: Props
         <Tldraw
           // Intentionally NO persistenceKey — shared board must not use local IndexedDB alone
           className="tldraw-fill"
+          cameraOptions={WB_CAMERA}
           components={tldrawComponents}
           onMount={(editor) => {
             editorRef.current = editor;
+            editor.setCameraOptions(WB_CAMERA);
 
             try {
               editor.updateInstanceState({ isReadonly: !canWriteRef.current });
+              // View-only still pans with the hand. Writers pan with wheel, space-drag, or the hand tool.
               if (!canWriteRef.current) {
                 editor.setCurrentTool('hand');
               }
@@ -368,7 +409,14 @@ export function Whiteboard({ code, onEnded, canWrite = false, isTeacher }: Props
 
             if (initialSnapshot) {
               try {
-                loadSnapshot(editor.store, initialSnapshot as any);
+                const cam = editor.getCamera();
+                loadSnapshot(editor.store, documentOnlySnapshot(initialSnapshot) as any);
+                editor.setCameraOptions(WB_CAMERA);
+                if (editor.getCurrentPageShapes().length > 0) {
+                  editor.zoomToFit({ force: true, immediate: true });
+                } else {
+                  editor.setCamera({ x: cam.x, y: cam.y, z: cam.z }, { force: true, immediate: true });
+                }
               } catch (e) {
                 console.warn('wb initial load', e);
               }
