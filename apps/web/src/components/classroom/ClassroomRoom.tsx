@@ -385,8 +385,8 @@ function useDraggableFloat(
 /**
  * One student tile as it appears today: the 16:9 video area of the students
  * float at its single-tile width (~372px pane → ~354×199 content).
- * 2 and 4 stay a single column (stacked). 6 is 2×3. The window grows
- * with the row count and only shrinks a tile when the stack would leave the screen.
+ * 2 and 4 are one column (2 or 4 rows). 6 is two columns × 3 rows.
+ * The window grows with that grid and only shrinks a tile when the stack would leave the screen.
  */
 const PEER_TILE_W = 354;
 const PEER_TILE_H = 199;
@@ -893,9 +893,7 @@ function TeacherPeersFloat({
           className="peers-float-grid"
           data-slots={slotCount}
           style={{
-            gridTemplateColumns: `repeat(${layout.cols}, ${layout.tileW}px)`,
             gridTemplateRows: `repeat(${layout.rows}, ${layout.tileH}px)`,
-            gap: layout.gap,
           }}
         >
           {cells.map((identity, i) => {

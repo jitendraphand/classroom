@@ -247,7 +247,8 @@ body {
     cursor: grabbing;
   }
 
-  /* Width/height come from the slot layout (one full tile, grown for 2/4/6). */
+  /* Pane width/height are set inline for the selected slot count.
+     Orientation lives here so 6 cannot flip into 3 columns. */
   .peers-float-pane {
     @apply absolute z-[34] overflow-hidden rounded-2xl border border-white/20 bg-surface-1/95 shadow-lift backdrop-blur-xl;
     touch-action: none;
@@ -266,6 +267,16 @@ body {
   }
   .peers-float-grid {
     @apply grid gap-1.5 p-2;
+    grid-auto-flow: row;
+  }
+  /* 2 and 4: one column, so 2 tiles stack and 4 tiles stack. */
+  .peers-float-grid[data-slots='2'],
+  .peers-float-grid[data-slots='4'] {
+    grid-template-columns: max-content;
+  }
+  /* 6: exactly two columns of three (not three columns of two). */
+  .peers-float-grid[data-slots='6'] {
+    grid-template-columns: repeat(2, max-content);
   }
   .peers-float-tile {
     @apply relative shrink-0 overflow-hidden rounded-lg bg-black;
