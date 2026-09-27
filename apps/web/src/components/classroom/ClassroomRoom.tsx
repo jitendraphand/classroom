@@ -1198,6 +1198,14 @@ function RoomInner({
   const hasTeacherScreen = useHasTeacherScreen(teacherIdentities);
   const effectiveStage =
     stageMode !== 'idle' ? stageMode : hasTeacherScreen ? 'screen' : 'idle';
+
+  // Keep teacher tab in sync with Redis stage so whiteboard fill layout shows on reload
+  useEffect(() => {
+    if (!isTeacher) return;
+    if (stageMode === 'whiteboard') setTab('board');
+    else if (stageMode === 'screen' || stageMode === 'idle') setTab((prev) => (prev === 'board' ? 'video' : prev));
+  }, [isTeacher, stageMode]);
+
   useEffect(() => {
     onVisibilityChange(!!state?.me?.canPublishVideo);
   }, [state?.me?.canPublishVideo, onVisibilityChange]);
@@ -1544,7 +1552,7 @@ function RoomInner({
           {effectiveStage === 'screen' ? (
             <TeacherScreenStage teacherIdentities={teacherIdentities} />
           ) : effectiveStage === 'whiteboard' ? (
-            <div className="h-full w-full p-0">
+            <div className="stage-fill-middle">
               <Whiteboard
                 code={code}
                 onEnded={onClassEnded}

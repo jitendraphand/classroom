@@ -1,7 +1,16 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+} from 'react';
 import { useRoomContext } from '@livekit/components-react';
 import { RoomEvent, DataPacket_Kind } from 'livekit-client';
 import { DefaultStylePanel, getSnapshot, loadSnapshot } from '@tldraw/tldraw';
@@ -12,7 +21,7 @@ import { cn } from '@/lib/cn';
 const Tldraw = dynamic(async () => (await import('@tldraw/tldraw')).Tldraw, {
   ssr: false,
   loading: () => (
-    <div className="flex h-full items-center justify-center rounded-2xl border border-white/[0.08] bg-surface-1 text-slate-400">
+    <div className="flex h-full w-full items-center justify-center bg-[#f9fafb] text-slate-500">
       Loading whiteboard…
     </div>
   ),
@@ -34,6 +43,16 @@ type WbMessage =
   | { v: 1; type: 'diff'; changes: unknown; from: string }
   | { v: 1; type: 'snapshot'; snapshot: unknown; from: string }
   | { v: 1; type: 'hello'; from: string };
+
+type StylesCtxValue = { open: boolean };
+const StylesCtx = createContext<StylesCtxValue>({ open: false });
+
+/** tldraw StylePanel slot — renders nothing until Colors toggle opens it. */
+function GatedStylePanel(props: ComponentProps<typeof DefaultStylePanel>) {
+  const { open } = useContext(StylesCtx);
+  if (!open) return null;
+  return <DefaultStylePanel {...props} />;
+}
 
 /**
  * Shared whiteboard: LiveKit reliable data messages for near-realtime sync,
@@ -145,12 +164,10 @@ export function Whiteboard({ code, onEnded, canWrite = false, isTeacher }: Props
   const publishData = useCallback(
     async (msg: WbMessage) => {
       if (!room?.localParticipant || !encoder) return;
-      // Readonly clients must not publish diffs/snapshots (hello is ok for sync request)
       if (!canWriteRef.current && msg.type === 'diff') return;
       if (!canWriteRef.current && msg.type === 'snapshot') return;
       try {
         const bytes = encoder.encode(JSON.stringify(msg));
-        // LiveKit reliable packets are ~15KB; fall back to snapshot via Redis if huge
         if (bytes.byteLength > 14_000) {
           if (msg.type === 'diff' && editorRef.current && canWriteRef.current) {
             const snap = getSnapshot(editorRef.current.store);
@@ -218,7 +235,6 @@ export function Whiteboard({ code, onEnded, canWrite = false, isTeacher }: Props
     }
   }, []);
 
-  // LiveKit data sync
   useEffect(() => {
     if (!room) return;
 
@@ -240,7 +256,6 @@ export function Whiteboard({ code, onEnded, canWrite = false, isTeacher }: Props
         } else if (msg.type === 'snapshot') {
           applySnapshot(msg.snapshot);
         } else if (msg.type === 'hello') {
-          // Peer asked for latest — only writers push a snapshot
           const editor = editorRef.current;
           if (editor && room.localParticipant && canWriteRef.current) {
             const snap = getSnapshot(editor.store);
@@ -265,7 +280,6 @@ export function Whiteboard({ code, onEnded, canWrite = false, isTeacher }: Props
     };
   }, [room, applyDiff, applySnapshot, publishData, persist]);
 
-  // Lightweight Redis converge (~1.5s) if data packets were missed
   useEffect(() => {
     const t = setInterval(async () => {
       if (endedRef.current) return;
@@ -296,99 +310,105 @@ export function Whiteboard({ code, onEnded, canWrite = false, isTeacher }: Props
     return () => clearInterval(t);
   }, [code, applySnapshot, hashSnap]);
 
+  const stylesCtx = useMemo(() => ({ open: stylesOpen }), [stylesOpen]);
+
+  // Stable component slot — GatedStylePanel itself decides visibility via context
   const tldrawComponents = useMemo(
     () => ({
-      StylePanel: stylesOpen ? DefaultStylePanel : null,
+      StylePanel: GatedStylePanel,
     }),
-    [stylesOpen]
+    []
   );
 
   if (!ready || initialSnapshot === undefined) {
     return (
-      <div className="flex h-full items-center justify-center bg-surface-1 text-slate-400">
+      <div className="flex h-full w-full items-center justify-center bg-[#f9fafb] text-slate-500">
         Loading whiteboard…
       </div>
     );
   }
 
   return (
-    <div
-      className={cn(
-        'tldraw-wrap h-full min-h-0 w-full',
-        !canWrite && 'tldraw-readonly',
-        isTeacher && 'tldraw-teacher',
-        stylesOpen && 'tldraw-styles-open'
-      )}
-    >
-      {canWrite && (
-        <button
-          type="button"
-          className={cn('wb-styles-toggle', stylesOpen && 'wb-styles-toggle-active')}
-          onClick={() => setStylesOpen((v) => !v)}
-          aria-pressed={stylesOpen}
-          title={stylesOpen ? 'Hide color & style panel' : 'Show color & style panel'}
-        >
-          Colors
-        </button>
-      )}
-      <Tldraw
-        // Intentionally NO persistenceKey — shared board must not use local IndexedDB alone
-        components={tldrawComponents}
-        onMount={(editor) => {
-          editorRef.current = editor;
+    <StylesCtx.Provider value={stylesCtx}>
+      <div
+        className={cn(
+          'tldraw-wrap',
+          !canWrite && 'tldraw-readonly',
+          isTeacher && 'tldraw-teacher',
+          stylesOpen && 'tldraw-styles-open'
+        )}
+        data-styles-open={stylesOpen ? '1' : '0'}
+      >
+        {canWrite && (
+          <button
+            type="button"
+            className={cn('wb-styles-toggle', stylesOpen && 'wb-styles-toggle-active')}
+            onClick={() => setStylesOpen((v) => !v)}
+            aria-pressed={stylesOpen}
+            title={stylesOpen ? 'Hide color & style panel' : 'Show color & style panel'}
+          >
+            Colors
+          </button>
+        )}
+        <Tldraw
+          // Intentionally NO persistenceKey — shared board must not use local IndexedDB alone
+          className="tldraw-fill"
+          components={tldrawComponents}
+          onMount={(editor) => {
+            editorRef.current = editor;
 
-          try {
-            editor.updateInstanceState({ isReadonly: !canWriteRef.current });
-            if (!canWriteRef.current) {
-              editor.setCurrentTool('hand');
-            }
-          } catch {
-            /* ignore */
-          }
-
-          if (initialSnapshot) {
             try {
-              loadSnapshot(editor.store, initialSnapshot as any);
-            } catch (e) {
-              console.warn('wb initial load', e);
+              editor.updateInstanceState({ isReadonly: !canWriteRef.current });
+              if (!canWriteRef.current) {
+                editor.setCurrentTool('hand');
+              }
+            } catch {
+              /* ignore */
             }
-          }
 
-          // Announce presence so peers can push a snapshot
-          void publishData({ v: 1, type: 'hello', from: identityRef.current });
+            if (initialSnapshot) {
+              try {
+                loadSnapshot(editor.store, initialSnapshot as any);
+              } catch (e) {
+                console.warn('wb initial load', e);
+              }
+            }
 
-          const unsub = editor.store.listen(
-            (entry) => {
-              if (applyingRemote.current) return;
-              if (entry.source !== 'user') return;
-              if (!canWriteRef.current) return;
+            void publishData({ v: 1, type: 'hello', from: identityRef.current });
 
-              void publishData({
-                v: 1,
-                type: 'diff',
-                changes: entry.changes,
-                from: identityRef.current,
-              });
+            const unsub = editor.store.listen(
+              (entry) => {
+                if (applyingRemote.current) return;
+                if (entry.source !== 'user') return;
+                if (!canWriteRef.current) return;
 
+                void publishData({
+                  v: 1,
+                  type: 'diff',
+                  changes: entry.changes,
+                  from: identityRef.current,
+                });
+
+                if (saveTimer.current) clearTimeout(saveTimer.current);
+                saveTimer.current = setTimeout(() => {
+                  try {
+                    const snap = getSnapshot(editor.store);
+                    void persist(snap);
+                  } catch {
+                    /* ignore */
+                  }
+                }, 400);
+              },
+              { source: 'user', scope: 'document' }
+            );
+
+            return () => {
+              unsub();
               if (saveTimer.current) clearTimeout(saveTimer.current);
-              saveTimer.current = setTimeout(() => {
-                try {
-                  const snap = getSnapshot(editor.store);
-                  void persist(snap);
-                } catch {
-                  /* ignore */
-                }
-              }, 400);
-            },
-            { source: 'user', scope: 'document' }
-          );
-
-          return () => {
-            unsub();
-            if (saveTimer.current) clearTimeout(saveTimer.current);
-          };
-        }}
-      />
-    </div>
+            };
+          }}
+        />
+      </div>
+    </StylesCtx.Provider>
   );
 }
