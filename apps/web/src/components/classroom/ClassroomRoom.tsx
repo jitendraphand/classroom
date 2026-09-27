@@ -385,7 +385,8 @@ function useDraggableFloat(
 /**
  * One student tile as it appears today: the 16:9 video area of the students
  * float at its single-tile width (~372px pane → ~354×199 content).
- * Slot counts grow the window so every cell stays this size.
+ * 2 and 4 stay a single column (stacked). 6 is 2×3. The window grows
+ * with the row count and only shrinks a tile when the stack would leave the screen.
  */
 const PEER_TILE_W = 354;
 const PEER_TILE_H = 199;
@@ -395,8 +396,8 @@ const PEER_TOP_RESERVE = 152;
 const PEER_BOTTOM_RESERVE = 156;
 
 function peerFloatLayout(slots: 2 | 4 | 6, vw: number, vh: number) {
-  const cols = slots === 2 ? 1 : 2;
-  const rows = slots === 6 ? 3 : 2;
+  const cols = slots === 6 ? 2 : 1;
+  const rows = slots === 2 ? 2 : slots === 4 ? 4 : 3;
   const header = 34;
   const pad = 16;
   const gap = 6;
