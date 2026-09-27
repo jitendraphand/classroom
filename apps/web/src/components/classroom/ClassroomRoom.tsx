@@ -761,25 +761,25 @@ function TeacherPeersFloat({
 
   const peerIds = useMemo(() => {
     const tSet = new Set(teacherIdentities);
-    const fromSample = visibleIdentities.filter(
-      (id) => !tSet.has(id) && !id.startsWith('teacher_')
+    const hasLiveCamera = (id: string) => {
+      if (!room) return false;
+      const p = room.remoteParticipants.get(id);
+      if (!p || isTeacherParticipant(p, tSet)) return false;
+      const pub = p.getTrackPublication(Track.Source.Camera);
+      if (!pub || pub.isMuted) return false;
+      const media = pub.track?.mediaStreamTrack;
+      return !!media && media.readyState !== 'ended';
+    };
+    // Only cameras actually publishing in the sample. Everyone else stays a blank slot.
+    const pool = visibleIdentities.filter(
+      (id) => !tSet.has(id) && !id.startsWith('teacher_') && hasLiveCamera(id)
     );
-    const remote: string[] = [];
-    if (room) {
-      for (const p of Array.from(room.remoteParticipants.values())) {
-        if (isTeacherParticipant(p, tSet)) continue;
-        if (!remote.includes(p.identity)) remote.push(p.identity);
-      }
-    }
-    const pool = fromSample.length ? fromSample : remote;
-    const sticky = Array.from(stickySpeakersRef.current).filter(
-      (id) => pool.includes(id) || remote.includes(id)
-    );
+    const sticky = Array.from(stickySpeakersRef.current).filter((id) => pool.includes(id));
 
     // Speak-reserved slot first (active unmuted speaker), then other stickies
     const slots: string[] = [];
-    if (speakingId && (pool.includes(speakingId) || remote.includes(speakingId))) {
-      if (!slots.includes(speakingId)) slots.push(speakingId);
+    if (speakingId && pool.includes(speakingId) && !slots.includes(speakingId)) {
+      slots.push(speakingId);
     }
     for (const id of sticky) {
       if (slots.length >= slotCount) break;
@@ -819,12 +819,8 @@ function TeacherPeersFloat({
       if (slots.length >= slotCount) break;
       slots.push(id);
     }
-    if (slots.length < slotCount) {
-      for (const id of remote) {
-        if (slots.length >= slotCount) break;
-        if (!slots.includes(id)) slots.push(id);
-      }
-    }
+    // Never backfill with students who are not publishing a sample camera.
+    // The grid still paints `slotCount` cells; the rest stay blank.
     return slots.slice(0, slotCount);
   }, [
     visibleIdentities,
@@ -843,7 +839,11 @@ function TeacherPeersFloat({
   const style: CSSProperties = pos
     ? { left: pos.x, top: pos.y }
     : { left: 12, top: PEER_TOP_RESERVE };
-  if (!minimized) style.width = layout.paneW;
+  if (!minimized) {
+    // Size is the selected slot layout, even when some tiles are blank.
+    style.width = layout.paneW;
+    style.height = layout.paneH;
+  }
 
   return (
     <div
@@ -904,12 +904,10 @@ function TeacherPeersFloat({
                 <div
                   key={`empty-${i}`}
                   className="peers-float-tile"
+                  data-empty="1"
                   style={{ width: layout.tileW, height: layout.tileH }}
-                >
-                  <div className="flex h-full items-center justify-center bg-black/40 px-2 text-center text-2xs text-slate-500">
-                    {peerIds.length === 0 && i === 0 ? 'No students in sample yet' : ''}
-                  </div>
-                </div>
+                  aria-hidden
+                />
               );
             }
             let name = identity;
