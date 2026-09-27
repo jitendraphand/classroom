@@ -1,10 +1,10 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRoomContext } from '@livekit/components-react';
 import { RoomEvent, DataPacket_Kind } from 'livekit-client';
-import { getSnapshot, loadSnapshot } from '@tldraw/tldraw';
+import { DefaultStylePanel, getSnapshot, loadSnapshot } from '@tldraw/tldraw';
 import '@tldraw/tldraw/tldraw.css';
 import { roomFetch } from '@/lib/classroomClient';
 import { cn } from '@/lib/cn';
@@ -41,6 +41,7 @@ type WbMessage =
  */
 export function Whiteboard({ code, onEnded, canWrite = false, isTeacher }: Props) {
   const [ready, setReady] = useState(false);
+  const [stylesOpen, setStylesOpen] = useState(false);
   const [initialSnapshot, setInitialSnapshot] = useState<unknown | null | undefined>(undefined);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const editorRef = useRef<any>(null);
@@ -295,9 +296,16 @@ export function Whiteboard({ code, onEnded, canWrite = false, isTeacher }: Props
     return () => clearInterval(t);
   }, [code, applySnapshot, hashSnap]);
 
+  const tldrawComponents = useMemo(
+    () => ({
+      StylePanel: stylesOpen ? DefaultStylePanel : null,
+    }),
+    [stylesOpen]
+  );
+
   if (!ready || initialSnapshot === undefined) {
     return (
-      <div className="flex h-full items-center justify-center rounded-2xl border border-white/[0.08] bg-surface-1 text-slate-400">
+      <div className="flex h-full items-center justify-center bg-surface-1 text-slate-400">
         Loading whiteboard…
       </div>
     );
@@ -306,13 +314,26 @@ export function Whiteboard({ code, onEnded, canWrite = false, isTeacher }: Props
   return (
     <div
       className={cn(
-        'tldraw-wrap h-full min-h-[280px]',
+        'tldraw-wrap h-full min-h-0 w-full',
         !canWrite && 'tldraw-readonly',
-        isTeacher && 'tldraw-teacher'
+        isTeacher && 'tldraw-teacher',
+        stylesOpen && 'tldraw-styles-open'
       )}
     >
+      {canWrite && (
+        <button
+          type="button"
+          className={cn('wb-styles-toggle', stylesOpen && 'wb-styles-toggle-active')}
+          onClick={() => setStylesOpen((v) => !v)}
+          aria-pressed={stylesOpen}
+          title={stylesOpen ? 'Hide color & style panel' : 'Show color & style panel'}
+        >
+          Colors
+        </button>
+      )}
       <Tldraw
         // Intentionally NO persistenceKey — shared board must not use local IndexedDB alone
+        components={tldrawComponents}
         onMount={(editor) => {
           editorRef.current = editor;
 

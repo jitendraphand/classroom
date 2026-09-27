@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { ensureRedis } from '@/lib/redis';
+import { HARD_MAX_VISIBLE_STUDENT_VIDEOS, sampleConfig } from '@/lib/sample';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,7 +33,10 @@ export async function GET() {
     {
       status: ok ? 'healthy' : 'degraded',
       checks,
-      maxVisibleStudentVideos: Number(process.env.MAX_VISIBLE_STUDENT_VIDEOS || 10),
+      maxVisibleStudentVideos: sampleConfig().maxVisible,
+      hardMaxVisibleStudentVideos: HARD_MAX_VISIBLE_STUDENT_VIDEOS,
+      speakerPinUntilMute: true,
+      sampleRotationSeconds: sampleConfig().rotationSeconds,
       timestamp: new Date().toISOString(),
     },
     { status: ok ? 200 : 503 }

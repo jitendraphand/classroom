@@ -35,7 +35,6 @@ import { LocalPreview } from './LocalPreview';
 import { Whiteboard } from './Whiteboard';
 import { Chat } from './Chat';
 import { FloatingPanel } from './FloatingPanel';
-import { ResizableWhiteboardShell } from './ResizableWhiteboardShell';
 import { Avatar } from '@/components/ui/Avatar';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -137,14 +136,15 @@ function ParticipantGrid({
       {hasScreen && (
         <div
           className={cn(
-            'stage-primary grid min-h-[38vh] flex-1 gap-3',
-            screenShares.length > 1 ? 'lg:grid-cols-2' : 'grid-cols-1'
+            'stage-primary grid min-h-0 flex-1 gap-0 sm:gap-3',
+            screenShares.length > 1 ? 'lg:grid-cols-2' : 'grid-cols-1',
+            'h-full'
           )}
         >
           {screenShares.map((t) => (
             <div
               key={`${t.participant.identity}-${t.source}`}
-              className="video-tile relative min-h-[220px] w-full overflow-hidden bg-black"
+              className="video-tile relative min-h-0 h-full w-full overflow-hidden bg-black"
             >
               {t.publication?.track ? (
                 <VideoTrack trackRef={t} className="h-full w-full object-contain" />
@@ -511,7 +511,10 @@ function TeacherPeersFloat({
   const room = useRoomContext();
   const teacherSet = new Set(teacherIdentities);
   const paneRef = useRef<HTMLDivElement | null>(null);
-  const sizeRef = useRef({ w: 280, h: 220 });
+  const sizeRef = useRef({ w: 186, h: 220 });
+  const stickySpeakersRef = useRef<Set<string>>(new Set());
+  const mosaicPoolRef = useRef<string[]>([]);
+  const lastRotationTickRef = useRef(0);
   const [slotCount, setSlotCount] = useState<2 | 4 | 6>(() => {
     try {
       const v = sessionStorage.getItem(`peers_slots_${roomCode.toUpperCase()}`);
@@ -521,8 +524,16 @@ function TeacherPeersFloat({
     }
     return 4;
   });
+  const [minimized, setMinimized] = useState(() => {
+    try {
+      return sessionStorage.getItem(`peers_min_${roomCode.toUpperCase()}`) === '1';
+    } catch {
+      return false;
+    }
+  });
   const [rotationTick, setRotationTick] = useState(0);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
+  const [stickyVersion, setStickyVersion] = useState(0);
   const [tick, setTick] = useState(0);
 
   const defaultPos = useCallback((): FloatPos => {
@@ -546,36 +557,84 @@ function TeacherPeersFloat({
   }, [slotCount, roomCode]);
 
   useEffect(() => {
+    try {
+      sessionStorage.setItem(`peers_min_${roomCode.toUpperCase()}`, minimized ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  }, [minimized, roomCode]);
+
+  useEffect(() => {
     const el = paneRef.current;
     if (!el) return;
     const sync = () => {
-      sizeRef.current = { w: el.offsetWidth || 280, h: el.offsetHeight || 220 };
+      sizeRef.current = { w: el.offsetWidth || 186, h: el.offsetHeight || 220 };
     };
     sync();
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null;
     ro?.observe(el);
     return () => ro?.disconnect();
-  }, [slotCount]);
+  }, [slotCount, minimized]);
 
-  // Rotate fill slots ~8s to match server sample cadence
+  // Random mosaic rotation ~8s among non-sticky students
   useEffect(() => {
     const iv = window.setInterval(() => setRotationTick((n) => n + 1), 8000);
     return () => window.clearInterval(iv);
   }, []);
 
+  const isMicMuted = useCallback((p: Participant) => {
+    try {
+      if (!p.isMicrophoneEnabled) return true;
+      const pub = p.getTrackPublication(Track.Source.Microphone);
+      if (!pub) return true;
+      if (pub.isMuted) return true;
+      return false;
+    } catch {
+      return true;
+    }
+  }, []);
+
   useEffect(() => {
     if (!room) return;
     const onSpeakers = (speakers: Participant[]) => {
-      const studentSpeaker = speakers.find(
-        (s) => !s.isLocal && !isTeacherParticipant(s, teacherSet)
-      );
-      setSpeakingId(studentSpeaker?.identity ?? null);
+      const sticky = stickySpeakersRef.current;
+      let changed = false;
+      let topSpeaking: string | null = null;
+
+      for (const s of speakers) {
+        if (s.isLocal) continue;
+        if (isTeacherParticipant(s, teacherSet)) continue;
+        if (isMicMuted(s)) {
+          if (sticky.delete(s.identity)) changed = true;
+          continue;
+        }
+        // Unmuted + speaking → sticky until muted
+        if (!sticky.has(s.identity)) {
+          sticky.add(s.identity);
+          changed = true;
+        }
+        if (!topSpeaking) topSpeaking = s.identity;
+      }
+
+      // Drop sticky entries that left or are now muted
+      if (room) {
+        for (const id of Array.from(sticky)) {
+          const p = room.remoteParticipants.get(id);
+          if (!p || isMicMuted(p)) {
+            sticky.delete(id);
+            changed = true;
+          }
+        }
+      }
+
+      setSpeakingId(topSpeaking);
+      if (changed) setStickyVersion((n) => n + 1);
     };
     room.on(RoomEvent.ActiveSpeakersChanged, onSpeakers);
     return () => {
       room.off(RoomEvent.ActiveSpeakersChanged, onSpeakers);
     };
-  }, [room, teacherIdentities]);
+  }, [room, teacherIdentities, isMicMuted]);
 
   // Ensure peer cameras in sample are subscribed
   useEffect(() => {
@@ -591,6 +650,11 @@ function TeacherPeersFloat({
             console.warn('subscribe peer cam', e);
           }
         }
+        // Keep sticky set in sync with mute state even without speak events
+        if (stickySpeakersRef.current.has(p.identity) && isMicMuted(p)) {
+          stickySpeakersRef.current.delete(p.identity);
+          setStickyVersion((n) => n + 1);
+        }
       }
       setTick((n) => n + 1);
     };
@@ -599,22 +663,25 @@ function TeacherPeersFloat({
     room.on(RoomEvent.TrackSubscribed, ensure);
     room.on(RoomEvent.ParticipantConnected, ensure);
     room.on(RoomEvent.ParticipantDisconnected, ensure);
+    room.on(RoomEvent.TrackMuted, ensure);
+    room.on(RoomEvent.TrackUnmuted, ensure);
     const iv = window.setInterval(ensure, 2000);
     return () => {
       room.off(RoomEvent.TrackPublished, ensure);
       room.off(RoomEvent.TrackSubscribed, ensure);
       room.off(RoomEvent.ParticipantConnected, ensure);
       room.off(RoomEvent.ParticipantDisconnected, ensure);
+      room.off(RoomEvent.TrackMuted, ensure);
+      room.off(RoomEvent.TrackUnmuted, ensure);
       window.clearInterval(iv);
     };
-  }, [room, teacherIdentities, visibleIdentities]);
+  }, [room, teacherIdentities, visibleIdentities, isMicMuted]);
 
   void tick;
-  void rotationTick;
+  void stickyVersion;
 
   const peerIds = useMemo(() => {
     const tSet = new Set(teacherIdentities);
-    // Teacher is local — include all sampled student cams (do not exclude a localIdentity peer)
     const fromSample = visibleIdentities.filter(
       (id) => !tSet.has(id) && !id.startsWith('teacher_')
     );
@@ -626,14 +693,50 @@ function TeacherPeersFloat({
       }
     }
     const pool = fromSample.length ? fromSample : remote;
+    const sticky = Array.from(stickySpeakersRef.current).filter(
+      (id) => pool.includes(id) || remote.includes(id)
+    );
+
+    // Speak-reserved slot first (active unmuted speaker), then other stickies
     const slots: string[] = [];
     if (speakingId && (pool.includes(speakingId) || remote.includes(speakingId))) {
-      slots.push(speakingId);
+      if (!slots.includes(speakingId)) slots.push(speakingId);
     }
-    const rest = pool.filter((id) => !slots.includes(id));
-    const offset = rotationTick % Math.max(1, rest.length);
-    const rotated = rest.length ? [...rest.slice(offset), ...rest.slice(0, offset)] : [];
-    for (const id of rotated) {
+    for (const id of sticky) {
+      if (slots.length >= slotCount) break;
+      if (!slots.includes(id)) slots.push(id);
+    }
+
+    // Random mosaic fill among remaining eligible (non-sticky).
+    // Reshuffle only on rotationTick change (or when pool membership drifts).
+    const rest = pool.filter((id) => !slots.includes(id) && !sticky.includes(id));
+    const prevMosaic = mosaicPoolRef.current.filter((id) => rest.includes(id));
+    const needSlots = Math.max(0, slotCount - slots.length);
+    const membershipChanged =
+      prevMosaic.length !== rest.length || prevMosaic.some((id) => !rest.includes(id));
+    let mosaic = prevMosaic;
+    if (membershipChanged || mosaic.length === 0 || mosaic.length < Math.min(rest.length, needSlots)) {
+      const shuffled = [...rest];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      mosaic = shuffled;
+      mosaicPoolRef.current = mosaic;
+    }
+    // Fresh random order every ~8s (rotationTick), without reshuffling on unrelated ticks
+    if (lastRotationTickRef.current !== rotationTick) {
+      lastRotationTickRef.current = rotationTick;
+      const shuffled = [...rest];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      mosaic = shuffled;
+      mosaicPoolRef.current = mosaic;
+    }
+
+    for (const id of mosaic) {
       if (slots.length >= slotCount) break;
       slots.push(id);
     }
@@ -652,6 +755,7 @@ function TeacherPeersFloat({
     rotationTick,
     slotCount,
     tick,
+    stickyVersion,
   ]);
 
   const style = pos ? { left: pos.x, top: pos.y } : { left: 12, bottom: 88 };
@@ -661,61 +765,76 @@ function TeacherPeersFloat({
       ref={paneRef}
       className="peers-float-pane"
       data-slots={slotCount}
+      data-minimized={minimized ? '1' : '0'}
       style={style}
       aria-label="Students — drag to move"
       {...dragHandlers}
     >
       <div className="peers-float-header">
-        <span className="text-2xs font-semibold text-slate-200">Students</span>
+        <span className="text-2xs font-semibold text-slate-200">
+          Students{minimized ? ` · ${peerIds.length}` : ''}
+        </span>
         <div className="flex items-center gap-1" data-no-drag onPointerDown={(e) => e.stopPropagation()}>
-          {([2, 4, 6] as const).map((n) => (
-            <button
-              key={n}
-              type="button"
-              className={cn(
-                'rounded px-1.5 py-0.5 text-[10px] font-bold transition',
-                slotCount === n
-                  ? 'bg-brand-600 text-white'
-                  : 'bg-white/10 text-slate-300 hover:bg-white/20'
-              )}
-              onClick={() => setSlotCount(n)}
-              aria-label={`Show ${n} videos`}
-            >
-              {n}
-            </button>
-          ))}
+          {!minimized &&
+            ([2, 4, 6] as const).map((n) => (
+              <button
+                key={n}
+                type="button"
+                className={cn(
+                  'rounded px-1.5 py-0.5 text-[10px] font-bold transition',
+                  slotCount === n
+                    ? 'bg-brand-600 text-white'
+                    : 'bg-white/10 text-slate-300 hover:bg-white/20'
+                )}
+                onClick={() => setSlotCount(n)}
+                aria-label={`Show ${n} videos`}
+              >
+                {n}
+              </button>
+            ))}
+          <button
+            type="button"
+            className="rounded px-1.5 py-0.5 text-[10px] font-bold text-slate-300 hover:bg-white/10"
+            onClick={() => setMinimized((v) => !v)}
+            aria-label={minimized ? 'Expand students' : 'Minimize students'}
+            title={minimized ? 'Expand' : 'Minimize'}
+          >
+            {minimized ? '▢' : '—'}
+          </button>
         </div>
       </div>
-      <div className="peers-float-grid" data-slots={slotCount}>
-        {peerIds.length === 0 && (
-          <div className="col-span-full flex aspect-video items-center justify-center rounded-lg bg-black/40 text-2xs text-slate-400">
-            No students in sample yet
-          </div>
-        )}
-        {peerIds.map((identity) => {
-          let name = identity;
-          let mediaTrack: MediaStreamTrack | null = null;
-          let speaking = false;
-          if (room) {
-            const p = room.remoteParticipants.get(identity);
-            if (p) {
-              name = p.name || p.identity;
-              speaking = p.isSpeaking || speakingId === identity;
-              const pub = p.getTrackPublication(Track.Source.Camera);
-              mediaTrack = pub?.track?.mediaStreamTrack ?? null;
+      {!minimized && (
+        <div className="peers-float-grid" data-slots={slotCount}>
+          {peerIds.length === 0 && (
+            <div className="col-span-full flex aspect-video items-center justify-center rounded-lg bg-black/40 text-2xs text-slate-400">
+              No students in sample yet
+            </div>
+          )}
+          {peerIds.map((identity) => {
+            let name = identity;
+            let mediaTrack: MediaStreamTrack | null = null;
+            let speaking = false;
+            if (room) {
+              const p = room.remoteParticipants.get(identity);
+              if (p) {
+                name = p.name || p.identity;
+                speaking = p.isSpeaking || speakingId === identity;
+                const pub = p.getTrackPublication(Track.Source.Camera);
+                mediaTrack = pub?.track?.mediaStreamTrack ?? null;
+              }
             }
-          }
-          return (
-            <PeerCamTile
-              key={identity}
-              name={name}
-              mediaTrack={mediaTrack}
-              speaking={speaking}
-              pinned={speakingId === identity}
-            />
-          );
-        })}
-      </div>
+            return (
+              <PeerCamTile
+                key={identity}
+                name={name}
+                mediaTrack={mediaTrack}
+                speaking={speaking}
+                pinned={stickySpeakersRef.current.has(identity) || speakingId === identity}
+              />
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -1062,7 +1181,7 @@ function RoomInner({
   const [localCamStream, setLocalCamStream] = useState<MediaStream | null>(null);
   const [chromeVisible, setChromeVisible] = useState(true);
   const [chatOpen, setChatOpen] = useState(false);
-  const [rosterOpen, setRosterOpen] = useState(isTeacher);
+  const [rosterOpen, setRosterOpen] = useState(false);
   const [wbWriteLocal, setWbWriteLocal] = useState(false);
   const [leftForFullscreen, setLeftForFullscreen] = useState(false);
   const chromeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1453,10 +1572,11 @@ function RoomInner({
           <Controls
             {...controlsProps}
             variant="float"
-            onOpenChat={() => {
-              setChatOpen(true);
+            onToggleChat={() => {
+              setChatOpen((v) => !v);
               bumpChrome();
             }}
+            chatOpen={chatOpen}
             chatUnread={chatUnread}
           />
         </div>
@@ -1532,7 +1652,7 @@ function RoomInner({
             {isTeacher ? (
               <>
                 {' · '}
-                {visibles.length}/{state?.maxVisibleVideos ?? '—'} in sample
+                {visibles.length}/{Math.min(state?.maxVisibleVideos ?? 6, 6)} in sample
                 {' · '}
                 {studentCount} student{studentCount === 1 ? '' : 's'}
                 {waitingCount > 0 ? ` · ${waitingCount} waiting` : ''}
@@ -1588,20 +1708,32 @@ function RoomInner({
         </div>
       </header>
 
-      {/* Main stage */}
+      {/* Main stage — whiteboard/screen fill the entire middle */}
       <div className="relative min-h-0 flex-1 overflow-hidden">
-        <section className="h-full min-h-0 overflow-y-auto p-3 sm:p-4">
-          {tab === 'board' ? (
-            <ResizableWhiteboardShell storageKey={`wb_size_${code.toUpperCase()}`}>
-              <Whiteboard
-                code={code}
-                onEnded={onClassEnded}
-                canWrite={true}
-                isTeacher={true}
-              />
-            </ResizableWhiteboardShell>
-          ) : (
-            <div className="flex min-h-0 flex-col gap-3 pb-2">
+        {tab === 'board' ? (
+          <section className="stage-fill-middle">
+            <Whiteboard
+              code={code}
+              onEnded={onClassEnded}
+              canWrite={true}
+              isTeacher={true}
+            />
+          </section>
+        ) : (
+          <section
+            className={
+              screenOn || stageMode === 'screen'
+                ? 'stage-fill-middle bg-ink-950'
+                : 'h-full min-h-0 overflow-y-auto p-3 sm:p-4'
+            }
+          >
+            <div
+              className={
+                screenOn || stageMode === 'screen'
+                  ? 'flex h-full min-h-0 flex-col'
+                  : 'flex min-h-0 flex-col gap-3 pb-2'
+              }
+            >
               <ParticipantGrid
                 visibleIdentities={visibles}
                 isTeacher={isTeacher}
@@ -1617,8 +1749,8 @@ function RoomInner({
                 }
               />
             </div>
-          )}
-        </section>
+          </section>
+        )}
 
 
         <FloatingPanel
@@ -1852,12 +1984,17 @@ function RoomInner({
           onRotateSample={rotateSample}
           onMuteAll={() => muteAllStudents(true)}
           onUnmuteAll={() => muteAllStudents(false)}
-          onOpenChat={() => {
-            setChatOpen(true);
-            setChatUnread(0);
+          onToggleChat={() => {
+            setChatOpen((v) => {
+              const next = !v;
+              if (next) setChatUnread(0);
+              return next;
+            });
           }}
+          chatOpen={chatOpen}
           chatUnread={chatUnread}
-          onOpenRoster={() => setRosterOpen(true)}
+          onToggleRoster={() => setRosterOpen((v) => !v)}
+          rosterOpen={rosterOpen}
           rosterBadge={waitingCount}
         />
       </footer>

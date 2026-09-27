@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db';
 import { generateRoomCode, generateIdentity, generateSessionToken } from '@/lib/codes';
 import { ensureRedis, keys } from '@/lib/redis';
+import { clampMaxVisible } from '@/lib/sample';
 
 /** Allocate a unique permanent class code not used by any teacher or room. */
 export async function allocateUniqueCode(): Promise<string> {
@@ -89,7 +90,7 @@ export async function startOrReopenTeacherRoom(
         code,
         name: (opts.name || 'Live Class').trim(),
         teacherId: teacher.id,
-        maxVisibleVideos: opts.maxVisibleVideos ?? 10,
+        maxVisibleVideos: clampMaxVisible(opts.maxVisibleVideos ?? 6),
         status: 'WAITING',
         participants: {
           create: {
@@ -113,7 +114,7 @@ export async function startOrReopenTeacherRoom(
         status: 'WAITING',
         endedAt: null,
         name: opts.name?.trim() || room.name,
-        maxVisibleVideos: opts.maxVisibleVideos ?? room.maxVisibleVideos,
+        maxVisibleVideos: clampMaxVisible(opts.maxVisibleVideos ?? room.maxVisibleVideos),
       },
     });
 
@@ -157,13 +158,17 @@ export async function startOrReopenTeacherRoom(
     return room;
   }
 
-  // Already WAITING or LIVE — optionally refresh name / max visible
-  if (opts.name || opts.maxVisibleVideos != null) {
+  // Already WAITING or LIVE — optionally refresh name / max visible (hard-cap at 6)
+  const nextMax =
+    opts.maxVisibleVideos != null
+      ? clampMaxVisible(opts.maxVisibleVideos)
+      : clampMaxVisible(room.maxVisibleVideos);
+  if (opts.name || opts.maxVisibleVideos != null || nextMax !== room.maxVisibleVideos) {
     room = await prisma.room.update({
       where: { id: room.id },
       data: {
         ...(opts.name ? { name: opts.name.trim() } : {}),
-        ...(opts.maxVisibleVideos != null ? { maxVisibleVideos: opts.maxVisibleVideos } : {}),
+        maxVisibleVideos: nextMax,
       },
     });
   }

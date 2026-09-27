@@ -173,8 +173,22 @@ body {
   }
 
   .tldraw-wrap {
-    @apply h-full w-full overflow-hidden rounded-2xl bg-surface-1;
-    border: 1px solid var(--border);
+    @apply relative h-full w-full min-h-0 overflow-hidden bg-surface-1;
+    border: none;
+    border-radius: 0;
+  }
+
+  /* Colors/style panel toggle — sits near the tldraw toolbar */
+  .wb-styles-toggle {
+    @apply absolute bottom-3 right-3 z-[60] rounded-xl border border-white/20 bg-black/70 px-3 py-1.5 text-xs font-semibold text-white shadow-lift backdrop-blur-md transition hover:bg-black/85;
+  }
+  .wb-styles-toggle-active {
+    @apply border-brand-400/60 bg-brand-600/90 hover:bg-brand-600;
+  }
+  /* Hide default style panel unless toggled open (belt+suspenders with components override) */
+  .tldraw-wrap:not(.tldraw-styles-open) .tlui-style-panel,
+  .tldraw-wrap:not(.tldraw-styles-open) .tlui-style-panel__wrapper {
+    display: none !important;
   }
 
   .page-shell {
@@ -245,19 +259,25 @@ body {
     cursor: grabbing;
   }
 
+  /* Base unit ≈ one student video tile (~186×105 like teacher cam float).
+     2 slots ≈ 2× base (stacked), 4 ≈ 2×2, 6 ≈ 2×3 — tiles stay similarly proportioned. */
   .peers-float-pane {
     @apply absolute z-[34] overflow-hidden rounded-2xl border border-white/20 bg-surface-1/95 shadow-lift backdrop-blur-xl;
     touch-action: none;
     cursor: grab;
   }
   .peers-float-pane[data-slots='2'] {
-    width: min(46vw, 220px);
+    width: min(48vw, 186px);
   }
   .peers-float-pane[data-slots='4'] {
-    width: min(56vw, 320px);
+    width: min(72vw, 372px);
   }
   .peers-float-pane[data-slots='6'] {
-    width: min(64vw, 420px);
+    width: min(72vw, 372px);
+  }
+  .peers-float-pane[data-minimized='1'] {
+    width: auto !important;
+    min-width: 140px;
   }
   .peers-float-pane:active {
     cursor: grabbing;
@@ -277,13 +297,6 @@ body {
   }
   .peers-float-tile {
     @apply relative aspect-video overflow-hidden rounded-lg bg-black;
-    min-height: 64px;
-  }
-  .peers-float-pane[data-slots='2'] .peers-float-tile {
-    min-height: 96px;
-  }
-  .peers-float-pane[data-slots='6'] .peers-float-tile {
-    min-height: 72px;
   }
 
   .stage-chat-drawer {
@@ -346,6 +359,16 @@ body {
 /* Local camera mirror */
 .video-mirror {
   transform: scaleX(-1);
+}
+
+/* Full middle stage (whiteboard / screen) — no padded card */
+.stage-fill-middle {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* Meet-like stage */

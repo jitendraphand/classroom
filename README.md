@@ -32,7 +32,7 @@ flowchart LR
 ### How sampled video works
 
 1. Every admitted student may keep **camera on locally** (preview on their device).
-2. Redis holds a **visible sample** of size `N` (`MAX_VISIBLE_STUDENT_VIDEOS`, default **10**, overridable per room).
+2. Redis holds a **visible sample** of size `N` (`MAX_VISIBLE_STUDENT_VIDEOS`, default **6** (hard max **6**), overridable per room).
 3. Only students whose LiveKit identity is in that set **publish** camera tracks to LiveKit.
 4. The server **rotates** the sample every `SAMPLE_ROTATION_SECONDS` (default **8**), or when the teacher clicks **Rotate sample**.
 5. When a **student speaks**, the teacher client pins them into the visible sample (`POST /api/rooms/{code}/sample/pin`) so their camera publishes; pins last ~18s and are preferred during random rotation.
@@ -156,7 +156,7 @@ See `.env.example`. Important:
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `MAX_VISIBLE_STUDENT_VIDEOS` | `10` | Default sample size for new rooms |
+| `MAX_VISIBLE_STUDENT_VIDEOS` | `6` | Default sample size for new rooms (hard-capped at 6) |
 | `SAMPLE_ROTATION_SECONDS` | `8` | Auto-rotation interval for visible student cameras (5–10s recommended) |
 | `SPEAKER_PIN_TTL_SECONDS` | `18` | How long an active-speaker pin protects a student from random ejection |
 | `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | generated | Must match `infra/livekit.yaml` (`scripts/sync-livekit-keys.sh`) |

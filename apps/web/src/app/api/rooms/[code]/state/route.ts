@@ -1,7 +1,7 @@
 import { prisma } from '@/lib/db';
 import { resolveRoomAccess } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
-import { ensureSampleFresh, getVisibleSample } from '@/lib/sample';
+import { clampMaxVisible, ensureSampleFresh, getVisibleSample } from '@/lib/sample';
 import { ensureRedis, keys } from '@/lib/redis';
 
 export const dynamic = 'force-dynamic';
@@ -43,7 +43,7 @@ export async function GET(req: Request, { params }: { params: { code: string } }
       ended: true,
       teacherName: room.teacher.name,
       public: true,
-      maxVisibleVideos: room.maxVisibleVideos,
+      maxVisibleVideos: clampMaxVisible(room.maxVisibleVideos),
       isTeacher: false,
       me: null,
       admitted: [],
@@ -98,7 +98,7 @@ export async function GET(req: Request, { params }: { params: { code: string } }
     code: room.code,
     name: room.name,
     status: room.status,
-    maxVisibleVideos: room.maxVisibleVideos,
+    maxVisibleVideos: clampMaxVisible(room.maxVisibleVideos),
     teacherName: room.teacher.name,
     isTeacher,
     actingAsStudent: forceStudent || (access.mode === 'student' && !!access.teacherOwns),

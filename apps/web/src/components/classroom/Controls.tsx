@@ -35,11 +35,13 @@ type Props = {
   showScreenShare?: boolean;
   /** Dock sits in the bottom bar; float is a denser floating panel. */
   variant?: 'dock' | 'float';
-  /** Open chat floating panel */
-  onOpenChat?: () => void;
+  /** Toggle chat floating panel (open ↔ close) */
+  onToggleChat?: () => void;
+  chatOpen?: boolean;
   chatUnread?: number;
-  /** Teacher: open roster floating panel */
-  onOpenRoster?: () => void;
+  /** Teacher: toggle roster floating panel (open ↔ close) */
+  onToggleRoster?: () => void;
+  rosterOpen?: boolean;
   rosterBadge?: number;
   /** Student raise-hand */
   handRaised?: boolean;
@@ -63,9 +65,11 @@ export function Controls({
   mutedByTeacher,
   showScreenShare = true,
   variant = 'dock',
-  onOpenChat,
+  onToggleChat,
+  chatOpen = false,
   chatUnread = 0,
-  onOpenRoster,
+  onToggleRoster,
+  rosterOpen = false,
   rosterBadge = 0,
   handRaised,
   onToggleHand,
@@ -131,11 +135,15 @@ export function Controls({
           </IconButton>
         )}
 
-        {onOpenChat && (
-          <IconButton label="Open chat" onClick={onOpenChat}>
+        {onToggleChat && (
+          <IconButton
+            label={chatOpen ? 'Close chat' : 'Open chat'}
+            active={chatOpen}
+            onClick={onToggleChat}
+          >
             <span className="relative inline-flex">
               <IconChat />
-              {chatUnread > 0 && (
+              {!chatOpen && chatUnread > 0 && (
                 <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand-500 px-0.5 text-[9px] font-bold text-white">
                   {chatUnread > 9 ? '9+' : chatUnread}
                 </span>
@@ -144,11 +152,15 @@ export function Controls({
           </IconButton>
         )}
 
-        {isTeacher && onOpenRoster && (
-          <IconButton label="Open roster" onClick={onOpenRoster}>
+        {isTeacher && onToggleRoster && (
+          <IconButton
+            label={rosterOpen ? 'Close roster' : 'Open roster'}
+            active={rosterOpen}
+            onClick={onToggleRoster}
+          >
             <span className="relative inline-flex">
               <IconUsers />
-              {rosterBadge > 0 && (
+              {!rosterOpen && rosterBadge > 0 && (
                 <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-0.5 text-[9px] font-bold text-white">
                   {rosterBadge > 9 ? '9+' : rosterBadge}
                 </span>

@@ -31,7 +31,7 @@ model Room {
   name             String
   teacherId        String
   teacher          Teacher       @relation(fields: [teacherId], references: [id], onDelete: Cascade)
-  maxVisibleVideos Int           @default(10)
+  maxVisibleVideos Int           @default(6)
   status           RoomStatus    @default(WAITING)
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt

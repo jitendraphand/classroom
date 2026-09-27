@@ -1,13 +1,13 @@
 import { z } from 'zod';
 import { getTeacherSession } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
-import { sampleConfig } from '@/lib/sample';
+import { clampMaxVisible, sampleConfig } from '@/lib/sample';
 import { resolveAppUrl } from '@/lib/url';
 import { ensureTeacherPermanentCode, startOrReopenTeacherRoom } from '@/lib/teacherRoom';
 
 const schema = z.object({
   name: z.string().min(1).max(120).optional(),
-  maxVisibleVideos: z.number().int().min(1).max(50).optional(),
+  maxVisibleVideos: z.number().int().min(1).max(6).optional(),
 });
 
 export async function POST(req: Request) {
@@ -16,7 +16,7 @@ export async function POST(req: Request) {
 
   try {
     const body = schema.parse(await req.json().catch(() => ({})));
-    const max = body.maxVisibleVideos ?? sampleConfig().maxVisible;
+    const max = clampMaxVisible(body.maxVisibleVideos ?? sampleConfig().maxVisible);
     const permanentCode =
       teacher.permanentCode || (await ensureTeacherPermanentCode(teacher.id));
 

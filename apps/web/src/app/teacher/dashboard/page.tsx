@@ -16,7 +16,7 @@ export default function TeacherDashboard() {
   const router = useRouter();
   const [me, setMe] = useState<Me | null>(null);
   const [name, setName] = useState('Live Class');
-  const [maxVisible, setMaxVisible] = useState(10);
+  const [maxVisible, setMaxVisible] = useState(6);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState('');
   const [created, setCreated] = useState<{
@@ -141,7 +141,7 @@ export default function TeacherDashboard() {
             type="number"
             name="maxVisible"
             min={1}
-            max={50}
+            max={6}
             value={maxVisible}
             onChange={(e) => setMaxVisible(Number(e.target.value))}
             hint="Only this many student camera streams reach you. Others stay local-only on their devices."

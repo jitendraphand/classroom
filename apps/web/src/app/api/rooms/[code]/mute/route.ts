@@ -4,6 +4,7 @@ import { getTeacherSession } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
 import { ensureRedis, keys } from '@/lib/redis';
 import { setManyParticipantMics, setParticipantMicAllowed } from '@/lib/livekit';
+import { clearPinnedSpeakers, unpinSpeaker } from '@/lib/sample';
 
 const schema = z.union([
   z.object({
@@ -56,6 +57,11 @@ export async function POST(req: Request, { params }: { params: { code: string } 
       // Force LiveKit mic off / restore so clients cannot self-unmute
       void setManyParticipantMics(code, identities, !body.muted);
 
+      // Sticky speak-pins last until mute — clear all when muting everyone
+      if (body.muted) {
+        await clearPinnedSpeakers(code);
+      }
+
       return jsonOk({ ok: true, all: true, muted: body.muted, count: ids.length });
     }
 
@@ -73,6 +79,11 @@ export async function POST(req: Request, { params }: { params: { code: string } 
     else await redis.srem(keys.muted(code), participant.id);
 
     void setParticipantMicAllowed(code, participant.livekitIdentity, !body.muted);
+
+    // Sticky speak-pin: drop when teacher mutes this student
+    if (body.muted) {
+      await unpinSpeaker(code, participant.livekitIdentity);
+    }
 
     return jsonOk({ ok: true, muted: body.muted });
   } catch (e) {

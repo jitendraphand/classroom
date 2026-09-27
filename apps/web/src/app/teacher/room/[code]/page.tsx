@@ -29,7 +29,7 @@ export default function TeacherRoomLobby() {
   const router = useRouter();
   const code = String(params.code || '').toUpperCase();
   const [state, setState] = useState<State | null>(null);
-  const [maxVisible, setMaxVisible] = useState(10);
+  const [maxVisible, setMaxVisible] = useState(6);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -214,7 +214,7 @@ export default function TeacherRoomLobby() {
               <Input
                 type="number"
                 min={1}
-                max={50}
+                max={6}
                 value={maxVisible}
                 onChange={(e) => setMaxVisible(Number(e.target.value))}
                 aria-label="Max visible student videos"
