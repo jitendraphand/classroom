@@ -1,13 +1,12 @@
 import { z } from 'zod';
-import { prisma } from '@/lib/db';
 import { getTeacherSession } from '@/lib/auth';
-import { generateRoomCode, generateIdentity, generateSessionToken } from '@/lib/codes';
 import { jsonError, jsonOk } from '@/lib/response';
 import { sampleConfig } from '@/lib/sample';
 import { resolveAppUrl } from '@/lib/url';
+import { ensureTeacherPermanentCode, startOrReopenTeacherRoom } from '@/lib/teacherRoom';
 
 const schema = z.object({
-  name: z.string().min(1).max(120),
+  name: z.string().min(1).max(120).optional(),
   maxVisibleVideos: z.number().int().min(1).max(50).optional(),
 });
 
@@ -16,37 +15,15 @@ export async function POST(req: Request) {
   if (!teacher) return jsonError('Unauthorized', 401);
 
   try {
-    const body = schema.parse(await req.json());
+    const body = schema.parse(await req.json().catch(() => ({})));
     const max = body.maxVisibleVideos ?? sampleConfig().maxVisible;
+    const permanentCode =
+      teacher.permanentCode || (await ensureTeacherPermanentCode(teacher.id));
 
-    let code = generateRoomCode();
-    for (let i = 0; i < 5; i++) {
-      const clash = await prisma.room.findUnique({ where: { code } });
-      if (!clash) break;
-      code = generateRoomCode();
-    }
-
-    // Identity must be unique across all rooms — include room code
-    const teacherIdentity = generateIdentity('teacher', `${teacher.id}_${code}`);
-
-    const room = await prisma.room.create({
-      data: {
-        code,
-        name: body.name.trim(),
-        teacherId: teacher.id,
-        maxVisibleVideos: max,
-        status: 'WAITING',
-        participants: {
-          create: {
-            displayName: teacher.name,
-            role: 'TEACHER',
-            status: 'ADMITTED',
-            livekitIdentity: teacherIdentity,
-            sessionToken: generateSessionToken(),
-          },
-        },
-      },
-    });
+    const room = await startOrReopenTeacherRoom(
+      { id: teacher.id, name: teacher.name, permanentCode },
+      { name: body.name, maxVisibleVideos: max }
+    );
 
     const appUrl = resolveAppUrl(req);
 
@@ -55,12 +32,16 @@ export async function POST(req: Request) {
       code: room.code,
       name: room.name,
       maxVisibleVideos: room.maxVisibleVideos,
+      permanent: true,
       joinUrl: `${appUrl}/join/${room.code}`,
       teacherUrl: `${appUrl}/teacher/room/${room.code}`,
     });
   } catch (e) {
     if (e instanceof z.ZodError) return jsonError(e.errors[0]?.message || 'Invalid input');
+    if (e instanceof Error && e.message === 'CODE_CONFLICT') {
+      return jsonError('Permanent code conflict — contact support', 409);
+    }
     console.error(e);
-    return jsonError('Failed to create room', 500);
+    return jsonError('Failed to start classroom', 500);
   }
 }

@@ -10,18 +10,20 @@ import { Card, CardHeader } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { PageLoading } from '@/components/ui/Skeleton';
 
-type Me = { role: string; name?: string; email?: string };
+type Me = { role: string; name?: string; email?: string; permanentCode?: string };
 
 export default function TeacherDashboard() {
   const router = useRouter();
   const [me, setMe] = useState<Me | null>(null);
   const [name, setName] = useState('Live Class');
   const [maxVisible, setMaxVisible] = useState(10);
-  const [creating, setCreating] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [error, setError] = useState('');
-  const [created, setCreated] = useState<{ code: string; joinUrl: string; teacherUrl: string } | null>(
-    null
-  );
+  const [created, setCreated] = useState<{
+    code: string;
+    joinUrl: string;
+    teacherUrl: string;
+  } | null>(null);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -41,9 +43,9 @@ export default function TeacherDashboard() {
       });
   }, [router]);
 
-  async function createRoom(e: React.FormEvent) {
+  async function startClass(e: React.FormEvent) {
     e.preventDefault();
-    setCreating(true);
+    setStarting(true);
     setError('');
     const res = await fetch('/api/rooms/create', {
       method: 'POST',
@@ -51,12 +53,15 @@ export default function TeacherDashboard() {
       body: JSON.stringify({ name, maxVisibleVideos: maxVisible }),
     });
     const data = await res.json();
-    setCreating(false);
+    setStarting(false);
     if (!res.ok) {
-      setError(data.error || 'Failed to create room');
+      setError(data.error || 'Failed to start class');
       return;
     }
     setCreated(data);
+    if (me && data.code) {
+      setMe({ ...me, permanentCode: data.code });
+    }
   }
 
   async function logout() {
@@ -71,7 +76,17 @@ export default function TeacherDashboard() {
     setTimeout(() => setCopied(false), 2000);
   }
 
+  async function copyCode() {
+    const code = created?.code || me?.permanentCode;
+    if (!code) return;
+    await navigator.clipboard.writeText(code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
   if (!me) return <PageLoading label="Loading dashboard…" />;
+
+  const displayCode = created?.code || me.permanentCode;
 
   return (
     <main className="page-shell max-w-3xl">
@@ -91,12 +106,29 @@ export default function TeacherDashboard() {
         <p className="text-sm text-slate-400">{me.email}</p>
       </div>
 
+      {displayCode && (
+        <Card className="mb-6">
+          <CardHeader
+            title="Your permanent class code"
+            subtitle="Students always join with this code. Start class anytime — the same room code is reused."
+          />
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="font-display text-3xl font-bold tracking-[0.28em] text-brand-300">
+              {displayCode}
+            </p>
+            <Button variant="secondary" size="sm" onClick={copyCode}>
+              {copied ? 'Copied!' : 'Copy code'}
+            </Button>
+          </div>
+        </Card>
+      )}
+
       <Card>
         <CardHeader
-          title="Create a classroom"
-          subtitle="Students join with a code or link. You control the waiting room and how many student cameras are visible."
+          title="Start class"
+          subtitle="Opens (or reactivates) your permanent classroom. Students wait in the lobby until you admit them."
         />
-        <form onSubmit={createRoom} className="space-y-4">
+        <form onSubmit={startClass} className="space-y-4">
           <Input
             label="Class name"
             name="className"
@@ -119,8 +151,8 @@ export default function TeacherDashboard() {
               {error}
             </p>
           )}
-          <Button type="submit" fullWidth className="py-3" disabled={creating}>
-            {creating ? 'Creating…' : 'Create room'}
+          <Button type="submit" fullWidth className="py-3" disabled={starting}>
+            {starting ? 'Starting…' : 'Start class'}
           </Button>
         </form>
 

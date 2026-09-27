@@ -34,13 +34,14 @@ import { Controls } from './Controls';
 import { LocalPreview } from './LocalPreview';
 import { Whiteboard } from './Whiteboard';
 import { Chat } from './Chat';
+import { FloatingPanel } from './FloatingPanel';
+import { ResizableWhiteboardShell } from './ResizableWhiteboardShell';
 import { Avatar } from '@/components/ui/Avatar';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
-import { Tabs } from '@/components/ui/Tabs';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageLoading } from '@/components/ui/Skeleton';
-import { IconBoard, IconHand, IconScreen, IconSidebar, IconUsers, IconVideo } from '@/components/ui/Icons';
+import { IconBoard, IconHand, IconScreen, IconUsers, IconVideo } from '@/components/ui/Icons';
 import { cn } from '@/lib/cn';
 import { roomFetch, rememberClassroomRole } from '@/lib/classroomClient';
 
@@ -653,20 +654,20 @@ function TeacherPeersFloat({
     tick,
   ]);
 
-  const cols = slotCount === 2 ? 1 : 2;
   const style = pos ? { left: pos.x, top: pos.y } : { left: 12, bottom: 88 };
 
   return (
     <div
       ref={paneRef}
       className="peers-float-pane"
+      data-slots={slotCount}
       style={style}
       aria-label="Students — drag to move"
       {...dragHandlers}
     >
       <div className="peers-float-header">
         <span className="text-2xs font-semibold text-slate-200">Students</span>
-        <div className="flex items-center gap-1" onPointerDown={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-1" data-no-drag onPointerDown={(e) => e.stopPropagation()}>
           {([2, 4, 6] as const).map((n) => (
             <button
               key={n}
@@ -685,10 +686,7 @@ function TeacherPeersFloat({
           ))}
         </div>
       </div>
-      <div
-        className="peers-float-grid"
-        style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
-      >
+      <div className="peers-float-grid" data-slots={slotCount}>
         {peerIds.length === 0 && (
           <div className="col-span-full flex aspect-video items-center justify-center rounded-lg bg-black/40 text-2xs text-slate-400">
             No students in sample yet
@@ -751,7 +749,7 @@ function PeerCamTile({
   return (
     <div
       className={cn(
-        'relative aspect-video overflow-hidden rounded-lg bg-black',
+        'peers-float-tile',
         speaking && 'ring-2 ring-brand-400'
       )}
     >
@@ -1060,13 +1058,13 @@ function RoomInner({
   const [camOn, setCamOn] = useState(true);
   const [screenOn, setScreenOn] = useState(false);
   const [tab, setTab] = useState<'video' | 'board'>('video');
-  const [sideTab, setSideTab] = useState<'roster' | 'chat'>(isTeacher ? 'roster' : 'chat');
   const [chatUnread, setChatUnread] = useState(0);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [localCamStream, setLocalCamStream] = useState<MediaStream | null>(null);
   const [chromeVisible, setChromeVisible] = useState(true);
-  const [chatDrawerOpen, setChatDrawerOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [rosterOpen, setRosterOpen] = useState(isTeacher);
   const [wbWriteLocal, setWbWriteLocal] = useState(false);
+  const [leftForFullscreen, setLeftForFullscreen] = useState(false);
   const chromeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { state, refresh } = useRoomState(code, 2000);
 
@@ -1081,10 +1079,6 @@ function RoomInner({
   const hasTeacherScreen = useHasTeacherScreen(teacherIdentities);
   const effectiveStage =
     stageMode !== 'idle' ? stageMode : hasTeacherScreen ? 'screen' : 'idle';
-  useEffect(() => {
-    if (!isTeacher) setSideTab('chat');
-  }, [isTeacher]);
-
   useEffect(() => {
     onVisibilityChange(!!state?.me?.canPublishVideo);
   }, [state?.me?.canPublishVideo, onVisibilityChange]);
@@ -1194,7 +1188,6 @@ function RoomInner({
   useEffect(() => {
     if (isTeacher) {
       if (chromeTimer.current) clearTimeout(chromeTimer.current);
-      setChatDrawerOpen(false);
       return;
     }
     setChromeVisible(true);
@@ -1202,6 +1195,72 @@ function RoomInner({
       if (chromeTimer.current) clearTimeout(chromeTimer.current);
     };
   }, [isTeacher]);
+
+  // Student forced fullscreen: request on join; leaving fullscreen kicks from class
+  useEffect(() => {
+    if (isTeacher || leftForFullscreen) return;
+    const root = document.documentElement;
+    let entered = false;
+    let cancelled = false;
+    let kicking = false;
+
+    const requestFs = async () => {
+      if (cancelled || !root.requestFullscreen) return;
+      try {
+        if (!document.fullscreenElement) {
+          await root.requestFullscreen();
+        }
+        if (document.fullscreenElement) entered = true;
+      } catch {
+        // Browser blocked / needs gesture / unsupported — do not kick
+      }
+    };
+
+    void requestFs();
+
+    const onGesture = () => {
+      if (!entered && !document.fullscreenElement) void requestFs();
+    };
+
+    const onFsChange = () => {
+      if (cancelled || isTeacher || kicking) return;
+      if (document.fullscreenElement) {
+        entered = true;
+        return;
+      }
+      // Only kick if we previously succeeded at entering fullscreen
+      if (!entered) return;
+      kicking = true;
+      setLeftForFullscreen(true);
+      void (async () => {
+        try {
+          await roomFetch(code, '/leave', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+          });
+        } catch {
+          /* ignore */
+        }
+        try {
+          room?.disconnect();
+        } catch {
+          /* ignore */
+        }
+        router.push('/');
+      })();
+    };
+
+    document.addEventListener('fullscreenchange', onFsChange);
+    document.addEventListener('pointerdown', onGesture, { once: true });
+    document.addEventListener('keydown', onGesture, { once: true });
+    return () => {
+      cancelled = true;
+      document.removeEventListener('fullscreenchange', onFsChange);
+      document.removeEventListener('pointerdown', onGesture);
+      document.removeEventListener('keydown', onGesture);
+    };
+  }, [isTeacher, leftForFullscreen, code, room, router]);
 
   const stopScreenShare = useCallback(async () => {
     if (!localParticipant) return;
@@ -1395,48 +1454,44 @@ function RoomInner({
             {...controlsProps}
             variant="float"
             onOpenChat={() => {
-              setChatDrawerOpen(true);
+              setChatOpen(true);
               bumpChrome();
             }}
             chatUnread={chatUnread}
           />
         </div>
 
-        {chatDrawerOpen && (
-          <>
-            <button
-              type="button"
-              className="absolute inset-0 z-40 bg-black/40"
-              aria-label="Close chat"
-              onClick={() => setChatDrawerOpen(false)}
-            />
-            <aside className="stage-chat-drawer">
-              <div className="mb-2 flex items-center justify-between">
-                <h2 className="text-sm font-semibold">Chat</h2>
-                <button
-                  type="button"
-                  className="text-xs text-slate-400 hover:text-white"
-                  onClick={() => setChatDrawerOpen(false)}
-                >
-                  Close
-                </button>
-              </div>
-              <div className="min-h-0 flex-1">
-                <Chat
-                  code={code}
-                  isTeacher={false}
-                  myParticipantId={state?.me?.id ?? null}
-                  students={(state?.admitted ?? [])
-                    .filter((a) => a.role === 'STUDENT')
-                    .map((a) => ({ id: a.id, displayName: a.displayName }))}
-                  active={chatDrawerOpen}
-                  onUnreadChange={setChatUnread}
-                  stopped={state?.status === 'ENDED' || !!state?.ended}
-                />
-              </div>
-            </aside>
-          </>
-        )}
+        <FloatingPanel
+          title="Chat"
+          storageKey={`student_chat_${code.toUpperCase()}`}
+          open={chatOpen}
+          onClose={() => setChatOpen(false)}
+          width={320}
+          height={420}
+          defaultPos={() => ({
+            x: Math.max(8, window.innerWidth - 340),
+            y: Math.max(8, window.innerHeight - 520),
+          })}
+          badge={
+            chatUnread > 0 ? (
+              <span className="rounded-full bg-brand-500 px-1.5 text-[9px] font-bold text-white">
+                {chatUnread > 9 ? '9+' : chatUnread}
+              </span>
+            ) : null
+          }
+        >
+          <Chat
+            code={code}
+            isTeacher={false}
+            myParticipantId={state?.me?.id ?? null}
+            students={(state?.admitted ?? [])
+              .filter((a) => a.role === 'STUDENT')
+              .map((a) => ({ id: a.id, displayName: a.displayName }))}
+            active={chatOpen}
+            onUnreadChange={setChatUnread}
+            stopped={state?.status === 'ENDED' || !!state?.ended}
+          />
+        </FloatingPanel>
       </div>
     );
   }
@@ -1530,31 +1585,21 @@ function RoomInner({
               )}
             </>
           )}
-          <Button
-            variant="secondary"
-            size="sm"
-            className="!px-2.5 xl:hidden"
-            onClick={() => setSidebarOpen((v) => !v)}
-            aria-label={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
-          >
-            <IconSidebar size={16} />
-          </Button>
         </div>
       </header>
 
-      {/* Main + sidebar */}
-      <div className="relative grid min-h-0 flex-1 gap-0 overflow-hidden xl:grid-cols-[minmax(0,1fr)_300px]">
-        <section className="min-h-0 overflow-y-auto p-3 sm:p-4">
-          {/* Students idle: teacher camera/empty only — never mount Whiteboard */}
-          {isTeacher && tab === 'board' ? (
-            <div className="h-[calc(100dvh-11rem)] min-h-[280px]">
+      {/* Main stage */}
+      <div className="relative min-h-0 flex-1 overflow-hidden">
+        <section className="h-full min-h-0 overflow-y-auto p-3 sm:p-4">
+          {tab === 'board' ? (
+            <ResizableWhiteboardShell storageKey={`wb_size_${code.toUpperCase()}`}>
               <Whiteboard
                 code={code}
                 onEnded={onClassEnded}
                 canWrite={true}
                 isTeacher={true}
               />
-            </div>
+            </ResizableWhiteboardShell>
           ) : (
             <div className="flex min-h-0 flex-col gap-3 pb-2">
               <ParticipantGrid
@@ -1575,226 +1620,217 @@ function RoomInner({
           )}
         </section>
 
-        {/* Sidebar — collapsible under xl */}
-        <aside
-          className={cn(
-            'glass z-20 flex max-h-full min-h-0 flex-col overflow-hidden border-l border-white/[0.06] p-3 sm:p-4',
-            'xl:relative xl:translate-x-0 xl:opacity-100',
-            sidebarOpen
-              ? 'absolute inset-y-0 right-0 w-[min(100%,300px)] translate-x-0 shadow-lift'
-              : 'absolute inset-y-0 right-0 w-[min(100%,300px)] translate-x-full opacity-0 pointer-events-none xl:pointer-events-auto'
-          )}
+
+        <FloatingPanel
+          title="Roster"
+          storageKey={`teacher_roster_${code.toUpperCase()}`}
+          open={rosterOpen}
+          onClose={() => setRosterOpen(false)}
+          width={320}
+          height={480}
+          defaultPos={() => ({ x: Math.max(8, window.innerWidth - 340), y: 72 })}
+          badge={
+            waitingCount > 0 ? (
+              <span className="rounded-full bg-amber-500 px-1.5 text-[9px] font-bold text-white">
+                {waitingCount}
+              </span>
+            ) : null
+          }
         >
-          <Tabs
-            className="mb-3 shrink-0"
-            value={sideTab}
-            onChange={(id) => {
-              setSideTab(id);
-              if (id === 'chat') setChatUnread(0);
-            }}
-            items={
-              isTeacher
-                ? [
-                    { id: 'roster' as const, label: 'Roster' },
-                    {
-                      id: 'chat' as const,
-                      label: 'Chat',
-                      badge:
-                        chatUnread > 0 && sideTab !== 'chat'
-                          ? chatUnread > 9
-                            ? '9+'
-                            : chatUnread
-                          : undefined,
-                    },
-                  ]
-                : [
-                    {
-                      id: 'chat' as const,
-                      label: 'Chat',
-                      badge:
-                        chatUnread > 0 && sideTab !== 'chat'
-                          ? chatUnread > 9
-                            ? '9+'
-                            : chatUnread
-                          : undefined,
-                    },
-                  ]
-            }
-          />
-
-          <div
-            className={cn(
-              'min-h-0 flex-1 flex-col overflow-hidden',
-              sideTab === 'chat' ? 'flex' : 'hidden'
-            )}
-          >
-            <Chat
-              code={code}
-              isTeacher={isTeacher}
-              myParticipantId={state?.me?.id ?? null}
-              students={(state?.admitted ?? [])
-                .filter((a) => a.role === 'STUDENT')
-                .map((a) => ({ id: a.id, displayName: a.displayName }))}
-              active={sideTab === 'chat'}
-              onUnreadChange={setChatUnread}
-              stopped={state?.status === 'ENDED' || !!state?.ended}
-            />
-          </div>
-
-          {isTeacher && sideTab === 'roster' && (
-            <div className="flex min-h-0 flex-1 flex-col space-y-3 overflow-hidden">
-              {isTeacher && (
-                <div className="flex shrink-0 flex-wrap gap-2">
-                  <Button size="sm" variant="warning" onClick={() => muteAllStudents(true)}>
-                    Mute all
-                  </Button>
-                  <Button size="sm" variant="secondary" onClick={() => muteAllStudents(false)}>
-                    Unmute all
-                  </Button>
-                </div>
+          <div className="flex h-full min-h-0 flex-col space-y-3 overflow-hidden">
+            <div className="flex shrink-0 flex-wrap gap-2" data-no-drag>
+              <Button size="sm" variant="warning" onClick={() => muteAllStudents(true)}>
+                Mute all
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => muteAllStudents(false)}>
+                Unmute all
+              </Button>
+            </div>
+            <ul className="min-h-0 flex-1 space-y-2 overflow-y-auto text-sm" data-no-drag>
+              {(state?.admitted?.length || 0) === 0 && (
+                <EmptyState
+                  icon={<IconUsers size={22} />}
+                  title="No one here yet"
+                  description="Admitted participants will show up in this roster."
+                  className="py-6"
+                />
               )}
-              <ul className="min-h-0 flex-1 space-y-2 overflow-y-auto text-sm">
-                {(state?.admitted?.length || 0) === 0 && (
-                  <EmptyState
-                    icon={<IconUsers size={22} />}
-                    title="No one here yet"
-                    description="Admitted participants will show up in this roster."
-                    className="py-6"
-                  />
-                )}
-                {[...(state?.admitted ?? [])]
-                  .sort((a, b) => {
-                    const ah = a.role === 'STUDENT' && (a.handRaised || (state?.raisedHands ?? []).includes(a.id)) ? 1 : 0;
-                    const bh = b.role === 'STUDENT' && (b.handRaised || (state?.raisedHands ?? []).includes(b.id)) ? 1 : 0;
-                    if (ah !== bh) return bh - ah;
-                    if (a.role !== b.role) return a.role === 'TEACHER' ? -1 : 1;
-                    return a.displayName.localeCompare(b.displayName);
-                  })
-                  .map((p) => {
+              {[...(state?.admitted ?? [])]
+                .sort((a, b) => {
+                  const ah =
+                    a.role === 'STUDENT' &&
+                    (a.handRaised || (state?.raisedHands ?? []).includes(a.id))
+                      ? 1
+                      : 0;
+                  const bh =
+                    b.role === 'STUDENT' &&
+                    (b.handRaised || (state?.raisedHands ?? []).includes(b.id))
+                      ? 1
+                      : 0;
+                  if (ah !== bh) return bh - ah;
+                  if (a.role !== b.role) return a.role === 'TEACHER' ? -1 : 1;
+                  return a.displayName.localeCompare(b.displayName);
+                })
+                .map((p) => {
                   const raised =
                     p.role === 'STUDENT' &&
                     (p.handRaised || (state?.raisedHands ?? []).includes(p.id));
                   return (
-                  <li
-                    key={p.id}
-                    className={cn(
-                      'rounded-xl border bg-black/20 px-3 py-2.5',
-                      raised ? 'border-amber-400/40 bg-amber-500/10' : 'border-white/[0.05]'
-                    )}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex min-w-0 items-center gap-2.5">
-                        <Avatar name={p.displayName} size="sm" />
-                        <div className="min-w-0">
-                          <p className="flex items-center gap-1.5 truncate font-medium text-slate-100">
+                    <li
+                      key={p.id}
+                      className={cn(
+                        'rounded-xl border bg-black/20 px-3 py-2.5',
+                        raised ? 'border-amber-400/40 bg-amber-500/10' : 'border-white/[0.05]'
+                      )}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex min-w-0 items-center gap-2.5">
+                          <Avatar name={p.displayName} size="sm" />
+                          <div className="min-w-0">
+                            <p className="flex items-center gap-1.5 truncate font-medium text-slate-100">
+                              {raised && (
+                                <span
+                                  className="inline-flex shrink-0 text-amber-300"
+                                  title="Hand raised"
+                                  aria-label="Hand raised"
+                                >
+                                  <IconHand size={14} />
+                                </span>
+                              )}
+                              <span className="truncate">
+                                {p.displayName}
+                                {p.role === 'TEACHER' ? ' · Teacher' : ''}
+                              </span>
+                            </p>
+                            {p.mutedByTeacher && p.role === 'STUDENT' && (
+                              <span className="chip-muted mt-0.5">Muted by teacher</span>
+                            )}
                             {raised && (
-                              <span className="inline-flex shrink-0 text-amber-300" title="Hand raised" aria-label="Hand raised">
-                                <IconHand size={14} />
+                              <span className="mt-0.5 inline-flex items-center gap-1 text-2xs font-semibold text-amber-300">
+                                ✋ Hand raised
                               </span>
                             )}
-                            <span className="truncate">
-                              {p.displayName}
-                              {p.role === 'TEACHER' ? ' · Teacher' : ''}
-                            </span>
-                          </p>
-                          {p.mutedByTeacher && p.role === 'STUDENT' && (
-                            <span className="chip-muted mt-0.5">Muted by teacher</span>
-                          )}
-                          {raised && (
-                            <span className="mt-0.5 inline-flex items-center gap-1 text-2xs font-semibold text-amber-300">
-                              ✋ Hand raised
-                            </span>
-                          )}
+                          </div>
                         </div>
-                      </div>
-                      {p.role === 'STUDENT' && (
-                        <span className={p.isVisible ? 'chip-sample' : 'chip-local'}>
-                          {p.isVisible ? 'In sample' : 'Local'}
-                        </span>
-                      )}
-                    </div>
-                    {isTeacher && p.role === 'STUDENT' && (
-                      <div className="mt-2 flex flex-wrap gap-3">
-                        <button
-                          type="button"
-                          className="text-xs font-medium text-brand-300 hover:underline"
-                          onClick={() => muteStudent(p.id, !p.mutedByTeacher)}
-                        >
-                          {p.mutedByTeacher ? 'Unmute student' : 'Mute student'}
-                        </button>
-                        {raised && (
-                          <button
-                            type="button"
-                            className="text-xs font-medium text-amber-300 hover:underline"
-                            onClick={async () => {
-                              try {
-                                const res = await roomFetch(code, '/hand', {
-                                  method: 'POST',
-                                  headers: { 'Content-Type': 'application/json' },
-                                  body: JSON.stringify({ participantId: p.id, raised: false }),
-                                });
-                                if (!res.ok) {
-                                  const data = await res.json().catch(() => ({}));
-                                  console.error('Lower hand failed', res.status, data);
-                                  alert(
-                                    (data as { error?: string }).error ||
-                                      `Could not lower hand (${res.status})`
-                                  );
-                                  return;
-                                }
-                                refresh();
-                              } catch (e) {
-                                console.error('Lower hand error', e);
-                                alert('Could not lower hand');
-                              }
-                            }}
-                          >
-                            Lower hand
-                          </button>
+                        {p.role === 'STUDENT' && (
+                          <span className={p.isVisible ? 'chip-sample' : 'chip-local'}>
+                            {p.isVisible ? 'In sample' : 'Local'}
+                          </span>
                         )}
                       </div>
-                    )}
-                  </li>
+                      {p.role === 'STUDENT' && (
+                        <div className="mt-2 flex flex-wrap gap-3">
+                          <button
+                            type="button"
+                            className="text-xs font-medium text-brand-300 hover:underline"
+                            onClick={() => muteStudent(p.id, !p.mutedByTeacher)}
+                          >
+                            {p.mutedByTeacher ? 'Unmute student' : 'Mute student'}
+                          </button>
+                          {raised && (
+                            <button
+                              type="button"
+                              className="text-xs font-medium text-amber-300 hover:underline"
+                              onClick={async () => {
+                                try {
+                                  const res = await roomFetch(code, '/hand', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ participantId: p.id, raised: false }),
+                                  });
+                                  if (!res.ok) {
+                                    const data = await res.json().catch(() => ({}));
+                                    console.error('Lower hand failed', res.status, data);
+                                    alert(
+                                      (data as { error?: string }).error ||
+                                        `Could not lower hand (${res.status})`
+                                    );
+                                    return;
+                                  }
+                                  refresh();
+                                } catch (e) {
+                                  console.error('Lower hand error', e);
+                                  alert('Could not lower hand');
+                                }
+                              }}
+                            >
+                              Lower hand
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </li>
                   );
                 })}
-              </ul>
-              {isTeacher && waitingCount > 0 && (
-                <div className="shrink-0 border-t border-white/5 pt-3">
-                  <h3 className="text-2xs font-semibold uppercase tracking-wider text-slate-400">
-                    Waiting ({waitingCount})
-                  </h3>
-                  <ul className="mt-2 max-h-32 space-y-1.5 overflow-y-auto text-sm">
-                    {state!.waiting!.map((p) => (
-                      <li
-                        key={p.id}
-                        className="flex items-center justify-between gap-2 rounded-lg bg-black/15 px-2 py-1.5"
+            </ul>
+            {waitingCount > 0 && (
+              <div className="shrink-0 border-t border-white/5 pt-3" data-no-drag>
+                <h3 className="text-2xs font-semibold uppercase tracking-wider text-slate-400">
+                  Waiting ({waitingCount})
+                </h3>
+                <ul className="mt-2 max-h-32 space-y-1.5 overflow-y-auto text-sm">
+                  {state!.waiting!.map((p) => (
+                    <li
+                      key={p.id}
+                      className="flex items-center justify-between gap-2 rounded-lg bg-black/15 px-2 py-1.5"
+                    >
+                      <div className="flex min-w-0 items-center gap-2">
+                        <Avatar name={p.displayName} size="sm" />
+                        <span className="truncate">{p.displayName}</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="shrink-0 text-xs font-semibold text-brand-300 hover:underline"
+                        onClick={async () => {
+                          await roomFetch(code, '/admit', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ participantIds: [p.id] }),
+                          });
+                          refresh();
+                        }}
                       >
-                        <div className="flex min-w-0 items-center gap-2">
-                          <Avatar name={p.displayName} size="sm" />
-                          <span className="truncate">{p.displayName}</span>
-                        </div>
-                        <button
-                          type="button"
-                          className="shrink-0 text-xs font-semibold text-brand-300 hover:underline"
-                          onClick={async () => {
-                            await roomFetch(code, '/admit', {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ participantIds: [p.id] }),
-                            });
-                            refresh();
-                          }}
-                        >
-                          Admit
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
-        </aside>
+                        Admit
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </FloatingPanel>
+
+        <FloatingPanel
+          title="Chat"
+          storageKey={`teacher_chat_${code.toUpperCase()}`}
+          open={chatOpen}
+          onClose={() => setChatOpen(false)}
+          width={320}
+          height={420}
+          defaultPos={() => ({
+            x: Math.max(8, window.innerWidth - 340),
+            y: Math.max(8, window.innerHeight - 540),
+          })}
+          badge={
+            chatUnread > 0 ? (
+              <span className="rounded-full bg-brand-500 px-1.5 text-[9px] font-bold text-white">
+                {chatUnread > 9 ? '9+' : chatUnread}
+              </span>
+            ) : null
+          }
+        >
+          <Chat
+            code={code}
+            isTeacher={true}
+            myParticipantId={state?.me?.id ?? null}
+            students={(state?.admitted ?? [])
+              .filter((a) => a.role === 'STUDENT')
+              .map((a) => ({ id: a.id, displayName: a.displayName }))}
+            active={chatOpen}
+            onUnreadChange={setChatUnread}
+            stopped={state?.status === 'ENDED' || !!state?.ended}
+          />
+        </FloatingPanel>
       </div>
 
       {(stageMode === 'screen' ||
@@ -1816,6 +1852,13 @@ function RoomInner({
           onRotateSample={rotateSample}
           onMuteAll={() => muteAllStudents(true)}
           onUnmuteAll={() => muteAllStudents(false)}
+          onOpenChat={() => {
+            setChatOpen(true);
+            setChatUnread(0);
+          }}
+          chatUnread={chatUnread}
+          onOpenRoster={() => setRosterOpen(true)}
+          rosterBadge={waitingCount}
         />
       </footer>
     </div>

@@ -51,7 +51,18 @@ export async function getTeacherSession() {
     if (payload.role !== 'teacher' || typeof payload.sub !== 'string') return null;
     const teacher = await prisma.teacher.findUnique({ where: { id: payload.sub } });
     if (!teacher) return null;
-    return { id: teacher.id, email: teacher.email, name: teacher.name };
+    let permanentCode = teacher.permanentCode;
+    if (!permanentCode) {
+      // Lazy backfill if migration row somehow lacks a code
+      const { ensureTeacherPermanentCode } = await import('./teacherRoom');
+      permanentCode = await ensureTeacherPermanentCode(teacher.id);
+    }
+    return {
+      id: teacher.id,
+      email: teacher.email,
+      name: teacher.name,
+      permanentCode,
+    };
   } catch {
     return null;
   }

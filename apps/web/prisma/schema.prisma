@@ -8,13 +8,15 @@ datasource db {
 }
 
 model Teacher {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  passwordHash String
-  name         String
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  rooms        Room[]
+  id            String   @id @default(cuid())
+  email         String   @unique
+  passwordHash  String
+  name          String
+  /// Stable meeting code reused for every class this teacher starts.
+  permanentCode String   @unique
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  rooms         Room[]
 }
 
 enum RoomStatus {

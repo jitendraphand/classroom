@@ -12,6 +12,7 @@ import {
   IconRotate,
   IconChat,
   IconHand,
+  IconUsers,
 } from '@/components/ui/Icons';
 import { cn } from '@/lib/cn';
 
@@ -34,9 +35,12 @@ type Props = {
   showScreenShare?: boolean;
   /** Dock sits in the bottom bar; float is a denser floating panel. */
   variant?: 'dock' | 'float';
-  /** Float mode: open chat overlay */
+  /** Open chat floating panel */
   onOpenChat?: () => void;
   chatUnread?: number;
+  /** Teacher: open roster floating panel */
+  onOpenRoster?: () => void;
+  rosterBadge?: number;
   /** Student raise-hand */
   handRaised?: boolean;
   onToggleHand?: () => void;
@@ -61,6 +65,8 @@ export function Controls({
   variant = 'dock',
   onOpenChat,
   chatUnread = 0,
+  onOpenRoster,
+  rosterBadge = 0,
   handRaised,
   onToggleHand,
 }: Props) {
@@ -125,13 +131,26 @@ export function Controls({
           </IconButton>
         )}
 
-        {isFloat && onOpenChat && (
+        {onOpenChat && (
           <IconButton label="Open chat" onClick={onOpenChat}>
             <span className="relative inline-flex">
               <IconChat />
               {chatUnread > 0 && (
                 <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand-500 px-0.5 text-[9px] font-bold text-white">
                   {chatUnread > 9 ? '9+' : chatUnread}
+                </span>
+              )}
+            </span>
+          </IconButton>
+        )}
+
+        {isTeacher && onOpenRoster && (
+          <IconButton label="Open roster" onClick={onOpenRoster}>
+            <span className="relative inline-flex">
+              <IconUsers />
+              {rosterBadge > 0 && (
+                <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-0.5 text-[9px] font-bold text-white">
+                  {rosterBadge > 9 ? '9+' : rosterBadge}
                 </span>
               )}
             </span>

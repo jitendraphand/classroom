@@ -17,7 +17,13 @@ export async function POST(req: Request) {
     }
     const token = await createTeacherToken(teacher);
     await setTeacherCookie(token);
-    return jsonOk({ id: teacher.id, email: teacher.email, name: teacher.name });
+    const permanentCode = teacher.permanentCode;
+    return jsonOk({
+      id: teacher.id,
+      email: teacher.email,
+      name: teacher.name,
+      permanentCode,
+    });
   } catch (e) {
     if (e instanceof z.ZodError) return jsonError(e.errors[0]?.message || 'Invalid input');
     console.error(e);
