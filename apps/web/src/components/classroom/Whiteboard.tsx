@@ -48,17 +48,31 @@ type StylesCtxValue = { open: boolean };
 const StylesCtx = createContext<StylesCtxValue>({ open: false });
 
 /**
- * Unbounded camera. No `constraints`, so pan is not clipped to a page.
- * Zoom steps run from 2% to 1600%; trackpad pinch and ctrl/⌘+wheel are continuous.
- * Plain wheel pans. Each viewer keeps their own camera (not part of the shared document).
+ * Unbounded camera — do not set `constraints`. A bounds box would clamp pan
+ * and zoom to a fixed page. Wheel zooms (ctrl/⌘+wheel pans). Pinch zooms.
+ * The hand tool and space-drag pan. 2%–1600% on the zoom control; 100% is the
+ * default step. Each viewer keeps their own camera.
  */
 const WB_CAMERA = {
   isLocked: false,
-  wheelBehavior: 'pan' as const,
+  wheelBehavior: 'zoom' as const,
   panSpeed: 1,
   zoomSpeed: 1,
   zoomSteps: [0.02, 0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8, 16],
 };
+
+function unlockCamera(editor: any) {
+  editor.setCameraOptions({ ...WB_CAMERA });
+  const applied = editor.getCameraOptions();
+  if (applied?.constraints) {
+    // setCameraOptions merges, so a previous bounds box would otherwise stick.
+    // `free` ignores that box while panning.
+    editor.setCameraOptions({
+      ...WB_CAMERA,
+      constraints: { ...applied.constraints, behavior: 'free' },
+    });
+  }
+}
 
 const SESSION_RECORD_TYPES = new Set([
   'camera',
@@ -260,7 +274,7 @@ export function Whiteboard({ code, onEnded, canWrite = false, isTeacher }: Props
     applyingRemote.current = true;
     try {
       loadSnapshot(editor.store, documentOnlySnapshot(snapshot) as any);
-      editor.setCameraOptions(WB_CAMERA);
+      unlockCamera(editor);
       if (fitView && editor.getCurrentPageShapes().length > 0) {
         editor.zoomToFit({ force: true, immediate: true });
       } else {
@@ -395,11 +409,11 @@ export function Whiteboard({ code, onEnded, canWrite = false, isTeacher }: Props
           components={tldrawComponents}
           onMount={(editor) => {
             editorRef.current = editor;
-            editor.setCameraOptions(WB_CAMERA);
+            unlockCamera(editor);
 
             try {
               editor.updateInstanceState({ isReadonly: !canWriteRef.current });
-              // View-only still pans with the hand. Writers pan with wheel, space-drag, or the hand tool.
+              // Read-only students pan with the hand. Teachers keep the draw tool and pan with the hand or space-drag.
               if (!canWriteRef.current) {
                 editor.setCurrentTool('hand');
               }
@@ -411,11 +425,12 @@ export function Whiteboard({ code, onEnded, canWrite = false, isTeacher }: Props
               try {
                 const cam = editor.getCamera();
                 loadSnapshot(editor.store, documentOnlySnapshot(initialSnapshot) as any);
-                editor.setCameraOptions(WB_CAMERA);
-                if (editor.getCurrentPageShapes().length > 0) {
+                unlockCamera(editor);
+                // Students land on the existing drawing. Teachers stay at 100% until they pan or zoom.
+                if (!canWriteRef.current && editor.getCurrentPageShapes().length > 0) {
                   editor.zoomToFit({ force: true, immediate: true });
                 } else {
-                  editor.setCamera({ x: cam.x, y: cam.y, z: cam.z }, { force: true, immediate: true });
+                  editor.setCamera({ x: cam.x, y: cam.y, z: 1 }, { force: true, immediate: true });
                 }
               } catch (e) {
                 console.warn('wb initial load', e);
