@@ -24,6 +24,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type RefObject,
@@ -250,21 +251,29 @@ function TeacherScreenStage({ teacherIdentities }: { teacherIdentities: string[]
 
 type FloatPos = { x: number; y: number };
 
-function clampFloatPos(x: number, y: number, w: number, h: number): FloatPos {
+function clampFloatPos(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  topReserve = 8,
+  bottomReserve = 108
+): FloatPos {
   const margin = 8;
-  const chromeBottom = 96; // keep above student control chrome
   const maxX = Math.max(margin, window.innerWidth - w - margin);
-  const maxY = Math.max(margin, window.innerHeight - h - chromeBottom);
+  const maxY = Math.max(topReserve, window.innerHeight - h - bottomReserve);
   return {
     x: Math.min(maxX, Math.max(margin, x)),
-    y: Math.min(maxY, Math.max(margin, y)),
+    y: Math.min(maxY, Math.max(topReserve, y)),
   };
 }
 
 function useDraggableFloat(
   storageKey: string,
   defaultPos: () => FloatPos,
-  sizeRef: RefObject<{ w: number; h: number }>
+  sizeRef: RefObject<{ w: number; h: number }>,
+  topReserve = 8,
+  bottomReserve = 108
 ) {
   const [pos, setPos] = useState<FloatPos | null>(null);
   const dragging = useRef(false);
@@ -277,7 +286,7 @@ function useDraggableFloat(
         const parsed = JSON.parse(raw) as FloatPos;
         if (typeof parsed.x === 'number' && typeof parsed.y === 'number') {
           const sz = sizeRef.current || { w: 186, h: 105 };
-          setPos(clampFloatPos(parsed.x, parsed.y, sz.w, sz.h));
+          setPos(clampFloatPos(parsed.x, parsed.y, sz.w, sz.h, topReserve, bottomReserve));
           return;
         }
       }
@@ -285,19 +294,25 @@ function useDraggableFloat(
       /* ignore */
     }
     setPos(defaultPos());
-  }, [storageKey]);
+  }, [storageKey, topReserve, bottomReserve]);
+
+  const reclamp = useCallback(() => {
+    setPos((prev) => {
+      if (!prev) return prev;
+      const sz = sizeRef.current || { w: 186, h: 105 };
+      const next = clampFloatPos(prev.x, prev.y, sz.w, sz.h, topReserve, bottomReserve);
+      if (next.x === prev.x && next.y === prev.y) return prev;
+      return next;
+    });
+  }, [sizeRef, topReserve, bottomReserve]);
 
   useEffect(() => {
     const onResize = () => {
-      setPos((prev) => {
-        if (!prev) return prev;
-        const sz = sizeRef.current || { w: 186, h: 105 };
-        return clampFloatPos(prev.x, prev.y, sz.w, sz.h);
-      });
+      reclamp();
     };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
-  }, [sizeRef]);
+  }, [reclamp]);
 
   const onPointerDown = useCallback(
     (e: ReactPointerEvent) => {
@@ -320,10 +335,17 @@ function useDraggableFloat(
       const dx = e.clientX - origin.current.px;
       const dy = e.clientY - origin.current.py;
       const sz = sizeRef.current || { w: 186, h: 105 };
-      const next = clampFloatPos(origin.current.x + dx, origin.current.y + dy, sz.w, sz.h);
+      const next = clampFloatPos(
+        origin.current.x + dx,
+        origin.current.y + dy,
+        sz.w,
+        sz.h,
+        topReserve,
+        bottomReserve
+      );
       setPos(next);
     },
-    [sizeRef]
+    [sizeRef, topReserve, bottomReserve]
   );
 
   const onPointerUp = useCallback(
@@ -350,6 +372,7 @@ function useDraggableFloat(
 
   return {
     pos,
+    reclamp,
     dragHandlers: {
       onPointerDown,
       onPointerMove,
@@ -357,6 +380,40 @@ function useDraggableFloat(
       onPointerCancel: onPointerUp,
     },
   };
+}
+
+/**
+ * One student tile as it appears today: the 16:9 video area of the students
+ * float at its single-tile width (~372px pane → ~354×199 content).
+ * Slot counts grow the window so every cell stays this size.
+ */
+const PEER_TILE_W = 354;
+const PEER_TILE_H = 199;
+/** Below the classroom header and the whiteboard page menu. */
+const PEER_TOP_RESERVE = 152;
+/** Above the dock and the tldraw tool bar. */
+const PEER_BOTTOM_RESERVE = 156;
+
+function peerFloatLayout(slots: 2 | 4 | 6, vw: number, vh: number) {
+  const cols = slots === 2 ? 1 : 2;
+  const rows = slots === 6 ? 3 : 2;
+  const header = 34;
+  const pad = 16;
+  const gap = 6;
+  const border = 2;
+  const bottomReserve = PEER_BOTTOM_RESERVE;
+  const maxPaneW = Math.max(200, vw - 16);
+  const maxPaneH = Math.max(180, vh - PEER_TOP_RESERVE - bottomReserve);
+  const scale = Math.min(
+    1,
+    (maxPaneW - pad - border - gap * (cols - 1)) / (PEER_TILE_W * cols),
+    (maxPaneH - header - pad - gap * (rows - 1)) / (PEER_TILE_H * rows)
+  );
+  const tileW = Math.max(112, Math.floor(PEER_TILE_W * scale));
+  const tileH = Math.max(63, Math.floor((tileW * 9) / 16));
+  const paneW = border + pad + cols * tileW + gap * (cols - 1);
+  const paneH = header + pad + rows * tileH + gap * (rows - 1);
+  return { cols, rows, tileW, tileH, paneW, paneH, gap };
 }
 
 
@@ -511,7 +568,7 @@ function TeacherPeersFloat({
   const room = useRoomContext();
   const teacherSet = new Set(teacherIdentities);
   const paneRef = useRef<HTMLDivElement | null>(null);
-  const sizeRef = useRef({ w: 186, h: 220 });
+  const sizeRef = useRef({ w: 372, h: 250 });
   const stickySpeakersRef = useRef<Set<string>>(new Set());
   const mosaicPoolRef = useRef<string[]>([]);
   const lastRotationTickRef = useRef(0);
@@ -535,17 +592,28 @@ function TeacherPeersFloat({
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [stickyVersion, setStickyVersion] = useState(0);
   const [tick, setTick] = useState(0);
+  const [viewport, setViewport] = useState({ w: 1400, h: 900 });
+
+  const layout = useMemo(
+    () => peerFloatLayout(slotCount, viewport.w, viewport.h),
+    [slotCount, viewport.w, viewport.h]
+  );
+  sizeRef.current = minimized
+    ? { w: 168, h: 36 }
+    : { w: layout.paneW, h: layout.paneH };
 
   const defaultPos = useCallback((): FloatPos => {
     const w = sizeRef.current.w;
     const h = sizeRef.current.h;
-    return clampFloatPos(12, window.innerHeight - h - 100, w, h);
+    return clampFloatPos(12, window.innerHeight - h - PEER_BOTTOM_RESERVE, w, h, PEER_TOP_RESERVE);
   }, []);
 
-  const { pos, dragHandlers } = useDraggableFloat(
+  const { pos, reclamp, dragHandlers } = useDraggableFloat(
     `peers_float_pos_${roomCode.toUpperCase()}`,
     defaultPos,
-    sizeRef
+    sizeRef,
+    PEER_TOP_RESERVE,
+    PEER_BOTTOM_RESERVE
   );
 
   useEffect(() => {
@@ -565,16 +633,26 @@ function TeacherPeersFloat({
   }, [minimized, roomCode]);
 
   useEffect(() => {
+    const read = () => setViewport({ w: window.innerWidth, h: window.innerHeight });
+    read();
+    window.addEventListener('resize', read);
+    return () => window.removeEventListener('resize', read);
+  }, []);
+
+  useEffect(() => {
     const el = paneRef.current;
     if (!el) return;
     const sync = () => {
-      sizeRef.current = { w: el.offsetWidth || 186, h: el.offsetHeight || 220 };
+      const w = el.offsetWidth || layout.paneW;
+      const h = el.offsetHeight || (minimized ? 36 : layout.paneH);
+      sizeRef.current = { w, h };
+      reclamp();
     };
     sync();
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null;
     ro?.observe(el);
     return () => ro?.disconnect();
-  }, [slotCount, minimized]);
+  }, [layout.paneW, layout.paneH, minimized, reclamp]);
 
   // Random mosaic rotation ~8s among non-sticky students
   useEffect(() => {
@@ -758,7 +836,13 @@ function TeacherPeersFloat({
     stickyVersion,
   ]);
 
-  const style = pos ? { left: pos.x, top: pos.y } : { left: 12, bottom: 88 };
+  const cells: Array<string | null> = [];
+  for (let i = 0; i < slotCount; i++) cells.push(peerIds[i] ?? null);
+
+  const style: CSSProperties = pos
+    ? { left: pos.x, top: pos.y }
+    : { left: 12, top: PEER_TOP_RESERVE };
+  if (!minimized) style.width = layout.paneW;
 
   return (
     <div
@@ -772,7 +856,7 @@ function TeacherPeersFloat({
     >
       <div className="peers-float-header">
         <span className="text-2xs font-semibold text-slate-200">
-          Students{minimized ? ` · ${peerIds.length}` : ''}
+          Students{minimized ? ` · ${peerIds.length}` : peerIds.length === 0 ? ' · waiting' : ''}
         </span>
         <div className="flex items-center gap-1" data-no-drag onPointerDown={(e) => e.stopPropagation()}>
           {!minimized &&
@@ -804,13 +888,29 @@ function TeacherPeersFloat({
         </div>
       </div>
       {!minimized && (
-        <div className="peers-float-grid" data-slots={slotCount}>
-          {peerIds.length === 0 && (
-            <div className="col-span-full flex aspect-video items-center justify-center rounded-lg bg-black/40 text-2xs text-slate-400">
-              No students in sample yet
-            </div>
-          )}
-          {peerIds.map((identity) => {
+        <div
+          className="peers-float-grid"
+          data-slots={slotCount}
+          style={{
+            gridTemplateColumns: `repeat(${layout.cols}, ${layout.tileW}px)`,
+            gridTemplateRows: `repeat(${layout.rows}, ${layout.tileH}px)`,
+            gap: layout.gap,
+          }}
+        >
+          {cells.map((identity, i) => {
+            if (!identity) {
+              return (
+                <div
+                  key={`empty-${i}`}
+                  className="peers-float-tile"
+                  style={{ width: layout.tileW, height: layout.tileH }}
+                >
+                  <div className="flex h-full items-center justify-center bg-black/40 px-2 text-center text-2xs text-slate-500">
+                    {peerIds.length === 0 && i === 0 ? 'No students in sample yet' : ''}
+                  </div>
+                </div>
+              );
+            }
             let name = identity;
             let mediaTrack: MediaStreamTrack | null = null;
             let speaking = false;
@@ -830,6 +930,8 @@ function TeacherPeersFloat({
                 mediaTrack={mediaTrack}
                 speaking={speaking}
                 pinned={stickySpeakersRef.current.has(identity) || speakingId === identity}
+                tileW={layout.tileW}
+                tileH={layout.tileH}
               />
             );
           })}
@@ -844,11 +946,15 @@ function PeerCamTile({
   mediaTrack,
   speaking,
   pinned,
+  tileW,
+  tileH,
 }: {
   name: string;
   mediaTrack: MediaStreamTrack | null;
   speaking: boolean;
   pinned: boolean;
+  tileW: number;
+  tileH: number;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   useEffect(() => {
@@ -871,6 +977,7 @@ function PeerCamTile({
         'peers-float-tile',
         speaking && 'ring-2 ring-brand-400'
       )}
+      style={{ width: tileW, height: tileH }}
     >
       {mediaTrack ? (
         <video

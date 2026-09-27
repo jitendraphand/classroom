@@ -247,25 +247,16 @@ body {
     cursor: grabbing;
   }
 
-  /* Base unit ≈ one student video tile (~186×105 like teacher cam float).
-     2 slots ≈ 2× base (stacked), 4 ≈ 2×2, 6 ≈ 2×3 — tiles stay similarly proportioned. */
+  /* Width/height come from the slot layout (one full tile, grown for 2/4/6). */
   .peers-float-pane {
     @apply absolute z-[34] overflow-hidden rounded-2xl border border-white/20 bg-surface-1/95 shadow-lift backdrop-blur-xl;
     touch-action: none;
     cursor: grab;
   }
-  .peers-float-pane[data-slots='2'] {
-    width: min(48vw, 186px);
-  }
-  .peers-float-pane[data-slots='4'] {
-    width: min(72vw, 372px);
-  }
-  .peers-float-pane[data-slots='6'] {
-    width: min(72vw, 372px);
-  }
   .peers-float-pane[data-minimized='1'] {
     width: auto !important;
     min-width: 140px;
+    height: auto !important;
   }
   .peers-float-pane:active {
     cursor: grabbing;
@@ -276,15 +267,8 @@ body {
   .peers-float-grid {
     @apply grid gap-1.5 p-2;
   }
-  .peers-float-grid[data-slots='2'] {
-    grid-template-columns: 1fr;
-  }
-  .peers-float-grid[data-slots='4'],
-  .peers-float-grid[data-slots='6'] {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
   .peers-float-tile {
-    @apply relative aspect-video overflow-hidden rounded-lg bg-black;
+    @apply relative shrink-0 overflow-hidden rounded-lg bg-black;
   }
 
   .stage-chat-drawer {
@@ -415,6 +399,20 @@ body {
   margin: 0 !important;
   padding: 0 !important;
   opacity: 0 !important;
+}
+
+/* Teacher whiteboard camera (zoom / minimap) sits top-right so the Students
+   float can occupy the bottom-left without covering zoom in/out. */
+.tldraw-teacher .tlui-navigation-panel {
+  position: fixed !important;
+  left: auto !important;
+  right: 8px !important;
+  top: 8px !important;
+  bottom: auto !important;
+  z-index: 400 !important;
+}
+.tldraw-teacher.tldraw-styles-open .tlui-navigation-panel {
+  right: 164px !important;
 }
 
 /* Meet-like stage */
