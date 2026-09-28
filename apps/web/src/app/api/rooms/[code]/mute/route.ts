@@ -4,7 +4,7 @@ import { getTeacherSession } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
 import { ensureRedis, keys } from '@/lib/redis';
 import { setManyParticipantMics, setParticipantMicAllowed } from '@/lib/livekit';
-import { clearPinnedSpeakers, unpinSpeaker } from '@/lib/sample';
+import { clearPinnedSpeakers, getVisibleSample, unpinSpeaker } from '@/lib/sample';
 
 const schema = z.union([
   z.object({
@@ -54,8 +54,17 @@ export async function POST(req: Request, { params }: { params: { code: string } 
         await redis.del(keys.muted(code));
       }
 
-      // Force LiveKit mic off / restore so clients cannot self-unmute
-      void setManyParticipantMics(code, identities, !body.muted);
+      // Force LiveKit mic off / restore so clients cannot self-unmute. Camera
+      // permission must follow current sample membership, otherwise this would
+      // re-grant camera to students outside the visible sample.
+      const { visible } = await getVisibleSample(code);
+      const inSample = new Set(visible);
+      void setManyParticipantMics(
+        code,
+        identities,
+        !body.muted,
+        (identity) => inSample.has(identity)
+      );
 
       // Sticky speak-pins last until mute — clear all when muting everyone
       if (body.muted) {
@@ -78,7 +87,13 @@ export async function POST(req: Request, { params }: { params: { code: string } 
     if (body.muted) await redis.sadd(keys.muted(code), participant.id);
     else await redis.srem(keys.muted(code), participant.id);
 
-    void setParticipantMicAllowed(code, participant.livekitIdentity, !body.muted);
+    const { visible } = await getVisibleSample(code);
+    void setParticipantMicAllowed(
+      code,
+      participant.livekitIdentity,
+      !body.muted,
+      visible.includes(participant.livekitIdentity)
+    );
 
     // Sticky speak-pin: drop when teacher mutes this student
     if (body.muted) {

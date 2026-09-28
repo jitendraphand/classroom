@@ -6,6 +6,8 @@ import { jsonError, jsonOk } from '@/lib/response';
 export const dynamic = 'force-dynamic';
 
 const MAX_BODY = 2000;
+/** Newest N messages retained per client's view of a room. */
+const MAX_HISTORY = 500;
 
 type AccessCtx = {
   room: { id: string; code: string; status: string; teacherId: string };
@@ -98,25 +100,34 @@ export async function GET(req: Request, { params }: { params: { code: string } }
   // Waiting students can read nothing (or empty); stick to admitted + teacher
   if (!ctx.admitted) return jsonError('Not admitted', 403);
 
-  const all = await prisma.message.findMany({
-    where: { roomId: ctx.room.id },
-    orderBy: { createdAt: 'asc' },
-    include: messageInclude,
-    take: 500,
-  });
+  // A student only ever sees broadcasts, their own messages to the teacher, and
+  // DMs addressed to them. Filtering in the WHERE clause keeps other students'
+  // messages (notably the teacher's DMs naming a classmate) out of the result
+  // set entirely, rather than pulling every row and discarding it in JS.
+  const where = ctx.isTeacher
+    ? { roomId: ctx.room.id }
+    : {
+        roomId: ctx.room.id,
+        OR: [
+          { scope: 'BROADCAST' as const },
+          { scope: 'TEACHER' as const, senderParticipantId: ctx.participantId ?? '__none__' },
+          { scope: 'DIRECT' as const, recipientParticipantId: ctx.participantId ?? '__none__' },
+        ],
+      };
 
-  const visible = ctx.isTeacher
-    ? all
-    : all.filter((m) => {
-        if (m.scope === 'BROADCAST') return true;
-        if (m.scope === 'TEACHER' && m.senderParticipantId === ctx.participantId) return true;
-        if (m.scope === 'DIRECT' && m.recipientParticipantId === ctx.participantId) return true;
-        // Also show DMs the student somehow sent (shouldn't happen) — skip
-        return false;
-      });
+  // Newest-first with `take` so the cap keeps the MOST RECENT history; taking the
+  // oldest 500 meant new messages silently stopped appearing once a chatty class
+  // crossed the threshold. Reversed below to keep the client order ascending.
+  const rows = await prisma.message.findMany({
+    where,
+    orderBy: { createdAt: 'desc' },
+    include: messageInclude,
+    take: MAX_HISTORY,
+  });
+  const all = rows.reverse();
 
   return jsonOk({
-    messages: visible.map(serializeMessage),
+    messages: all.map(serializeMessage),
     ended: false,
   });
 }

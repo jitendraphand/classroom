@@ -41,22 +41,11 @@ export const keys = {
   pinnedSpeakers: (code: string) => `room:${code}:pinned-speakers`,
   /** Per-identity pin rate limit */
   pinRate: (code: string, identity: string) => `room:${code}:pin-rate:${identity}`,
+  /** Short-lived mutex so only one client rotates the visible sample */
+  rotateLock: (code: string) => `room:${code}:rotate-lock`,
   /** Set of participant ids with raised hands */
   hands: (code: string) => `room:${code}:hands`,
 };
 
 export type StageMode = 'idle' | 'screen' | 'whiteboard';
-
-export async function getStageMode(code: string): Promise<StageMode> {
-  const redis = await ensureRedis();
-  const v = await redis.get(keys.stage(code));
-  if (v === 'screen' || v === 'whiteboard' || v === 'idle') return v;
-  return 'idle';
-}
-
-export async function getWhiteboardWriteAllowed(code: string): Promise<boolean> {
-  const redis = await ensureRedis();
-  const v = await redis.get(keys.wbWrite(code));
-  return v === '1';
-}
 

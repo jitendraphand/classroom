@@ -52,6 +52,10 @@ export async function GET(req: Request, { params }: { params: { code: string } }
     canPublishData: true,
     canSubscribe: true,
     mutedByTeacher,
+    // Server-side enforcement of selective video: a student outside the visible
+    // sample is granted every source EXCEPT camera, so their video cannot reach
+    // the SFU regardless of what the client does.
+    allowCamera: canPublishVideo,
     metadata: {
       role: participant.role,
       participantId: participant.id,

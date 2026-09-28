@@ -39,6 +39,9 @@ const WB_TOPIC = 'whiteboard';
 const encoder = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
 const decoder = typeof TextDecoder !== 'undefined' ? new TextDecoder() : null;
 
+/** Mirror of the server-side cap in api/rooms/[code]/whiteboard/route.ts. */
+const MAX_SNAPSHOT_BYTES = 512_000;
+
 type WbMessage =
   | { v: 1; type: 'diff'; changes: unknown; from: string }
   | { v: 1; type: 'snapshot'; snapshot: unknown; from: string }
@@ -112,6 +115,7 @@ export function Whiteboard({ code, onEnded, canWrite = false, isTeacher }: Props
   const identityRef = useRef('anon');
   const lastPersistedHash = useRef('');
   const lastAppliedHash = useRef('');
+  const oversizeWarned = useRef(false);
   const canWriteRef = useRef(canWrite);
   const room = useRoomContext();
   const endedRef = useRef(false);
@@ -187,6 +191,23 @@ export function Whiteboard({ code, onEnded, canWrite = false, isTeacher }: Props
     async (snapshot: unknown) => {
       if (endedRef.current) return;
       if (!canWriteRef.current) return;
+      let serialized: string | undefined;
+      try {
+        serialized = JSON.stringify(snapshot);
+      } catch {
+        return;
+      }
+      // Keep in step with the server cap; skipping the round trip is better than
+      // filling the response with 413s on a very large board.
+      if (typeof serialized !== 'string' || serialized.length > MAX_SNAPSHOT_BYTES) {
+        if (!oversizeWarned.current) {
+          oversizeWarned.current = true;
+          console.warn(
+            'whiteboard snapshot exceeds the sync limit; remote viewers will not receive it'
+          );
+        }
+        return;
+      }
       try {
         lastPersistedHash.current = hashSnap(snapshot);
         const res = await roomFetch(code, '/whiteboard', {

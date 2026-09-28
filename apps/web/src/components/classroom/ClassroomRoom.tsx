@@ -16,7 +16,9 @@ import {
   createLocalAudioTrack,
   LocalAudioTrack,
   RoomEvent,
+  type LocalTrackPublication,
   type Participant,
+  type TrackPublication,
 } from 'livekit-client';
 import {
   useCallback,
@@ -1283,12 +1285,12 @@ function RoomInner({
   const [tab, setTab] = useState<'video' | 'board'>('video');
   const [chatUnread, setChatUnread] = useState(0);
   const [localCamStream, setLocalCamStream] = useState<MediaStream | null>(null);
-  const [chromeVisible, setChromeVisible] = useState(true);
   const [chatOpen, setChatOpen] = useState(false);
   const [rosterOpen, setRosterOpen] = useState(false);
   const [wbWriteLocal, setWbWriteLocal] = useState(false);
   const [leftForFullscreen, setLeftForFullscreen] = useState(false);
-  const chromeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** True while we intentionally move between presentation stages. */
+  const stageSwitchRef = useRef(false);
   const { state, refresh } = useRoomState(code, 2000);
 
   const stageMode = state?.stageMode ?? 'idle';
@@ -1343,35 +1345,54 @@ function RoomInner({
   useEffect(() => {
     if (!isTeacher || !room) return;
     const pinnedRecently = new Map<string, number>();
+    const studentIdentities = new Set(
+      (state?.admitted ?? [])
+        .filter((a) => a.role === 'STUDENT')
+        .map((a) => a.livekitIdentity)
+    );
+    const visibleSet = new Set(state?.visibleIdentities ?? visibleIdentities);
+
+    const postPin = (identity: string, pinned: boolean) => {
+      // Rate-limit only the pinning direction; releases must always land so a
+      // muted student cannot hold a slot.
+      if (pinned) {
+        const last = pinnedRecently.get(identity) || 0;
+        if (Date.now() - last < 2000) return;
+      }
+      pinnedRecently.set(identity, Date.now());
+      void roomFetch(code, '/sample/pin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identity, pinned }),
+      }).then((res) => {
+        if (res.ok) refresh();
+      });
+    };
 
     const onSpeakers = (speakers: Participant[]) => {
-      const visiblesSet = new Set(state?.visibleIdentities ?? visibleIdentities);
-      const students = new Set(
-        (state?.admitted ?? [])
-          .filter((a) => a.role === 'STUDENT')
-          .map((a) => a.livekitIdentity)
-      );
-
       for (const s of speakers) {
         if (s.isLocal) continue;
-        if (!students.has(s.identity)) continue;
-        if (visiblesSet.has(s.identity)) continue;
-        const last = pinnedRecently.get(s.identity) || 0;
-        if (Date.now() - last < 2000) continue;
-        pinnedRecently.set(s.identity, Date.now());
-        void roomFetch(code, '/sample/pin', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ identity: s.identity }),
-        }).then((res) => {
-          if (res.ok) refresh();
-        });
+        if (!studentIdentities.has(s.identity)) continue;
+        if (visibleSet.has(s.identity)) continue;
+        postPin(s.identity, true);
       }
     };
 
+    // Sticky speak-pins last "until mute". A student who speaks once and then
+    // mutes their own microphone must release their reserved slot, otherwise they
+    // keep publishing (and holding a slot) for the rest of the class.
+    const onTrackMuted = (pub: TrackPublication, participant: Participant) => {
+      if (!pub || pub.source !== Track.Source.Microphone) return;
+      const identity = participant?.identity;
+      if (!identity || !studentIdentities.has(identity)) return;
+      postPin(identity, false);
+    };
+
     room.on(RoomEvent.ActiveSpeakersChanged, onSpeakers);
+    room.on(RoomEvent.TrackMuted, onTrackMuted);
     return () => {
       room.off(RoomEvent.ActiveSpeakersChanged, onSpeakers);
+      room.off(RoomEvent.TrackMuted, onTrackMuted);
     };
   }, [isTeacher, room, code, refresh, state?.admitted, state?.visibleIdentities, visibleIdentities]);
 
@@ -1410,22 +1431,11 @@ function RoomInner({
     [code, isTeacher, refresh]
   );
 
-  const bumpChrome = useCallback(() => {
-    setChromeVisible(true);
-    if (chromeTimer.current) clearTimeout(chromeTimer.current);
-    // Keep student controls visible — tap still refreshes visibility if ever hidden.
-  }, []);
-
-  useEffect(() => {
-    if (isTeacher) {
-      if (chromeTimer.current) clearTimeout(chromeTimer.current);
-      return;
-    }
-    setChromeVisible(true);
-    return () => {
-      if (chromeTimer.current) clearTimeout(chromeTimer.current);
-    };
-  }, [isTeacher]);
+  // NOTE: `chromeVisible` / `bumpChrome` were removed. The state was only ever
+  // ever set to `true` (the auto-hide timer that would have cleared it was
+  // dropped), so the opacity branch below was unreachable and the "tap to show
+  // controls" behaviour never fired. Controls are always visible on the
+  // student stage, which is the intended behaviour.
 
   // Student forced fullscreen: request on join; leaving fullscreen kicks from class
   useEffect(() => {
@@ -1503,6 +1513,25 @@ function RoomInner({
     setScreenOn(false);
   }, [localParticipant]);
 
+  // The browser's own "Stop sharing" bar (and any track teardown we did not
+  // initiate) leaves the Redis stage stuck on `screen`, which pins every student
+  // to an empty "Waiting for teacher screen…" stage. Reset it here.
+  // `stageSwitchRef` is set while we are deliberately moving to another stage so
+  // this cannot race postStage('whiteboard') from selectTab().
+  useEffect(() => {
+    if (!isTeacher || !localParticipant) return;
+    const onUnpublished = (pub: LocalTrackPublication) => {
+      if (pub?.source !== Track.Source.ScreenShare) return;
+      setScreenOn(false);
+      if (stageSwitchRef.current) return;
+      void postStage('idle');
+    };
+    localParticipant.on(RoomEvent.LocalTrackUnpublished, onUnpublished);
+    return () => {
+      localParticipant.off(RoomEvent.LocalTrackUnpublished, onUnpublished);
+    };
+  }, [isTeacher, localParticipant, postStage]);
+
   const toggleScreen = useCallback(async () => {
     if (!localParticipant || !isTeacher) return;
     try {
@@ -1526,8 +1555,15 @@ function RoomInner({
       setTab(next);
       if (!isTeacher) return;
       if (next === 'board') {
-        await stopScreenShare();
-        await postStage('whiteboard');
+        // Mark the transition so the screen-share teardown below does not race
+        // this by posting `idle` after we post `whiteboard`.
+        stageSwitchRef.current = true;
+        try {
+          await stopScreenShare();
+          await postStage('whiteboard');
+        } finally {
+          stageSwitchRef.current = false;
+        }
       } else {
         // Video tab: keep screen stage if still sharing, else idle
         if (screenOn) {
@@ -1635,11 +1671,7 @@ function RoomInner({
           : 'Waiting for teacher…';
 
     return (
-      <div
-        className="stage-fullscreen"
-        onPointerDown={bumpChrome}
-        onTouchStart={bumpChrome}
-      >
+      <div className="stage-fullscreen">
         <SelectivePublisher
           canPublishVideo={effectiveCanPublish}
           mutedByTeacher={effectiveMuted}
@@ -1674,19 +1706,12 @@ function RoomInner({
 
         <TeacherCameraFloat teacherIdentities={teacherIdentities} roomCode={code} />
 
-        <div
-          className={cn(
-            'stage-float-chrome',
-            chromeVisible ? 'opacity-100' : 'pointer-events-none opacity-0'
-          )}
-          onPointerDown={(e) => e.stopPropagation()}
-        >
+        <div className="stage-float-chrome">
           <Controls
             {...controlsProps}
             variant="float"
             onToggleChat={() => {
               setChatOpen((v) => !v);
-              bumpChrome();
             }}
             chatOpen={chatOpen}
             chatUnread={chatUnread}
@@ -2180,41 +2205,11 @@ export function ClassroomRoom({ code }: { code: string }) {
     load();
   }, [load]);
 
-  // Poll room status for mute visibility + end-class kick (students especially)
-  useEffect(() => {
-    if (classEnded) return;
-    const t = setInterval(async () => {
-      try {
-        const stateRes = await roomFetch(code, '/state');
-        const state = await stateRes.json();
-        if (
-          stateRes.status === 410 ||
-          state.status === 'ENDED' ||
-          state.ended ||
-          (state.public && state.status === 'ENDED')
-        ) {
-          setClassEnded(true);
-          setTokenData(null);
-          return;
-        }
-        if (!stateRes.ok) return;
-        setCanPublishVideo(!!state.me?.canPublishVideo);
-        const asStudent =
-          !!state.actingAsStudent ||
-          state.me?.role === 'STUDENT' ||
-          (!state.isTeacher && !!state.me);
-        if (asStudent) {
-          rememberClassroomRole(code, 'student');
-          setIsTeacher(false);
-        } else if (typeof state.isTeacher === 'boolean') {
-          setIsTeacher(!!state.isTeacher);
-        }
-      } catch {
-        /* ignore */
-      }
-    }, 2000);
-    return () => clearInterval(t);
-  }, [code, classEnded]);
+  // NOTE: room state is polled by useRoomState() inside RoomInner (2s), which
+  // also surfaces the ENDED transition via onClassEnded(). A second /state
+  // poller used to live here and doubled the load on the hottest endpoint in the
+  // app for no behavioural gain — the props below are initial values that
+  // effectiveCanPublish / effectiveMuted immediately override from `state`.
 
   if (classEnded) {
     return (

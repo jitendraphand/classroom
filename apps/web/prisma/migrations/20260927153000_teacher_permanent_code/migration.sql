@@ -21,13 +21,15 @@ SET "permanentCode" = UPPER(SUBSTRING(REGEXP_REPLACE(md5(id || email), '[01]', '
 WHERE "permanentCode" IS NULL;
 
 -- Resolve rare collisions by appending index from row number
+-- NOTE: ROW_NUMBER() returns bigint and PostgreSQL has no
+-- substring(text, bigint, int); the ::int cast is required or this fails to parse.
 WITH dups AS (
   SELECT id, "permanentCode",
     ROW_NUMBER() OVER (PARTITION BY "permanentCode" ORDER BY "createdAt") AS rn
   FROM "Teacher"
 )
 UPDATE "Teacher" t
-SET "permanentCode" = LEFT(d."permanentCode", 5) || SUBSTRING('23456789ABCDEFGHJKLMNPQRSTUVWXYZ', d.rn, 1)
+SET "permanentCode" = LEFT(d."permanentCode", 5) || SUBSTRING('23456789ABCDEFGHJKLMNPQRSTUVWXYZ', d.rn::int, 1)
 FROM dups d
 WHERE t.id = d.id AND d.rn > 1;
 

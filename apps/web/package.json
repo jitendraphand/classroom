@@ -7,6 +7,7 @@
     "build": "prisma generate && next build",
     "start": "prisma migrate deploy && node server.js",
     "start:next": "next start",
+    "typecheck": "tsc --noEmit",
     "lint": "next lint",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
@@ -23,7 +24,7 @@
     "livekit-client": "^2.6.0",
     "livekit-server-sdk": "^2.7.0",
     "nanoid": "^5.0.8",
-    "next": "14.2.18",
+    "next": "14.2.35",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zod": "^3.23.8"

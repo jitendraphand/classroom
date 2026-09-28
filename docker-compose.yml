@@ -12,8 +12,28 @@ services:
     network_mode: host
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-classroom}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-classroom_dev_password}
+      # No default: a missing POSTGRES_PASSWORD must fail loudly rather than
+      # silently boot a database with a publicly documented credential.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
       POSTGRES_DB: ${POSTGRES_DB:-classroom}
+    command:
+      - postgres
+      # Bind loopback only. The official image forces listen_addresses='*', which
+      # published 5432 on every interface; the firewall was the only control.
+      - -c
+      - listen_addresses=127.0.0.1
+      # Sized for a 2 GB VPS (the documented target host).
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=1536MB
+      - -c
+      - maintenance_work_mem=128MB
+      - -c
+      - max_wal_size=512MB
+      - -c
+      - max_connections=50
+    shm_size: 256mb
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -26,7 +46,23 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     network_mode: host
-    command: ["redis-server", "--appendonly", "yes", "--bind", "127.0.0.1", "--port", "6379"]
+    # Loopback only, with a hard memory ceiling and LRU eviction. The previous
+    # config had maxmemory 0 + noeviction alongside AOF, so unbounded room keys
+    # could grow until the 2 GB host was OOM-killed.
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --bind
+      - 127.0.0.1
+      - --port
+      - "6379"
+      - --maxmemory
+      - 192mb
+      - --maxmemory-policy
+      - allkeys-lru
     volumes:
       - redis_data:/data
     healthcheck:
@@ -59,7 +95,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-classroom}:${POSTGRES_PASSWORD:-classroom_dev_password}@127.0.0.1:5432/${POSTGRES_DB:-classroom}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-classroom}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@127.0.0.1:5432/${POSTGRES_DB:-classroom}
       REDIS_URL: redis://127.0.0.1:6379
       LIVEKIT_URL: ws://127.0.0.1:7880
       LIVEKIT_INTERNAL_URL: http://127.0.0.1:7880
@@ -80,6 +116,10 @@ services:
         condition: service_healthy
       livekit:
         condition: service_started
+    # Give `prisma migrate deploy` room to finish: the entrypoint traps
+    # SIGTERM, so Docker must not SIGKILL mid-migration and leave a half-applied
+    # entry in _prisma_migrations.
+    stop_grace_period: 45s
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
       interval: 10s

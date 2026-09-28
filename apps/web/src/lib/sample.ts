@@ -1,5 +1,7 @@
+import type Redis from 'ioredis';
 import { ensureRedis, keys } from './redis';
 import { prisma } from './db';
+import { setParticipantCameraAllowed } from './livekit';
 
 /** Hard ceiling: server never selects/publishes more than this many student videos. */
 export const HARD_MAX_VISIBLE_STUDENT_VIDEOS = 6;
@@ -15,9 +17,71 @@ const ROTATION_SECONDS = Number(process.env.SAMPLE_ROTATION_SECONDS || 8);
 /** Do not re-pin the same identity more often than this. */
 const PIN_RATE_LIMIT_MS = 2000;
 
+/**
+ * Cap on remembered sticky speakers. Pins last until mute, so without a ceiling
+ * a few very chatty students could hold every slot for the whole class.
+ */
+const MAX_STICKY_PINS = 12;
+
+/** Guard so a poll storm cannot trigger dozens of concurrent rotations. */
+const ROTATE_LOCK_MS = 3000;
+
 export function clampMaxVisible(n: number | undefined | null): number {
   const v = typeof n === 'number' && Number.isFinite(n) ? n : DEFAULT_MAX;
   return Math.min(HARD_MAX_VISIBLE_STUDENT_VIDEOS, Math.max(1, Math.floor(v)));
+}
+
+/**
+ * Push a student's effective publish permissions to LiveKit after a change in
+ * visible-sample membership.
+ *
+ * Camera permission follows sample membership; mic permission follows the
+ * teacher-mute flags. Both are sent together because writing `canPublishSources`
+ * replaces the whole list, so a camera-only update would silently re-grant mic
+ * to a muted student (and vice versa).
+ *
+ * Failures are swallowed: the next token mint (and every poll of `/state`)
+ * carries the same truth, so this is a latency optimisation that also makes a
+ * connected client drop the track immediately rather than at its next refresh.
+ */
+export async function syncCameraPermissionFor(
+  roomCode: string,
+  identity: string,
+  inSample: boolean
+): Promise<void> {
+  try {
+    const part = await prisma.participant.findFirst({
+      where: { livekitIdentity: identity, role: 'STUDENT' },
+      select: { id: true, mutedByTeacher: true },
+    });
+    if (!part) return;
+    const redis = await ensureRedis();
+    const mutedIds = await redis.smembers(keys.muted(roomCode));
+    await setParticipantCameraAllowed(
+      roomCode,
+      identity,
+      inSample,
+      !part.mutedByTeacher && !mutedIds.includes(part.id)
+    );
+  } catch (e) {
+    console.warn('sample sync camera permission', roomCode, identity, e);
+  }
+}
+
+/** Sync every identity whose sample membership changed between two samples. */
+async function syncSampleMembership(
+  roomCode: string,
+  before: string[],
+  after: string[]
+) {
+  const changed = new Set<string>();
+  const prev = new Set(before);
+  const next = new Set(after);
+  for (const id of before) if (!next.has(id)) changed.add(id);
+  for (const id of after) if (!prev.has(id)) changed.add(id);
+  await Promise.allSettled(
+    Array.from(changed).map((id) => syncCameraPermissionFor(roomCode, id, next.has(id)))
+  );
 }
 
 function shuffle<T>(arr: T[]): T[] {
@@ -44,15 +108,28 @@ export async function unpinSpeaker(roomCode: string, identity: string) {
   await redis.hdel(keys.pinnedSpeakers(roomCode), identity);
 }
 
-export async function unpinSpeakers(roomCode: string, identities: string[]) {
-  if (!identities.length) return;
-  const redis = await ensureRedis();
-  await redis.hdel(keys.pinnedSpeakers(roomCode), ...identities);
-}
-
 export async function clearPinnedSpeakers(roomCode: string) {
   const redis = await ensureRedis();
   await redis.del(keys.pinnedSpeakers(roomCode));
+}
+
+/**
+ * Trim the sticky-speaker hash to the MAX_STICKY_PINS most recent entries.
+ * The hash stores `identity -> pinnedAt ms`, so recency is recoverable.
+ */
+async function pruneStickyPins(redis: Redis, roomCode: string, keep: Set<string>) {
+  const raw = await redis.hgetall(keys.pinnedSpeakers(roomCode));
+  const entries = Object.entries(raw);
+  if (entries.length <= MAX_STICKY_PINS) return;
+  entries.sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0));
+  const drop = entries
+    .slice(MAX_STICKY_PINS)
+    .map(([id]) => id)
+    .filter((id) => !keep.has(id));
+  if (drop.length) {
+    await redis.hdel(keys.pinnedSpeakers(roomCode), ...drop);
+    for (const id of drop) keep.delete(id);
+  }
 }
 
 /**
@@ -86,6 +163,10 @@ export async function rotateVisibleSample(roomCode: string, maxVisible?: number)
     for (const id of stalePins) pinned.delete(id);
   }
 
+  // Keep the most recently pinned MAX_STICKY_PINS so stale pins can never
+  // accumulate across a long class and monopolise every slot.
+  await pruneStickyPins(redis, roomCode, pinned);
+
   // Prefer keeping sticky speakers, then fill randomly among the rest.
   const pinnedInRoom = identities.filter((id) => pinned.has(id));
   const rest = identities.filter((id) => !pinned.has(id));
@@ -94,11 +175,17 @@ export async function rotateVisibleSample(roomCode: string, maxVisible?: number)
   const fill = shuffle(rest).slice(0, Math.max(0, n - keepPinned.length));
   const sample = [...keepPinned, ...fill].slice(0, n);
 
+  const previous = await redis.smembers(keys.visible(roomCode));
+
   const pipe = redis.multi();
   pipe.del(keys.visible(roomCode));
   if (sample.length) pipe.sadd(keys.visible(roomCode), ...sample);
   pipe.set(keys.rotation(roomCode), String(Date.now()), 'EX', ROTATION_SECONDS * 3);
   await pipe.exec();
+
+  // Server-side enforcement: identities that entered or left the sample get
+  // their camera publish permission updated on the SFU.
+  await syncSampleMembership(roomCode, previous, sample);
 
   return { visible: sample, max: n, rotatedAt: Date.now(), nextIn: ROTATION_SECONDS };
 }
@@ -115,15 +202,33 @@ export async function ensureSampleFresh(roomCode: string) {
   const redis = await ensureRedis();
   const rotatedAt = Number((await redis.get(keys.rotation(roomCode))) || 0);
   const age = Date.now() - rotatedAt;
-  if (!rotatedAt || age > ROTATION_SECONDS * 1000) {
-    return rotateVisibleSample(roomCode);
+  if (rotatedAt && age <= ROTATION_SECONDS * 1000) {
+    const sample = await getVisibleSample(roomCode);
+    // Cap if somehow over hard max
+    if (sample.visible.length > HARD_MAX_VISIBLE_STUDENT_VIDEOS) {
+      return rotateVisibleSample(roomCode);
+    }
+    return sample;
   }
-  const sample = await getVisibleSample(roomCode);
-  // Cap if somehow over hard max
-  if (sample.visible.length > HARD_MAX_VISIBLE_STUDENT_VIDEOS) {
-    return rotateVisibleSample(roomCode);
+
+  // Stale (or missing) rotation marker. Every client polls this endpoint, so
+  // without a lock a rotation boundary produces a stampede of concurrent
+  // rotations — each a full participant read plus a clobbering write. Exactly
+  // one caller rotates; the rest read the existing sample and pick the new one
+  // up on their next poll.
+  const lock = await redis.set(keys.rotateLock(roomCode), '1', 'PX', ROTATE_LOCK_MS, 'NX');
+  if (!lock) {
+    const current = await getVisibleSample(roomCode);
+    // A rotation may already have landed; only re-rotate if the marker is still
+    // stale AND the sample is empty, otherwise report what is there.
+    if (!current.visible.length) return rotateVisibleSample(roomCode);
+    return current;
   }
-  return sample;
+  try {
+    return await rotateVisibleSample(roomCode);
+  } finally {
+    await redis.del(keys.rotateLock(roomCode));
+  }
 }
 
 /**
@@ -192,13 +297,34 @@ export async function pinSpeaker(roomCode: string, identity: string) {
   if (!next.includes(identity)) next.push(identity);
   next = next.slice(0, max);
 
+  const previous = await redis.smembers(keys.visible(roomCode));
+
   const pipe = redis.multi();
   pipe.del(keys.visible(roomCode));
   if (next.length) pipe.sadd(keys.visible(roomCode), ...next);
   pipe.hset(keys.pinnedSpeakers(roomCode), identity, String(Date.now()));
   await pipe.exec();
 
+  // The pinned student may now publish camera — enforce that on the SFU, and
+  // revoke it from whoever was pushed out of the sample.
+  await syncSampleMembership(roomCode, previous, next);
+
   return { ok: true as const, alreadyVisible: false, visible: next, pinned: identity };
+}
+
+/**
+ * Drop a sticky speaker pin.
+ *
+ * Called when the teacher mutes a student, and when the teacher client sees that
+ * student mute their own microphone — without this a student who speaks once and
+ * then mutes holds a visible slot for the rest of the class.
+ */
+export async function unpinSpeakerByParticipant(roomCode: string, identity: string) {
+  const redis = await ensureRedis();
+  const wasPinned = await redis.hexists(keys.pinnedSpeakers(roomCode), identity);
+  if (!wasPinned) return { ok: true as const, wasPinned: false };
+  await redis.hdel(keys.pinnedSpeakers(roomCode), identity);
+  return { ok: true as const, wasPinned: true };
 }
 
 export function sampleConfig() {

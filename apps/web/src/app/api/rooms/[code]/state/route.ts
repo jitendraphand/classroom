@@ -69,6 +69,55 @@ export async function GET(req: Request, { params }: { params: { code: string } }
     });
   }
 
+  // A student in the waiting lobby knows only that they exist and which class
+  // they queued for. Returning the admitted roster, LiveKit identities and the
+  // visible sample leaked the whole class to anyone who had the room code before
+  // being admitted, and made the lobby page re-download it every 2s. Bail out
+  // before the sample/Redis reads, which this client does not need.
+  if (!isTeacher) {
+    const me = room.participants.find((p) => p.id === access.student?.id);
+    const redis = await ensureRedis();
+    const stageRaw = await redis.get(keys.stage(code));
+    const stageMode =
+      stageRaw === 'screen' || stageRaw === 'whiteboard' || stageRaw === 'idle'
+        ? stageRaw
+        : 'idle';
+    const raisedHands = (await redis.smembers(keys.hands(code))).map(String);
+
+    if (me?.status !== 'ADMITTED') {
+      return jsonOk({
+        code: room.code,
+        name: room.name,
+        status: room.status,
+        teacherName: room.teacher.name,
+        maxVisibleVideos: clampMaxVisible(room.maxVisibleVideos),
+        isTeacher: false,
+        actingAsStudent: forceStudent || (access.mode === 'student' && !!access.teacherOwns),
+        teacherSessionActive: !!access.teacher,
+        me: me
+          ? {
+              id: me.id,
+              displayName: me.displayName,
+              role: me.role,
+              status: me.status,
+              livekitIdentity: me.livekitIdentity,
+              mutedByTeacher: false,
+              canPublishVideo: false,
+              inVisibleSample: false,
+              handRaised: raisedHands.includes(me.id),
+            }
+          : null,
+        admitted: [],
+        visibleIdentities: [],
+        visibleCount: 0,
+        raisedHands: [],
+        stageMode,
+        whiteboardCanWrite: false,
+        whiteboardWriteAllowed: false,
+      });
+    }
+  }
+
   await ensureSampleFresh(code);
   const { visible } = await getVisibleSample(code);
   const redis = await ensureRedis();
@@ -94,6 +143,20 @@ export async function GET(req: Request, { params }: { params: { code: string } }
   const canPublishVideo =
     isTeacher || (me ? visible.includes(me.livekitIdentity) : false);
 
+  const mePayload = me
+    ? {
+        id: me.id,
+        displayName: me.displayName,
+        role: me.role,
+        status: me.status,
+        livekitIdentity: me.livekitIdentity,
+        mutedByTeacher: me.mutedByTeacher || mutedIds.includes(me.id),
+        canPublishVideo,
+        inVisibleSample: canPublishVideo,
+        handRaised: raisedHands.includes(me.id),
+      }
+    : null;
+
   return jsonOk({
     code: room.code,
     name: room.name,
@@ -103,19 +166,7 @@ export async function GET(req: Request, { params }: { params: { code: string } }
     isTeacher,
     actingAsStudent: forceStudent || (access.mode === 'student' && !!access.teacherOwns),
     teacherSessionActive: !!access.teacher,
-    me: me
-      ? {
-          id: me.id,
-          displayName: me.displayName,
-          role: me.role,
-          status: me.status,
-          livekitIdentity: me.livekitIdentity,
-          mutedByTeacher: me.mutedByTeacher || mutedIds.includes(me.id),
-          canPublishVideo,
-          inVisibleSample: canPublishVideo,
-          handRaised: raisedHands.includes(me.id),
-        }
-      : null,
+    me: mePayload,
     waiting: isTeacher
       ? waiting.map((p) => ({
           id: p.id,

@@ -16,8 +16,10 @@ ARG NEXT_PUBLIC_APP_URL=http://localhost:3000
 ENV NEXT_PUBLIC_LIVEKIT_URL=$NEXT_PUBLIC_LIVEKIT_URL
 ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
 ENV NEXT_TELEMETRY_DISABLED=1
-# Prisma needs a URL at generate time; runtime uses real env
-ENV DATABASE_URL="postgresql://classroom:classroom_dev_password@postgres:5432/classroom"
+# Prisma needs a syntactically valid URL at generate time; the runtime env
+# supplies the real one. Deliberately a non-routable dummy so no credential is
+# baked into this image layer (see docs/VERIFY.md).
+ENV DATABASE_URL="postgresql://placeholder:placeholder@127.0.0.1:5432/placeholder"
 RUN npx prisma generate
 RUN npm run build
 
@@ -41,5 +43,9 @@ USER nextjs
 EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
+
+# Explicit CMD: without it the base image's CMD is inherited and the entrypoint
+# (which forwards "$@") can never start the app.
+CMD ["node", "server.js"]
 
 ENTRYPOINT ["/docker-entrypoint.sh"]

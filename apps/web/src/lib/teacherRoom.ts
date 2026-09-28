@@ -155,6 +155,13 @@ export async function startOrReopenTeacherRoom(
       data: { status: 'LEFT', leftAt: new Date() },
     });
 
+    // Chat history is per-session. A teacher's permanent room row is reused
+    // forever, so without this the NEXT class would start by showing the
+    // previous class's conversation — including teacher DMs addressed to
+    // individual students by name. Matches the documented behaviour that chat is
+    // cleared when a class ends.
+    await prisma.message.deleteMany({ where: { roomId: room.id } });
+
     return room;
   }
 

@@ -48,7 +48,7 @@ export async function POST(req: Request, { params }: { params: { code: string } 
     const pipe = redis.multi();
     pipe.del(keys.waiting(code));
     const stillWaiting = await prisma.participant.findMany({
-      where: { roomId: room.id, status: 'WAITING' },
+      where: { roomId: room.id, role: 'STUDENT', status: 'WAITING' },
       select: { id: true },
     });
     if (stillWaiting.length) pipe.sadd(keys.waiting(code), ...stillWaiting.map((p) => p.id));
