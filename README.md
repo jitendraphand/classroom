@@ -56,6 +56,25 @@ If no webcam is available, the app falls back to a **canvas demo camera** so pub
 
 On the waiting-room screen, **Not you? Join with a different name** calls `POST /api/auth/clear-student` to drop the student session cookie so another display name can join in the same browser.
 
+### Teach while sharing
+
+When the teacher shares their screen and needs to switch to another app, the
+**Share HUD** keeps every class control reachable. It auto-opens when the share
+starts and floats in its own window:
+
+- **Annotate** on top of the shared screen (pen / highlighter / eraser / clear).
+  Students see the strokes composited over the share, on the `screen` stage —
+  the whiteboard is not involved and is not switched to.
+- **Chat** (teacher rules unchanged), **raised hands** with Lower, and
+  **per-student mute** plus mute-all / unmute-all.
+
+Hosts are chosen automatically: **Document Picture-in-Picture** (Chromium 116+,
+always-on-top) → **`window.open` popup** (other desktop browsers; you may need to
+raise it manually) → **in-page bottom sheet** (mobile, or when both are blocked).
+The collapsed sheet is a small pill, so it never covers the whole screen.
+
+Details, browser matrix and limitations: **[SHARE_HUD_NOTES.md](SHARE_HUD_NOTES.md)**.
+
 ## Quick start
 
 ### Prerequisites

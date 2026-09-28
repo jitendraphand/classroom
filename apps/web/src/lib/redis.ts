@@ -37,6 +37,8 @@ export const keys = {
   stage: (code: string) => `room:${code}:stage`,
   /** When set to "1", students may write on the shared whiteboard */
   wbWrite: (code: string) => `room:${code}:wb-write`,
+  /** Screen-share annotation strokes (JSON array), for late joiners */
+  annotate: (code: string) => `room:${code}:screen-annotate`,
   /** Hash identity → pinnedAt ms for active-speaker pins */
   pinnedSpeakers: (code: string) => `room:${code}:pinned-speakers`,
   /** Per-identity pin rate limit */

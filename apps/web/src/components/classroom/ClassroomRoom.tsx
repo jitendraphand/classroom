@@ -38,6 +38,8 @@ import { LocalPreview } from './LocalPreview';
 import { Whiteboard } from './Whiteboard';
 import { Chat } from './Chat';
 import { FloatingPanel } from './FloatingPanel';
+import { ScreenAnnotator, useScreenAnnotate } from './ScreenAnnotator';
+import { TeacherShareHud, useShareHud, supportsDocumentPip } from './TeacherShareHud';
 import { Avatar } from '@/components/ui/Avatar';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -214,7 +216,15 @@ function ParticipantGrid({
 }
 
 
-function TeacherScreenStage({ teacherIdentities }: { teacherIdentities: string[] }) {
+function TeacherScreenStage({
+  teacherIdentities,
+  code,
+  active,
+}: {
+  teacherIdentities: string[];
+  code: string;
+  active: boolean;
+}) {
   const tracks = useTracks(
     [{ source: Track.Source.ScreenShare, withPlaceholder: false }],
     { onlySubscribed: true }
@@ -226,6 +236,10 @@ function TeacherScreenStage({ teacherIdentities }: { teacherIdentities: string[]
     return isTeacherParticipant(t.participant, teacherSet);
   });
 
+  // Students render the teacher's annotation layer read-only over the share.
+  const annotate = useScreenAnnotate({ code, active, canDraw: false });
+  const frameRef = useRef<HTMLDivElement | null>(null);
+
   if (screens.length === 0) {
     return (
       <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-ink-950 text-slate-400">
@@ -235,15 +249,25 @@ function TeacherScreenStage({ teacherIdentities }: { teacherIdentities: string[]
     );
   }
 
+  // Only the last screen share is annotated; the overlay tracks that frame.
+  const primary = screens[screens.length - 1];
+
   return (
     <div className="relative h-full w-full bg-black">
       {screens.map((t) => (
         <div key={`${t.participant.identity}-${t.source}`} className="absolute inset-0">
-          {t.publication?.track ? (
-            <VideoTrack trackRef={t} className="h-full w-full object-contain" />
-          ) : (
-            <div className="flex h-full items-center justify-center text-slate-400">No screen</div>
-          )}
+          <div className="relative h-full w-full">
+            <div ref={t === primary ? frameRef : undefined} className="h-full w-full">
+              {t.publication?.track ? (
+                <VideoTrack trackRef={t} className="h-full w-full object-contain" />
+              ) : (
+                <div className="flex h-full items-center justify-center text-slate-400">No screen</div>
+              )}
+            </div>
+            {t === primary && (
+              <ScreenAnnotator frameRef={frameRef} strokes={annotate.strokes} />
+            )}
+          </div>
         </div>
       ))}
     </div>
@@ -1289,9 +1313,14 @@ function RoomInner({
   const [rosterOpen, setRosterOpen] = useState(false);
   const [wbWriteLocal, setWbWriteLocal] = useState(false);
   const [leftForFullscreen, setLeftForFullscreen] = useState(false);
+  const [hudOpen, setHudOpen] = useState(false);
+  const [hudNotice, setHudNotice] = useState('');
   /** True while we intentionally move between presentation stages. */
   const stageSwitchRef = useRef(false);
+  /** Reset per share session so the HUD auto-opens once per share. */
+  const hudAutoOpenedRef = useRef(false);
   const { state, refresh } = useRoomState(code, 2000);
+  const hud = useShareHud();
 
   const stageMode = state?.stageMode ?? 'idle';
   const whiteboardCanWrite = isTeacher
@@ -1513,6 +1542,19 @@ function RoomInner({
     setScreenOn(false);
   }, [localParticipant]);
 
+  /**
+   * Screen share ended (button, browser "Stop sharing" bar, or track teardown):
+   * close the HUD and wipe the annotation layer for everyone. Never touches the
+   * LiveKit connection, so students simply fall back to their waiting stage.
+   */
+  const endShareSession = useCallback(() => {
+    setScreenOn(false);
+    setHudOpen(false);
+    setHudNotice('');
+    hud.close();
+    hudAutoOpenedRef.current = false;
+  }, [hud]);
+
   // The browser's own "Stop sharing" bar (and any track teardown we did not
   // initiate) leaves the Redis stage stuck on `screen`, which pins every student
   // to an empty "Waiting for teacher screen…" stage. Reset it here.
@@ -1522,7 +1564,7 @@ function RoomInner({
     if (!isTeacher || !localParticipant) return;
     const onUnpublished = (pub: LocalTrackPublication) => {
       if (pub?.source !== Track.Source.ScreenShare) return;
-      setScreenOn(false);
+      endShareSession();
       if (stageSwitchRef.current) return;
       void postStage('idle');
     };
@@ -1530,16 +1572,41 @@ function RoomInner({
     return () => {
       localParticipant.off(RoomEvent.LocalTrackUnpublished, onUnpublished);
     };
-  }, [isTeacher, localParticipant, postStage]);
+  }, [isTeacher, localParticipant, postStage, endShareSession]);
+
+  /** Open (or re-open) the share HUD from a click, so the gesture is valid. */
+  const openShareHud = useCallback(() => {
+    if (!hud.detached) hud.open();
+    hud.setExpanded(true);
+    setHudOpen(true);
+    setHudNotice('');
+  }, [hud]);
 
   const toggleScreen = useCallback(async () => {
     if (!localParticipant || !isTeacher) return;
     try {
       if (screenOn) {
         await localParticipant.setScreenShareEnabled(false);
-        setScreenOn(false);
+        endShareSession();
         await postStage('idle');
       } else {
+        // Open the HUD first, while this click's user activation is still
+        // valid: Document PiP and popup blockers both require a gesture. The
+        // window appears before the share track, which is imperceptible.
+        if (!hudAutoOpenedRef.current) {
+          hudAutoOpenedRef.current = true;
+          const host = hud.open();
+          setHudOpen(true);
+          if (host === 'inline') {
+            // PiP or a popup was unavailable/refused. Say so, and point at the
+            // in-page sheet which still works while the tab is visible.
+            setHudNotice(
+              supportsDocumentPip()
+                ? 'Pop-out was blocked. Tap “Open share controls” to allow it, or use the in-page sheet.'
+                : 'This browser has no pop-out mode. Use the in-page sheet, or split the screen.'
+            );
+          }
+        }
         // Always announce screen stage after successful share start (even if UI state was stale)
         await localParticipant.setScreenShareEnabled(true);
         setScreenOn(true);
@@ -1548,7 +1615,7 @@ function RoomInner({
     } catch (e) {
       console.warn('screen share', e);
     }
-  }, [localParticipant, screenOn, isTeacher, postStage]);
+  }, [localParticipant, screenOn, isTeacher, postStage, hud, endShareSession]);
 
   const selectTab = useCallback(
     async (next: 'video' | 'board') => {
@@ -1560,6 +1627,7 @@ function RoomInner({
         stageSwitchRef.current = true;
         try {
           await stopScreenShare();
+          endShareSession();
           await postStage('whiteboard');
         } finally {
           stageSwitchRef.current = false;
@@ -1573,7 +1641,7 @@ function RoomInner({
         }
       }
     },
-    [isTeacher, stopScreenShare, postStage, screenOn]
+    [isTeacher, stopScreenShare, postStage, screenOn, endShareSession]
   );
 
   async function leave() {
@@ -1640,6 +1708,29 @@ function RoomInner({
 
   const studentCount = state?.admitted?.filter((a) => a.role === 'STUDENT').length ?? 0;
   const waitingCount = state?.waiting?.length ?? 0;
+
+  /** Teacher lowers a student's raised hand. Shared by the roster and the HUD. */
+  async function lowerHand(participantId: string) {
+    try {
+      const res = await roomFetch(code, '/hand', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ participantId, raised: false }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        console.error('Lower hand failed', res.status, data);
+        setHudNotice(
+          (data as { error?: string }).error || `Could not lower hand (${res.status})`
+        );
+        return;
+      }
+      refresh();
+    } catch (e) {
+      console.error('Lower hand error', e);
+      setHudNotice('Could not lower hand');
+    }
+  }
   const controlsProps = {
     micOn: micOn && !effectiveMuted,
     camOn,
@@ -1686,7 +1777,11 @@ function RoomInner({
 
         <div className="absolute inset-0 z-10">
           {effectiveStage === 'screen' ? (
-            <TeacherScreenStage teacherIdentities={teacherIdentities} />
+            <TeacherScreenStage
+              teacherIdentities={teacherIdentities}
+              code={code}
+              active={effectiveStage === 'screen'}
+            />
           ) : effectiveStage === 'whiteboard' ? (
             <div className="stage-fill-middle">
               <Whiteboard
@@ -1840,10 +1935,34 @@ function RoomInner({
                   {wbWriteLocal ? 'Lock drawing' : 'Allow students to draw'}
                 </Button>
               )}
+              {/* Reopen the HUD after it was closed, or promote the in-page
+                  sheet to a real window. */}
+              {screenOn && !hudOpen && (
+                <Button variant="primary" size="sm" onClick={() => openShareHud()}>
+                  <IconScreen size={14} />
+                  Open share controls
+                </Button>
+              )}
             </>
           )}
         </div>
       </header>
+
+      {hudNotice && isTeacher && (
+        <div
+          role="status"
+          className="flex shrink-0 items-center gap-2 border-b border-amber-400/25 bg-amber-500/10 px-3 py-1.5 text-2xs text-amber-100 sm:px-4"
+        >
+          <span className="flex-1">{hudNotice}</span>
+          <button
+            type="button"
+            className="rounded px-1.5 py-0.5 font-semibold text-amber-200 hover:underline"
+            onClick={() => setHudNotice('')}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Main stage — whiteboard/screen fill the entire middle */}
       <div className="relative min-h-0 flex-1 overflow-hidden">
@@ -2000,28 +2119,7 @@ function RoomInner({
                             <button
                               type="button"
                               className="text-xs font-medium text-amber-300 hover:underline"
-                              onClick={async () => {
-                                try {
-                                  const res = await roomFetch(code, '/hand', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ participantId: p.id, raised: false }),
-                                  });
-                                  if (!res.ok) {
-                                    const data = await res.json().catch(() => ({}));
-                                    console.error('Lower hand failed', res.status, data);
-                                    alert(
-                                      (data as { error?: string }).error ||
-                                        `Could not lower hand (${res.status})`
-                                    );
-                                    return;
-                                  }
-                                  refresh();
-                                } catch (e) {
-                                  console.error('Lower hand error', e);
-                                  alert('Could not lower hand');
-                                }
-                              }}
+                              onClick={() => void lowerHand(p.id)}
                             >
                               Lower hand
                             </button>
@@ -2135,6 +2233,36 @@ function RoomInner({
           rosterBadge={waitingCount}
         />
       </footer>
+
+      {/* Pop-out controls + annotation surface, available whenever sharing. */}
+      {isTeacher && hudOpen && (
+        <TeacherShareHud
+          hud={hud}
+          code={code}
+          admitted={state?.admitted ?? []}
+          waitingCount={waitingCount}
+          teacherMicOn={micOn && !effectiveMuted}
+          onToggleTeacherMic={() => setMicOn((v) => !v)}
+          onStopSharing={() => void toggleScreen()}
+          onMuteStudent={(id, muted) => void muteStudent(id, muted)}
+          onMuteAll={(muted) => void muteAllStudents(muted)}
+          onLowerHand={(id) => void lowerHand(id)}
+          teacherParticipantId={state?.me?.id ?? null}
+          chatUnread={chatUnread}
+          onChatUnread={setChatUnread}
+          classEnded={state?.status === 'ENDED' || !!state?.ended}
+          onClose={() => {
+            // Closing the HUD must never stop the share.
+            setHudOpen(false);
+            hud.close();
+          }}
+          onPopOut={() => {
+            hud.open();
+            setHudOpen(true);
+          }}
+          canPopOut
+        />
+      )}
     </div>
   );
 }

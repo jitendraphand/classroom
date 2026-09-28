@@ -63,6 +63,7 @@ async function clearRoomRedis(code: string) {
     keys.hands(code),
     keys.stage(code),
     keys.wbWrite(code),
+    keys.annotate(code),
     keys.pinnedSpeakers(code)
   );
 }

@@ -4,15 +4,21 @@ import { resolveRoomAccess, getTeacherSession } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
 import { ensureRedis, keys } from '@/lib/redis';
 
-const schema = z.union([
-  z.object({
-    raised: z.boolean(),
-  }),
-  z.object({
-    participantId: z.string().min(1),
-    raised: z.boolean(),
-  }),
-]);
+/**
+ * A student raises/lowers their own hand by sending only `raised`; the teacher
+ * targets a specific student by also sending `participantId`.
+ *
+ * This is deliberately a single object with an optional field rather than a
+ * `z.union`. zod objects strip unknown keys, so `{ participantId, raised:false }`
+ * also validates against a bare `{ raised }` branch, and a union would always
+ * resolve to that first branch — silently dropping `participantId` and making
+ * the teacher's "lower hand" action fail with a 401.
+ */
+const schema = z.object({
+  raised: z.boolean(),
+  /** Present => teacher-issued action against one student in this room. */
+  participantId: z.string().min(1).optional(),
+});
 
 export const dynamic = 'force-dynamic';
 
@@ -31,10 +37,10 @@ export async function POST(req: Request, { params }: { params: { code: string } 
     const body = schema.parse(await req.json());
     const redis = await ensureRedis();
 
-    // Teacher lowering (or raising) a specific student's hand — authorize like mute
-    // (getTeacherSession only). Do not fail on access.mode === 'student' from
-    // as=student / x-classroom-as headers that roomFetch may send.
-    if ('participantId' in body) {
+    // Teacher lowering (or raising) a specific student's hand — authorize like
+    // mute (getTeacherSession only). Do not fail on access.mode === 'student'
+    // from as=student / x-classroom-as headers that roomFetch may send.
+    if (body.participantId) {
       const teacher = await getTeacherSession();
       if (!teacher || room.teacherId !== teacher.id) {
         return jsonError('Unauthorized', 401);

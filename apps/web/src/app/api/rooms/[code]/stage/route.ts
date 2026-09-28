@@ -27,6 +27,13 @@ export async function POST(req: Request, { params }: { params: { code: string } 
     const redis = await ensureRedis();
     await redis.set(keys.stage(code), mode, 'EX', STAGE_TTL);
 
+    // Annotations belong to the share session. Leaving the screen stage (via
+    // the dock, the whiteboard tab, or the browser's own "Stop sharing" bar)
+    // must wipe the durable copy, or the next share would resurrect it.
+    if (mode !== 'screen') {
+      await redis.del(keys.annotate(code));
+    }
+
     // Clearing presentation: optionally clear student write flag when leaving whiteboard
     if (mode === 'screen' || mode === 'idle') {
       // Keep wb-write as-is so teacher preference persists across brief switches;
