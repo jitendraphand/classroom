@@ -38,7 +38,7 @@ import { LocalPreview } from './LocalPreview';
 import { Whiteboard } from './Whiteboard';
 import { Chat } from './Chat';
 import { FloatingPanel } from './FloatingPanel';
-import { ScreenAnnotator, useScreenAnnotate } from './ScreenAnnotator';
+import { ScreenAnnotator, useScreenAnnotate, ANNOTATE_COLORS, type AnnotateMode } from './ScreenAnnotator';
 import { TeacherShareHud, useShareHud, supportsDocumentPip } from './TeacherShareHud';
 import { Avatar } from '@/components/ui/Avatar';
 import { Badge } from '@/components/ui/Badge';
@@ -47,7 +47,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { PageLoading } from '@/components/ui/Skeleton';
 import { IconBoard, IconHand, IconScreen, IconUsers, IconVideo } from '@/components/ui/Icons';
 import { cn } from '@/lib/cn';
-import { roomFetch, rememberClassroomRole } from '@/lib/classroomClient';
+import { roomFetch, rememberClassroomRole, getClassroomRole, claimTeacherTab } from '@/lib/classroomClient';
 
 type TokenPayload = {
   token: string;
@@ -79,11 +79,19 @@ function ParticipantGrid({
   localPreview,
   teacherIdentities,
   visibleIdentities: _visibleIdentities,
+  annotate,
+  annotateOn,
+  annotateMode,
+  annotateColor,
 }: {
   visibleIdentities: string[];
   isTeacher: boolean;
   localPreview: ReactNode;
   teacherIdentities: string[];
+  annotate?: ReturnType<typeof useScreenAnnotate>;
+  annotateOn?: boolean;
+  annotateMode?: AnnotateMode;
+  annotateColor?: string;
 }) {
   void _visibleIdentities;
   const tracks = useTracks(
@@ -147,30 +155,15 @@ function ParticipantGrid({
           )}
         >
           {screenShares.map((t) => (
-            <div
+            <TeacherShareTile
               key={`${t.participant.identity}-${t.source}`}
-              className="video-tile relative min-h-0 h-full w-full overflow-hidden bg-black"
-            >
-              {t.publication?.track ? (
-                <VideoTrack trackRef={t} className="h-full w-full object-contain" />
-              ) : (
-                <div className="flex h-full items-center justify-center bg-ink-900 text-slate-400">
-                  No screen
-                </div>
-              )}
-              <div className="absolute bottom-2 left-2 flex items-center gap-2 rounded-lg bg-black/65 px-2.5 py-1 text-xs backdrop-blur">
-                <Avatar
-                  name={t.participant.name || t.participant.identity}
-                  size="sm"
-                  className="!h-5 !w-5 !text-[9px]"
-                />
-                <span>
-                  {t.participant.name || t.participant.identity}
-                  {' · screen'}
-                  {t.participant.isLocal ? ' (you)' : ''}
-                </span>
-              </div>
-            </div>
+              trackRef={t}
+              canAnnotate={!!isTeacher && !!t.participant.isLocal && !!annotate}
+              annotate={annotate}
+              annotateOn={!!annotateOn}
+              annotateMode={annotateMode || 'pen'}
+              annotateColor={annotateColor || ANNOTATE_COLORS[0]}
+            />
           ))}
         </div>
       )}
@@ -215,6 +208,68 @@ function ParticipantGrid({
   );
 }
 
+
+function TeacherShareTile({
+  trackRef,
+  canAnnotate,
+  annotate,
+  annotateOn,
+  annotateMode,
+  annotateColor,
+}: {
+  trackRef: ReturnType<typeof useTracks>[number];
+  canAnnotate: boolean;
+  annotate?: ReturnType<typeof useScreenAnnotate>;
+  annotateOn: boolean;
+  annotateMode: AnnotateMode;
+  annotateColor: string;
+}) {
+  const frameRef = useRef<HTMLDivElement | null>(null);
+  const t = trackRef;
+  const draw = canAnnotate && annotateOn && !!annotate;
+
+  return (
+    <div className="video-tile relative min-h-0 h-full w-full overflow-hidden bg-black">
+      <div ref={frameRef} className="relative h-full w-full">
+        {t.publication?.track ? (
+          <VideoTrack trackRef={t} className="h-full w-full object-contain" />
+        ) : (
+          <div className="flex h-full items-center justify-center bg-ink-900 text-slate-400">
+            No screen
+          </div>
+        )}
+        {canAnnotate && annotate && (
+          <ScreenAnnotator
+            frameRef={frameRef}
+            strokes={annotate.strokes}
+            canDraw={draw}
+            tool={annotateMode}
+            color={annotateColor}
+            onBegin={(p) =>
+              annotate.begin(p, annotateMode === 'eraser' ? 'pen' : annotateMode, annotateColor)
+            }
+            onExtend={annotate.extend}
+            onEnd={annotate.end}
+            onErase={annotate.eraseAt}
+          />
+        )}
+      </div>
+      <div className="pointer-events-none absolute bottom-2 left-2 z-20 flex items-center gap-2 rounded-lg bg-black/65 px-2.5 py-1 text-xs backdrop-blur">
+        <Avatar
+          name={t.participant.name || t.participant.identity}
+          size="sm"
+          className="!h-5 !w-5 !text-[9px]"
+        />
+        <span>
+          {t.participant.name || t.participant.identity}
+          {' · screen'}
+          {t.participant.isLocal ? ' (you)' : ''}
+          {draw ? ' · drawing' : ''}
+        </span>
+      </div>
+    </div>
+  );
+}
 
 function TeacherScreenStage({
   teacherIdentities,
@@ -501,16 +556,22 @@ function TeacherCameraFloat({
     };
     ensure();
     room.on(RoomEvent.TrackPublished, ensure);
+    room.on(RoomEvent.TrackUnpublished, bump);
     room.on(RoomEvent.TrackSubscribed, ensure);
     room.on(RoomEvent.TrackUnsubscribed, bump);
+    room.on(RoomEvent.TrackMuted, bump);
+    room.on(RoomEvent.TrackUnmuted, ensure);
     room.on(RoomEvent.ParticipantConnected, ensure);
     room.on(RoomEvent.ParticipantDisconnected, bump);
     room.on(RoomEvent.TrackSubscriptionFailed, ensure);
     const iv = window.setInterval(ensure, 1500);
     return () => {
       room.off(RoomEvent.TrackPublished, ensure);
+      room.off(RoomEvent.TrackUnpublished, bump);
       room.off(RoomEvent.TrackSubscribed, ensure);
       room.off(RoomEvent.TrackUnsubscribed, bump);
+      room.off(RoomEvent.TrackMuted, bump);
+      room.off(RoomEvent.TrackUnmuted, ensure);
       room.off(RoomEvent.ParticipantConnected, ensure);
       room.off(RoomEvent.ParticipantDisconnected, bump);
       room.off(RoomEvent.TrackSubscriptionFailed, ensure);
@@ -520,14 +581,21 @@ function TeacherCameraFloat({
 
   void tick;
 
-  let teacherPub: { track?: { mediaStreamTrack?: MediaStreamTrack } | null; isSubscribed?: boolean } | null =
-    null;
+  let teacherPub: {
+    track?: { mediaStreamTrack?: MediaStreamTrack } | null;
+    isSubscribed?: boolean;
+    isMuted?: boolean;
+  } | null = null;
   let teacherName = 'Teacher';
   if (room) {
     for (const p of Array.from(room.remoteParticipants.values())) {
       if (!isTeacherParticipant(p, teacherSet)) continue;
       teacherName = p.name || p.identity || 'Teacher';
-      teacherPub = p.getTrackPublication(Track.Source.Camera) ?? null;
+      const pub = p.getTrackPublication(Track.Source.Camera);
+      // Only treat as published when the camera track is live (not muted/unpublished).
+      if (pub && !pub.isMuted && pub.track) {
+        teacherPub = pub;
+      }
       break;
     }
   }
@@ -548,7 +616,10 @@ function TeacherCameraFloat({
     };
   }, [mediaTrack]);
 
-  const hasVideo = !!mediaTrack;
+  const hasVideo = !!mediaTrack && !teacherPub?.isMuted;
+  // Hide the floating pane entirely when the teacher is not publishing camera.
+  if (!hasVideo) return null;
+
   const style = pos ? { left: pos.x, top: pos.y } : { right: 12, bottom: 88 };
 
   return (
@@ -560,25 +631,16 @@ function TeacherCameraFloat({
       title="Drag to move"
       {...dragHandlers}
     >
-      {hasVideo ? (
-        <video
-          ref={videoRef}
-          className="pointer-events-none h-full w-full object-cover"
-          autoPlay
-          playsInline
-          muted
-        />
-      ) : (
-        <div className="pointer-events-none flex h-full flex-col items-center justify-center gap-2 bg-gradient-to-br from-surface-3 to-ink-950 text-slate-300">
-          <Avatar name={teacherName} size="lg" />
-          <span className="text-xs">{teacherPub ? 'Camera off' : 'Waiting…'}</span>
-        </div>
-      )}
-      {hasVideo && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-2.5 pb-2 pt-6">
-          <span className="text-2xs font-semibold tracking-wide text-white">{teacherName}</span>
-        </div>
-      )}
+      <video
+        ref={videoRef}
+        className="pointer-events-none h-full w-full object-cover"
+        autoPlay
+        playsInline
+        muted
+      />
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-2.5 pb-2 pt-6">
+        <span className="text-2xs font-semibold tracking-wide text-white">{teacherName}</span>
+      </div>
     </div>
   );
 }
@@ -1315,6 +1377,9 @@ function RoomInner({
   const [leftForFullscreen, setLeftForFullscreen] = useState(false);
   const [hudOpen, setHudOpen] = useState(false);
   const [hudNotice, setHudNotice] = useState('');
+  const [annotateOn, setAnnotateOn] = useState(false);
+  const [annotateMode, setAnnotateMode] = useState<AnnotateMode>('pen');
+  const [annotateColor, setAnnotateColor] = useState(ANNOTATE_COLORS[0]);
   /** True while we intentionally move between presentation stages. */
   const stageSwitchRef = useRef(false);
   /** Reset per share session so the HUD auto-opens once per share. */
@@ -1333,6 +1398,15 @@ function RoomInner({
   const hasTeacherScreen = useHasTeacherScreen(teacherIdentities);
   const effectiveStage =
     stageMode !== 'idle' ? stageMode : hasTeacherScreen ? 'screen' : 'idle';
+
+  // Teacher draws on the classroom screen-share stage; HUD only holds the tools.
+  const screenAnnotateActive =
+    isTeacher && (screenOn || stageMode === 'screen' || effectiveStage === 'screen');
+  const annotate = useScreenAnnotate({
+    code,
+    active: screenAnnotateActive,
+    canDraw: isTeacher,
+  });
 
   // Keep teacher tab in sync with Redis stage so whiteboard fill layout shows on reload
   useEffect(() => {
@@ -1551,6 +1625,7 @@ function RoomInner({
     setScreenOn(false);
     setHudOpen(false);
     setHudNotice('');
+    setAnnotateOn(false);
     hud.close();
     hudAutoOpenedRef.current = false;
   }, [hud]);
@@ -1994,6 +2069,10 @@ function RoomInner({
                 visibleIdentities={visibles}
                 isTeacher={isTeacher}
                 teacherIdentities={teacherIdentities}
+                annotate={annotate}
+                annotateOn={annotateOn}
+                annotateMode={annotateMode}
+                annotateColor={annotateColor}
                 localPreview={
                   <LocalPreview
                     stream={localCamStream}
@@ -2251,6 +2330,13 @@ function RoomInner({
           chatUnread={chatUnread}
           onChatUnread={setChatUnread}
           classEnded={state?.status === 'ENDED' || !!state?.ended}
+          annotate={annotate}
+          annotateOn={annotateOn}
+          onAnnotateOnChange={setAnnotateOn}
+          annotateMode={annotateMode}
+          onAnnotateModeChange={setAnnotateMode}
+          annotateColor={annotateColor}
+          onAnnotateColorChange={setAnnotateColor}
           onClose={() => {
             // Closing the HUD must never stop the share.
             setHudOpen(false);
@@ -2282,6 +2368,23 @@ export function ClassroomRoom({ code }: { code: string }) {
   }, []);
 
   const load = useCallback(async () => {
+    // If this tab is not explicitly a student tab, prefer the teacher session.
+    // Stale sessionStorage 'student' from a prior join-as-student on the same
+    // phone/browser was flipping teachers into the student UI after lobby enter.
+    let tabRole = getClassroomRole(code);
+    if (tabRole !== 'student') {
+      try {
+        const meRes = await fetch('/api/auth/me', { cache: 'no-store' });
+        const me = await meRes.json();
+        if (me.role === 'teacher') {
+          await claimTeacherTab(code);
+          tabRole = 'teacher';
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
     const stateRes = await roomFetch(code, '/state');
     const state = await stateRes.json();
     if (!stateRes.ok) {
@@ -2305,14 +2408,18 @@ export function ClassroomRoom({ code }: { code: string }) {
       return;
     }
 
-    const asStudent =
-      !!state.actingAsStudent ||
-      state.me?.role === 'STUDENT' ||
-      (!state.isTeacher && !!state.me);
-    if (asStudent) rememberClassroomRole(code, 'student');
-    else if (state.isTeacher) rememberClassroomRole(code, 'teacher');
+    // Prefer teacher whenever the server says so and this tab did not
+    // explicitly choose join-as-student (sessionStorage or act-as cookie).
+    const explicitStudent =
+      getClassroomRole(code) === 'student' || !!state.actingAsStudent;
+    if (state.isTeacher && !explicitStudent) {
+      rememberClassroomRole(code, 'teacher');
+      setIsTeacher(true);
+    } else {
+      rememberClassroomRole(code, 'student');
+      setIsTeacher(false);
+    }
 
-    setIsTeacher(!!state.isTeacher && !asStudent);
     setDisplayName(state.me?.displayName || 'You');
     setCanPublishVideo(!!state.me?.canPublishVideo);
 

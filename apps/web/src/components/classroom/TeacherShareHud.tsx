@@ -8,13 +8,10 @@ import {
   useState,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { useTracks } from '@livekit/components-react';
-import { Track, type LocalVideoTrack } from 'livekit-client';
 import { Avatar } from '@/components/ui/Avatar';
 import { Chat } from './Chat';
 import {
   ANNOTATE_COLORS,
-  ScreenAnnotator,
   useScreenAnnotate,
   type AnnotateMode,
 } from './ScreenAnnotator';
@@ -48,66 +45,61 @@ export type HudHost = 'pip' | 'popup' | 'inline';
 const HUD_CSS = `
 .hud-root{--hud-bg:#0d1219;--hud-line:rgba(255,255,255,.10);--hud-text:#eef2ff;--hud-dim:#94a3b8;--hud-accent:#3385ff;--hud-warn:#f59e0b;
 box-sizing:border-box;height:100%;display:flex;flex-direction:column;background:var(--hud-bg);color:var(--hud-text);overflow:hidden;
-font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:13px;line-height:1.4}
+font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:12px;line-height:1.35}
 .hud-root *{box-sizing:border-box}
-.hud-head{display:flex;align-items:center;gap:6px;padding:7px 9px;border-bottom:1px solid var(--hud-line);background:rgba(0,0,0,.35);flex:0 0 auto}
-.hud-title{font-weight:650;font-size:12px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.hud-badge{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:2px 5px;border-radius:999px;border:1px solid var(--hud-line);color:var(--hud-dim);white-space:nowrap}
+.hud-head{display:flex;align-items:center;gap:4px;padding:5px 7px;border-bottom:1px solid var(--hud-line);background:rgba(0,0,0,.35);flex:0 0 auto}
+.hud-title{font-weight:650;font-size:11px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hud-badge{font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:1px 4px;border-radius:999px;border:1px solid var(--hud-line);color:var(--hud-dim);white-space:nowrap}
 .hud-badge-live{color:#bbf7d0;border-color:rgba(34,197,94,.4);background:rgba(34,197,94,.14)}
-.hud-x{all:unset;cursor:pointer;width:28px;height:28px;min-width:28px;display:grid;place-items:center;border-radius:8px;color:var(--hud-dim);font-size:15px;line-height:1;text-align:center}
+.hud-x{all:unset;cursor:pointer;width:26px;height:26px;min-width:26px;display:grid;place-items:center;border-radius:7px;color:var(--hud-dim);font-size:14px;line-height:1;text-align:center}
 .hud-x:hover{background:rgba(255,255,255,.1);color:#fff}
 .hud-x:focus-visible{outline:2px solid var(--hud-accent);outline-offset:1px}
-.hud-btn{all:unset;box-sizing:border-box;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:5px;min-height:36px;
-padding:6px 10px;border-radius:10px;border:1px solid var(--hud-line);background:rgba(255,255,255,.06);color:var(--hud-text);
-font-size:12px;font-weight:600;text-align:center;line-height:1.2}
+.hud-btn{all:unset;box-sizing:border-box;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:4px;min-height:30px;
+padding:4px 8px;border-radius:8px;border:1px solid var(--hud-line);background:rgba(255,255,255,.06);color:var(--hud-text);
+font-size:11px;font-weight:600;text-align:center;line-height:1.2}
 .hud-btn:hover{background:rgba(255,255,255,.13)}
 .hud-btn:focus-visible{outline:2px solid var(--hud-accent);outline-offset:1px}
 .hud-btn[aria-pressed="true"]{background:rgba(51,133,255,.26);border-color:rgba(51,133,255,.6);color:#fff}
 .hud-btn[disabled]{opacity:.45;cursor:default}
 .hud-btn-danger{background:rgba(239,68,68,.2);border-color:rgba(239,68,68,.45);color:#fecaca}
 .hud-btn-danger:hover{background:rgba(239,68,68,.32)}
-.hud-btn-sm{min-height:30px;padding:4px 8px;font-size:11px}
-.hud-row{display:flex;align-items:center;gap:6px;padding:7px 9px;border-bottom:1px solid var(--hud-line);flex:0 0 auto;flex-wrap:wrap}
+.hud-btn-sm{min-height:26px;padding:3px 7px;font-size:10.5px}
+.hud-row{display:flex;align-items:center;gap:5px;padding:5px 7px;border-bottom:1px solid var(--hud-line);flex:0 0 auto;flex-wrap:wrap}
 .hud-body{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden}
-.hud-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:8px 9px;-webkit-overflow-scrolling:touch}
-.hud-empty{color:var(--hud-dim);font-size:12px;text-align:center;padding:20px 8px;margin:0}
-.hud-note{font-size:10.5px;line-height:1.45;color:var(--hud-dim);padding:6px 9px;border-top:1px solid var(--hud-line);background:rgba(0,0,0,.25);flex:0 0 auto;margin:0}
-.hud-warn{background:rgba(245,158,11,.16);color:#fde68a;padding:6px 9px;font-size:11px;line-height:1.4;border-bottom:1px solid rgba(245,158,11,.3);flex:0 0 auto;margin:0}
-.hud-tabs{display:flex;gap:4px;padding:6px 9px;border-bottom:1px solid var(--hud-line);flex:0 0 auto}
-.hud-tab{all:unset;box-sizing:border-box;cursor:pointer;flex:1 1 0;min-height:36px;display:inline-flex;align-items:center;justify-content:center;gap:5px;
-padding:5px 6px;border-radius:9px;font-size:11.5px;font-weight:650;color:var(--hud-dim);text-align:center}
+.hud-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:6px 7px;-webkit-overflow-scrolling:touch}
+.hud-empty{color:var(--hud-dim);font-size:11px;text-align:center;padding:14px 8px;margin:0}
+.hud-note{font-size:10px;line-height:1.4;color:var(--hud-dim);padding:5px 7px;border-top:1px solid var(--hud-line);background:rgba(0,0,0,.25);flex:0 0 auto;margin:0}
+.hud-warn{background:rgba(245,158,11,.16);color:#fde68a;padding:5px 7px;font-size:10.5px;line-height:1.35;border-bottom:1px solid rgba(245,158,11,.3);flex:0 0 auto;margin:0}
+.hud-tabs{display:flex;gap:3px;padding:4px 7px;border-bottom:1px solid var(--hud-line);flex:0 0 auto}
+.hud-tab{all:unset;box-sizing:border-box;cursor:pointer;flex:1 1 0;min-height:30px;display:inline-flex;align-items:center;justify-content:center;gap:4px;
+padding:4px 5px;border-radius:8px;font-size:11px;font-weight:650;color:var(--hud-dim);text-align:center}
 .hud-tab[aria-selected="true"]{background:rgba(255,255,255,.12);color:#fff}
 .hud-tab:hover{background:rgba(255,255,255,.07)}
 .hud-tab:focus-visible{outline:2px solid var(--hud-accent);outline-offset:1px}
-.hud-count{min-width:17px;height:17px;padding:0 4px;border-radius:999px;background:var(--hud-warn);color:#1a1206;font-size:9.5px;font-weight:800;display:inline-grid;place-items:center}
+.hud-count{min-width:15px;height:15px;padding:0 4px;border-radius:999px;background:var(--hud-warn);color:#1a1206;font-size:9px;font-weight:800;display:inline-grid;place-items:center}
 .hud-count-blue{background:var(--hud-accent);color:#04122b}
-.hud-stage{position:relative;flex:0 0 auto;background:#000;border-bottom:1px solid var(--hud-line);aspect-ratio:16/9;overflow:hidden}
-.hud-stage>video{position:absolute;inset:0;z-index:0;width:100%;height:100%;object-fit:contain;background:#000}
-.hud-stage-empty{position:absolute;inset:0;z-index:0;display:flex;align-items:center;justify-content:center;color:var(--hud-dim);font-size:12px;text-align:center;padding:10px}
-.hud-tools{display:flex;align-items:center;gap:5px;padding:6px 9px;border-bottom:1px solid var(--hud-line);flex-wrap:wrap;flex:0 0 auto}
-.hud-swatch{all:unset;box-sizing:border-box;cursor:pointer;width:24px;height:24px;border-radius:999px;border:2px solid transparent;flex:0 0 auto}
+.hud-tools{display:flex;align-items:center;gap:4px;padding:5px 7px;border-bottom:1px solid var(--hud-line);flex-wrap:wrap;flex:0 0 auto}
+.hud-swatch{all:unset;box-sizing:border-box;cursor:pointer;width:20px;height:20px;border-radius:999px;border:2px solid transparent;flex:0 0 auto}
 .hud-swatch[aria-pressed="true"]{border-color:#fff}
 .hud-swatch:focus-visible{outline:2px solid var(--hud-accent);outline-offset:1px}
-.hud-person{display:flex;align-items:center;gap:8px;padding:8px;border-radius:10px;background:rgba(255,255,255,.04);margin-bottom:6px}
+.hud-person{display:flex;align-items:center;gap:6px;padding:6px;border-radius:8px;background:rgba(255,255,255,.04);margin-bottom:5px}
 .hud-person:last-child{margin-bottom:0}
-.hud-person-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;font-size:12px}
-.hud-person-sub{font-size:10.5px;color:var(--hud-dim);font-weight:500}
-.hud-chip{display:inline-block;font-size:9.5px;font-weight:700;padding:2px 5px;border-radius:999px;border:1px solid var(--hud-line);color:var(--hud-dim);white-space:nowrap}
+.hud-person-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;font-size:11px}
+.hud-person-sub{font-size:10px;color:var(--hud-dim);font-weight:500}
+.hud-chip{display:inline-block;font-size:9px;font-weight:700;padding:1px 4px;border-radius:999px;border:1px solid var(--hud-line);color:var(--hud-dim);white-space:nowrap}
 .hud-chip-muted{color:#fcd34d;border-color:rgba(245,158,11,.4);background:rgba(245,158,11,.12)}
 .hud-pill{position:fixed;right:10px;bottom:calc(10px + env(safe-area-inset-bottom,0px));z-index:60;display:flex;gap:6px;align-items:center}
-.hud-sheet{position:fixed;left:0;right:0;bottom:0;z-index:60;max-height:min(80dvh,640px);border-top:1px solid var(--hud-line);
-border-radius:16px 16px 0 0;overflow:hidden;box-shadow:0 -12px 40px rgba(0,0,0,.55);padding-bottom:env(safe-area-inset-bottom,0px)}
-.hud-sheet .hud-root{max-height:min(80dvh,640px);border-radius:16px 16px 0 0}
-.hud-grab{height:22px;display:grid;place-items:center;flex:0 0 auto;background:rgba(0,0,0,.45);cursor:grab}
-.hud-grab::before{content:"";width:38px;height:4px;border-radius:999px;background:rgba(255,255,255,.28)}
-/* Touch devices get 44px targets, the accessibility floor for a teaching tool
-   the teacher taps one-handed while sharing. */
+.hud-sheet{position:fixed;left:0;right:0;bottom:0;z-index:60;max-height:min(55dvh,420px);border-top:1px solid var(--hud-line);
+border-radius:14px 14px 0 0;overflow:hidden;box-shadow:0 -12px 40px rgba(0,0,0,.55);padding-bottom:env(safe-area-inset-bottom,0px)}
+.hud-sheet .hud-root{max-height:min(55dvh,420px);border-radius:14px 14px 0 0}
+.hud-grab{height:18px;display:grid;place-items:center;flex:0 0 auto;background:rgba(0,0,0,.45);cursor:grab}
+.hud-grab::before{content:"";width:34px;height:3px;border-radius:999px;background:rgba(255,255,255,.28)}
 @media (pointer:coarse){
-.hud-btn{min-height:44px;padding:8px 12px;font-size:13px}
-.hud-btn-sm{min-height:38px}
-.hud-tab{min-height:44px}
-.hud-swatch{width:28px;height:28px}
-.hud-x{width:36px;height:36px;min-width:36px}
+.hud-btn{min-height:40px;padding:7px 10px;font-size:12px}
+.hud-btn-sm{min-height:34px}
+.hud-tab{min-height:40px}
+.hud-swatch{width:26px;height:26px}
+.hud-x{width:34px;height:34px;min-width:34px}
 }
 `;
 
@@ -194,6 +186,14 @@ export type TeacherShareHudProps = {
   /** Upgrade from the in-page sheet to a real window. */
   onPopOut: () => void;
   canPopOut: boolean;
+  /** Shared annotate transport — drawing happens on the classroom stage, not in this HUD. */
+  annotate: ReturnType<typeof useScreenAnnotate>;
+  annotateOn: boolean;
+  onAnnotateOnChange: (on: boolean) => void;
+  annotateMode: AnnotateMode;
+  onAnnotateModeChange: (mode: AnnotateMode) => void;
+  annotateColor: string;
+  onAnnotateColorChange: (color: string) => void;
 };
 
 const TOOL_LABEL: Record<AnnotateMode, string> = {
@@ -234,25 +234,19 @@ function HudBody({
     classEnded,
     onPopOut,
     canPopOut,
+    annotate,
+    annotateOn,
+    onAnnotateOnChange,
+    annotateMode: mode,
+    onAnnotateModeChange: setMode,
+    annotateColor: color,
+    onAnnotateColorChange: setColor,
   } = props;
 
   const [tab, setTab] = useState<'chat' | 'hands' | 'roster'>('chat');
-  const [annotateOn, setAnnotateOn] = useState(false);
-  const [mode, setMode] = useState<AnnotateMode>('pen');
-  const [color, setColor] = useState(ANNOTATE_COLORS[0]);
-
-  const stageRef = useRef<HTMLDivElement | null>(null);
-  // The teacher's own local screen share, so the HUD shows what students see.
-  const localShare = useTracks(
-    [{ source: Track.Source.ScreenShare, withPlaceholder: false }],
-    { onlySubscribed: true }
-  ).find((t) => t.participant.isLocal);
-
-  const annotate = useScreenAnnotate({ code, active: true, canDraw: true });
 
   const students = useMemo(() => admitted.filter((a) => a.role === 'STUDENT'), [admitted]);
   const hands = useMemo(() => students.filter((s) => s.handRaised), [students]);
-  const shareTrack = (localShare?.publication?.track ?? null) as LocalVideoTrack | null;
 
   return (
     <div className="hud-root">
@@ -288,62 +282,39 @@ function HudBody({
       </div>
 
       {annotateOn && (
-        <>
-          <div className="hud-stage" ref={stageRef}>
-            {shareTrack && (
-              <StageVideo track={shareTrack} />
-            )}
-            {!shareTrack && (
-              <div className="hud-stage-empty">Your screen share is not visible</div>
-            )}
-            {shareTrack && (
-              <ScreenAnnotator
-                frameRef={stageRef}
-                strokes={annotate.strokes}
-                canDraw
-                tool={mode}
-                color={color}
-                onBegin={(p) => annotate.begin(p, mode === 'eraser' ? 'pen' : mode, color)}
-                onExtend={annotate.extend}
-                onEnd={annotate.end}
-                onErase={annotate.eraseAt}
-              />
-            )}
-          </div>
-          <div className="hud-tools" role="toolbar" aria-label="Annotation tools">
-            {(['pen', 'highlighter', 'eraser'] as const).map((m) => (
-              <button
-                key={m}
-                type="button"
-                className="hud-btn hud-btn-sm"
-                aria-pressed={mode === m}
-                onClick={() => setMode(m)}
-              >
-                {TOOL_LABEL[m]}
-              </button>
-            ))}
-            <span style={{ flex: 1 }} />
-            {ANNOTATE_COLORS.map((c) => (
-              <button
-                key={c}
-                type="button"
-                className="hud-swatch"
-                style={{ background: c }}
-                aria-label={`Colour ${c}`}
-                aria-pressed={color === c}
-                onClick={() => setColor(c)}
-              />
-            ))}
+        <div className="hud-tools" role="toolbar" aria-label="Annotation tools">
+          {(['pen', 'highlighter', 'eraser'] as const).map((m) => (
             <button
+              key={m}
               type="button"
-                className="hud-btn hud-btn-sm"
-              onClick={annotate.clear}
-              disabled={!annotate.strokes.length}
+              className="hud-btn hud-btn-sm"
+              aria-pressed={mode === m}
+              onClick={() => setMode(m)}
             >
-              Clear
+              {TOOL_LABEL[m]}
             </button>
-          </div>
-        </>
+          ))}
+          <span style={{ flex: 1 }} />
+          {ANNOTATE_COLORS.map((c) => (
+            <button
+              key={c}
+              type="button"
+              className="hud-swatch"
+              style={{ background: c }}
+              aria-label={`Colour ${c}`}
+              aria-pressed={color === c}
+              onClick={() => setColor(c)}
+            />
+          ))}
+          <button
+            type="button"
+            className="hud-btn hud-btn-sm"
+            onClick={annotate.clear}
+            disabled={!annotate.strokes.length}
+          >
+            Clear
+          </button>
+        </div>
       )}
 
       <div className="hud-row">
@@ -360,7 +331,7 @@ function HudBody({
           type="button"
           className="hud-btn"
           aria-pressed={annotateOn}
-          onClick={() => setAnnotateOn((v) => !v)}
+          onClick={() => onAnnotateOnChange(!annotateOn)}
         >
           Annotate
         </button>
@@ -489,7 +460,7 @@ function HudBody({
       </div>
 
       <p className="hud-note">
-        Annotations appear over the shared screen for every student. Closing these
+        Draw on the shared screen in the classroom tab. Closing these
         controls does not stop sharing.
         {inPage
           ? ' In-page controls stop responding if you switch apps — keep Classroom in split view, or minimise the browser with its picture-in-picture, if you need to leave it.'
@@ -499,22 +470,6 @@ function HudBody({
       </p>
     </div>
   );
-}
-
-function StageVideo({ track }: { track: LocalVideoTrack }) {
-  const ref = useRef<HTMLVideoElement | null>(null);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.srcObject = new MediaStream([track.mediaStreamTrack]);
-    void el.play().catch(() => undefined);
-    return () => {
-      el.srcObject = null;
-    };
-  }, [track]);
-  // Decorative preview of the teacher's own share; audio is not requested.
-  // eslint-disable-next-line jsx-a11y/media-has-caption
-  return <video ref={ref} autoPlay muted playsInline />;
 }
 
 /** Collapsed in-page affordance: a pill that never covers the whole screen. */
@@ -603,7 +558,7 @@ export function useShareHud(): UseShareHud {
       let request: Promise<Window> | null = null;
       try {
         // Must be called synchronously: Document PiP requires user activation.
-        request = pip.requestWindow({ width: 380, height: 580 });
+        request = pip.requestWindow({ width: 300, height: 420 });
       } catch {
         request = null;
       }
@@ -639,7 +594,7 @@ export function useShareHud(): UseShareHud {
       const win = window.open(
         '/hud',
         'classroom-hud',
-        `popup=yes,width=380,height=580,left=${Math.max(0, window.screenX + 60)},top=${Math.max(0, window.screenY + 60)}`
+        `popup=yes,width=300,height=420,left=${Math.max(0, window.screenX + 60)},top=${Math.max(0, window.screenY + 60)}`
       );
       if (win) {
         winRef.current = win;

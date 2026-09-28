@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { AppHeader } from '@/components/layout/AppHeader';
@@ -12,6 +11,7 @@ import { Avatar } from '@/components/ui/Avatar';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageLoading } from '@/components/ui/Skeleton';
 import { IconUsers } from '@/components/ui/Icons';
+import { claimTeacherTab } from '@/lib/classroomClient';
 
 type Waiting = { id: string; displayName: string; createdAt: string };
 type State = {
@@ -50,12 +50,10 @@ export default function TeacherRoomLobby() {
   }, [code, router]);
 
   useEffect(() => {
-    fetch('/api/auth/act-as', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: 'clear' }),
-    }).catch(() => {});
-  }, []);
+    // Claim this tab as teacher so Enter classroom never inherits a leftover
+    // join-as-student sessionStorage role (common on mobile same-browser flows).
+    void claimTeacherTab(code);
+  }, [code]);
 
   useEffect(() => {
     poll();
@@ -115,9 +113,15 @@ export default function TeacherRoomLobby() {
             <Button variant="secondary" onClick={() => copyLink(joinUrl)}>
               {copied ? 'Copied!' : 'Copy link'}
             </Button>
-            <Link href={`/classroom/${code}`} className="btn-primary">
+            <Button
+              onClick={() => {
+                void claimTeacherTab(code).then(() => {
+                  router.push(`/classroom/${code}`);
+                });
+              }}
+            >
               Enter classroom
-            </Link>
+            </Button>
             <Button variant="danger" onClick={endClass}>
               End class
             </Button>

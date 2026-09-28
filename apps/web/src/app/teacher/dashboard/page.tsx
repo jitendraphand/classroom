@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { claimTeacherTab } from '@/lib/classroomClient';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { AppHeader } from '@/components/layout/AppHeader';
@@ -168,7 +169,13 @@ export default function TeacherDashboard() {
             </p>
             <p className="mt-3 break-all text-xs text-slate-400">Join link: {created.joinUrl}</p>
             <div className="mt-4 flex flex-wrap gap-2">
-              <Link href={created.teacherUrl} className="btn-primary">
+              <Link
+                href={created.teacherUrl}
+                className="btn-primary"
+                onClick={() => {
+                  if (created?.code) void claimTeacherTab(created.code);
+                }}
+              >
                 Open teacher lobby
               </Link>
               <Button variant="secondary" onClick={copyLink}>

@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { Inter, Outfit } from 'next/font/google';
+import { SessionIdleGuard } from '@/components/auth/SessionIdleGuard';
 import './globals.css';
 
 const display = Outfit({
@@ -30,6 +31,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className="dark">
       <body className={`${display.variable} ${sans.variable} font-sans antialiased min-h-screen`}>
+        <SessionIdleGuard />
         {children}
       </body>
     </html>
