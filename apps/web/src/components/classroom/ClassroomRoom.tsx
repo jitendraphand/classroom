@@ -35,17 +35,16 @@ import { useRouter } from 'next/navigation';
 import { useRoomState } from '@/hooks/useRoomState';
 import { Controls } from './Controls';
 import { LocalPreview } from './LocalPreview';
-import { Whiteboard } from './Whiteboard';
 import { Chat } from './Chat';
 import { FloatingPanel } from './FloatingPanel';
 import { ScreenAnnotator, useScreenAnnotate, ANNOTATE_COLORS, type AnnotateMode } from './ScreenAnnotator';
-import { TeacherShareHud, useShareHud, supportsDocumentPip } from './TeacherShareHud';
+import { TeacherShareHud } from './TeacherShareHud';
 import { Avatar } from '@/components/ui/Avatar';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageLoading } from '@/components/ui/Skeleton';
-import { IconBoard, IconHand, IconScreen, IconUsers, IconVideo } from '@/components/ui/Icons';
+import { IconHand, IconScreen, IconUsers, IconVideo } from '@/components/ui/Icons';
 import { cn } from '@/lib/cn';
 import { roomFetch, rememberClassroomRole, getClassroomRole, claimTeacherTab } from '@/lib/classroomClient';
 
@@ -471,9 +470,38 @@ function useDraggableFloat(
  */
 const PEER_TILE_W = 354;
 const PEER_TILE_H = 199;
-/** Below the classroom header and the whiteboard page menu. */
+/** True when the browser exposes getDisplayMedia (required for screen share). */
+function canShareScreen(): boolean {
+  return (
+    typeof navigator !== 'undefined' &&
+    !!navigator.mediaDevices &&
+    typeof navigator.mediaDevices.getDisplayMedia === 'function'
+  );
+}
+
+/** Human-readable reason when screen share fails or is unavailable. */
+function screenShareErrorMessage(err: unknown): string {
+  if (!canShareScreen()) {
+    return 'This browser cannot share a screen. On iPhone/iPad screen share is limited — use a computer, or Android Chrome. Controls still open so you can teach from this device.';
+  }
+  const name =
+    err && typeof err === 'object' && 'name' in err ? String((err as { name: unknown }).name) : '';
+  const msg = err instanceof Error ? err.message : String(err || '');
+  if (name === 'NotAllowedError' || /permission|denied|not allowed/i.test(msg)) {
+    return 'Screen share was blocked or cancelled. Allow screen sharing when prompted, then try again.';
+  }
+  if (name === 'NotSupportedError' || /not supported|getDisplayMedia/i.test(msg)) {
+    return 'Screen share is not supported in this browser. Try desktop Chrome/Edge/Firefox, or Android Chrome.';
+  }
+  if (name === 'AbortError' || /abort|cancel/i.test(msg)) {
+    return 'Screen share was cancelled.';
+  }
+  return 'Could not start screen share. Try again, or use a desktop browser.';
+}
+
+
 const PEER_TOP_RESERVE = 152;
-/** Above the dock and the tldraw tool bar. */
+/** Above the dock. */
 const PEER_BOTTOM_RESERVE = 156;
 
 function peerFloatLayout(slots: 2 | 4 | 6, vw: number, vh: number) {
@@ -1368,35 +1396,29 @@ function RoomInner({
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
   const [screenOn, setScreenOn] = useState(false);
-  const [tab, setTab] = useState<'video' | 'board'>('video');
   const [chatUnread, setChatUnread] = useState(0);
   const [localCamStream, setLocalCamStream] = useState<MediaStream | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [rosterOpen, setRosterOpen] = useState(false);
-  const [wbWriteLocal, setWbWriteLocal] = useState(false);
   const [leftForFullscreen, setLeftForFullscreen] = useState(false);
   const [hudOpen, setHudOpen] = useState(false);
   const [hudNotice, setHudNotice] = useState('');
   const [annotateOn, setAnnotateOn] = useState(false);
   const [annotateMode, setAnnotateMode] = useState<AnnotateMode>('pen');
   const [annotateColor, setAnnotateColor] = useState(ANNOTATE_COLORS[0]);
-  /** True while we intentionally move between presentation stages. */
+  /** True while we intentionally change presentation stage (avoids teardown races). */
   const stageSwitchRef = useRef(false);
-  /** Reset per share session so the HUD auto-opens once per share. */
-  const hudAutoOpenedRef = useRef(false);
   const { state, refresh } = useRoomState(code, 2000);
-  const hud = useShareHud();
 
-  const stageMode = state?.stageMode ?? 'idle';
-  const whiteboardCanWrite = isTeacher
-    ? true
-    : !!(state?.whiteboardCanWrite ?? false);
+  const rawStage = state?.stageMode ?? 'idle';
+  // Whiteboard product surface removed — treat legacy redis value as idle.
+  const stageMode: 'idle' | 'screen' = rawStage === 'screen' ? 'screen' : 'idle';
   const teacherIdentities = (state?.admitted ?? [])
     .filter((a) => a.role === 'TEACHER')
     .map((a) => a.livekitIdentity);
   // Fallback: if teacher screen track(s) exist, treat as screen present even if redis idle
   const hasTeacherScreen = useHasTeacherScreen(teacherIdentities);
-  const effectiveStage =
+  const effectiveStage: 'idle' | 'screen' =
     stageMode !== 'idle' ? stageMode : hasTeacherScreen ? 'screen' : 'idle';
 
   // Teacher draws on the classroom screen-share stage; HUD only holds the tools.
@@ -1408,23 +1430,9 @@ function RoomInner({
     canDraw: isTeacher,
   });
 
-  // Keep teacher tab in sync with Redis stage so whiteboard fill layout shows on reload
-  useEffect(() => {
-    if (!isTeacher) return;
-    if (stageMode === 'whiteboard') setTab('board');
-    else if (stageMode === 'screen' || stageMode === 'idle') setTab((prev) => (prev === 'board' ? 'video' : prev));
-  }, [isTeacher, stageMode]);
-
   useEffect(() => {
     onVisibilityChange(!!state?.me?.canPublishVideo);
   }, [state?.me?.canPublishVideo, onVisibilityChange]);
-
-  // Sync teacher draw-permission toggle from Redis flag
-  useEffect(() => {
-    if (isTeacher && typeof state?.whiteboardWriteAllowed === 'boolean') {
-      setWbWriteLocal(!!state.whiteboardWriteAllowed);
-    }
-  }, [isTeacher, state?.whiteboardWriteAllowed]);
 
   const effectiveCanPublish = state?.me?.canPublishVideo ?? canPublishVideo;
   const effectiveMuted = state?.me?.mutedByTeacher ?? mutedByTeacher;
@@ -1500,7 +1508,7 @@ function RoomInner({
   }, [isTeacher, room, code, refresh, state?.admitted, state?.visibleIdentities, visibleIdentities]);
 
   const postStage = useCallback(
-    async (mode: 'idle' | 'screen' | 'whiteboard') => {
+    async (mode: 'idle' | 'screen') => {
       if (!isTeacher) return;
       try {
         await roomFetch(code, '/stage', {
@@ -1516,23 +1524,6 @@ function RoomInner({
     [code, isTeacher, refresh]
   );
 
-  const setWbWriteAllowed = useCallback(
-    async (allowed: boolean) => {
-      if (!isTeacher) return;
-      try {
-        setWbWriteLocal(allowed);
-        await roomFetch(code, '/whiteboard/write', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ allowed }),
-        });
-        refresh();
-      } catch (e) {
-        console.warn('wb write', e);
-      }
-    },
-    [code, isTeacher, refresh]
-  );
 
   // NOTE: `chromeVisible` / `bumpChrome` were removed. The state was only ever
   // ever set to `true` (the auto-hide timer that would have cleared it was
@@ -1606,15 +1597,6 @@ function RoomInner({
     };
   }, [isTeacher, leftForFullscreen, code, room, router]);
 
-  const stopScreenShare = useCallback(async () => {
-    if (!localParticipant) return;
-    try {
-      await localParticipant.setScreenShareEnabled(false);
-    } catch {
-      /* ignore */
-    }
-    setScreenOn(false);
-  }, [localParticipant]);
 
   /**
    * Screen share ended (button, browser "Stop sharing" bar, or track teardown):
@@ -1626,15 +1608,12 @@ function RoomInner({
     setHudOpen(false);
     setHudNotice('');
     setAnnotateOn(false);
-    hud.close();
-    hudAutoOpenedRef.current = false;
-  }, [hud]);
+  }, []);
 
   // The browser's own "Stop sharing" bar (and any track teardown we did not
   // initiate) leaves the Redis stage stuck on `screen`, which pins every student
   // to an empty "Waiting for teacher screen…" stage. Reset it here.
-  // `stageSwitchRef` is set while we are deliberately moving to another stage so
-  // this cannot race postStage('whiteboard') from selectTab().
+  // `stageSwitchRef` is set while we are deliberately changing stage.
   useEffect(() => {
     if (!isTeacher || !localParticipant) return;
     const onUnpublished = (pub: LocalTrackPublication) => {
@@ -1649,75 +1628,57 @@ function RoomInner({
     };
   }, [isTeacher, localParticipant, postStage, endShareSession]);
 
-  /** Open (or re-open) the share HUD from a click, so the gesture is valid. */
+  /** Re-show the compact share bar if the teacher hid it. */
   const openShareHud = useCallback(() => {
-    if (!hud.detached) hud.open();
-    hud.setExpanded(true);
     setHudOpen(true);
     setHudNotice('');
-  }, [hud]);
+  }, []);
 
+  /**
+   * One click must both start getDisplayMedia AND show the teacher HUD.
+   * Previously the HUD (Document PiP / popup) ran first and consumed the user
+   * gesture, so share only started on the second click. The HUD is now an
+   * inline compact bar that does not need a gesture — start share first.
+   */
   const toggleScreen = useCallback(async () => {
     if (!localParticipant || !isTeacher) return;
-    try {
-      if (screenOn) {
+    if (screenOn) {
+      try {
         await localParticipant.setScreenShareEnabled(false);
-        endShareSession();
-        await postStage('idle');
-      } else {
-        // Open the HUD first, while this click's user activation is still
-        // valid: Document PiP and popup blockers both require a gesture. The
-        // window appears before the share track, which is imperceptible.
-        if (!hudAutoOpenedRef.current) {
-          hudAutoOpenedRef.current = true;
-          const host = hud.open();
-          setHudOpen(true);
-          if (host === 'inline') {
-            // PiP or a popup was unavailable/refused. Say so, and point at the
-            // in-page sheet which still works while the tab is visible.
-            setHudNotice(
-              supportsDocumentPip()
-                ? 'Pop-out was blocked. Tap “Open share controls” to allow it, or use the in-page sheet.'
-                : 'This browser has no pop-out mode. Use the in-page sheet, or split the screen.'
-            );
-          }
-        }
-        // Always announce screen stage after successful share start (even if UI state was stale)
-        await localParticipant.setScreenShareEnabled(true);
-        setScreenOn(true);
-        await postStage('screen');
+      } catch {
+        /* ignore */
       }
+      endShareSession();
+      await postStage('idle');
+      return;
+    }
+
+    // Unsupported browsers: still open the HUD with a clear reason (no silent no-op).
+    if (!canShareScreen()) {
+      setHudOpen(true);
+      setHudNotice(screenShareErrorMessage(null));
+      setChatOpen(false);
+      setRosterOpen(false);
+      return;
+    }
+
+    try {
+      await localParticipant.setScreenShareEnabled(true);
+      setScreenOn(true);
+      setHudOpen(true);
+      setChatOpen(false);
+      setRosterOpen(false);
+      setHudNotice('');
+      await postStage('screen');
     } catch (e) {
       console.warn('screen share', e);
+      setScreenOn(false);
+      setHudOpen(true);
+      setHudNotice(screenShareErrorMessage(e));
+      setChatOpen(false);
+      setRosterOpen(false);
     }
-  }, [localParticipant, screenOn, isTeacher, postStage, hud, endShareSession]);
-
-  const selectTab = useCallback(
-    async (next: 'video' | 'board') => {
-      setTab(next);
-      if (!isTeacher) return;
-      if (next === 'board') {
-        // Mark the transition so the screen-share teardown below does not race
-        // this by posting `idle` after we post `whiteboard`.
-        stageSwitchRef.current = true;
-        try {
-          await stopScreenShare();
-          endShareSession();
-          await postStage('whiteboard');
-        } finally {
-          stageSwitchRef.current = false;
-        }
-      } else {
-        // Video tab: keep screen stage if still sharing, else idle
-        if (screenOn) {
-          await postStage('screen');
-        } else {
-          await postStage('idle');
-        }
-      }
-    },
-    [isTeacher, stopScreenShare, postStage, screenOn, endShareSession]
-  );
+  }, [localParticipant, screenOn, isTeacher, postStage, endShareSession]);
 
   async function leave() {
     await roomFetch(code, '/leave', {
@@ -1828,13 +1789,7 @@ function RoomInner({
   // —— Student path: always fullscreen stage + floating teacher cam + float chrome ——
   if (!isTeacher) {
     const badge =
-      effectiveStage === 'screen'
-        ? 'Teacher screen'
-        : effectiveStage === 'whiteboard'
-          ? whiteboardCanWrite
-            ? 'Whiteboard · drawing allowed'
-            : 'Whiteboard · view only'
-          : 'Waiting for teacher…';
+      effectiveStage === 'screen' ? 'Teacher screen' : 'Waiting for teacher…';
 
     return (
       <div className="stage-fullscreen">
@@ -1857,15 +1812,6 @@ function RoomInner({
               code={code}
               active={effectiveStage === 'screen'}
             />
-          ) : effectiveStage === 'whiteboard' ? (
-            <div className="stage-fill-middle">
-              <Whiteboard
-                code={code}
-                onEnded={onClassEnded}
-                canWrite={whiteboardCanWrite}
-                isTeacher={false}
-              />
-            </div>
           ) : (
             <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-ink-950 text-slate-400">
               <IconVideo size={32} />
@@ -1945,10 +1891,8 @@ function RoomInner({
             <Badge tone="success" pulse>
               Live
             </Badge>
-            {isTeacher && stageMode !== 'idle' && (
-              <Badge tone="neutral">
-                Stage · {stageMode === 'screen' ? 'Screen' : 'Whiteboard'}
-              </Badge>
+            {isTeacher && stageMode === 'screen' && (
+              <Badge tone="neutral">Stage · Screen</Badge>
             )}
           </div>
           <h1 className="mt-0.5 truncate font-display text-lg font-semibold tracking-tight sm:text-xl">
@@ -1974,56 +1918,16 @@ function RoomInner({
         </div>
 
         <div className="flex items-center gap-1.5 sm:gap-2">
-          {/* Students must NOT have Video/Whiteboard tabs — only teacher switches stage */}
-          {isTeacher && (
-            <>
-              <div className="flex rounded-xl bg-black/30 p-1">
-                <button
-                  type="button"
-                  className={cn(
-                    'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition',
-                    tab === 'video' ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-slate-200'
-                  )}
-                  onClick={() => void selectTab('video')}
-                >
-                  <IconVideo size={14} />
-                  <span className="hidden sm:inline">Video</span>
-                </button>
-                <button
-                  type="button"
-                  className={cn(
-                    'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition',
-                    tab === 'board' ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-slate-200'
-                  )}
-                  onClick={() => void selectTab('board')}
-                >
-                  <IconBoard size={14} />
-                  <span className="hidden sm:inline">Whiteboard</span>
-                </button>
-              </div>
-              {tab === 'board' && (
-                <Button
-                  variant={wbWriteLocal ? 'warning' : 'secondary'}
-                  size="sm"
-                  onClick={() => void setWbWriteAllowed(!wbWriteLocal)}
-                >
-                  {wbWriteLocal ? 'Lock drawing' : 'Allow students to draw'}
-                </Button>
-              )}
-              {/* Reopen the HUD after it was closed, or promote the in-page
-                  sheet to a real window. */}
-              {screenOn && !hudOpen && (
-                <Button variant="primary" size="sm" onClick={() => openShareHud()}>
-                  <IconScreen size={14} />
-                  Open share controls
-                </Button>
-              )}
-            </>
+          {isTeacher && screenOn && !hudOpen && (
+            <Button variant="primary" size="sm" onClick={() => openShareHud()}>
+              <IconScreen size={14} />
+              Open share controls
+            </Button>
           )}
         </div>
       </header>
 
-      {hudNotice && isTeacher && (
+      {hudNotice && isTeacher && !hudOpen && (
         <div
           role="status"
           className="flex shrink-0 items-center gap-2 border-b border-amber-400/25 bg-amber-500/10 px-3 py-1.5 text-2xs text-amber-100 sm:px-4"
@@ -2039,18 +1943,8 @@ function RoomInner({
         </div>
       )}
 
-      {/* Main stage — whiteboard/screen fill the entire middle */}
+      {/* Main stage — screen share fills the middle when active */}
       <div className="relative min-h-0 flex-1 overflow-hidden">
-        {tab === 'board' ? (
-          <section className="stage-fill-middle">
-            <Whiteboard
-              code={code}
-              onEnded={onClassEnded}
-              canWrite={true}
-              isTeacher={true}
-            />
-          </section>
-        ) : (
           <section
             className={
               screenOn || stageMode === 'screen'
@@ -2085,13 +1979,12 @@ function RoomInner({
               />
             </div>
           </section>
-        )}
 
 
         <FloatingPanel
           title="Roster"
           storageKey={`teacher_roster_${code.toUpperCase()}`}
-          open={rosterOpen}
+          open={rosterOpen && !screenOn}
           onClose={() => setRosterOpen(false)}
           width={320}
           height={480}
@@ -2249,7 +2142,7 @@ function RoomInner({
         <FloatingPanel
           title="Chat"
           storageKey={`teacher_chat_${code.toUpperCase()}`}
-          open={chatOpen}
+          open={chatOpen && !screenOn}
           onClose={() => setChatOpen(false)}
           width={320}
           height={420}
@@ -2279,10 +2172,7 @@ function RoomInner({
         </FloatingPanel>
       </div>
 
-      {(stageMode === 'screen' ||
-        stageMode === 'whiteboard' ||
-        effectiveStage === 'screen' ||
-        effectiveStage === 'whiteboard') && (
+      {(stageMode === 'screen' || effectiveStage === 'screen') && (
         <TeacherPeersFloat
           roomCode={code}
           teacherIdentities={teacherIdentities}
@@ -2298,25 +2188,28 @@ function RoomInner({
           onRotateSample={rotateSample}
           onMuteAll={() => muteAllStudents(true)}
           onUnmuteAll={() => muteAllStudents(false)}
-          onToggleChat={() => {
-            setChatOpen((v) => {
-              const next = !v;
-              if (next) setChatUnread(0);
-              return next;
-            });
-          }}
+          onToggleChat={
+            screenOn
+              ? undefined
+              : () => {
+                  setChatOpen((v) => {
+                    const next = !v;
+                    if (next) setChatUnread(0);
+                    return next;
+                  });
+                }
+          }
           chatOpen={chatOpen}
           chatUnread={chatUnread}
-          onToggleRoster={() => setRosterOpen((v) => !v)}
+          onToggleRoster={screenOn ? undefined : () => setRosterOpen((v) => !v)}
           rosterOpen={rosterOpen}
           rosterBadge={waitingCount}
         />
       </footer>
 
-      {/* Pop-out controls + annotation surface, available whenever sharing. */}
+      {/* Compact teacher-only share bar (never shown to students). */}
       {isTeacher && hudOpen && (
         <TeacherShareHud
-          hud={hud}
           code={code}
           admitted={state?.admitted ?? []}
           waitingCount={waitingCount}
@@ -2337,16 +2230,11 @@ function RoomInner({
           onAnnotateModeChange={setAnnotateMode}
           annotateColor={annotateColor}
           onAnnotateColorChange={setAnnotateColor}
+          notice={hudNotice || undefined}
           onClose={() => {
             // Closing the HUD must never stop the share.
             setHudOpen(false);
-            hud.close();
           }}
-          onPopOut={() => {
-            hud.open();
-            setHudOpen(true);
-          }}
-          canPopOut
         />
       )}
     </div>

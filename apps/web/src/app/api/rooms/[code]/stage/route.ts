@@ -7,6 +7,7 @@ import { ensureRedis, keys, type StageMode } from '@/lib/redis';
 export const dynamic = 'force-dynamic';
 
 const schema = z.object({
+  // 'whiteboard' accepted for backward compat only — mapped to idle (feature removed).
   mode: z.enum(['idle', 'screen', 'whiteboard']),
 });
 
@@ -23,21 +24,14 @@ export async function POST(req: Request, { params }: { params: { code: string } 
 
   try {
     const body = schema.parse(await req.json());
-    const mode = body.mode as StageMode;
+    const requested = body.mode as StageMode;
+    const mode: StageMode = requested === 'whiteboard' ? 'idle' : requested;
     const redis = await ensureRedis();
     await redis.set(keys.stage(code), mode, 'EX', STAGE_TTL);
 
-    // Annotations belong to the share session. Leaving the screen stage (via
-    // the dock, the whiteboard tab, or the browser's own "Stop sharing" bar)
-    // must wipe the durable copy, or the next share would resurrect it.
+    // Annotations belong to the share session. Leaving screen must wipe them.
     if (mode !== 'screen') {
       await redis.del(keys.annotate(code));
-    }
-
-    // Clearing presentation: optionally clear student write flag when leaving whiteboard
-    if (mode === 'screen' || mode === 'idle') {
-      // Keep wb-write as-is so teacher preference persists across brief switches;
-      // only stage exclusivity matters for students.
     }
 
     return jsonOk({ ok: true, stageMode: mode });

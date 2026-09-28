@@ -33,7 +33,7 @@ Use two browsers (or normal + incognito). Start from a healthy stack (`GET /api/
 
 - [ ] Fits `100dvh` — no page scroll; dock always visible
 - [ ] Top bar: room name, code, sample count, Live badge
-- [ ] Toggle **Video** / **Whiteboard**
+- [ ] **Share screen** once → share starts AND compact teacher controls appear
 - [ ] Sidebar **Roster | Chat**; under ~1280px, sidebar toggle works (~900px usable)
 - [ ] Empty video state shows empty-state card + local preview
 
@@ -63,13 +63,14 @@ Use two browsers (or normal + incognito). Start from a healthy stack (`GET /api/
 - [ ] Stop sharing restores grid
 - [ ] Student can share; teacher sees large tile
 
-## J. Whiteboard
+## J. Screen share + annotate
+- [ ] Teacher: one click Share screen starts share + slim Share bar
+- [ ] Teacher-only: students never see the Share bar
+- [ ] Annotate draws on shared screen; student sees strokes
+- [ ] Chat / roster / hands open from Share bar icons only while sharing
+- [ ] Mobile: if getDisplayMedia blocked, HUD shows a clear reason (not silent no-op)
+- [ ] Stop share clears annotations and returns stage to idle
 
-- [ ] Both sides open **Whiteboard**
-- [ ] Teacher draws → student sees strokes (~1s LiveKit / ≤1.5s Redis)
-- [ ] Student draws → teacher sees
-- [ ] Hard-refresh restores board from Redis snapshot
-- [ ] Dock remains visible below board
 
 ## K. Chat
 

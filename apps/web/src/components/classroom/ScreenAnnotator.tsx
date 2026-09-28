@@ -18,11 +18,11 @@ import { roomFetch } from '@/lib/classroomClient';
  * The teacher draws on a transparent surface that is composited over the screen
  * share every participant is already receiving, so students see strokes without
  * any change to the stage. This is deliberately separate from the tldraw
- * whiteboard: annotations must not require the whiteboard stage.
+ * Annotations stay on the screen stage (independent of any other mode).
  *
  * Sync model
  * - Strokes stream over the LiveKit data channel (topic `annotate`) for latency,
- *   following the same pattern as Chat.tsx / Whiteboard.tsx.
+ *   following the same pattern as Chat.tsx.
  * - A debounced Redis snapshot (`/annotate`) backs late joiners and reconnects.
  * - Coordinates are normalised 0..1 against the *video content rect*, so a
  *   4K teacher screen maps correctly onto a letterboxed student viewport

@@ -1,6 +1,6 @@
 # Classroom — Live Online Teaching (MVP)
 
-Privacy-minded live classes: teachers sign in, students join with a room code, waiting-room admit, **selective student video** (only a rotating sample publishes to LiveKit), shared tldraw whiteboard, **in-class chat** (student→teacher + teacher broadcast/DM), screen share, mute controls. **No recording.**
+Privacy-minded live classes: teachers sign in, students join with a room code, waiting-room admit, **selective student video** (only a rotating sample publishes to LiveKit), screen share with annotations, **in-class chat** (student→teacher + teacher broadcast/DM), screen share, mute controls. **No recording.**
 
 ## Architecture
 
@@ -25,7 +25,7 @@ flowchart LR
 | **web** | Next.js 14 App Router — teacher/student UI, auth, room APIs, sample rotation |
 | **livekit** | Open-source WebRTC SFU |
 | **postgres** | Teachers, rooms, participants, chat messages |
-| **redis** | Waiting/admitted sets, visible-sample identities, whiteboard snapshots |
+| **redis** | Waiting/admitted sets, visible-sample identities, screen-annotate snapshots |
 
 > **Networking:** `docker-compose.yml` uses `network_mode: host` on a single Linux VM so LiveKit WebRTC UDP/TCP bind on the host NICs and services talk over `127.0.0.1`. Ideal for local demos **and** bare public-IP VPS deploys (see [docs/DEPLOY-VPS.md](docs/DEPLOY-VPS.md)). Optional **Caddy** TLS uses the same host networking via Compose profile `tls` ([docs/DEPLOY-CADDY.md](docs/DEPLOY-CADDY.md)).
 
@@ -45,12 +45,12 @@ Non-sampled video **never leaves the student device**.
 
 ### Student live view
 
-Students get a fullscreen exclusive stage — **either** teacher screen share **or** whiteboard (not a student video grid; no screen-share control for students):
+Students get a fullscreen exclusive stage — teacher screen share when active (not a student video grid; no screen-share control for students):
 
 - **Floating teacher camera** in the corner (subscribes to the teacher cam track; avatar placeholder when off)
 - **Always-visible floating controls** — mic, cam, chat, leave
 - Chat opens as a side drawer over the stage
-- Waiting state when the teacher has not started screen/whiteboard yet
+- Waiting state when the teacher has not started screen share yet
 
 If no webcam is available, the app falls back to a **canvas demo camera** so publish/preview still works in headless or permission-denied environments.
 
@@ -64,7 +64,7 @@ starts and floats in its own window:
 
 - **Annotate** on top of the shared screen (pen / highlighter / eraser / clear).
   Students see the strokes composited over the share, on the `screen` stage —
-  the whiteboard is not involved and is not switched to.
+  annotations draw on the shared screen (no separate whiteboard).
 - **Chat** (teacher rules unchanged), **raised hands** with Lower, and
   **per-student mute** plus mute-all / unmute-all.
 
@@ -109,7 +109,7 @@ curl -s http://localhost:3000/api/health
 3. Teacher lobby → **Enter classroom** (allow camera/mic)
 4. **Student** (incognito / second browser) → http://localhost:3000/join/{CODE} → name → waiting room
 5. Teacher **Admit** → student enters class (floating teacher cam + float controls)
-6. Try whiteboard, **Chat**, mute / mute-all, screen share, **Rotate sample**, speak as a student to force pin into sample
+6. Try **Chat**, mute / mute-all, screen share + annotate, **Rotate sample**, speak as a student to force pin into sample
 
 ### Stop
 
@@ -221,7 +221,6 @@ See `.env.example`. Important:
 | `apps/web/src/components/classroom/ClassroomRoom.tsx` | LiveKit room, selective publish, student float UI |
 | `apps/web/src/app/api/auth/clear-student/route.ts` | Clear student cookie for rejoin |
 | `apps/web/src/app/api/rooms/[code]/*/route.ts` | Join, admit, token, mute, state, end |
-| `apps/web/src/components/classroom/Whiteboard.tsx` | tldraw + Redis snapshot sync |
 | `apps/web/src/components/classroom/Chat.tsx` | In-class messaging UI |
 | `apps/web/src/app/api/rooms/[code]/messages/route.ts` | Chat GET/POST (scoped visibility) |
 
@@ -236,7 +235,7 @@ Targets: ~20 concurrent rooms × ~150 attendees. Selective publish is the main l
 
 ## Known limitations (MVP)
 
-- Whiteboard sync uses **LiveKit reliable data messages** (tldraw store diffs) plus Redis snapshots for late joiners.
+- Screen-share annotations use **LiveKit reliable data messages** plus a Redis snapshot for late joiners.
 - Chat persists in Postgres while the room is LIVE/WAITING; GET returns empty after ENDED. No student-to-student chat.
 - Local demos keep `use_external_ip: false`; VPS deploys set it `true` (and usually `LIVEKIT_NODE_IP`) via `configure-public-ip.sh`.
 - Bare HTTP on a public IP works (cookies `Secure=false`); browsers may still warn about camera/mic permissions compared to HTTPS. Prefer domain + Caddy (`--profile tls`) for production.
@@ -247,4 +246,4 @@ Targets: ~20 concurrent rooms × ~150 attendees. Selective publish is the main l
 
 ## License
 
-Open-source stack (Next.js, LiveKit, Postgres, Redis, tldraw). App code provided as-is for this MVP.
+Open-source stack (Next.js, LiveKit, Postgres, Redis). App code provided as-is for this MVP.

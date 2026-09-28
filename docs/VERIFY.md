@@ -8,12 +8,12 @@ curl -sI http://localhost:3000/favicon.ico | head -1
 # expect 200
 ```
 
-## 1. Whiteboard sync
-1. Teacher: create room → Enter classroom → Whiteboard tab → draw shapes.
-2. Student (incognito): `/join/CODE` → admit → Whiteboard tab.
-3. Expect teacher strokes to appear within ~1s (LiveKit data) or ≤1.5s (Redis converge).
-4. Student draw → teacher should see it.
-5. Student hard-refresh → Redis snapshot should restore board.
+## 1. Screen share + annotate
+1. Teacher: create room → Enter classroom → Share screen (one click).
+2. Confirm compact Share bar appears and students see the shared screen.
+3. Teacher Annotate → draw; student sees strokes over the share.
+4. Stop share → stage idle, annotations cleared.
+
 
 ## 2. Join link does not hijack teachers
 1. Sign in as teacher, copy join link `/join/CODE`.
@@ -79,10 +79,10 @@ curl -sI http://localhost:3000/favicon.ico | head -1
 5. Teacher **Unmute all** / unmute student → mic control works again.
 
 ## 12. End class kicks students (no whiteboard 401 spam)
-1. Student stays on `/classroom/CODE` (video or whiteboard tab).
+1. Student stays on `/classroom/CODE` (video or screen stage).
 2. Teacher **End class**.
 3. Within ~2s student sees **Class ended** screen (not stuck in classroom).
-4. Browser network: whiteboard/chat/state stop retrying after 410/ENDED — no 401 spam loop.
+4. Browser network: annotate/chat/state stop retrying after 410/ENDED — no 401 spam loop.
 5. Join link for that code shows class ended.
 
 ## 13. Chat attribution with same browser profile

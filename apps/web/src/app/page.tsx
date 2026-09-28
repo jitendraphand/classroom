@@ -6,7 +6,7 @@ import { IconCheck } from '@/components/ui/Icons';
 const features = [
   'Waiting room with admit controls',
   'Selective student video (bandwidth-aware)',
-  'Shared tldraw whiteboard',
+  'Screen share with live annotations',
   'Screen share and mute controls',
   'In-class chat (broadcast + DM)',
   'Permanent teacher room codes',

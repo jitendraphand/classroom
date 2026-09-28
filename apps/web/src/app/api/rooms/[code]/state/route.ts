@@ -79,9 +79,7 @@ export async function GET(req: Request, { params }: { params: { code: string } }
     const redis = await ensureRedis();
     const stageRaw = await redis.get(keys.stage(code));
     const stageMode =
-      stageRaw === 'screen' || stageRaw === 'whiteboard' || stageRaw === 'idle'
-        ? stageRaw
-        : 'idle';
+      stageRaw === 'screen' ? 'screen' : 'idle';
     const raisedHands = (await redis.smembers(keys.hands(code))).map(String);
 
     if (me?.status !== 'ADMITTED') {
@@ -125,9 +123,7 @@ export async function GET(req: Request, { params }: { params: { code: string } }
   const raisedHands = (await redis.smembers(keys.hands(code))).map(String);
   const stageRaw = await redis.get(keys.stage(code));
   const stageMode =
-    stageRaw === 'screen' || stageRaw === 'whiteboard' || stageRaw === 'idle'
-      ? stageRaw
-      : 'idle';
+    stageRaw === 'screen' ? 'screen' : 'idle';
   const wbWriteAllowed = (await redis.get(keys.wbWrite(code))) === '1';
   const whiteboardCanWrite = isTeacher || wbWriteAllowed;
 

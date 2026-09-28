@@ -1,13 +1,6 @@
 'use client';
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
-import { createPortal } from 'react-dom';
+import { useMemo, useState } from 'react';
 import { Avatar } from '@/components/ui/Avatar';
 import { Chat } from './Chat';
 import {
@@ -18,145 +11,14 @@ import {
 import { IconChat, IconHand, IconMic, IconMicOff, IconScreen, IconUsers } from '@/components/ui/Icons';
 
 /**
- * Teacher "Share HUD" — keep teaching while the classroom tab is covered.
+ * Compact teacher-only floating control bar shown while screen sharing.
  *
- * Hosts, in preference order:
- *   1. Document Picture-in-Picture (Chromium 116+). A real OS window that stays
- *      on top, so it survives the main tab being minimised or covered.
- *   2. `window.open` popup (any desktop browser). A separate window, but the
- *      platform offers no always-on-top to web content, so the teacher may have
- *      to raise it manually.
- *   3. In-page bottom sheet. The only option on mobile, and the fallback when
- *      the first two are refused.
+ * Intentionally inline (no Document PiP / popup): those consume the same user
+ * gesture as getDisplayMedia, which caused the "first click opens HUD, second
+ * click starts share" bug. A slim bar also works on mobile and stays small.
  *
- * `open()` must be called synchronously from a user gesture: Document PiP
- * requires transient activation and popup blockers apply to `window.open`.
- *
- * All HUD chrome is styled by the inlined HUD_CSS rather than Tailwind, so the
- * same markup renders correctly in a PiP/popup document (which starts with an
- * empty <head>). Embedded children that do rely on Tailwind — Chat — get the
- * host document's stylesheets copied across on a best-effort basis.
+ * Students never render this component.
  */
-
-export type HudHost = 'pip' | 'popup' | 'inline';
-
-/* ------------------------------------------------------------------ styles */
-
-const HUD_CSS = `
-.hud-root{--hud-bg:#0d1219;--hud-line:rgba(255,255,255,.10);--hud-text:#eef2ff;--hud-dim:#94a3b8;--hud-accent:#3385ff;--hud-warn:#f59e0b;
-box-sizing:border-box;height:100%;display:flex;flex-direction:column;background:var(--hud-bg);color:var(--hud-text);overflow:hidden;
-font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:12px;line-height:1.35}
-.hud-root *{box-sizing:border-box}
-.hud-head{display:flex;align-items:center;gap:4px;padding:5px 7px;border-bottom:1px solid var(--hud-line);background:rgba(0,0,0,.35);flex:0 0 auto}
-.hud-title{font-weight:650;font-size:11px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.hud-badge{font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:1px 4px;border-radius:999px;border:1px solid var(--hud-line);color:var(--hud-dim);white-space:nowrap}
-.hud-badge-live{color:#bbf7d0;border-color:rgba(34,197,94,.4);background:rgba(34,197,94,.14)}
-.hud-x{all:unset;cursor:pointer;width:26px;height:26px;min-width:26px;display:grid;place-items:center;border-radius:7px;color:var(--hud-dim);font-size:14px;line-height:1;text-align:center}
-.hud-x:hover{background:rgba(255,255,255,.1);color:#fff}
-.hud-x:focus-visible{outline:2px solid var(--hud-accent);outline-offset:1px}
-.hud-btn{all:unset;box-sizing:border-box;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:4px;min-height:30px;
-padding:4px 8px;border-radius:8px;border:1px solid var(--hud-line);background:rgba(255,255,255,.06);color:var(--hud-text);
-font-size:11px;font-weight:600;text-align:center;line-height:1.2}
-.hud-btn:hover{background:rgba(255,255,255,.13)}
-.hud-btn:focus-visible{outline:2px solid var(--hud-accent);outline-offset:1px}
-.hud-btn[aria-pressed="true"]{background:rgba(51,133,255,.26);border-color:rgba(51,133,255,.6);color:#fff}
-.hud-btn[disabled]{opacity:.45;cursor:default}
-.hud-btn-danger{background:rgba(239,68,68,.2);border-color:rgba(239,68,68,.45);color:#fecaca}
-.hud-btn-danger:hover{background:rgba(239,68,68,.32)}
-.hud-btn-sm{min-height:26px;padding:3px 7px;font-size:10.5px}
-.hud-row{display:flex;align-items:center;gap:5px;padding:5px 7px;border-bottom:1px solid var(--hud-line);flex:0 0 auto;flex-wrap:wrap}
-.hud-body{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden}
-.hud-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:6px 7px;-webkit-overflow-scrolling:touch}
-.hud-empty{color:var(--hud-dim);font-size:11px;text-align:center;padding:14px 8px;margin:0}
-.hud-note{font-size:10px;line-height:1.4;color:var(--hud-dim);padding:5px 7px;border-top:1px solid var(--hud-line);background:rgba(0,0,0,.25);flex:0 0 auto;margin:0}
-.hud-warn{background:rgba(245,158,11,.16);color:#fde68a;padding:5px 7px;font-size:10.5px;line-height:1.35;border-bottom:1px solid rgba(245,158,11,.3);flex:0 0 auto;margin:0}
-.hud-tabs{display:flex;gap:3px;padding:4px 7px;border-bottom:1px solid var(--hud-line);flex:0 0 auto}
-.hud-tab{all:unset;box-sizing:border-box;cursor:pointer;flex:1 1 0;min-height:30px;display:inline-flex;align-items:center;justify-content:center;gap:4px;
-padding:4px 5px;border-radius:8px;font-size:11px;font-weight:650;color:var(--hud-dim);text-align:center}
-.hud-tab[aria-selected="true"]{background:rgba(255,255,255,.12);color:#fff}
-.hud-tab:hover{background:rgba(255,255,255,.07)}
-.hud-tab:focus-visible{outline:2px solid var(--hud-accent);outline-offset:1px}
-.hud-count{min-width:15px;height:15px;padding:0 4px;border-radius:999px;background:var(--hud-warn);color:#1a1206;font-size:9px;font-weight:800;display:inline-grid;place-items:center}
-.hud-count-blue{background:var(--hud-accent);color:#04122b}
-.hud-tools{display:flex;align-items:center;gap:4px;padding:5px 7px;border-bottom:1px solid var(--hud-line);flex-wrap:wrap;flex:0 0 auto}
-.hud-swatch{all:unset;box-sizing:border-box;cursor:pointer;width:20px;height:20px;border-radius:999px;border:2px solid transparent;flex:0 0 auto}
-.hud-swatch[aria-pressed="true"]{border-color:#fff}
-.hud-swatch:focus-visible{outline:2px solid var(--hud-accent);outline-offset:1px}
-.hud-person{display:flex;align-items:center;gap:6px;padding:6px;border-radius:8px;background:rgba(255,255,255,.04);margin-bottom:5px}
-.hud-person:last-child{margin-bottom:0}
-.hud-person-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;font-size:11px}
-.hud-person-sub{font-size:10px;color:var(--hud-dim);font-weight:500}
-.hud-chip{display:inline-block;font-size:9px;font-weight:700;padding:1px 4px;border-radius:999px;border:1px solid var(--hud-line);color:var(--hud-dim);white-space:nowrap}
-.hud-chip-muted{color:#fcd34d;border-color:rgba(245,158,11,.4);background:rgba(245,158,11,.12)}
-.hud-pill{position:fixed;right:10px;bottom:calc(10px + env(safe-area-inset-bottom,0px));z-index:60;display:flex;gap:6px;align-items:center}
-.hud-sheet{position:fixed;left:0;right:0;bottom:0;z-index:60;max-height:min(55dvh,420px);border-top:1px solid var(--hud-line);
-border-radius:14px 14px 0 0;overflow:hidden;box-shadow:0 -12px 40px rgba(0,0,0,.55);padding-bottom:env(safe-area-inset-bottom,0px)}
-.hud-sheet .hud-root{max-height:min(55dvh,420px);border-radius:14px 14px 0 0}
-.hud-grab{height:18px;display:grid;place-items:center;flex:0 0 auto;background:rgba(0,0,0,.45);cursor:grab}
-.hud-grab::before{content:"";width:34px;height:3px;border-radius:999px;background:rgba(255,255,255,.28)}
-@media (pointer:coarse){
-.hud-btn{min-height:40px;padding:7px 10px;font-size:12px}
-.hud-btn-sm{min-height:34px}
-.hud-tab{min-height:40px}
-.hud-swatch{width:26px;height:26px}
-.hud-x{width:34px;height:34px;min-width:34px}
-}
-`;
-
-/* ------------------------------------------------------------------ PiP glue */
-
-type DocumentPictureInPictureApi = {
-  requestWindow: (opts?: { width?: number; height?: number }) => Promise<Window>;
-};
-
-function getDocumentPip(): DocumentPictureInPictureApi | null {
-  if (typeof window === 'undefined') return null;
-  const api = (window as unknown as { documentPictureInPicture?: DocumentPictureInPictureApi })
-    .documentPictureInPicture;
-  return api && typeof api.requestWindow === 'function' ? api : null;
-}
-
-export function supportsDocumentPip(): boolean {
-  return getDocumentPip() !== null;
-}
-
-/**
- * Copy the host document's stylesheets into the popup so Tailwind children
- * (Chat) render correctly there. Best effort: the HUD's own chrome is
- * self-contained via HUD_CSS and does not depend on this succeeding.
- */
-function adoptStyles(doc: Document) {
-  for (const sheet of Array.from(document.styleSheets)) {
-    try {
-      if (sheet instanceof CSSStyleSheet && sheet.href) {
-        const link = doc.createElement('link');
-        link.rel = 'stylesheet';
-        link.href = sheet.href;
-        doc.head.appendChild(link);
-      } else if (sheet instanceof CSSStyleSheet) {
-        const style = doc.createElement('style');
-        style.textContent = Array.from(sheet.cssRules)
-          .map((r) => r.cssText)
-          .join('\n');
-        doc.head.appendChild(style);
-      }
-    } catch {
-      /* cross-origin sheet we cannot read; the <link> branch covers most */
-    }
-  }
-  const meta = doc.createElement('meta');
-  meta.name = 'viewport';
-  meta.content = 'width=device-width, initial-scale=1';
-  doc.head.appendChild(meta);
-  const html = doc.documentElement;
-  html.style.height = '100%';
-  doc.body.style.height = '100%';
-  doc.body.style.margin = '0';
-  doc.body.style.background = 'var(--hud-bg, #0d1219)';
-  doc.title = 'Class controls';
-}
-
-/* ------------------------------------------------------------------ the HUD */
 
 export type RosterEntry = {
   id: string;
@@ -181,12 +43,8 @@ export type TeacherShareHudProps = {
   chatUnread: number;
   onChatUnread: (n: number) => void;
   classEnded: boolean;
-  /** Called when the teacher closes the HUD. Never stops the share. */
+  /** Closing the HUD never stops the share. */
   onClose: () => void;
-  /** Upgrade from the in-page sheet to a real window. */
-  onPopOut: () => void;
-  canPopOut: boolean;
-  /** Shared annotate transport — drawing happens on the classroom stage, not in this HUD. */
   annotate: ReturnType<typeof useScreenAnnotate>;
   annotateOn: boolean;
   onAnnotateOnChange: (on: boolean) => void;
@@ -194,7 +52,11 @@ export type TeacherShareHudProps = {
   onAnnotateModeChange: (mode: AnnotateMode) => void;
   annotateColor: string;
   onAnnotateColorChange: (color: string) => void;
+  /** Optional browser-limit tip shown under the bar (e.g. mobile). */
+  notice?: string;
 };
+
+type Panel = 'chat' | 'hands' | 'roster' | null;
 
 const TOOL_LABEL: Record<AnnotateMode, string> = {
   pen: 'Pen',
@@ -202,22 +64,54 @@ const TOOL_LABEL: Record<AnnotateMode, string> = {
   eraser: 'Eraser',
 };
 
-/** Presentational HUD body. Rendered into whichever host window is active. */
-function HudBody({
-  props,
-  onClose,
-  onCollapse,
-  expanded,
-  inPage,
-}: {
-  props: TeacherShareHudProps;
-  onClose: () => void;
-  /** Collapses to the compact pill. Only offered by the in-page host. */
-  onCollapse?: () => void;
-  expanded: boolean;
-  /** True for the in-page sheet, where the mobile backgrounding caveat applies. */
-  inPage?: boolean;
-}) {
+const HUD_CSS = `
+.tsh{--bg:#0d1219;--line:rgba(255,255,255,.12);--text:#eef2ff;--dim:#94a3b8;--accent:#3385ff;--warn:#f59e0b;
+position:fixed;left:50%;bottom:calc(12px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:55;
+width:min(560px,calc(100vw - 16px));display:flex;flex-direction:column;gap:6px;pointer-events:none;
+font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:12px;line-height:1.3;color:var(--text)}
+.tsh *{box-sizing:border-box}
+.tsh-bar,.tsh-tools,.tsh-panel,.tsh-tip{pointer-events:auto;background:rgba(13,18,25,.94);border:1px solid var(--line);
+backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);box-shadow:0 10px 36px rgba(0,0,0,.45)}
+.tsh-bar{display:flex;align-items:center;gap:4px;padding:5px 6px;border-radius:14px;flex-wrap:wrap}
+.tsh-tools{display:flex;align-items:center;gap:4px;padding:5px 7px;border-radius:12px;flex-wrap:wrap}
+.tsh-panel{border-radius:14px;overflow:hidden;max-height:min(42dvh,360px);display:flex;flex-direction:column}
+.tsh-tip{border-radius:10px;padding:6px 9px;font-size:10.5px;line-height:1.4;color:#fde68a;background:rgba(245,158,11,.16);border-color:rgba(245,158,11,.35)}
+.tsh-live{font-size:8px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;padding:2px 6px;border-radius:999px;
+color:#bbf7d0;border:1px solid rgba(34,197,94,.4);background:rgba(34,197,94,.14);white-space:nowrap}
+.tsh-title{font-weight:650;font-size:11px;color:var(--dim);margin-right:2px;white-space:nowrap}
+.tsh-sep{width:1px;height:22px;background:var(--line);margin:0 2px;flex:0 0 auto}
+.tsh-btn{all:unset;box-sizing:border-box;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:4px;
+min-height:32px;min-width:32px;padding:4px 8px;border-radius:10px;border:1px solid transparent;color:var(--text);
+font-size:11px;font-weight:600;line-height:1.15;position:relative}
+.tsh-btn:hover{background:rgba(255,255,255,.1)}
+.tsh-btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.tsh-btn[aria-pressed="true"]{background:rgba(51,133,255,.28);border-color:rgba(51,133,255,.55)}
+.tsh-btn-danger{color:#fecaca}
+.tsh-btn-danger:hover,.tsh-btn-danger[aria-pressed="true"]{background:rgba(239,68,68,.28);border-color:rgba(239,68,68,.5)}
+.tsh-btn[disabled]{opacity:.4;cursor:default}
+.tsh-count{position:absolute;top:-3px;right:-3px;min-width:14px;height:14px;padding:0 3px;border-radius:999px;
+background:var(--warn);color:#1a1206;font-size:9px;font-weight:800;display:inline-grid;place-items:center}
+.tsh-count-blue{background:var(--accent);color:#04122b}
+.tsh-swatch{all:unset;box-sizing:border-box;cursor:pointer;width:18px;height:18px;border-radius:999px;border:2px solid transparent;flex:0 0 auto}
+.tsh-swatch[aria-pressed="true"]{border-color:#fff}
+.tsh-panel-head{display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid var(--line);flex:0 0 auto}
+.tsh-panel-title{font-weight:650;font-size:11px;flex:1}
+.tsh-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:6px 8px;-webkit-overflow-scrolling:touch}
+.tsh-empty{color:var(--dim);font-size:11px;text-align:center;padding:16px 8px;margin:0}
+.tsh-person{display:flex;align-items:center;gap:6px;padding:6px;border-radius:8px;background:rgba(255,255,255,.04);margin-bottom:5px}
+.tsh-person:last-child{margin-bottom:0}
+.tsh-person-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;font-size:11px}
+.tsh-person-sub{font-size:10px;color:var(--dim);font-weight:500}
+.tsh-chip{display:inline-block;font-size:9px;font-weight:700;padding:1px 4px;border-radius:999px;border:1px solid var(--line);color:var(--dim)}
+.tsh-chip-muted{color:#fcd34d;border-color:rgba(245,158,11,.4);background:rgba(245,158,11,.12)}
+.tsh-chat{height:min(38dvh,300px);min-height:180px}
+@media (pointer:coarse){
+.tsh-btn{min-height:40px;min-width:40px;padding:6px 10px;font-size:12px}
+.tsh-swatch{width:24px;height:24px}
+}
+`;
+
+export function TeacherShareHud(props: TeacherShareHudProps) {
   const {
     code,
     admitted,
@@ -232,8 +126,7 @@ function HudBody({
     chatUnread,
     onChatUnread,
     classEnded,
-    onPopOut,
-    canPopOut,
+    onClose,
     annotate,
     annotateOn,
     onAnnotateOnChange,
@@ -241,53 +134,131 @@ function HudBody({
     onAnnotateModeChange: setMode,
     annotateColor: color,
     onAnnotateColorChange: setColor,
+    notice,
   } = props;
 
-  const [tab, setTab] = useState<'chat' | 'hands' | 'roster'>('chat');
+  const [panel, setPanel] = useState<Panel>(null);
 
   const students = useMemo(() => admitted.filter((a) => a.role === 'STUDENT'), [admitted]);
   const hands = useMemo(() => students.filter((s) => s.handRaised), [students]);
 
+  const togglePanel = (p: Exclude<Panel, null>) => {
+    setPanel((cur) => (cur === p ? null : p));
+  };
+
   return (
-    <div className="hud-root">
+    <div className="tsh" role="region" aria-label="Share controls">
       <style>{HUD_CSS}</style>
-      <div className="hud-head">
-        <span className="hud-badge hud-badge-live">Live</span>
-        <span className="hud-title">Class controls</span>
-        <span className="hud-badge">{code}</span>
-        {canPopOut && (
-          <button
-            type="button"
-            className="hud-btn hud-btn-sm"
-            onClick={onPopOut}
-            title="Open in its own always-on-top window"
-          >
-            Pop out
-          </button>
-        )}
-        {onCollapse && (
-          <button
-            type="button"
-            className="hud-x"
-            onClick={onCollapse}
-            aria-label="Collapse to a small button"
-            title="Collapse"
-          >
-            –
-          </button>
-        )}
-        <button type="button" className="hud-x" onClick={onClose} aria-label="Close controls">
-          ✕
-        </button>
-      </div>
+
+      {notice ? <div className="tsh-tip">{notice}</div> : null}
+
+      {panel === 'chat' && (
+        <div className="tsh-panel">
+          <div className="tsh-panel-head">
+            <span className="tsh-panel-title">Chat</span>
+            <button type="button" className="tsh-btn" onClick={() => setPanel(null)} aria-label="Close chat">
+              ✕
+            </button>
+          </div>
+          <div className="tsh-chat">
+            <Chat
+              code={code}
+              isTeacher
+              myParticipantId={teacherParticipantId}
+              students={students.map((s) => ({ id: s.id, displayName: s.displayName }))}
+              active
+              onUnreadChange={onChatUnread}
+              stopped={classEnded}
+            />
+          </div>
+        </div>
+      )}
+
+      {panel === 'hands' && (
+        <div className="tsh-panel">
+          <div className="tsh-panel-head">
+            <span className="tsh-panel-title">Raised hands</span>
+            <button type="button" className="tsh-btn" onClick={() => setPanel(null)} aria-label="Close hands">
+              ✕
+            </button>
+          </div>
+          <div className="tsh-scroll">
+            {hands.length === 0 ? (
+              <p className="tsh-empty">No raised hands.</p>
+            ) : (
+              hands.map((s) => (
+                <div className="tsh-person" key={s.id}>
+                  <Avatar name={s.displayName} size="sm" />
+                  <span className="tsh-person-name">
+                    {s.displayName}
+                    <span className="tsh-person-sub"> · raised</span>
+                  </span>
+                  <button type="button" className="tsh-btn" onClick={() => onLowerHand(s.id)}>
+                    Lower
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {panel === 'roster' && (
+        <div className="tsh-panel">
+          <div className="tsh-panel-head">
+            <span className="tsh-panel-title">Roster</span>
+            {waitingCount > 0 && <span className="tsh-chip">{waitingCount} waiting</span>}
+            <button type="button" className="tsh-btn" onClick={() => setPanel(null)} aria-label="Close roster">
+              ✕
+            </button>
+          </div>
+          <div className="tsh-scroll">
+            <div style={{ display: 'flex', gap: 4, marginBottom: 8, flexWrap: 'wrap' }}>
+              <button type="button" className="tsh-btn" onClick={() => onMuteAll(true)}>
+                Mute all
+              </button>
+              <button type="button" className="tsh-btn" onClick={() => onMuteAll(false)}>
+                Unmute all
+              </button>
+            </div>
+            {students.length === 0 ? (
+              <p className="tsh-empty">No students yet.</p>
+            ) : (
+              students.map((s) => (
+                <div className="tsh-person" key={s.id}>
+                  <Avatar name={s.displayName} size="sm" />
+                  <span className="tsh-person-name">
+                    {s.displayName}
+                    <span className="tsh-person-sub" style={{ display: 'block' }}>
+                      {s.mutedByTeacher
+                        ? 'muted by you'
+                        : s.isVisible
+                          ? 'in sample'
+                          : 'local only'}
+                    </span>
+                  </span>
+                  {s.mutedByTeacher ? <span className="tsh-chip tsh-chip-muted">muted</span> : null}
+                  <button
+                    type="button"
+                    className="tsh-btn"
+                    onClick={() => onMuteStudent(s.id, !s.mutedByTeacher)}
+                  >
+                    {s.mutedByTeacher ? 'Unmute' : 'Mute'}
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
 
       {annotateOn && (
-        <div className="hud-tools" role="toolbar" aria-label="Annotation tools">
+        <div className="tsh-tools" role="toolbar" aria-label="Annotation tools">
           {(['pen', 'highlighter', 'eraser'] as const).map((m) => (
             <button
               key={m}
               type="button"
-              className="hud-btn hud-btn-sm"
+              className="tsh-btn"
               aria-pressed={mode === m}
               onClick={() => setMode(m)}
             >
@@ -299,7 +270,7 @@ function HudBody({
             <button
               key={c}
               type="button"
-              className="hud-swatch"
+              className="tsh-swatch"
               style={{ background: c }}
               aria-label={`Colour ${c}`}
               aria-pressed={color === c}
@@ -308,7 +279,7 @@ function HudBody({
           ))}
           <button
             type="button"
-            className="hud-btn hud-btn-sm"
+            className="tsh-btn"
             onClick={annotate.clear}
             disabled={!annotate.strokes.length}
           >
@@ -317,396 +288,123 @@ function HudBody({
         </div>
       )}
 
-      <div className="hud-row">
+      <div className="tsh-bar">
+        <span className="tsh-live">Live</span>
+        <span className="tsh-title">Share</span>
+
         <button
           type="button"
-          className="hud-btn"
+          className="tsh-btn"
           aria-pressed={!teacherMicOn}
           onClick={onToggleTeacherMic}
+          title={teacherMicOn ? 'Mute mic' : 'Unmute mic'}
+          aria-label={teacherMicOn ? 'Mute mic' : 'Unmute mic'}
         >
           {teacherMicOn ? <IconMic size={15} /> : <IconMicOff size={15} />}
-          {teacherMicOn ? 'Mic on' : 'Mic off'}
         </button>
+
         <button
           type="button"
-          className="hud-btn"
+          className="tsh-btn"
           aria-pressed={annotateOn}
           onClick={() => onAnnotateOnChange(!annotateOn)}
+          title="Annotate on shared screen"
         >
           Annotate
         </button>
-        <button type="button" className="hud-btn hud-btn-danger" onClick={onStopSharing}>
-          <IconScreen size={15} />
-          Stop share
-        </button>
-      </div>
 
-      <div className="hud-row">
-        <button type="button" className="hud-btn" onClick={() => onMuteAll(true)}>
-          Mute all
-        </button>
-        <button type="button" className="hud-btn" onClick={() => onMuteAll(false)}>
-          Unmute all
-        </button>
-        {waitingCount > 0 && (
-          <span className="hud-chip">{waitingCount} waiting</span>
-        )}
-      </div>
+        <span className="tsh-sep" aria-hidden />
 
-      <div className="hud-tabs" role="tablist">
         <button
           type="button"
-          role="tab"
-          className="hud-tab"
-          aria-selected={tab === 'chat'}
-          onClick={() => setTab('chat')}
+          className="tsh-btn"
+          aria-pressed={panel === 'chat'}
+          onClick={() => togglePanel('chat')}
+          title="Chat"
+          aria-label="Chat"
         >
-          <IconChat size={13} /> Chat
-          {chatUnread > 0 && (
-            <span className="hud-count">{chatUnread > 9 ? '9+' : chatUnread}</span>
+          <IconChat size={15} />
+          {chatUnread > 0 && panel !== 'chat' && (
+            <span className="tsh-count">{chatUnread > 9 ? '9+' : chatUnread}</span>
           )}
         </button>
+
         <button
           type="button"
-          role="tab"
-          className="hud-tab"
-          aria-selected={tab === 'hands'}
-          onClick={() => setTab('hands')}
+          className="tsh-btn"
+          aria-pressed={panel === 'hands'}
+          onClick={() => togglePanel('hands')}
+          title="Raised hands"
+          aria-label="Raised hands"
         >
-          <IconHand size={13} /> Hands
-          {hands.length > 0 && <span className="hud-count">{hands.length}</span>}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          className="hud-tab"
-          aria-selected={tab === 'roster'}
-          onClick={() => setTab('roster')}
-        >
-          <IconUsers size={13} /> Roster
-          <span className="hud-count hud-count-blue">{students.length}</span>
-        </button>
-      </div>
-
-      <div className="hud-body">
-        {tab === 'chat' && (
-          <Chat
-            code={code}
-            isTeacher
-            myParticipantId={teacherParticipantId}
-            students={students.map((s) => ({ id: s.id, displayName: s.displayName }))}
-            active={true}
-            onUnreadChange={onChatUnread}
-            stopped={classEnded}
-          />
-        )}
-
-        {tab === 'hands' && (
-          <div className="hud-scroll">
-            {hands.length === 0 ? (
-              <p className="hud-empty">No raised hands.</p>
-            ) : (
-              hands.map((s) => (
-                <div className="hud-person" key={s.id}>
-                  <Avatar name={s.displayName} size="sm" />
-                  <span className="hud-person-name">
-                    {s.displayName}
-                    <span className="hud-person-sub"> · raised hand</span>
-                  </span>
-                  <button
-                    type="button"
-                    className="hud-btn hud-btn-sm"
-                    onClick={() => onLowerHand(s.id)}
-                  >
-                    Lower
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
-        )}
-
-        {tab === 'roster' && (
-          <div className="hud-scroll">
-            {students.length === 0 ? (
-              <p className="hud-empty">No students yet.</p>
-            ) : (
-              students.map((s) => (
-                <div className="hud-person" key={s.id}>
-                  <Avatar name={s.displayName} size="sm" />
-                  <span className="hud-person-name">
-                    {s.displayName}
-                    <span className="hud-person-sub" style={{ display: 'block' }}>
-                      {s.mutedByTeacher
-                        ? 'muted by you'
-                        : s.isVisible
-                          ? 'in sample'
-                          : 'local only'}
-                    </span>
-                  </span>
-                  {s.mutedByTeacher ? <span className="hud-chip hud-chip-muted">muted</span> : null}
-                  <button
-                    type="button"
-                    className="hud-btn hud-btn-sm"
-                    onClick={() => onMuteStudent(s.id, !s.mutedByTeacher)}
-                  >
-                    {s.mutedByTeacher ? 'Unmute' : 'Mute'}
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
-        )}
-      </div>
-
-      <p className="hud-note">
-        Draw on the shared screen in the classroom tab. Closing these
-        controls does not stop sharing.
-        {inPage
-          ? ' In-page controls stop responding if you switch apps — keep Classroom in split view, or minimise the browser with its picture-in-picture, if you need to leave it.'
-          : !expanded
-            ? ' Tap “Controls” to reopen.'
-            : ''}
-      </p>
-    </div>
-  );
-}
-
-/** Collapsed in-page affordance: a pill that never covers the whole screen. */
-function HudPill({
-  props,
-  onExpand,
-}: {
-  props: TeacherShareHudProps;
-  onExpand: () => void;
-}) {
-  const hands = props.admitted.filter((a) => a.role === 'STUDENT' && a.handRaised).length;
-  return (
-    <div className="hud-root">
-      <style>{HUD_CSS}</style>
-      <div className="hud-pill">
-        <button type="button" className="hud-btn" onClick={onExpand}>
-          <IconUsers size={15} /> Controls
-          {props.chatUnread > 0 && (
-            <span className="hud-count">{props.chatUnread > 9 ? '9+' : props.chatUnread}</span>
+          <IconHand size={15} />
+          {hands.length > 0 && panel !== 'hands' && (
+            <span className="tsh-count">{hands.length}</span>
           )}
-          {hands > 0 && <span className="hud-count">{hands}</span>}
         </button>
+
         <button
           type="button"
-          className="hud-btn hud-btn-danger"
-          onClick={props.onStopSharing}
-          aria-label="Stop sharing"
+          className="tsh-btn"
+          aria-pressed={panel === 'roster'}
+          onClick={() => togglePanel('roster')}
+          title="Roster"
+          aria-label="Roster"
         >
+          <IconUsers size={15} />
+          {students.length > 0 && panel !== 'roster' && (
+            <span className="tsh-count tsh-count-blue">{students.length}</span>
+          )}
+        </button>
+
+        <span className="tsh-sep" aria-hidden />
+
+        <button type="button" className="tsh-btn tsh-btn-danger" onClick={onStopSharing} title="Stop sharing">
           <IconScreen size={15} />
+          Stop
+        </button>
+
+        <button type="button" className="tsh-btn" onClick={onClose} aria-label="Hide share controls" title="Hide controls">
+          ✕
         </button>
       </div>
     </div>
   );
 }
 
+/** @deprecated Kept for import compatibility; HUD is always inline now. */
+export function supportsDocumentPip(): boolean {
+  return false;
+}
+
+/** Minimal stub — HUD open state is owned by ClassroomRoom. */
 export type UseShareHud = {
-  host: HudHost | null;
-  /** Portal target: a foreign document body, or null for the in-page sheet. */
-  container: HTMLElement | null;
+  host: 'inline' | null;
+  container: null;
   expanded: boolean;
   setExpanded: (v: boolean) => void;
-  open: () => HudHost;
+  open: () => 'inline';
   close: () => void;
-  /** True when a native window host is currently in use. */
-  detached: boolean;
+  detached: false;
 };
 
-/**
- * Owns the HUD window lifecycle.
- *
- * `open()` performs the OS-level window request synchronously so it can be
- * called straight from a click handler; a refused or unavailable request falls
- * back to the in-page sheet rather than failing.
- */
 export function useShareHud(): UseShareHud {
-  const [host, setHost] = useState<HudHost | null>(null);
-  const [container, setContainer] = useState<HTMLElement | null>(null);
+  const [host, setHost] = useState<'inline' | null>(null);
   const [expanded, setExpanded] = useState(true);
-  const winRef = useRef<Window | null>(null);
-
-  const teardown = useCallback(() => {
-    const win = winRef.current;
-    winRef.current = null;
-    if (win && !win.closed) {
-      try {
-        win.close();
-      } catch {
-        /* ignore */
-      }
-    }
-  }, []);
-
-  const close = useCallback(() => {
-    teardown();
-    setContainer(null);
-    setHost(null);
-    setExpanded(true);
-  }, [teardown]);
-
-  const open = useCallback((): HudHost => {
-    // Already detached — nothing to do.
-    if (winRef.current && !winRef.current.closed) return host ?? 'inline';
-
-    const pip = getDocumentPip();
-    if (pip) {
-      let request: Promise<Window> | null = null;
-      try {
-        // Must be called synchronously: Document PiP requires user activation.
-        request = pip.requestWindow({ width: 300, height: 420 });
-      } catch {
-        request = null;
-      }
-      if (request) {
-        setHost('pip');
-        setExpanded(true);
-        request
-          .then((win) => {
-            winRef.current = win;
-            adoptStyles(win.document);
-            setContainer(win.document.body);
-            win.addEventListener('pagehide', () => {
-              // Teacher closed the PiP window by hand.
-              winRef.current = null;
-              setContainer(null);
-              setHost(null);
-            });
-          })
-          .catch(() => {
-            setHost('inline');
-            setContainer(null);
-            setExpanded(true);
-          });
-        return 'pip';
-      }
-    }
-
-    // Popup fallback. It must be opened on a *same-origin* URL: an empty URL
-    // yields a document with an opaque origin, and the popup's fetches would
-    // then be cross-origin, so the browser omits the session cookies and every
-    // HUD action 401s. /hud is an empty shell the HUD is portalled into.
-    try {
-      const win = window.open(
-        '/hud',
-        'classroom-hud',
-        `popup=yes,width=300,height=420,left=${Math.max(0, window.screenX + 60)},top=${Math.max(0, window.screenY + 60)}`
-      );
-      if (win) {
-        winRef.current = win;
-        setHost('popup');
-        setExpanded(true);
-
-        // Wait for the navigation to finish; portalling into the initial
-        // about:blank document would be discarded on load.
-        const mount = () => {
-          // Defensive: if the browser still gave us an opaque origin, silently
-          // degrade to the in-page sheet rather than ship a HUD whose every
-          // action fails with a 401.
-          let sameOrigin = false;
-          try {
-            sameOrigin = win.location.origin === window.location.origin;
-          } catch {
-            sameOrigin = false;
-          }
-          if (!sameOrigin) {
-            winRef.current = null;
-            try {
-              win.close();
-            } catch {
-              /* ignore */
-            }
-            setHost('inline');
-            setContainer(null);
-            return;
-          }
-          adoptStyles(win.document);
-          setContainer(win.document.body);
-        };
-        if (win.document.readyState === 'complete') mount();
-        else win.addEventListener('load', mount, { once: true });
-        return 'popup';
-      }
-    } catch {
-      /* blocked */
-    }
-
-    setHost('inline');
-    setContainer(null);
-    setExpanded(true);
-    return 'inline';
-  }, [host]);
-
-  // A popup the user closed without a pagehide (e.g. tab discarded) still needs
-  // the HUD to fall back rather than point at a dead document.
-  useEffect(() => {
-    if (host !== 'popup') return;
-    const t = window.setInterval(() => {
-      const win = winRef.current;
-      if (win && win.closed) {
-        winRef.current = null;
-        setContainer(null);
-        setHost(null);
-      }
-    }, 1_000);
-    return () => window.clearInterval(t);
-  }, [host]);
-
-  useEffect(() => {
-    return () => {
-      teardown();
-    };
-  }, [teardown]);
-
   return {
     host,
-    container,
+    container: null,
     expanded,
     setExpanded,
-    open,
-    close,
-    detached: host === 'pip' || host === 'popup',
+    open: () => {
+      setHost('inline');
+      setExpanded(true);
+      return 'inline';
+    },
+    close: () => {
+      setHost(null);
+      setExpanded(true);
+    },
+    detached: false,
   };
-}
-
-/**
- * Renders the HUD in the best available host. Renders nothing when closed.
- */
-export function TeacherShareHud(props: TeacherShareHudProps & { hud: UseShareHud }) {
-  const { hud, onClose, onPopOut, canPopOut: canPopOutProp } = props;
-  // Only offer "Pop out" while we are still in-page; a detached host is already
-  // a separate window and there is nothing further to upgrade to.
-  const canPopOut = hud.host === 'inline' && canPopOutProp;
-
-  const content = (() => {
-    if (hud.host === 'inline') {
-      if (!hud.expanded) {
-        return <HudPill props={{ ...props, onPopOut, canPopOut }} onExpand={() => hud.setExpanded(true)} />;
-      }
-      return (
-        <div className="hud-sheet">
-          <div className="hud-grab" aria-hidden="true" />
-          <HudBody
-            props={{ ...props, onPopOut, canPopOut }}
-            onClose={onClose}
-            onCollapse={() => hud.setExpanded(false)}
-            expanded
-            inPage
-          />
-        </div>
-      );
-    }
-    return <HudBody props={{ ...props, onPopOut, canPopOut }} onClose={onClose} expanded />;
-  })();
-
-  // A detached window renders through a portal into that document.
-  if (hud.detached && hud.container) {
-    return createPortal(content, hud.container);
-  }
-  if (hud.host === 'inline') return content;
-  return null;
 }

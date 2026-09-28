@@ -32,10 +32,11 @@ export const keys = {
   visible: (code: string) => `room:${code}:visible`,
   muted: (code: string) => `room:${code}:muted`,
   rotation: (code: string) => `room:${code}:rotation`,
+  /** Legacy whiteboard snapshot key (feature removed; still cleared on end). */
   whiteboard: (code: string) => `room:${code}:whiteboard`,
-  /** Exclusive presentation stage: idle | screen | whiteboard */
+  /** Exclusive presentation stage: idle | screen (whiteboard legacy → idle) */
   stage: (code: string) => `room:${code}:stage`,
-  /** When set to "1", students may write on the shared whiteboard */
+  /** Legacy student whiteboard-write flag (unused). */
   wbWrite: (code: string) => `room:${code}:wb-write`,
   /** Screen-share annotation strokes (JSON array), for late joiners */
   annotate: (code: string) => `room:${code}:screen-annotate`,
