@@ -1,8 +1,7 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Avatar } from '@/components/ui/Avatar';
-import { Chat } from './Chat';
 import {
   ANNOTATE_COLORS,
   useScreenAnnotate,
@@ -30,7 +29,6 @@ export type RosterEntry = {
 };
 
 export type TeacherShareHudProps = {
-  code: string;
   admitted: RosterEntry[];
   waitingCount?: number;
   teacherMicOn: boolean;
@@ -39,10 +37,10 @@ export type TeacherShareHudProps = {
   onMuteStudent: (participantId: string, muted: boolean) => void;
   onMuteAll: (muted: boolean) => void;
   onLowerHand: (participantId: string) => void;
-  teacherParticipantId: string | null;
   chatUnread: number;
-  onChatUnread: (n: number) => void;
-  classEnded: boolean;
+  /** Shared chat thread UI. Unread is owned by the parent so it survives this panel closing. */
+  chat?: ReactNode;
+  onChatOpenChange?: (open: boolean) => void;
   /** Closing the HUD never stops the share. */
   onClose: () => void;
   annotate: ReturnType<typeof useScreenAnnotate>;
@@ -113,7 +111,6 @@ background:var(--warn);color:#1a1206;font-size:9px;font-weight:800;display:inlin
 
 export function TeacherShareHud(props: TeacherShareHudProps) {
   const {
-    code,
     admitted,
     waitingCount = 0,
     teacherMicOn,
@@ -122,10 +119,9 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     onMuteStudent,
     onMuteAll,
     onLowerHand,
-    teacherParticipantId,
     chatUnread,
-    onChatUnread,
-    classEnded,
+    chat,
+    onChatOpenChange,
     onClose,
     annotate,
     annotateOn,
@@ -138,6 +134,14 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
   } = props;
 
   const [panel, setPanel] = useState<Panel>(null);
+
+  useEffect(() => {
+    onChatOpenChange?.(panel === 'chat');
+  }, [panel, onChatOpenChange]);
+
+  useEffect(() => {
+    return () => onChatOpenChange?.(false);
+  }, [onChatOpenChange]);
 
   const students = useMemo(() => admitted.filter((a) => a.role === 'STUDENT'), [admitted]);
   const hands = useMemo(() => students.filter((s) => s.handRaised), [students]);
@@ -160,17 +164,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
               ✕
             </button>
           </div>
-          <div className="tsh-chat">
-            <Chat
-              code={code}
-              isTeacher
-              myParticipantId={teacherParticipantId}
-              students={students.map((s) => ({ id: s.id, displayName: s.displayName }))}
-              active
-              onUnreadChange={onChatUnread}
-              stopped={classEnded}
-            />
-          </div>
+          <div className="tsh-chat">{chat}</div>
         </div>
       )}
 

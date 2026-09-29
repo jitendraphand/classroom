@@ -35,7 +35,7 @@ import { useRouter } from 'next/navigation';
 import { useRoomState } from '@/hooks/useRoomState';
 import { Controls } from './Controls';
 import { LocalPreview } from './LocalPreview';
-import { Chat } from './Chat';
+import { ChatView, useChatThread } from './Chat';
 import { FloatingPanel } from './FloatingPanel';
 import { ScreenAnnotator, useScreenAnnotate, ANNOTATE_COLORS, type AnnotateMode } from './ScreenAnnotator';
 import { TeacherShareHud } from './TeacherShareHud';
@@ -482,7 +482,7 @@ function canShareScreen(): boolean {
 /** Human-readable reason when screen share fails or is unavailable. */
 function screenShareErrorMessage(err: unknown): string {
   if (!canShareScreen()) {
-    return 'This browser cannot share a screen. On iPhone/iPad screen share is limited — use a computer, or Android Chrome. Controls still open so you can teach from this device.';
+    return 'This browser cannot share a screen. iPhone, iPad, and Android browsers do not support screen capture. Use a computer, or the Classroom Android app. Controls still open so you can teach from this device.';
   }
   const name =
     err && typeof err === 'object' && 'name' in err ? String((err as { name: unknown }).name) : '';
@@ -491,7 +491,7 @@ function screenShareErrorMessage(err: unknown): string {
     return 'Screen share was blocked or cancelled. Allow screen sharing when prompted, then try again.';
   }
   if (name === 'NotSupportedError' || /not supported|getDisplayMedia/i.test(msg)) {
-    return 'Screen share is not supported in this browser. Try desktop Chrome/Edge/Firefox, or Android Chrome.';
+    return 'Screen share is not supported in this browser. Use desktop Chrome, Edge, or Firefox, or the Classroom Android app.';
   }
   if (name === 'AbortError' || /abort|cancel/i.test(msg)) {
     return 'Screen share was cancelled.';
@@ -677,10 +677,14 @@ function TeacherPeersFloat({
   roomCode,
   teacherIdentities,
   visibleIdentities,
+  selfName,
+  selfStream,
 }: {
   roomCode: string;
   teacherIdentities: string[];
   visibleIdentities: string[];
+  selfName: string;
+  selfStream: MediaStream | null;
 }) {
   const room = useRoomContext();
   const teacherSet = new Set(teacherIdentities);
@@ -897,16 +901,17 @@ function TeacherPeersFloat({
     if (speakingId && pool.includes(speakingId) && !slots.includes(speakingId)) {
       slots.push(speakingId);
     }
+    const studentSlotsForSticky = Math.max(0, slotCount - 1);
     for (const id of sticky) {
-      if (slots.length >= slotCount) break;
+      if (slots.length >= studentSlotsForSticky) break;
       if (!slots.includes(id)) slots.push(id);
     }
 
-    // Random mosaic fill among remaining eligible (non-sticky).
-    // Reshuffle only on rotationTick change (or when pool membership drifts).
+    // First tile is the teacher. Remaining tiles cycle every rotation tick.
+    const studentSlots = Math.max(0, slotCount - 1);
     const rest = pool.filter((id) => !slots.includes(id) && !sticky.includes(id));
     const prevMosaic = mosaicPoolRef.current.filter((id) => rest.includes(id));
-    const needSlots = Math.max(0, slotCount - slots.length);
+    const needSlots = Math.max(0, studentSlots - slots.length);
     const membershipChanged =
       prevMosaic.length !== rest.length || prevMosaic.some((id) => !rest.includes(id));
     let mosaic = prevMosaic;
@@ -919,25 +924,23 @@ function TeacherPeersFloat({
       mosaic = shuffled;
       mosaicPoolRef.current = mosaic;
     }
-    // Fresh random order every ~8s (rotationTick), without reshuffling on unrelated ticks
     if (lastRotationTickRef.current !== rotationTick) {
       lastRotationTickRef.current = rotationTick;
-      const shuffled = [...rest];
-      for (let i = shuffled.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      const rotating = mosaic.filter((id) => rest.includes(id));
+      for (const id of rest) {
+        if (!rotating.includes(id)) rotating.push(id);
       }
-      mosaic = shuffled;
+      mosaic = rotating.length > 1 ? [...rotating.slice(1), rotating[0]] : rotating;
       mosaicPoolRef.current = mosaic;
     }
 
     for (const id of mosaic) {
-      if (slots.length >= slotCount) break;
+      if (slots.length >= studentSlots) break;
       slots.push(id);
     }
     // Never backfill with students who are not publishing a sample camera.
     // The grid still paints `slotCount` cells; the rest stay blank.
-    return slots.slice(0, slotCount);
+    return slots.slice(0, Math.max(0, slotCount - 1));
   }, [
     visibleIdentities,
     teacherIdentities,
@@ -949,8 +952,8 @@ function TeacherPeersFloat({
     stickyVersion,
   ]);
 
-  const cells: Array<string | null> = [];
-  for (let i = 0; i < slotCount; i++) cells.push(peerIds[i] ?? null);
+  const cells: Array<string | null> = ['__self__'];
+  for (let i = 0; i < slotCount - 1; i++) cells.push(peerIds[i] ?? null);
 
   const style: CSSProperties = pos
     ? { left: pos.x, top: pos.y }
@@ -968,12 +971,12 @@ function TeacherPeersFloat({
       data-slots={slotCount}
       data-minimized={minimized ? '1' : '0'}
       style={style}
-      aria-label="Students — drag to move"
+      aria-label="Class videos — drag to move"
       {...dragHandlers}
     >
       <div className="peers-float-header">
         <span className="text-2xs font-semibold text-slate-200">
-          Students{minimized ? ` · ${peerIds.length}` : peerIds.length === 0 ? ' · waiting' : ''}
+          Class{minimized ? ` · ${peerIds.length + 1}` : ''}
         </span>
         <div className="flex items-center gap-1" data-no-drag onPointerDown={(e) => e.stopPropagation()}>
           {!minimized &&
@@ -997,7 +1000,7 @@ function TeacherPeersFloat({
             type="button"
             className="rounded px-1.5 py-0.5 text-[10px] font-bold text-slate-300 hover:bg-white/10"
             onClick={() => setMinimized((v) => !v)}
-            aria-label={minimized ? 'Expand students' : 'Minimize students'}
+            aria-label={minimized ? 'Expand class videos' : 'Minimize class videos'}
             title={minimized ? 'Expand' : 'Minimize'}
           >
             {minimized ? '▢' : '—'}
@@ -1013,6 +1016,24 @@ function TeacherPeersFloat({
           }}
         >
           {cells.map((identity, i) => {
+            if (identity === '__self__') {
+              const selfTrack =
+                selfStream
+                  ?.getVideoTracks()
+                  .find((track) => track.readyState === 'live' && track.enabled) ?? null;
+              return (
+                <PeerCamTile
+                  key="self"
+                  name={`${selfName} (you)`}
+                  mediaTrack={selfTrack}
+                  speaking={false}
+                  pinned={false}
+                  mirror
+                  tileW={layout.tileW}
+                  tileH={layout.tileH}
+                />
+              );
+            }
             if (!identity) {
               return (
                 <div
@@ -1061,6 +1082,7 @@ function PeerCamTile({
   pinned,
   tileW,
   tileH,
+  mirror = false,
 }: {
   name: string;
   mediaTrack: MediaStreamTrack | null;
@@ -1068,6 +1090,7 @@ function PeerCamTile({
   pinned: boolean;
   tileW: number;
   tileH: number;
+  mirror?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   useEffect(() => {
@@ -1095,7 +1118,7 @@ function PeerCamTile({
       {mediaTrack ? (
         <video
           ref={videoRef}
-          className="h-full w-full object-cover"
+          className={cn('h-full w-full object-cover', mirror && 'video-mirror')}
           autoPlay
           playsInline
           muted
@@ -1171,6 +1194,71 @@ function createCanvasCameraTrack(): { track: LocalVideoTrack; stopExtra: () => v
   };
 }
 
+/** Release a local track. LocalVideoTrack.stop throws if a simulcast MediaStreamTrack is null. */
+function safeStop(track: LocalVideoTrack | LocalAudioTrack | null | undefined) {
+  if (!track) return;
+  if (track instanceof LocalVideoTrack) {
+    track.simulcastCodecs.forEach((info) => {
+      try {
+        const raw = info?.mediaStreamTrack;
+        if (raw && raw.readyState !== 'ended') raw.stop();
+      } catch {
+        /* already stopped */
+      }
+    });
+  }
+  try {
+    const raw = track.mediaStreamTrack;
+    if (raw && raw.readyState !== 'ended') raw.stop();
+  } catch {
+    /* media track already released */
+  }
+  try {
+    track.stop();
+  } catch {
+    /* simulcast mediaStreamTrack already null */
+  }
+}
+
+function simulcastMediaTracks(track: LocalVideoTrack | LocalAudioTrack): MediaStreamTrack[] {
+  if (!(track instanceof LocalVideoTrack)) return [];
+  const tracks: MediaStreamTrack[] = [];
+  track.simulcastCodecs.forEach((info) => {
+    if (info?.mediaStreamTrack) tracks.push(info.mediaStreamTrack);
+  });
+  return tracks;
+}
+
+/**
+ * Negotiate the unpublish before the media track ends. The default path stops
+ * the track first, which throws once a simulcast MediaStreamTrack is null and
+ * ends the remote subscription before publication metadata arrives.
+ */
+async function unpublishThenStop(
+  localParticipant: {
+    unpublishTrack: (
+      track: LocalVideoTrack | LocalAudioTrack,
+      stopOnUnpublish?: boolean
+    ) => Promise<unknown>;
+  },
+  track: LocalVideoTrack | LocalAudioTrack
+) {
+  const simulcast = simulcastMediaTracks(track);
+  try {
+    await localParticipant.unpublishTrack(track, false);
+  } catch {
+    /* already unpublished */
+  }
+  for (const raw of simulcast) {
+    try {
+      if (raw.readyState !== 'ended') raw.stop();
+    } catch {
+      /* already stopped */
+    }
+  }
+  safeStop(track);
+}
+
 function SelectivePublisher({
   canPublishVideo,
   mutedByTeacher,
@@ -1189,6 +1277,7 @@ function SelectivePublisher({
   const { localParticipant } = useLocalParticipant();
   const room = useRoomContext();
   const camTrackRef = useRef<LocalVideoTrack | null>(null);
+  const camStopExtraRef = useRef<(() => void) | null>(null);
   const micTrackRef = useRef<LocalAudioTrack | null>(null);
   const publishingVideo = useRef(false);
 
@@ -1250,16 +1339,19 @@ function SelectivePublisher({
       const shouldPublish = camDesired && canPublishVideo;
 
       if (!shouldPublish) {
-        if (camTrackRef.current) {
-          try {
-            await localParticipant.unpublishTrack(camTrackRef.current);
-          } catch {
-            /* already unpublished */
-          }
-          camTrackRef.current.stop();
-          camTrackRef.current = null;
-        }
+        const track = camTrackRef.current;
+        const extra = camStopExtraRef.current;
+        camTrackRef.current = null;
+        camStopExtraRef.current = null;
         publishingVideo.current = false;
+        if (track) {
+          await unpublishThenStop(localParticipant, track);
+          try {
+            extra?.();
+          } catch {
+            /* canvas preview already stopped */
+          }
+        }
         return;
       }
 
@@ -1272,13 +1364,15 @@ function SelectivePublisher({
       // Stale publish flag after a failed/replaced track — allow retry
       if (publishingVideo.current && !existingCam?.track) {
         publishingVideo.current = false;
+        const stale = camTrackRef.current;
         camTrackRef.current = null;
+        safeStop(stale);
       }
 
       let stopExtra: (() => void) | null = null;
+      let track: LocalVideoTrack | null = null;
       try {
         publishingVideo.current = true;
-        let track: LocalVideoTrack;
         try {
           track = await createLocalVideoTrack({
             resolution: { width: 640, height: 360 },
@@ -1290,17 +1384,43 @@ function SelectivePublisher({
           track = fallback.track;
           stopExtra = fallback.stopExtra;
         }
+        if (!track) {
+          publishingVideo.current = false;
+          return;
+        }
         if (cancelled || !(camDesired && canPublishVideo)) {
-          track.stop();
-          stopExtra?.();
+          safeStop(track);
+          try {
+            stopExtra?.();
+          } catch {
+            /* canvas preview already stopped */
+          }
           publishingVideo.current = false;
           return;
         }
         await localParticipant.publishTrack(track, { source: Track.Source.Camera });
+        if (cancelled || !(camDesired && canPublishVideo)) {
+          await unpublishThenStop(localParticipant, track);
+          try {
+            stopExtra?.();
+          } catch {
+            /* canvas preview already stopped */
+          }
+          publishingVideo.current = false;
+          return;
+        }
         camTrackRef.current = track;
+        camStopExtraRef.current = stopExtra;
       } catch (e) {
         publishingVideo.current = false;
-        stopExtra?.();
+        if (track && camTrackRef.current !== track) {
+          await unpublishThenStop(localParticipant, track);
+        }
+        try {
+          stopExtra?.();
+        } catch {
+          /* canvas preview already stopped */
+        }
         console.warn('publish video', e);
       }
     }
@@ -1318,19 +1438,16 @@ function SelectivePublisher({
       // Teacher mute is authoritative — never publish audio while mutedByTeacher
       const want = micDesired && !mutedByTeacher;
       if (!want) {
-        if (micTrackRef.current) {
-          try {
-            await localParticipant.unpublishTrack(micTrackRef.current);
-          } catch {
-            /* already unpublished */
-          }
-          micTrackRef.current.stop();
-          micTrackRef.current = null;
+        const track = micTrackRef.current;
+        micTrackRef.current = null;
+        if (track) {
+          await unpublishThenStop(localParticipant, track);
         }
+        if (cancelled) return;
         try {
           await localParticipant.setMicrophoneEnabled(false);
         } catch {
-          /* ignore */
+          /* publication already removed */
         }
         return;
       }
@@ -1338,17 +1455,17 @@ function SelectivePublisher({
         if (!micTrackRef.current) {
           const track = await createLocalAudioTrack();
           if (cancelled || mutedByTeacher) {
-            track.stop();
+            safeStop(track);
             return;
           }
-          await localParticipant.publishTrack(track);
+          try {
+            await localParticipant.publishTrack(track);
+          } catch (e) {
+            safeStop(track);
+            throw e;
+          }
           if (cancelled || mutedByTeacher) {
-            try {
-              await localParticipant.unpublishTrack(track);
-            } catch {
-              /* ignore */
-            }
-            track.stop();
+            await unpublishThenStop(localParticipant, track);
             return;
           }
           micTrackRef.current = track;
@@ -1399,6 +1516,7 @@ function RoomInner({
   const [chatUnread, setChatUnread] = useState(0);
   const [localCamStream, setLocalCamStream] = useState<MediaStream | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
+  const [hudChatOpen, setHudChatOpen] = useState(false);
   const [rosterOpen, setRosterOpen] = useState(false);
   const [leftForFullscreen, setLeftForFullscreen] = useState(false);
   const [hudOpen, setHudOpen] = useState(false);
@@ -1409,6 +1527,20 @@ function RoomInner({
   /** True while we intentionally change presentation stage (avoids teardown races). */
   const stageSwitchRef = useRef(false);
   const { state, refresh } = useRoomState(code, 2000);
+  const chatStopped = state?.status === 'ENDED' || !!state?.ended;
+  const chatActive = (isTeacher ? chatOpen && !screenOn : chatOpen) || hudChatOpen;
+  const myParticipantId = state?.me?.id ?? null;
+  const chatStudents = (state?.admitted ?? [])
+    .filter((a) => a.role === 'STUDENT')
+    .map((a) => ({ id: a.id, displayName: a.displayName }));
+  const chatThread = useChatThread({
+    code,
+    isTeacher,
+    myParticipantId,
+    onUnreadChange: setChatUnread,
+    active: chatActive,
+    stopped: chatStopped,
+  });
 
   const rawStage = state?.stageMode ?? 'idle';
   // Whiteboard product surface removed — treat legacy redis value as idle.
@@ -1853,16 +1985,11 @@ function RoomInner({
             ) : null
           }
         >
-          <Chat
-            code={code}
+          <ChatView
+            thread={chatThread}
             isTeacher={false}
-            myParticipantId={state?.me?.id ?? null}
-            students={(state?.admitted ?? [])
-              .filter((a) => a.role === 'STUDENT')
-              .map((a) => ({ id: a.id, displayName: a.displayName }))}
-            active={chatOpen}
-            onUnreadChange={setChatUnread}
-            stopped={state?.status === 'ENDED' || !!state?.ended}
+            myParticipantId={myParticipantId}
+            students={chatStudents}
           />
         </FloatingPanel>
       </div>
@@ -2158,27 +2285,22 @@ function RoomInner({
             ) : null
           }
         >
-          <Chat
-            code={code}
-            isTeacher={true}
-            myParticipantId={state?.me?.id ?? null}
-            students={(state?.admitted ?? [])
-              .filter((a) => a.role === 'STUDENT')
-              .map((a) => ({ id: a.id, displayName: a.displayName }))}
-            active={chatOpen}
-            onUnreadChange={setChatUnread}
-            stopped={state?.status === 'ENDED' || !!state?.ended}
+          <ChatView
+            thread={chatThread}
+            isTeacher
+            myParticipantId={myParticipantId}
+            students={chatStudents}
           />
         </FloatingPanel>
       </div>
 
-      {(stageMode === 'screen' || effectiveStage === 'screen') && (
-        <TeacherPeersFloat
-          roomCode={code}
-          teacherIdentities={teacherIdentities}
-          visibleIdentities={visibles}
-        />
-      )}
+      <TeacherPeersFloat
+        roomCode={code}
+        teacherIdentities={teacherIdentities}
+        visibleIdentities={visibles}
+        selfName={displayName}
+        selfStream={localCamStream}
+      />
 
       {/* Bottom dock — never covers content */}
       <footer className="shrink-0 border-t border-white/[0.06] bg-surface-1/90 px-3 py-2.5 backdrop-blur-xl sm:px-4">
@@ -2188,17 +2310,7 @@ function RoomInner({
           onRotateSample={rotateSample}
           onMuteAll={() => muteAllStudents(true)}
           onUnmuteAll={() => muteAllStudents(false)}
-          onToggleChat={
-            screenOn
-              ? undefined
-              : () => {
-                  setChatOpen((v) => {
-                    const next = !v;
-                    if (next) setChatUnread(0);
-                    return next;
-                  });
-                }
-          }
+          onToggleChat={screenOn ? undefined : () => setChatOpen((v) => !v)}
           chatOpen={chatOpen}
           chatUnread={chatUnread}
           onToggleRoster={screenOn ? undefined : () => setRosterOpen((v) => !v)}
@@ -2210,7 +2322,6 @@ function RoomInner({
       {/* Compact teacher-only share bar (never shown to students). */}
       {isTeacher && hudOpen && (
         <TeacherShareHud
-          code={code}
           admitted={state?.admitted ?? []}
           waitingCount={waitingCount}
           teacherMicOn={micOn && !effectiveMuted}
@@ -2219,10 +2330,16 @@ function RoomInner({
           onMuteStudent={(id, muted) => void muteStudent(id, muted)}
           onMuteAll={(muted) => void muteAllStudents(muted)}
           onLowerHand={(id) => void lowerHand(id)}
-          teacherParticipantId={state?.me?.id ?? null}
           chatUnread={chatUnread}
-          onChatUnread={setChatUnread}
-          classEnded={state?.status === 'ENDED' || !!state?.ended}
+          onChatOpenChange={setHudChatOpen}
+          chat={
+            <ChatView
+              thread={chatThread}
+              isTeacher
+              myParticipantId={myParticipantId}
+              students={chatStudents}
+            />
+          }
           annotate={annotate}
           annotateOn={annotateOn}
           onAnnotateOnChange={setAnnotateOn}

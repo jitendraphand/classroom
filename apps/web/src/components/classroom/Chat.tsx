@@ -25,15 +25,23 @@ export type ChatMessage = {
 
 type StudentOpt = { id: string; displayName: string };
 
-type Props = {
+type ThreadProps = {
   code: string;
   isTeacher: boolean;
   myParticipantId: string | null;
-  students: StudentOpt[];
   onUnreadChange?: (n: number) => void;
+  /** True while a chat surface (dock panel or share HUD) is open. */
   active?: boolean;
   /** When true, stop polling (class ended) */
   stopped?: boolean;
+};
+
+export type ChatThread = {
+  messages: ChatMessage[];
+  ended: boolean;
+  sending: boolean;
+  error: string;
+  send: (text: string, destination: string) => Promise<boolean>;
 };
 
 const CHAT_TOPIC = 'chat';
@@ -73,37 +81,29 @@ function scopeBadge(scope: string) {
   );
 }
 
-export function Chat({
+/**
+ * One chat subscription for the whole class. Call this from RoomInner so the
+ * unread count keeps running after the floating panel unmounts its children.
+ */
+export function useChatThread({
   code,
   isTeacher,
   myParticipantId,
-  students,
   onUnreadChange,
   active = true,
   stopped = false,
-}: Props) {
+}: ThreadProps): ChatThread {
   const room = useRoomContext();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [text, setText] = useState('');
-  const [to, setTo] = useState<'all' | string>('all');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   const [ended, setEnded] = useState(false);
-  const listRef = useRef<HTMLDivElement>(null);
+  const [hydrated, setHydrated] = useState(false);
   const lastSeenId = useRef<string | null>(null);
   const baselineDone = useRef(false);
-  const activeRef = useRef(active);
-  const identityRef = useRef('anon');
-
-  useEffect(() => {
-    activeRef.current = active;
-  }, [active]);
-
-  useEffect(() => {
-    if (room?.localParticipant?.identity) {
-      identityRef.current = room.localParticipant.identity;
-    }
-  }, [room?.localParticipant?.identity]);
+  const sendingRef = useRef(false);
+  /** Messages created before this client joined are history, not unread. */
+  const joinedAt = useRef(Date.now());
 
   const mergeMessages = useCallback((incoming: ChatMessage[]) => {
     setMessages((prev) => {
@@ -124,16 +124,19 @@ export function Chat({
       if (!res.ok) {
         if (res.status === 410 || res.status === 401 || data.ended) {
           setEnded(true);
+          setHydrated(true);
           return;
         }
         return;
       }
       if (data.ended) {
         setEnded(true);
+        setHydrated(true);
         return;
       }
       if (Array.isArray(data.messages)) {
         mergeMessages(data.messages);
+        setHydrated(true);
       }
     } catch {
       /* ignore poll errors */
@@ -150,27 +153,25 @@ export function Chat({
     return () => clearInterval(t);
   }, [fetchMessages, stopped]);
 
-  useEffect(() => {
-    const el = listRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [messages.length]);
-
-  // Unread badge: baseline current history once, then count only new while Roster is active
+  // Baseline only after the first fetch. History from before this client
+  // joined stays read; anything newer counts while every chat surface is closed.
   useEffect(() => {
     if (!onUnreadChange) return;
+    if (!hydrated) return;
     if (active) {
-      const last = messages[messages.length - 1];
-      lastSeenId.current = last?.id ?? null;
+      lastSeenId.current = messages[messages.length - 1]?.id ?? null;
       baselineDone.current = true;
       onUnreadChange(0);
       return;
     }
     if (!baselineDone.current) {
-      lastSeenId.current = messages[messages.length - 1]?.id ?? null;
+      let lastPrior: string | null = null;
+      for (const m of messages) {
+        const t = new Date(m.createdAt).getTime();
+        if (Number.isFinite(t) && t <= joinedAt.current) lastPrior = m.id;
+      }
+      lastSeenId.current = lastPrior;
       baselineDone.current = true;
-      onUnreadChange(0);
-      return;
     }
     if (!lastSeenId.current) {
       onUnreadChange(messages.length);
@@ -179,7 +180,7 @@ export function Chat({
     const idx = messages.findIndex((m) => m.id === lastSeenId.current);
     const unread = idx < 0 ? messages.length : messages.length - idx - 1;
     onUnreadChange(Math.max(0, unread));
-  }, [messages, active, onUnreadChange]);
+  }, [messages, active, hydrated, onUnreadChange]);
 
   const publishChat = useCallback(
     async (message: ChatMessage) => {
@@ -233,49 +234,82 @@ export function Chat({
     };
   }, [room, isTeacher, myParticipantId, mergeMessages]);
 
+  const send = useCallback(
+    async (raw: string, destination: string) => {
+      const trimmed = raw.trim();
+      if (!trimmed || sendingRef.current || ended) return false;
+      sendingRef.current = true;
+      setSending(true);
+      setError('');
+      try {
+        const res = await roomFetch(code, '/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: trimmed, to: destination }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          if (res.status === 410) {
+            setEnded(true);
+            setError('Class has ended');
+            return false;
+          }
+          setError(data.error || 'Send failed');
+          return false;
+        }
+        if (data.message) {
+          mergeMessages([data.message]);
+          void publishChat(data.message);
+        }
+        return true;
+      } catch {
+        setError('Network error');
+        return false;
+      } finally {
+        sendingRef.current = false;
+        setSending(false);
+      }
+    },
+    [code, ended, mergeMessages, publishChat]
+  );
+
+  return { messages, ended, sending, error, send };
+}
+
+export function ChatView({
+  thread,
+  isTeacher,
+  myParticipantId,
+  students,
+}: {
+  thread: ChatThread;
+  isTeacher: boolean;
+  myParticipantId: string | null;
+  students: StudentOpt[];
+}) {
+  const { messages, ended, sending, error, send } = thread;
+  const [text, setText] = useState('');
+  const [to, setTo] = useState<'all' | string>('all');
+  const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [messages.length]);
+
   const studentOptions = useMemo(
     () => students.filter((s) => s.id !== myParticipantId),
     [students, myParticipantId]
   );
 
-  async function send(e?: FormEvent) {
+  async function onSubmit(e?: FormEvent) {
     e?.preventDefault();
     const trimmed = text.trim();
     if (!trimmed || sending || ended) return;
-    setSending(true);
-    setError('');
-    try {
-      const payload: { text: string; to?: string } = { text: trimmed };
-      if (isTeacher) {
-        payload.to = to === 'all' ? 'all' : to;
-      } else {
-        payload.to = 'teacher';
-      }
-      const res = await roomFetch(code, '/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        if (res.status === 410) {
-          setEnded(true);
-          setError('Class has ended');
-          return;
-        }
-        setError(data.error || 'Send failed');
-        return;
-      }
-      if (data.message) {
-        mergeMessages([data.message]);
-        void publishChat(data.message);
-      }
-      setText('');
-    } catch {
-      setError('Network error');
-    } finally {
-      setSending(false);
-    }
+    const destination = isTeacher ? (to === 'all' ? 'all' : to) : 'teacher';
+    const ok = await send(trimmed, destination);
+    if (ok) setText('');
   }
 
   return (
@@ -321,7 +355,7 @@ export function Chat({
         })}
       </div>
 
-      <form onSubmit={send} className="mt-3 shrink-0 space-y-2 border-t border-white/5 pt-3">
+      <form onSubmit={onSubmit} className="mt-3 shrink-0 space-y-2 border-t border-white/5 pt-3">
         {ended ? (
           <p className="text-2xs text-slate-400">Class ended — chat closed.</p>
         ) : isTeacher ? (
@@ -374,5 +408,20 @@ export function Chat({
         )}
       </form>
     </div>
+  );
+}
+
+type Props = ThreadProps & { students: StudentOpt[] };
+
+/** Standalone chat. Prefer useChatThread + ChatView when the panel can unmount. */
+export function Chat({ students, ...threadProps }: Props) {
+  const thread = useChatThread(threadProps);
+  return (
+    <ChatView
+      thread={thread}
+      isTeacher={threadProps.isTeacher}
+      myParticipantId={threadProps.myParticipantId}
+      students={students}
+    />
   );
 }
