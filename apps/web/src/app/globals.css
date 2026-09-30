@@ -348,29 +348,6 @@ body {
   .float-panel-body {
     @apply flex min-h-0 flex-1 flex-col overflow-hidden p-2.5;
   }
-
-
-  /* View-only whiteboard: hide editing chrome, but keep pan/zoom controls. */
-  .tldraw-readonly .tlui-layout .tlui-toolbar,
-  .tldraw-readonly .tlui-toolbar,
-  .tldraw-readonly .tlui-style-panel,
-  .tldraw-readonly .tlui-help-menu,
-  .tldraw-readonly .tlui-menu-zone,
-  .tldraw-readonly .tlui-main-toolbar,
-  .tldraw-readonly .tlui-style-panel__wrapper {
-    display: none !important;
-    pointer-events: none !important;
-  }
-  .tldraw-readonly .tlui-layout,
-  .tldraw-readonly [class^='tlui-'],
-  .tldraw-readonly [class*=' tlui-'] {
-    pointer-events: none !important;
-  }
-  .tldraw-readonly .tlui-navigation-panel,
-  .tldraw-readonly .tlui-navigation-panel * {
-    pointer-events: all !important;
-  }
-
 }
 
 /* Local camera mirror */
@@ -378,8 +355,8 @@ body {
   transform: scaleX(-1);
 }
 
-/* Full middle stage (whiteboard / screen) — edge-to-edge, no padded card.
-   Unlayered so these beat Tailwind @layer utilities and tldraw chrome. */
+/* Full middle stage (screen share) — edge-to-edge, no padded card.
+   Unlayered so these beat Tailwind @layer utilities. */
 .stage-fill-middle {
   position: absolute !important;
   inset: 0 !important;
@@ -407,70 +384,6 @@ body {
   max-width: none !important;
   margin: 0 !important;
   border-radius: 0 !important;
-}
-
-.tldraw-wrap {
-  position: relative !important;
-  display: flex !important;
-  flex-direction: column !important;
-  width: 100% !important;
-  height: 100% !important;
-  min-height: 0 !important;
-  min-width: 0 !important;
-  max-width: none !important;
-  max-height: none !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  overflow: hidden !important;
-  border: none !important;
-  border-radius: 0 !important;
-  /* Match tldraw light canvas — never show dark "padding" halo */
-  background: #f9fafb !important;
-}
-
-.tldraw-wrap .tl-container,
-.tldraw-wrap .tldraw-fill,
-.tldraw-wrap .tl-canvas,
-.tldraw-wrap .tl-background,
-.tldraw-wrap .tl-background__wrapper,
-.tldraw-wrap .tlui-layout {
-  width: 100% !important;
-  height: 100% !important;
-  max-width: none !important;
-  max-height: none !important;
-  border-radius: 0 !important;
-}
-
-/* Style panel CLOSED by default — only show when .tldraw-styles-open is set */
-.tldraw-wrap:not(.tldraw-styles-open) .tlui-style-panel,
-.tldraw-wrap:not(.tldraw-styles-open) .tlui-style-panel__wrapper,
-.tldraw-wrap[data-styles-open='0'] .tlui-style-panel,
-.tldraw-wrap[data-styles-open='0'] .tlui-style-panel__wrapper,
-.tldraw-wrap:not(.tldraw-styles-open) .tlui-layout__top__right .tlui-style-panel,
-.tldraw-wrap:not(.tldraw-styles-open) .tlui-layout__top__right .tlui-style-panel__wrapper {
-  display: none !important;
-  visibility: hidden !important;
-  pointer-events: none !important;
-  width: 0 !important;
-  height: 0 !important;
-  overflow: hidden !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  opacity: 0 !important;
-}
-
-/* Zoom / minimap sits top-right so pan-zoom stays usable beside the Students float.
-   position:fixed is contained by tldraw's transformed layout, i.e. the board itself. */
-.tldraw-wrap .tlui-navigation-panel {
-  position: fixed !important;
-  left: auto !important;
-  right: 8px !important;
-  top: 8px !important;
-  bottom: auto !important;
-  z-index: 400 !important;
-}
-.tldraw-wrap.tldraw-styles-open .tlui-navigation-panel {
-  right: 164px !important;
 }
 
 /* Meet-like stage */

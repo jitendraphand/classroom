@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
+import { isLiveSession, onLiveSessionChange, onReportedActivity } from '@/lib/liveSession';
 
 /** 15 minutes of no pointer/keyboard/touch activity → sign out. */
 const IDLE_MS = 15 * 60 * 1000;
@@ -23,6 +24,12 @@ const ACTIVITY_EVENTS: Array<keyof WindowEventMap> = [
 /**
  * Keeps JWT/cookie sessions across reloads; only logs out after IDLE_MS with
  * no user activity. Applies to both teacher and student authenticated sessions.
+ *
+ * Suspended while connected to a live classroom (see lib/liveSession): a
+ * teacher presenting from another app or from the share pop-out, and a student
+ * who is only watching, must not be signed out mid-class. Activity reported by
+ * the pop-out / PiP window also counts. The 15-minute timer applies everywhere
+ * else (dashboard, lobby, login pages) and restarts when the class ends.
  */
 export function useIdleLogout() {
   const router = useRouter();
@@ -58,6 +65,7 @@ export function useIdleLogout() {
     function armTimer() {
       clearTimer();
       if (!authedRef.current || signingOutRef.current) return;
+      if (isLiveSession()) return;
       timerRef.current = setTimeout(() => {
         void signOutIdle();
       }, IDLE_MS);
@@ -65,6 +73,7 @@ export function useIdleLogout() {
 
     async function signOutIdle() {
       if (signingOutRef.current || !authedRef.current) return;
+      if (isLiveSession()) return;
       signingOutRef.current = true;
       try {
         await fetch('/api/auth/logout', { method: 'POST' });
@@ -98,9 +107,13 @@ export function useIdleLogout() {
     for (const ev of ACTIVITY_EVENTS) {
       window.addEventListener(ev, onActivity, { passive: true, capture: true });
     }
-    document.addEventListener('visibilitychange', () => {
+    const onVisibility = () => {
       if (document.visibilityState === 'visible') onActivity();
-    });
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    const offActivity = onReportedActivity(onActivity);
+    // Joining a live room suspends the timer; leaving it starts a fresh one.
+    const offLive = onLiveSessionChange(() => armTimer());
 
     return () => {
       cancelled = true;
@@ -109,6 +122,9 @@ export function useIdleLogout() {
       for (const ev of ACTIVITY_EVENTS) {
         window.removeEventListener(ev, onActivity, true);
       }
+      document.removeEventListener('visibilitychange', onVisibility);
+      offActivity();
+      offLive();
     };
   }, [router, pathname]);
 }

@@ -71,6 +71,11 @@ type PictureInPictureApi = {
 };
 
 export type ShareControlSurface = {
+  /**
+   * `pip`: Document Picture-in-Picture (Chromium). `popup`: a normal window,
+   * which IS captured when the teacher shares the entire screen.
+   */
+  kind: 'pip' | 'popup';
   window: Window;
   mount: HTMLElement;
   close: () => void;
@@ -115,7 +120,11 @@ export function preopenShareControls() {
   }, 2500);
 }
 
-function styleControlDocument(win: Window, mount: HTMLElement): ShareControlSurface {
+function styleControlDocument(
+  win: Window,
+  mount: HTMLElement,
+  kind: ShareControlSurface['kind']
+): ShareControlSurface {
   const doc = win.document;
   doc.title = 'Share controls';
   const root = doc.documentElement;
@@ -130,6 +139,7 @@ function styleControlDocument(win: Window, mount: HTMLElement): ShareControlSurf
   body.style.background = '#0d1219';
   body.style.overflow = 'hidden';
   return {
+    kind,
     window: win,
     mount,
     close: () => {
@@ -202,7 +212,7 @@ function openPopupSurface(): Promise<ShareControlSurface | null> {
     if (!ready || ready.closed) return null;
     try {
       copyParentStyles(ready);
-      return styleControlDocument(ready, mountIn(ready));
+      return styleControlDocument(ready, mountIn(ready), 'popup');
     } catch {
       return null;
     }
@@ -227,7 +237,7 @@ export function beginShareControls(): Promise<ShareControlSurface | null> {
     return request
       .then((win) => {
         copyParentStyles(win);
-        return styleControlDocument(win, mountIn(win));
+        return styleControlDocument(win, mountIn(win), 'pip');
       })
       .catch(() => openPopupSurface());
   }

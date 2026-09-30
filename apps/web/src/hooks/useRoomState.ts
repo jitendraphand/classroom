@@ -37,10 +37,7 @@ export type RoomState = {
   visibleIdentities: string[];
   visibleCount: number;
   raisedHands?: string[];
-  stageMode?: 'idle' | 'screen' | 'whiteboard';
-  whiteboardCanWrite?: boolean;
-  /** Raw Redis flag: students may draw when true. */
-  whiteboardWriteAllowed?: boolean;
+  stageMode?: 'idle' | 'screen';
 };
 
 export function useRoomState(code: string, intervalMs = 2000) {

@@ -17,8 +17,7 @@ import { roomFetch } from '@/lib/classroomClient';
  *
  * The teacher draws on a transparent surface that is composited over the screen
  * share every participant is already receiving, so students see strokes without
- * any change to the stage. This is deliberately separate from the tldraw
- * Annotations stay on the screen stage (independent of any other mode).
+ * any change to the stage. Annotations exist only while the screen stage is on.
  *
  * Sync model
  * - Strokes stream over the LiveKit data channel (topic `annotate`) for latency,
@@ -75,6 +74,23 @@ const TOOL_WIDTH: Record<AnnotateTool, number> = { pen: 3, highlighter: 18 };
 
 /** SVG user-space is 0..100 on both axes; the element is sized to the video. */
 const VB = 100;
+
+/**
+ * True when a data packet came from a teacher. LiveKit sets `participant` from
+ * the sender's token (identity and metadata are chosen by our server, not the
+ * browser): teacher identities are `teacher_…` and carry role TEACHER.
+ */
+export function isTeacherSender(participant?: { identity?: string; metadata?: string }): boolean {
+  const identity = participant?.identity;
+  if (!identity || !identity.startsWith('teacher_')) return false;
+  if (!participant?.metadata) return true;
+  try {
+    const meta = JSON.parse(participant.metadata) as { role?: string };
+    return meta.role === undefined || meta.role === 'TEACHER';
+  } catch {
+    return true;
+  }
+}
 
 function clamp01(n: number) {
   return n < 0 ? 0 : n > 1 ? 1 : n;
@@ -233,16 +249,19 @@ export function useScreenAnnotate(opts: {
     if (!active || !room) return;
     const onData = (
       payload: Uint8Array,
-      _participant?: { identity?: string },
+      participant?: { identity?: string; metadata?: string },
       _kind?: unknown,
       topic?: string
     ) => {
-      if (topic && topic !== ANNOTATE_TOPIC) return;
+      if (topic !== ANNOTATE_TOPIC) return;
       if (!decoder) return;
+      // Trust the sender identity LiveKit authenticated (from the server-minted
+      // token), never the self-declared `from` field. Only a teacher may draw,
+      // erase, clear or replace the layer.
+      if (!isTeacherSender(participant)) return;
       try {
         const msg = JSON.parse(decoder.decode(payload)) as AnnotateMsg;
         if (!msg || msg.v !== 1) return;
-        if (msg.from && msg.from === identityRef.current) return;
 
         if (msg.type === 'begin') {
           const next = strokesRef.current;
@@ -486,7 +505,7 @@ export function useScreenAnnotate(opts: {
 
 type Props = {
   /** Element whose box the video is letterboxed inside. */
-  frameRef: RefObject<HTMLElement>;
+  frameRef: RefObject<HTMLElement | null>;
   /** The <video> element, used for its intrinsic aspect. */
   videoRef?: RefObject<HTMLVideoElement | null>;
   strokes: AnnotateStroke[];

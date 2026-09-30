@@ -12,7 +12,6 @@ import '@livekit/components-styles';
 import {
   Track,
   LocalVideoTrack,
-  createLocalVideoTrack,
   createLocalAudioTrack,
   LocalAudioTrack,
   RoomEvent,
@@ -20,6 +19,7 @@ import {
   AudioPresets,
   type LocalTrackPublication,
   type Participant,
+  type ParticipantTrackPermission,
   type TrackPublication,
 } from 'livekit-client';
 import {
@@ -54,6 +54,7 @@ import { PageLoading } from '@/components/ui/Skeleton';
 import { IconHand, IconScreen, IconUsers, IconVideo } from '@/components/ui/Icons';
 import { cn } from '@/lib/cn';
 import { roomFetch, rememberClassroomRole, getClassroomRole, claimTeacherTab } from '@/lib/classroomClient';
+import { forwardActivityFrom, setLiveSession } from '@/lib/liveSession';
 
 type TokenPayload = {
   token: string;
@@ -112,11 +113,10 @@ function ParticipantGrid({
 
   const screenShares = tracks.filter((t) => {
     if (t.source !== Track.Source.ScreenShare) return false;
-    // Students only see the teacher's screen; teachers see all shares
-    if (!isTeacher && !t.participant.isLocal) {
-      return isTeacherParticipant(t.participant, teacherSet);
-    }
-    return true;
+    // Only the teacher shares a screen (students have no screen-share grant);
+    // never render a share from anyone else.
+    if (t.participant.isLocal) return isTeacher;
+    return isTeacherParticipant(t.participant, teacherSet);
   });
 
   const cameras = tracks.filter((t) => {
@@ -1347,50 +1347,6 @@ function useHasTeacherScreen(teacherIdentities: string[]) {
 }
 
 
-function createCanvasCameraTrack(): { track: LocalVideoTrack; stopExtra: () => void } {
-  const canvas = document.createElement('canvas');
-  canvas.width = 640;
-  canvas.height = 360;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('canvas unsupported');
-  let frame = 0;
-  const draw = () => {
-    frame += 1;
-    const g = ctx.createLinearGradient(0, 0, 640, 360);
-    g.addColorStop(0, '#1e3a5f');
-    g.addColorStop(1, '#0f172a');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, 640, 360);
-    ctx.fillStyle = '#38bdf8';
-    ctx.beginPath();
-    ctx.arc(320 + Math.sin(frame / 18) * 90, 170, 52, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#f8fafc';
-    ctx.font = 'bold 26px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('Teacher', 320, 270);
-    ctx.font = '14px system-ui, sans-serif';
-    ctx.fillStyle = '#94a3b8';
-    ctx.fillText('Demo camera (no webcam)', 320, 298);
-  };
-  draw();
-  const timer = window.setInterval(draw, 66);
-  const stream = canvas.captureStream(15);
-  const mediaTrack = stream.getVideoTracks()[0];
-  if (!mediaTrack) {
-    clearInterval(timer);
-    throw new Error('no canvas video track');
-  }
-  const track = new LocalVideoTrack(mediaTrack);
-  return {
-    track,
-    stopExtra: () => {
-      clearInterval(timer);
-      stream.getTracks().forEach((t) => t.stop());
-    },
-  };
-}
-
 /** Release a local track. LocalVideoTrack.stop throws if a simulcast MediaStreamTrack is null. */
 function safeStop(track: LocalVideoTrack | LocalAudioTrack | null | undefined) {
   if (!track) return;
@@ -1476,6 +1432,35 @@ function screenCaptureLive(pub?: LocalTrackPublication | null): boolean {
   return !!media && media.readyState !== 'ended';
 }
 
+/** Human-readable camera failure. Shown instead of publishing a fake camera. */
+function cameraErrorMessage(err: unknown): string {
+  const name =
+    err && typeof err === 'object' && 'name' in err ? String((err as { name: unknown }).name) : '';
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    return 'Camera access was blocked. Allow the camera for this site in your browser settings, then turn the camera on again.';
+  }
+  if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+    return 'No camera was found on this device.';
+  }
+  if (name === 'NotReadableError' || name === 'AbortError') {
+    return 'The camera is in use by another app or could not be started. Close other apps using it, then turn the camera on again.';
+  }
+  if (typeof navigator !== 'undefined' && !navigator.mediaDevices?.getUserMedia) {
+    return 'This browser cannot open a camera here. Use an https address and a current browser.';
+  }
+  return 'Could not start the camera.';
+}
+
+/**
+ * Local camera + mic publishing.
+ *
+ * The camera is opened ONCE (getUserMedia) for the self-preview. When this
+ * client is allowed to publish video, a clone of that same MediaStreamTrack is
+ * published: cloning does not open the device a second time, so mobile
+ * browsers and drivers that only allow one capture keep working, and stopping
+ * the published clone never freezes the preview. If the camera cannot be
+ * opened, nothing is published and `onCameraError` explains why.
+ */
 function SelectivePublisher({
   canPublishVideo,
   mutedByTeacher,
@@ -1483,6 +1468,7 @@ function SelectivePublisher({
   micDesired,
   localCamStream,
   setLocalCamStream,
+  onCameraError,
 }: {
   canPublishVideo: boolean;
   mutedByTeacher: boolean;
@@ -1490,13 +1476,14 @@ function SelectivePublisher({
   micDesired: boolean;
   localCamStream: MediaStream | null;
   setLocalCamStream: (s: MediaStream | null) => void;
+  onCameraError: (message: string | null) => void;
 }) {
   const { localParticipant } = useLocalParticipant();
   const room = useRoomContext();
   const camTrackRef = useRef<LocalVideoTrack | null>(null);
-  const camStopExtraRef = useRef<(() => void) | null>(null);
+  /** The preview MediaStreamTrack the published clone was made from. */
+  const camSourceRef = useRef<MediaStreamTrack | null>(null);
   const micTrackRef = useRef<LocalAudioTrack | null>(null);
-  const publishingVideo = useRef(false);
   const videoGen = useRef(0);
 
   useEffect(() => {
@@ -1510,38 +1497,27 @@ function SelectivePublisher({
         return;
       }
       try {
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: { width: 640, height: 360, frameRate: 15 },
-            audio: false,
-          });
-        } catch (deviceErr) {
-          console.warn('local webcam unavailable, demo canvas preview', deviceErr);
-          const canvas = document.createElement('canvas');
-          canvas.width = 640;
-          canvas.height = 360;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.fillStyle = '#0f172a';
-            ctx.fillRect(0, 0, 640, 360);
-            ctx.fillStyle = '#38bdf8';
-            ctx.font = '20px system-ui, sans-serif';
-            ctx.textAlign = 'center';
-            ctx.fillText('Demo camera', 320, 180);
-          }
-          stream = canvas.captureStream(5);
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 640, height: 360, frameRate: 15 },
+          audio: false,
+        });
+      } catch (deviceErr) {
+        console.warn('camera unavailable', deviceErr);
+        if (!cancelled) {
+          setLocalCamStream(null);
+          onCameraError(cameraErrorMessage(deviceErr));
         }
-        if (cancelled) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        setLocalCamStream(stream);
-      } catch (e) {
-        console.warn('local camera', e);
+        return;
       }
+      if (cancelled) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      onCameraError(null);
+      setLocalCamStream(stream);
     }
 
-    setupLocal();
+    void setupLocal();
     return () => {
       cancelled = true;
       stream?.getTracks().forEach((t) => t.stop());
@@ -1549,110 +1525,69 @@ function SelectivePublisher({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [camDesired]);
 
+  const previewTrack =
+    localCamStream?.getVideoTracks().find((t) => t.readyState === 'live') ?? null;
+
   useEffect(() => {
     if (!localParticipant || !room) return;
     const gen = ++videoGen.current;
-    const shouldPublish = camDesired && canPublishVideo;
+    const source = camDesired && canPublishVideo ? previewTrack : null;
     const participant = localParticipant;
 
     void enqueueLocalPublish(async () => {
-        if (gen !== videoGen.current) return;
+      if (gen !== videoGen.current) return;
 
-        if (!shouldPublish) {
-          const track = camTrackRef.current;
-          const extra = camStopExtraRef.current;
-          camTrackRef.current = null;
-          camStopExtraRef.current = null;
-          publishingVideo.current = false;
-          if (track) {
-            await unpublishThenStop(participant, track);
-            try {
-              extra?.();
-            } catch {
-              /* canvas preview already stopped */
-            }
-          }
-          return;
-        }
+      const current = camTrackRef.current;
+      const published = participant.getTrackPublication(Track.Source.Camera);
+      if (
+        source &&
+        current &&
+        camSourceRef.current === source &&
+        published?.track === current
+      ) {
+        return; // Already publishing a clone of this preview.
+      }
 
-        const existingCam = participant.getTrackPublication(Track.Source.Camera);
-        if (existingCam?.track && camTrackRef.current) {
-          publishingVideo.current = true;
-          return;
-        }
-        if (publishingVideo.current && !existingCam?.track) {
-          publishingVideo.current = false;
-          const stale = camTrackRef.current;
-          camTrackRef.current = null;
-          safeStop(stale);
-        }
+      // Anything else: drop the old clone first (the preview keeps running).
+      if (current) {
+        camTrackRef.current = null;
+        camSourceRef.current = null;
+        await unpublishThenStop(participant, current);
+      }
+      if (!source || source.readyState !== 'live') return;
+      if (gen !== videoGen.current) return;
 
-        let stopExtra: (() => void) | null = null;
-        let track: LocalVideoTrack | null = null;
-        try {
-          publishingVideo.current = true;
-          try {
-            track = await createLocalVideoTrack({
-              resolution: { width: 640, height: 360 },
-              frameRate: 15,
-            });
-          } catch (deviceErr) {
-            console.warn('webcam unavailable, using demo canvas camera', deviceErr);
-            const fallback = createCanvasCameraTrack();
-            track = fallback.track;
-            stopExtra = fallback.stopExtra;
-          }
-          if (!track) {
-            publishingVideo.current = false;
-            return;
-          }
-          // A newer sample decision arrived while the camera was opening. Drop this track
-          // and let that decision publish, instead of negotiating twice at once.
-          if (gen !== videoGen.current) {
-            safeStop(track);
-            try {
-              stopExtra?.();
-            } catch {
-              /* canvas preview already stopped */
-            }
-            publishingVideo.current = false;
-            return;
-          }
-          await participant.publishTrack(track, {
-            source: Track.Source.Camera,
-            simulcast: false,
-            videoEncoding: { maxBitrate: 400_000, maxFramerate: 15 },
-          });
-          if (gen !== videoGen.current) {
-            await unpublishThenStop(participant, track);
-            try {
-              stopExtra?.();
-            } catch {
-              /* canvas preview already stopped */
-            }
-            publishingVideo.current = false;
-            return;
-          }
-          camTrackRef.current = track;
-          camStopExtraRef.current = stopExtra;
-        } catch (e) {
-          publishingVideo.current = false;
-          if (track && camTrackRef.current !== track) {
-            try {
-              await unpublishThenStop(participant, track);
-            } catch {
-              /* publication already gone */
-            }
-          }
-          try {
-            stopExtra?.();
-          } catch {
-            /* canvas preview already stopped */
-          }
-          console.warn('publish video', e);
-        }
-      });
-  }, [canPublishVideo, camDesired, localParticipant, room]);
+      const clone = source.clone();
+      const track = new LocalVideoTrack(clone, undefined, true);
+      try {
+        await participant.publishTrack(track, {
+          source: Track.Source.Camera,
+          simulcast: false,
+          videoEncoding: { maxBitrate: 400_000, maxFramerate: 15 },
+        });
+      } catch (e) {
+        console.warn('publish video', e);
+        await unpublishThenStop(participant, track);
+        return;
+      }
+      if (gen !== videoGen.current) {
+        await unpublishThenStop(participant, track);
+        return;
+      }
+      camTrackRef.current = track;
+      camSourceRef.current = source;
+    });
+  }, [canPublishVideo, camDesired, previewTrack, localParticipant, room]);
+
+  // Unmount: stop the published clone (the preview stream is stopped by its owner).
+  useEffect(() => {
+    return () => {
+      const track = camTrackRef.current;
+      camTrackRef.current = null;
+      camSourceRef.current = null;
+      safeStop(track);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1716,6 +1651,130 @@ function SelectivePublisher({
   return null;
 }
 
+function CameraErrorBanner({ message, onDismiss }: { message: string; onDismiss: () => void }) {
+  return (
+    <div
+      role="alert"
+      className="fixed left-1/2 top-3 z-[70] flex max-w-[min(92vw,34rem)] -translate-x-1/2 items-start gap-3 rounded-xl border border-danger-fg/30 bg-surface-1/95 px-4 py-3 text-sm text-slate-100 shadow-lift backdrop-blur"
+    >
+      <span className="flex-1">
+        <span className="font-semibold text-danger-fg">Camera unavailable. </span>
+        {message}
+      </span>
+      <button
+        type="button"
+        className="shrink-0 text-xs font-semibold text-slate-300 hover:underline"
+        onClick={onDismiss}
+      >
+        Dismiss
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Student-side media privacy (H-4).
+ *
+ * Subscriber side: the student connects with autoSubscribe off and subscribes
+ * only to the teacher's tracks (camera, microphone, screen) and to classmates'
+ * microphones (class audio is not limited by the sample). Other students'
+ * cameras are never subscribed.
+ *
+ * Publisher side (enforced by the SFU for this student's own tracks): only
+ * the teacher may subscribe to everything; classmates may subscribe to the
+ * microphone track only. So even a modified classmate client cannot pull this
+ * student's camera.
+ */
+function StudentMediaPrivacy({
+  teacherIdentities,
+  studentIdentities,
+}: {
+  teacherIdentities: string[];
+  studentIdentities: string[];
+}) {
+  const room = useRoomContext();
+  const teacherKey = teacherIdentities.join(',');
+  const studentKey = studentIdentities.join(',');
+  const lastPermKey = useRef('');
+
+  useEffect(() => {
+    if (!room) return;
+    const teacherSet = new Set(teacherKey ? teacherKey.split(',') : []);
+    const rosterStudents = studentKey ? studentKey.split(',') : [];
+
+    const sync = () => {
+      if (room.state !== ConnectionState.Connected) return;
+      const teachers = new Set<string>(teacherSet);
+      const classmates = new Set<string>(rosterStudents);
+
+      for (const p of Array.from(room.remoteParticipants.values())) {
+        const isTeacherP = isTeacherParticipant(p, teacherSet);
+        if (isTeacherP) teachers.add(p.identity);
+        else classmates.add(p.identity);
+        for (const pub of Array.from(p.trackPublications.values())) {
+          const want = isTeacherP || pub.source === Track.Source.Microphone;
+          if (pub.isSubscribed !== want) {
+            try {
+              pub.setSubscribed(want);
+            } catch (e) {
+              console.warn('subscription', e);
+            }
+          }
+        }
+      }
+
+      const me = room.localParticipant;
+      classmates.delete(me.identity);
+      for (const t of Array.from(teachers)) classmates.delete(t);
+      const micSid = me.getTrackPublication(Track.Source.Microphone)?.trackSid;
+      const perms: ParticipantTrackPermission[] = Array.from(teachers)
+        .sort()
+        .map((identity) => ({ participantIdentity: identity, allowAll: true }));
+      if (micSid) {
+        for (const identity of Array.from(classmates).sort()) {
+          perms.push({ participantIdentity: identity, allowAll: false, allowedTrackSids: [micSid] });
+        }
+      }
+      const key = JSON.stringify(perms);
+      if (key === lastPermKey.current) return;
+      lastPermKey.current = key;
+      try {
+        me.setTrackSubscriptionPermissions(false, perms);
+      } catch (e) {
+        lastPermKey.current = '';
+        console.warn('track subscription permissions', e);
+      }
+    };
+
+    const resync = () => {
+      lastPermKey.current = '';
+      sync();
+    };
+
+    sync();
+    room.on(RoomEvent.Connected, resync);
+    room.on(RoomEvent.Reconnected, resync);
+    room.on(RoomEvent.ParticipantConnected, sync);
+    room.on(RoomEvent.ParticipantDisconnected, sync);
+    room.on(RoomEvent.TrackPublished, sync);
+    room.on(RoomEvent.LocalTrackPublished, sync);
+    room.on(RoomEvent.LocalTrackUnpublished, sync);
+    const iv = window.setInterval(sync, 3000);
+    return () => {
+      room.off(RoomEvent.Connected, resync);
+      room.off(RoomEvent.Reconnected, resync);
+      room.off(RoomEvent.ParticipantConnected, sync);
+      room.off(RoomEvent.ParticipantDisconnected, sync);
+      room.off(RoomEvent.TrackPublished, sync);
+      room.off(RoomEvent.LocalTrackPublished, sync);
+      room.off(RoomEvent.LocalTrackUnpublished, sync);
+      window.clearInterval(iv);
+    };
+  }, [room, teacherKey, studentKey]);
+
+  return null;
+}
+
 function RoomInner({
   code,
   isTeacher,
@@ -1746,7 +1805,9 @@ function RoomInner({
   const [chatOpen, setChatOpen] = useState(false);
   const [hudChatOpen, setHudChatOpen] = useState(false);
   const [rosterOpen, setRosterOpen] = useState(false);
-  const [leftForFullscreen, setLeftForFullscreen] = useState(false);
+  /** Student left fullscreen (Esc, swipe, app switch): prompt, never kick. */
+  const [fsPrompt, setFsPrompt] = useState(false);
+  const [camError, setCamError] = useState<string | null>(null);
   const [hudOpen, setHudOpen] = useState(false);
   const [hudNotice, setHudNotice] = useState('');
   const [annotateOn, setAnnotateOn] = useState(false);
@@ -1788,6 +1849,9 @@ function RoomInner({
   const stageMode: 'idle' | 'screen' = rawStage === 'screen' ? 'screen' : 'idle';
   const teacherIdentities = (state?.admitted ?? [])
     .filter((a) => a.role === 'TEACHER')
+    .map((a) => a.livekitIdentity);
+  const studentIdentities = (state?.admitted ?? [])
+    .filter((a) => a.role === 'STUDENT')
     .map((a) => a.livekitIdentity);
   // Fallback: if teacher screen track(s) exist, treat as screen present even if redis idle
   const hasTeacherScreen = useHasTeacherScreen(teacherIdentities);
@@ -1904,13 +1968,15 @@ function RoomInner({
   // controls" behaviour never fired. Controls are always visible on the
   // student stage, which is the intended behaviour.
 
-  // Student forced fullscreen: request on join; leaving fullscreen kicks from class
+  // Student fullscreen: request it on join. Leaving fullscreen (Esc, a swipe,
+  // a browser prompt) only shows a "Return to full screen" prompt. It never
+  // marks the student LEFT or disconnects them; only an explicit Leave (or the
+  // connection dropping) does that.
   useEffect(() => {
-    if (isTeacher || leftForFullscreen) return;
+    if (isTeacher) return;
     const root = document.documentElement;
     let entered = false;
     let cancelled = false;
-    let kicking = false;
 
     const requestFs = async () => {
       if (cancelled || !root.requestFullscreen) return;
@@ -1918,9 +1984,12 @@ function RoomInner({
         if (!document.fullscreenElement) {
           await root.requestFullscreen();
         }
-        if (document.fullscreenElement) entered = true;
+        if (document.fullscreenElement) {
+          entered = true;
+          setFsPrompt(false);
+        }
       } catch {
-        // Browser blocked / needs gesture / unsupported — do not kick
+        // Browser blocked / needs gesture / unsupported — carry on windowed.
       }
     };
 
@@ -1931,32 +2000,13 @@ function RoomInner({
     };
 
     const onFsChange = () => {
-      if (cancelled || isTeacher || kicking) return;
+      if (cancelled) return;
       if (document.fullscreenElement) {
         entered = true;
+        setFsPrompt(false);
         return;
       }
-      // Only kick if we previously succeeded at entering fullscreen
-      if (!entered) return;
-      kicking = true;
-      setLeftForFullscreen(true);
-      void (async () => {
-        try {
-          await roomFetch(code, '/leave', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: '{}',
-          });
-        } catch {
-          /* ignore */
-        }
-        try {
-          room?.disconnect();
-        } catch {
-          /* ignore */
-        }
-        router.push('/');
-      })();
+      if (entered) setFsPrompt(true);
     };
 
     document.addEventListener('fullscreenchange', onFsChange);
@@ -1968,8 +2018,41 @@ function RoomInner({
       document.removeEventListener('pointerdown', onGesture);
       document.removeEventListener('keydown', onGesture);
     };
-  }, [isTeacher, leftForFullscreen, code, room, router]);
+  }, [isTeacher]);
 
+  const returnToFullscreen = useCallback(() => {
+    const root = document.documentElement;
+    if (!root.requestFullscreen) {
+      setFsPrompt(false);
+      return;
+    }
+    root
+      .requestFullscreen()
+      .then(() => setFsPrompt(false))
+      // Could not re-enter (browser policy): do not trap the student behind the prompt.
+      .catch(() => setFsPrompt(false));
+  }, []);
+
+  // While connected to the LiveKit room, idle logout is suspended (H-2): a
+  // teacher presenting elsewhere or a student who is only watching must not
+  // be signed out mid-class.
+  useEffect(() => {
+    if (!room) return;
+    const update = () => {
+      const st = room.state;
+      setLiveSession(
+        st === ConnectionState.Connected ||
+          st === ConnectionState.Reconnecting ||
+          st === ConnectionState.SignalReconnecting
+      );
+    };
+    update();
+    room.on(RoomEvent.ConnectionStateChanged, update);
+    return () => {
+      room.off(RoomEvent.ConnectionStateChanged, update);
+      setLiveSession(false);
+    };
+  }, [room]);
 
   /**
    * Screen share ended (button, browser "Stop sharing" bar, or track teardown):
@@ -2037,7 +2120,10 @@ function RoomInner({
       setHudOpen(false);
     };
     surface.window.addEventListener('pagehide', onHide);
+    // Clicks and keys in the pop-out / PiP count as activity for idle logout.
+    const stopForwarding = forwardActivityFrom(surface.window);
     shareHideCleanup.current = () => {
+      stopForwarding();
       try {
         surface.window.removeEventListener('pagehide', onHide);
       } catch {
@@ -2257,9 +2343,23 @@ function RoomInner({
 
     const controls = await controlsPromise.catch(() => null);
     attachShareSurface(controls);
+    let surfaceKind = '';
+    try {
+      surfaceKind = String(
+        (media.getSettings() as MediaTrackSettings & { displaySurface?: string }).displaySurface ?? ''
+      );
+    } catch {
+      /* older browsers do not report displaySurface */
+    }
     if (!controls) {
       setHudNotice(
         'Screen is sharing, but the browser blocked the controls window. Allow pop-ups, then use Open share controls.'
+      );
+    } else if (controls.kind === 'popup' && surfaceKind === 'monitor') {
+      // A normal pop-up window is captured like any other window when the
+      // whole screen is shared, so students would see roster, chat and hands.
+      setHudNotice(
+        'You are sharing your entire screen, so students can see this controls window. Move it to another monitor, or share a window or tab instead.'
       );
     }
     setScreenOn(true);
@@ -2444,10 +2544,40 @@ function RoomInner({
           micDesired={micOn}
           localCamStream={localCamStream}
           setLocalCamStream={setLocalCamStream}
+          onCameraError={setCamError}
+        />
+        <StudentMediaPrivacy
+          teacherIdentities={teacherIdentities}
+          studentIdentities={studentIdentities}
         />
         <RoomAudioRenderer />
 
         <div className="stage-fullscreen-badge">{badge}</div>
+
+        {camError && camOn && (
+          <CameraErrorBanner message={camError} onDismiss={() => setCamError(null)} />
+        )}
+
+        {fsPrompt && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="fs-prompt-title"
+            className="fixed inset-0 z-[80] flex items-center justify-center bg-black/80 px-6 backdrop-blur-sm"
+          >
+            <div className="max-w-sm rounded-2xl border border-white/10 bg-surface-1 p-6 text-center shadow-lift">
+              <p id="fs-prompt-title" className="font-display text-lg font-semibold">
+                You left full screen
+              </p>
+              <p className="mt-2 text-sm text-slate-400">
+                You are still in the class. Return to full screen to keep watching.
+              </p>
+              <Button className="mt-5" onClick={returnToFullscreen}>
+                Return to full screen
+              </Button>
+            </div>
+          </div>
+        )}
 
         <div className="absolute inset-0 z-10">
           {effectiveStage === 'screen' ? (
@@ -2527,6 +2657,7 @@ function RoomInner({
         micDesired={micOn}
         localCamStream={localCamStream}
         setLocalCamStream={setLocalCamStream}
+        onCameraError={setCamError}
       />
       <RoomAudioRenderer />
 
@@ -2597,6 +2728,10 @@ function RoomInner({
             Dismiss
           </button>
         </div>
+      )}
+
+      {camError && camOn && (
+        <CameraErrorBanner message={camError} onDismiss={() => setCamError(null)} />
       )}
 
       {/* Main stage — screen share fills the middle when active */}
@@ -3041,7 +3176,10 @@ export function ClassroomRoom({ code }: { code: string }) {
           screenShareEncoding: { maxBitrate: 1_200_000, maxFramerate: 15 },
         },
       }}
-      connectOptions={{ peerConnectionTimeout: 20_000 }}
+      // Students never auto-subscribe: StudentMediaPrivacy subscribes them to
+      // the teacher's tracks and classmates' microphones only, never to other
+      // students' cameras. The teacher keeps auto-subscribe (sampled cameras).
+      connectOptions={{ peerConnectionTimeout: 20_000, autoSubscribe: isTeacher }}
       className="h-[100dvh] overflow-hidden"
       onError={(e) => console.error('LiveKit', e)}
     >

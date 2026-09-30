@@ -45,7 +45,6 @@ export type ChatThread = {
 };
 
 const CHAT_TOPIC = 'chat';
-const encoder = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
 const decoder = typeof TextDecoder !== 'undefined' ? new TextDecoder() : null;
 
 type ChatPacket = { v: 1; type: 'message'; message: ChatMessage };
@@ -182,31 +181,19 @@ export function useChatThread({
     onUnreadChange(Math.max(0, unread));
   }, [messages, active, hydrated, onUnreadChange]);
 
-  const publishChat = useCallback(
-    async (message: ChatMessage) => {
-      if (!room?.localParticipant || !encoder) return;
-      try {
-        const packet: ChatPacket = { v: 1, type: 'message', message };
-        await room.localParticipant.publishData(encoder.encode(JSON.stringify(packet)), {
-          reliable: true,
-          topic: CHAT_TOPIC,
-        });
-      } catch (e) {
-        console.warn('chat publish', e);
-      }
-    },
-    [room]
-  );
-
   useEffect(() => {
     if (!room) return;
     const onData = (
       payload: Uint8Array,
-      _participant?: { identity?: string },
+      participant?: { identity?: string },
       _kind?: DataPacket_Kind,
       topic?: string
     ) => {
-      if (topic && topic !== CHAT_TOPIC) return;
+      if (topic !== CHAT_TOPIC) return;
+      // Chat packets are only ever sent by the server (POST /messages →
+      // RoomServiceClient.sendData, addressed to the allowed readers). A packet
+      // that names a participant came from a browser and is forged.
+      if (participant) return;
       if (!decoder) return;
       try {
         const msg = JSON.parse(decoder.decode(payload)) as ChatPacket;
@@ -257,10 +244,8 @@ export function useChatThread({
           setError(data.error || 'Send failed');
           return false;
         }
-        if (data.message) {
-          mergeMessages([data.message]);
-          void publishChat(data.message);
-        }
+        // The server pushes the stored message to the other readers.
+        if (data.message) mergeMessages([data.message]);
         return true;
       } catch {
         setError('Network error');
@@ -270,7 +255,7 @@ export function useChatThread({
         setSending(false);
       }
     },
-    [code, ended, mergeMessages, publishChat]
+    [code, ended, mergeMessages]
   );
 
   return { messages, ended, sending, error, send };
