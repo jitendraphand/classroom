@@ -84,6 +84,24 @@ async function syncSampleMembership(
   );
 }
 
+/**
+ * LiveKit permission updates are slow when the SFU is busy, and a hung call
+ * must not stall /state. Hands, mute, and admit are read on that poll.
+ * Syncs for one room stay ordered so an older sample cannot overwrite a newer one.
+ */
+const livekitSyncTail = new Map<string, Promise<void>>();
+
+function enqueueSampleSync(roomCode: string, before: string[], after: string[]) {
+  const prev = livekitSyncTail.get(roomCode) ?? Promise.resolve();
+  const job = prev
+    .catch(() => undefined)
+    .then(() => syncSampleMembership(roomCode, [...before], [...after]))
+    .catch((e) => {
+      console.warn('sample sync', roomCode, e);
+    });
+  livekitSyncTail.set(roomCode, job);
+}
+
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
@@ -183,9 +201,9 @@ export async function rotateVisibleSample(roomCode: string, maxVisible?: number)
   pipe.set(keys.rotation(roomCode), String(Date.now()), 'EX', ROTATION_SECONDS * 3);
   await pipe.exec();
 
-  // Server-side enforcement: identities that entered or left the sample get
-  // their camera publish permission updated on the SFU.
-  await syncSampleMembership(roomCode, previous, sample);
+  // Permission updates run after the response. The Redis sample is already the
+  // source of truth for the next /state poll.
+  enqueueSampleSync(roomCode, previous, sample);
 
   return { visible: sample, max: n, rotatedAt: Date.now(), nextIn: ROTATION_SECONDS };
 }
@@ -306,8 +324,9 @@ export async function pinSpeaker(roomCode: string, identity: string) {
   await pipe.exec();
 
   // The pinned student may now publish camera — enforce that on the SFU, and
-  // revoke it from whoever was pushed out of the sample.
-  await syncSampleMembership(roomCode, previous, next);
+  // revoke it from whoever was pushed out of the sample. Do not block the pin
+  // response (or the teacher's next state poll) on the SFU round-trip.
+  enqueueSampleSync(roomCode, previous, next);
 
   return { ok: true as const, alreadyVisible: false, visible: next, pinned: identity };
 }

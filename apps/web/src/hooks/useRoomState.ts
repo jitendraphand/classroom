@@ -47,12 +47,21 @@ export function useRoomState(code: string, intervalMs = 2000) {
   const [state, setState] = useState<RoomState | null>(null);
   const [error, setError] = useState('');
   const stopped = useRef(false);
+  /** One poll at a time. A mutation during that poll schedules a follow-up so an older snapshot cannot overwrite it. */
+  const inflight = useRef(false);
+  const again = useRef(false);
 
   const refresh = useCallback(async () => {
     if (stopped.current) return;
+    if (inflight.current) {
+      again.current = true;
+      return;
+    }
+    inflight.current = true;
     try {
       const res = await roomFetch(code, '/state');
       const data = await res.json();
+      if (stopped.current) return;
       if (!res.ok) {
         if (res.status === 410 || data.ended || data.status === 'ENDED') {
           setState((prev) =>
@@ -88,7 +97,13 @@ export function useRoomState(code: string, intervalMs = 2000) {
       setState(data);
       setError('');
     } catch {
-      setError('Network error');
+      if (!stopped.current) setError('Network error');
+    } finally {
+      inflight.current = false;
+      if (again.current && !stopped.current) {
+        again.current = false;
+        void refresh();
+      }
     }
   }, [code]);
 

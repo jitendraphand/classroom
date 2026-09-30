@@ -43,17 +43,16 @@ export function getConfiguredAppUrl(): string {
 
 /**
  * Resolve the public app base URL for join/share links.
- * Prefer non-loopback Origin / Host from the request; else configured APP_URL.
+ * Use the host that actually served the request, including loopback aliases.
+ * localhost and 127.0.0.1 do not share cookies, so substituting APP_URL's
+ * loopback name drops the teacher session when they open the lobby link.
+ * APP_URL is only the fallback when the request has no Host header.
  */
 export function resolveAppUrl(req?: Request): string {
   if (req) {
-    const origin = req.headers.get('origin');
-    if (origin && !isLoopbackHost(origin)) {
-      return stripTrailingSlash(origin);
-    }
     const xfHost = req.headers.get('x-forwarded-host');
     const host = (xfHost || req.headers.get('host') || '').split(',')[0]?.trim();
-    if (host && !isLoopbackHost(host)) {
+    if (host) {
       const xfProto = req.headers.get('x-forwarded-proto')?.split(',')[0]?.trim();
       const configured = getConfiguredAppUrl();
       const proto =

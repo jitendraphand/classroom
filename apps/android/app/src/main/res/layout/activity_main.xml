@@ -188,6 +188,23 @@
                 android:textColor="#E2E8F0"
                 android:textSize="16sp" />
 
+            <TextView
+                android:id="@+id/classWaitingTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingBottom="6dp"
+                android:text="Waiting to join"
+                android:textColor="#FDE68A"
+                android:textStyle="bold"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:id="@+id/classWaiting"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingBottom="8dp" />
+
             <Button
                 android:id="@+id/shareButton"
                 android:layout_width="match_parent"

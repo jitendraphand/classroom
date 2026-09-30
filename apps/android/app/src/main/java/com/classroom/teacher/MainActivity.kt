@@ -1,6 +1,9 @@
 package com.classroom.teacher
 
 import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
@@ -12,7 +15,9 @@ import android.widget.LinearLayout
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import com.classroom.teacher.databinding.ActivityMainBinding
 import io.livekit.android.LiveKit
@@ -20,6 +25,7 @@ import io.livekit.android.events.RoomEvent
 import io.livekit.android.events.collect
 import io.livekit.android.room.Room
 import io.livekit.android.room.track.screencapture.ScreenCaptureParams
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -46,10 +52,17 @@ class MainActivity : AppCompatActivity() {
     private var sharing = false
     private var pollJob: Job? = null
     private val seenMessageIds = linkedSetOf<String>()
+    private var knownWaiting = 0
+    private var pendingCapture = false
 
     private val notificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { /* Sharing still works if the user dismisses the notification prompt. */ }
+    ) {
+        if (pendingCapture) {
+            pendingCapture = false
+            launchCapture()
+        }
+    }
 
     private val micPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -91,6 +104,12 @@ class MainActivity : AppCompatActivity() {
         binding.sendButton.setOnClickListener { sendChat() }
         binding.endButton.setOnClickListener { confirmEnd() }
         binding.leaveButton.setOnClickListener { lifecycleScope.launch { leaveClass() } }
+        ScreenShareService.onStopRequested = { lifecycleScope.launch { stopScreenShare() } }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        getSystemService(NotificationManager::class.java).cancel(WAITING_NOTIFICATION_ID)
     }
 
     override fun onDestroy() {
@@ -102,6 +121,7 @@ class MainActivity : AppCompatActivity() {
             }
             room = null
         }
+        ScreenShareService.onStopRequested = null
         stopService(Intent(this, ScreenShareService::class.java))
         super.onDestroy()
     }
@@ -166,6 +186,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showHome() {
         pollJob?.cancel()
+        knownWaiting = 0
         showOnly(binding.homeGroup)
     }
 
@@ -178,7 +199,8 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 withContext(Dispatchers.IO) { api.admitAll(code) }
-                refreshLobby()
+                if (binding.classGroup.visibility == View.VISIBLE) refreshClassWaiting()
+                else refreshLobby()
             } catch (e: Exception) {
                 showError(e.message ?: "Could not admit students")
             }
@@ -203,8 +225,11 @@ class MainActivity : AppCompatActivity() {
                 room = connected
                 listen(connected)
                 connected.connect(url, token)
-                binding.classStatus.text = "In class $code. Share screen when you are ready."
+                binding.classStatus.text = "In class $code. Share screen when you are ready. Sharing keeps going if you leave this screen."
                 binding.shareButton.isEnabled = true
+                if (needsNotificationPermission()) {
+                    notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
                 startPolling(inClass = true)
             } catch (e: Exception) {
                 binding.classStatus.text = "Not connected"
@@ -232,12 +257,21 @@ class MainActivity : AppCompatActivity() {
             showError("Join the class before sharing.")
             return
         }
-        if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
+        if (needsNotificationPermission()) {
+            pendingCapture = true
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
         }
+        launchCapture()
+    }
+
+    private fun needsNotificationPermission(): Boolean {
+        return Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun launchCapture() {
         val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         captureLauncher.launch(manager.createScreenCaptureIntent())
     }
@@ -390,16 +424,111 @@ class MainActivity : AppCompatActivity() {
                             showHome()
                             return@launch
                         }
+                        renderClassWaiting(state.optJSONArray("waiting") ?: JSONArray())
                         refreshChat()
                     } else {
                         refreshLobby()
                     }
+                } catch (e: CancellationException) {
+                    // Leaving or ending the class cancels this poll. That is not a lost connection.
+                    throw e
                 } catch (e: Exception) {
                     showError(e.message ?: "Lost contact with the server")
                 }
                 delay(2000)
             }
         }
+    }
+
+    private suspend fun refreshClassWaiting() {
+        val state = withContext(Dispatchers.IO) { api.state(code) }
+        renderClassWaiting(state.optJSONArray("waiting") ?: JSONArray())
+    }
+
+    private suspend fun renderClassWaiting(waiting: JSONArray) {
+        val names = ArrayList<String>(waiting.length())
+        for (i in 0 until waiting.length()) {
+            names.add(waiting.getJSONObject(i).optString("displayName", "Student"))
+        }
+        withContext(Dispatchers.Main) {
+            if (waiting.length() > knownWaiting &&
+                !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+            ) {
+                notifyWaiting(names)
+            }
+            knownWaiting = waiting.length()
+            binding.classWaitingTitle.visibility = if (waiting.length() > 0) View.VISIBLE else View.GONE
+            binding.classWaitingTitle.text = when (waiting.length()) {
+                0 -> ""
+                1 -> "${names[0]} is waiting to join"
+                else -> "${waiting.length()} students are waiting to join"
+            }
+            binding.classWaiting.removeAllViews()
+            if (waiting.length() > 1) {
+                binding.classWaiting.addView(Button(this@MainActivity).apply {
+                    text = "Admit all"
+                    setOnClickListener { admitAll() }
+                })
+            }
+            for (i in 0 until waiting.length()) {
+                val person = waiting.getJSONObject(i)
+                val id = person.optString("id")
+                val name = names[i]
+                val row = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                }
+                row.addView(note(name).apply {
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                })
+                row.addView(Button(this@MainActivity).apply {
+                    text = "Admit"
+                    setOnClickListener {
+                        lifecycleScope.launch {
+                            try {
+                                withContext(Dispatchers.IO) { api.admit(code, id) }
+                                refreshClassWaiting()
+                            } catch (e: Exception) {
+                                showError(e.message ?: "Could not admit $name")
+                            }
+                        }
+                    }
+                })
+                binding.classWaiting.addView(row)
+            }
+        }
+    }
+
+    private fun notifyWaiting(names: List<String>) {
+        if (names.isEmpty() || needsNotificationPermission()) return
+        val manager = getSystemService(NotificationManager::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    WAITING_CHANNEL,
+                    "Waiting students",
+                    NotificationManager.IMPORTANCE_HIGH,
+                ),
+            )
+        }
+        val open = PendingIntent.getActivity(
+            this,
+            2,
+            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val text = if (names.size == 1) {
+            "${names[0]} is waiting to join"
+        } else {
+            "${names.size} students are waiting to join"
+        }
+        val notification = NotificationCompat.Builder(this, WAITING_CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat_share)
+            .setContentTitle(getString(R.string.waiting_notification_title))
+            .setContentText(text)
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .build()
+        manager.notify(WAITING_NOTIFICATION_ID, notification)
     }
 
     private suspend fun refreshLobby() {
@@ -487,5 +616,7 @@ class MainActivity : AppCompatActivity() {
         private const val PREFS = "classroom_teacher"
         private const val KEY_SERVER = "server"
         private const val KEY_EMAIL = "email"
+        private const val WAITING_CHANNEL = "classroom_waiting"
+        private const val WAITING_NOTIFICATION_ID = 42
     }
 }

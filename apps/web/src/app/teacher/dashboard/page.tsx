@@ -170,7 +170,7 @@ export default function TeacherDashboard() {
             <p className="mt-3 break-all text-xs text-slate-400">Join link: {created.joinUrl}</p>
             <div className="mt-4 flex flex-wrap gap-2">
               <Link
-                href={created.teacherUrl}
+                href={`/teacher/room/${created.code}`}
                 className="btn-primary"
                 onClick={() => {
                   if (created?.code) void claimTeacherTab(created.code);

@@ -2,5 +2,7 @@
 <resources>
     <string name="app_name">Classroom</string>
     <string name="share_notification_title">Sharing your screen</string>
-    <string name="share_notification_text">Students can see this device</string>
+    <string name="share_notification_text">Students can see this device. Sharing continues if you leave this screen.</string>
+    <string name="share_notification_stop">Stop sharing</string>
+    <string name="waiting_notification_title">Student waiting to join</string>
 </resources>

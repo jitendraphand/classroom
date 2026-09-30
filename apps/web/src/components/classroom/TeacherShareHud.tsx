@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createPortal, flushSync } from 'react-dom';
 import { Avatar } from '@/components/ui/Avatar';
 import {
   ANNOTATE_COLORS,
@@ -30,7 +31,11 @@ export type RosterEntry = {
 
 export type TeacherShareHudProps = {
   admitted: RosterEntry[];
+  /** Students still in the waiting room. Admitted from this bar without stopping the share. */
+  waiting?: RosterEntry[];
   waitingCount?: number;
+  onAdmit?: (participantId: string) => void;
+  onAdmitAll?: () => void;
   teacherMicOn: boolean;
   onToggleTeacherMic: () => void;
   onStopSharing: () => void;
@@ -64,9 +69,14 @@ const TOOL_LABEL: Record<AnnotateMode, string> = {
 
 const HUD_CSS = `
 .tsh{--bg:#0d1219;--line:rgba(255,255,255,.12);--text:#eef2ff;--dim:#94a3b8;--accent:#3385ff;--warn:#f59e0b;
-position:fixed;left:50%;bottom:calc(12px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:55;
-width:min(560px,calc(100vw - 16px));display:flex;flex-direction:column;gap:6px;pointer-events:none;
+position:relative;z-index:40;width:min(560px,calc(100% - 16px));margin:0 auto 8px;flex-shrink:0;
+display:flex;flex-direction:column;gap:6px;pointer-events:none;
 font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:12px;line-height:1.3;color:var(--text)}
+.tsh-pip{width:auto;margin:0;padding:8px}
+.tsh-wait{pointer-events:auto;display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 8px;border-radius:12px;
+background:rgba(245,158,11,.16);border:1px solid rgba(245,158,11,.45);color:#fde68a}
+.tsh-wait-name{flex:1;min-width:0;font-weight:700;font-size:12px}
+.tsh-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 .tsh *{box-sizing:border-box}
 .tsh-bar,.tsh-tools,.tsh-panel,.tsh-tip{pointer-events:auto;background:rgba(13,18,25,.94);border:1px solid var(--line);
 backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);box-shadow:0 10px 36px rgba(0,0,0,.45)}
@@ -112,7 +122,10 @@ background:var(--warn);color:#1a1206;font-size:9px;font-weight:800;display:inlin
 export function TeacherShareHud(props: TeacherShareHudProps) {
   const {
     admitted,
+    waiting = [],
     waitingCount = 0,
+    onAdmit,
+    onAdmitAll,
     teacherMicOn,
     onToggleTeacherMic,
     onStopSharing,
@@ -134,6 +147,14 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
   } = props;
 
   const [panel, setPanel] = useState<Panel>(null);
+  const [pipBody, setPipBody] = useState<HTMLElement | null>(null);
+  const [pipNote, setPipNote] = useState('');
+  const prevWaiting = useRef(waitingCount);
+
+  useEffect(() => {
+    if (waitingCount > prevWaiting.current) setPanel('roster');
+    prevWaiting.current = waitingCount;
+  }, [waitingCount]);
 
   useEffect(() => {
     onChatOpenChange?.(panel === 'chat');
@@ -150,11 +171,75 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     setPanel((cur) => (cur === p ? null : p));
   };
 
-  return (
-    <div className="tsh" role="region" aria-label="Share controls">
+  async function popOut() {
+    const api = (
+      window as Window & {
+        documentPictureInPicture?: {
+          requestWindow: (opts: { width: number; height: number }) => Promise<Window>;
+        };
+      }
+    ).documentPictureInPicture;
+    if (!api || !window.isSecureContext) {
+      setPipNote('Pop-out controls need desktop Chrome or Edge. This bar stays above the class controls.');
+      return;
+    }
+    try {
+      const pip = await api.requestWindow({ width: 440, height: 320 });
+      document.querySelectorAll('style, link[rel="stylesheet"]').forEach((node) => {
+        pip.document.head.appendChild(node.cloneNode(true));
+      });
+      pip.document.body.style.margin = '0';
+      pip.document.body.style.background = '#0d1219';
+      setPipBody(pip.document.body);
+      setPipNote('');
+      // pagehide is the last moment the pop-out document is still alive.
+      // A deferred setState runs after Chrome destroys it and the controls never return.
+      pip.addEventListener(
+        'pagehide',
+        () => {
+          try {
+            flushSync(() => setPipBody(null));
+          } catch {
+            setPipBody(null);
+          }
+        },
+        { once: true }
+      );
+    } catch {
+      setPipNote('Could not pop the controls out. They stay on this page, above the class controls.');
+    }
+  }
+
+  const waitingLabel =
+    waitingCount === 1
+      ? `${waiting[0]?.displayName || 'A student'} is waiting to join`
+      : waitingCount > 1
+        ? `${waitingCount} students are waiting to join`
+        : '';
+
+  const tree = (
+    <div className={pipBody ? 'tsh tsh-pip' : 'tsh'} role="region" aria-label="Share controls">
       <style>{HUD_CSS}</style>
+      <div className="tsh-sr" aria-live="polite">
+        {waitingLabel}
+      </div>
 
       {notice ? <div className="tsh-tip">{notice}</div> : null}
+      {pipNote ? <div className="tsh-tip">{pipNote}</div> : null}
+
+      {waiting.length > 0 && (
+        <div className="tsh-wait" role="status">
+          <span className="tsh-wait-name">{waitingLabel}</span>
+          <button type="button" className="tsh-btn" onClick={() => onAdmit?.(waiting[0].id)}>
+            Admit
+          </button>
+          {waiting.length > 1 && (
+            <button type="button" className="tsh-btn" onClick={() => onAdmitAll?.()}>
+              Admit all
+            </button>
+          )}
+        </div>
+      )}
 
       {panel === 'chat' && (
         <div className="tsh-panel">
@@ -207,6 +292,25 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
             </button>
           </div>
           <div className="tsh-scroll">
+            {waiting.length > 0 && (
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                  <span className="tsh-panel-title">Waiting</span>
+                  <button type="button" className="tsh-btn" onClick={() => onAdmitAll?.()}>
+                    Admit all
+                  </button>
+                </div>
+                {waiting.map((w) => (
+                  <div className="tsh-person" key={w.id}>
+                    <Avatar name={w.displayName} size="sm" />
+                    <span className="tsh-person-name">{w.displayName}</span>
+                    <button type="button" className="tsh-btn" onClick={() => onAdmit?.(w.id)}>
+                      Admit
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 4, marginBottom: 8, flexWrap: 'wrap' }}>
               <button type="button" className="tsh-btn" onClick={() => onMuteAll(true)}>
                 Mute all
@@ -346,12 +450,24 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
           aria-label="Roster"
         >
           <IconUsers size={15} />
-          {students.length > 0 && panel !== 'roster' && (
+          {waitingCount > 0 && panel !== 'roster' ? (
+            <span className="tsh-count">{waitingCount > 9 ? '9+' : waitingCount}</span>
+          ) : students.length > 0 && panel !== 'roster' ? (
             <span className="tsh-count tsh-count-blue">{students.length}</span>
-          )}
+          ) : null}
         </button>
 
         <span className="tsh-sep" aria-hidden />
+
+        <button
+          type="button"
+          className="tsh-btn"
+          onClick={() => void popOut()}
+          aria-label="Pop out share controls"
+          title="Keep these controls on screen if this window is minimized"
+        >
+          Pop out
+        </button>
 
         <button type="button" className="tsh-btn tsh-btn-danger" onClick={onStopSharing} title="Stop sharing">
           <IconScreen size={15} />
@@ -364,6 +480,20 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
       </div>
     </div>
   );
+
+  if (pipBody) {
+    return (
+      <>
+        {createPortal(tree, pipBody)}
+        <div className="tsh" role="status">
+          <div className="tsh-tip">
+            Share controls are in the pop-out window. Close that window to dock them here. Screen sharing continues if this window is minimized.
+          </div>
+        </div>
+      </>
+    );
+  }
+  return tree;
 }
 
 /** @deprecated Kept for import compatibility; HUD is always inline now. */
