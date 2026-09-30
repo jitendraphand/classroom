@@ -32,8 +32,16 @@ ACME_EMAIL="${ACME_EMAIL:-}"
 
 if [[ ! -f "$ENV_FILE" ]]; then
   cp "$ROOT/.env.example" "$ENV_FILE"
+  chmod 600 "$ENV_FILE" 2>/dev/null || true
   echo "Created $ENV_FILE from .env.example"
 fi
+
+# Fresh random LiveKit key/secret, NEXTAUTH_SECRET and POSTGRES_PASSWORD whenever
+# the current value is missing, a placeholder or known to have leaked. Written
+# to the untracked .env only; never printed.
+# shellcheck source=lib/secrets.sh
+source "$ROOT/scripts/lib/secrets.sh"
+ensure_env_secrets "$ENV_FILE"
 
 upsert() {
   local key="$1"

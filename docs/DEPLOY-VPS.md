@@ -65,13 +65,13 @@ That sets:
 - `COOKIE_SECURE=false` (required for HTTP on a bare IP)
 - Server-side `LIVEKIT_*` / DB / Redis remain on `127.0.0.1`
 
-Rotate secrets in `.env` before production:
+Secrets (`LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET`, `NEXTAUTH_SECRET`,
+`POSTGRES_PASSWORD` + `DATABASE_URL`) are generated into `.env` automatically by
+the configure scripts and by `sync-livekit-keys.sh` whenever they are missing,
+placeholders or known-leaked values. They are never printed and never written
+to a tracked file.
 
-- `LIVEKIT_API_SECRET` — long random hex
-- `NEXTAUTH_SECRET` — long random hex
-- `POSTGRES_PASSWORD` — and matching `DATABASE_URL`
-
-Then sync LiveKit config and start:
+Then sync LiveKit config (writes the gitignored `infra/livekit.yaml`) and start:
 
 ```bash
 ./scripts/sync-livekit-keys.sh
@@ -146,3 +146,29 @@ docker compose down -v
 - [ ] `infra/livekit.yaml` shows `use_external_ip: true` (and `node_ip` if set)
 - [ ] External `curl http://PUBLIC_IP:3000/api/health` healthy
 - [ ] Join links show the public IP, not localhost
+
+
+## Upgrading an existing server (secret rotation, 2026-09-30)
+
+An early commit of this repo contained a real LiveKit API secret in
+`infra/livekit.yaml`, and early `.env` history contained the Postgres password.
+Any server provisioned from those values must rotate:
+
+```bash
+git pull                                   # infra/livekit.yaml is no longer tracked;
+                                           # git may delete or refuse to overwrite it
+ROTATE_SECRETS=1 ./scripts/sync-livekit-keys.sh   # new LiveKit key/secret, NextAuth, Postgres pw
+# Existing Postgres volume: apply the new password inside the DB (value read from .env, not echoed)
+set -a; . ./.env; set +a
+docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+  -c "ALTER USER \"$POSTGRES_USER\" PASSWORD '$POSTGRES_PASSWORD';"
+docker compose up -d --build --force-recreate
+```
+
+Other deploy notes for this release:
+- New migration `room_session_id` (applied automatically by the web entrypoint).
+- Session cookies are renamed to `__Host-…` over HTTPS and are `SameSite=Strict`:
+  everyone is signed out once after the upgrade. Update the Android app too
+  (it accepts both cookie names).
+- The web container exits at boot if `LIVEKIT_API_KEY` is `devkey`, or if the
+  LiveKit/NextAuth secrets are placeholders, too short or known-leaked.

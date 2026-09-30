@@ -17,3 +17,6 @@ coverage
 apps/web/.next
 apps/web/node_modules
 apps/web/coverage
+
+# Generated LiveKit config (contains the API secret). Template: infra/livekit.example.yaml
+infra/livekit.yaml

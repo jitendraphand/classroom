@@ -324,7 +324,7 @@ Every other query in the file filters `role: 'STUDENT'`. If a teacher participan
 
 ```
 $ git log --all -p -- infra/livekit.yaml
-+  devkey: 89ee516826cc409874f95077fc5695610c8639cf6bfbce9e9f5b57887a957b68
++  devkey: 89ee…<redacted: leaked secret, rotated>
 ```
 
 The working-tree file now has the placeholder, but the real 256-bit secret is in the initial commit and is **the same value as the one in the local `.env` today** — never rotated. `infra/livekit.yaml` is the file bind-mounted at `docker-compose.yml:44`.

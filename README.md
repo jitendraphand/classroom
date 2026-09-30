@@ -82,13 +82,28 @@ Details, browser matrix and limitations: **[SHARE_HUD_NOTES.md](SHARE_HUD_NOTES.
 - Docker Engine + Compose plugin
 - Ports free: **3000** (web), **5432** (Postgres), **6379** (Redis), **7880/7881** (LiveKit), **50000–50100/udp** (WebRTC)
 
+### Secrets (read this before deploying)
+
+- `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET`, `NEXTAUTH_SECRET` and `POSTGRES_PASSWORD`
+  live only in the untracked `.env`. `scripts/sync-livekit-keys.sh` (also run by
+  the `configure-*.sh` scripts) replaces missing values, placeholders, the old
+  `devkey` key, and any value known to have leaked from this repo's git history
+  with fresh random ones. It never prints them. `ROTATE_SECRETS=1
+  ./scripts/sync-livekit-keys.sh` forces a full rotation.
+- `infra/livekit.yaml` is **generated and gitignored** (template:
+  `infra/livekit.example.yaml`). Never commit it: an early version of this repo
+  committed a real LiveKit secret, which is why any deployment created before
+  2026-09-30 must rotate (see `docs/DEPLOY-VPS.md` → "Upgrading an existing server").
+- The web container refuses to start when a LiveKit or NextAuth secret is
+  missing, a placeholder or a known-leaked value.
+
 ### Run
 
 ```bash
 cd classroom   # or: git clone … && cd classroom
 
-cp -n .env.example .env   # only if you need a fresh copy
-./scripts/sync-livekit-keys.sh   # writes LIVEKIT_* into infra/livekit.yaml
+./scripts/sync-livekit-keys.sh   # creates .env if needed, generates fresh secrets,
+                                 # writes the (gitignored) infra/livekit.yaml
 
 docker compose up --build -d
 ```
@@ -178,7 +193,7 @@ See `.env.example`. Important:
 | `MAX_VISIBLE_STUDENT_VIDEOS` | `6` | Default sample size for new rooms (hard-capped at 6) |
 | `SAMPLE_ROTATION_SECONDS` | `8` | Auto-rotation interval for visible student cameras (5–10s recommended) |
 | `SPEAKER_PIN_TTL_SECONDS` | `18` | How long an active-speaker pin protects a student from random ejection |
-| `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | generated | Must match `infra/livekit.yaml` (`scripts/sync-livekit-keys.sh`) |
+| `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | generated | Admin credential for the SFU. Generated into `.env` and the gitignored `infra/livekit.yaml` by `scripts/sync-livekit-keys.sh` |
 | `APP_URL` / `NEXT_PUBLIC_APP_URL` | `http://localhost:3000` | Browser-facing app origin — `http://PUBLIC_IP:3000` (bare IP) or `https://DOMAIN` (Caddy) |
 | `NEXT_PUBLIC_LIVEKIT_URL` | `ws://localhost:7880` | Browser-facing LiveKit — `ws://PUBLIC_IP:7880` or `wss://livekit.DOMAIN` |
 | `DOMAIN` / `ACME_EMAIL` | _(unset)_ | Domain TLS via `configure-domain-tls.sh`; optional LE account email |
@@ -195,7 +210,7 @@ See `.env.example`. Important:
 .
 ├── docker-compose.yml          # host networking stack (+ optional profile tls / Caddy)
 ├── .env.example                # copy to .env (gitignored)
-├── infra/livekit.yaml          # keys synced from .env
+├── infra/livekit.example.yaml  # template; infra/livekit.yaml is generated + gitignored
 ├── infra/Caddyfile             # written by configure-domain-tls.sh
 ├── scripts/sync-livekit-keys.sh
 ├── scripts/configure-public-ip.sh

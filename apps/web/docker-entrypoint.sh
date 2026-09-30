@@ -6,6 +6,38 @@ set -eu
 # half-applied migrations in _prisma_migrations).
 trap 'exit 143' TERM INT
 
+# Refuse to boot with placeholder or publicly leaked secrets. The LiveKit
+# key/secret pair is an admin credential for the SFU, and one pair was once
+# committed to this public repo (compared by SHA-256 here, never stored).
+# Run ./scripts/sync-livekit-keys.sh on the host to generate fresh values.
+node -e "
+const crypto = require('crypto');
+const leaked = new Set([
+  '8c672724f5fe8ec105a9a97bf37d9f36e891891bde4d082f26d9478ba7128bc3',
+  '2a8915bd005c7ae07faa331d2700c50ae29f58dc3e506dfbd77bb19b232acc36',
+]);
+const weak = (name, v, minLen) => {
+  if (!v) return 'missing';
+  if (/^(change-?me|replace-with|replace-me|placeholder)/i.test(v)) return 'a placeholder';
+  if (name === 'LIVEKIT_API_KEY' && v === 'devkey') return 'the old devkey';
+  if (leaked.has(crypto.createHash('sha256').update(v).digest('hex'))) return 'a known-leaked value';
+  if (minLen && v.length < minLen) return 'too short';
+  return '';
+};
+const bad = [
+  ['LIVEKIT_API_KEY', 0],
+  ['LIVEKIT_API_SECRET', 32],
+  ['NEXTAUTH_SECRET', 32],
+]
+  .map(([k, n]) => [k, weak(k, process.env[k] || '', n)])
+  .filter(([, why]) => why);
+if (bad.length) {
+  for (const [k, why] of bad) console.error('[classroom] FATAL: ' + k + ' is ' + why + '.');
+  console.error('[classroom] Run ./scripts/sync-livekit-keys.sh on the host (generates fresh values into .env), then recreate livekit and web.');
+  process.exit(1);
+}
+"
+
 # Parse the DB host/port properly. The previous regex mis-parsed any password
 # containing '@' and could not read IPv6 or URL-encoded credentials.
 DB_HOST=$(node -e "
