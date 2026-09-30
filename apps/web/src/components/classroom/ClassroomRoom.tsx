@@ -40,7 +40,12 @@ import { LocalPreview } from './LocalPreview';
 import { ChatView, useChatThread } from './Chat';
 import { FloatingPanel } from './FloatingPanel';
 import { ScreenAnnotator, useScreenAnnotate, ANNOTATE_COLORS, type AnnotateMode } from './ScreenAnnotator';
-import { TeacherShareHud } from './TeacherShareHud';
+import {
+  TeacherShareHud,
+  beginShareControls,
+  preopenShareControls,
+  type ShareControlSurface,
+} from './TeacherShareHud';
 import { Avatar } from '@/components/ui/Avatar';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -313,16 +318,16 @@ function TeacherScreenStage({
       {screens.map((t) => (
         <div key={`${t.participant.identity}-${t.source}`} className="absolute inset-0">
           <div className="relative h-full w-full">
-            <div ref={t === primary ? frameRef : undefined} className="h-full w-full">
+            <div ref={t === primary ? frameRef : undefined} className="relative h-full w-full">
               {t.publication?.track ? (
                 <VideoTrack trackRef={t} className="h-full w-full object-contain" />
               ) : (
                 <div className="flex h-full items-center justify-center text-slate-400">No screen</div>
               )}
+              {t === primary && (
+                <ScreenAnnotator frameRef={frameRef} strokes={annotate.strokes} />
+              )}
             </div>
-            {t === primary && (
-              <ScreenAnnotator frameRef={frameRef} strokes={annotate.strokes} />
-            )}
           </div>
         </div>
       ))}
@@ -484,7 +489,7 @@ function canShareScreen(): boolean {
 /** Human-readable reason when screen share fails or is unavailable. */
 function screenShareErrorMessage(err: unknown): string {
   if (!canShareScreen()) {
-    return 'This browser cannot share a screen. iPhone, iPad, and Android browsers do not support screen capture. Use a computer, or the Classroom Android app. Controls still open so you can teach from this device.';
+    return 'This browser cannot share a screen. iPhone, iPad, and Android browsers do not support screen capture. Use a computer, or the Classroom Android app.';
   }
   const name =
     err && typeof err === 'object' && 'name' in err ? String((err as { name: unknown }).name) : '';
@@ -498,13 +503,63 @@ function screenShareErrorMessage(err: unknown): string {
   if (name === 'AbortError' || /abort|cancel/i.test(msg)) {
     return 'Screen share was cancelled.';
   }
-  return 'Could not start screen share. Try again, or use a desktop browser.';
+  if (name === 'NotFoundError') {
+    return 'No screen was selected.';
+  }
+  if (name === 'SecurityError' || (typeof window !== 'undefined' && window.isSecureContext === false)) {
+    return 'Screen share needs a secure https page. Open the class from the https address.';
+  }
+  return 'Could not start screen share. Try again, or use desktop Chrome, Edge, Firefox, or Safari.';
+}
+
+function isSharePermissionError(err: unknown): boolean {
+  const name = err && typeof err === 'object' && 'name' in err ? String((err as { name: unknown }).name) : '';
+  return name === 'NotAllowedError' || name === 'AbortError';
+}
+
+/**
+ * Start the capture prompt. Called synchronously from the click, before any
+ * await, so the browser still treats it as a user gesture. Rich hints are
+ * attempted first; permission errors are not retried. Safari skips resolution
+ * constraints because specifying them captures a tiny frame.
+ */
+function captureScreen(): Promise<MediaStream> {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
+  const safari = /safari/i.test(ua) && !/chrome|chromium|crios|edg|android|fxios/i.test(ua);
+  const bare = () => navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+  if (safari) return bare();
+
+  const withHints = {
+    video: {
+      frameRate: { ideal: 15, max: 30 },
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
+    },
+    audio: false as const,
+    selfBrowserSurface: 'include',
+    surfaceSwitching: 'include',
+    systemAudio: 'exclude',
+    monitorTypeSurfaces: 'include',
+  };
+
+  try {
+    const attempt = navigator.mediaDevices.getDisplayMedia(
+      withHints as DisplayMediaStreamOptions
+    );
+    return attempt.catch((err: unknown) => {
+      if (isSharePermissionError(err)) throw err;
+      return bare();
+    });
+  } catch (err) {
+    if (isSharePermissionError(err)) return Promise.reject(err);
+    return bare();
+  }
 }
 
 
 const PEER_TOP_RESERVE = 152;
-/** Above the dock. */
-const PEER_BOTTOM_RESERVE = 220;
+/** Above the teacher dock. The share bar is no longer in this page. */
+const PEER_BOTTOM_RESERVE = 120;
 
 function peerFloatLayout(slots: 2 | 4 | 6, vw: number, vh: number) {
   const cols = slots === 6 ? 2 : 1;
@@ -532,16 +587,42 @@ function peerFloatLayout(slots: 2 | 4 | 6, vw: number, vh: number) {
 function TeacherCameraFloat({
   teacherIdentities,
   roomCode,
+  selfName,
+  selfStream,
+  camOn,
 }: {
   teacherIdentities: string[];
   roomCode: string;
+  selfName: string;
+  selfStream: MediaStream | null;
+  camOn: boolean;
 }) {
   const room = useRoomContext();
   const teacherSet = new Set(teacherIdentities);
   const [tick, setTick] = useState(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const selfVideoRef = useRef<HTMLVideoElement | null>(null);
   const paneRef = useRef<HTMLDivElement | null>(null);
-  const sizeRef = useRef({ w: 186, h: 105 });
+  const sizeRef = useRef({ w: 360, h: 160 });
+  type SelfMode = 'show' | 'min' | 'off';
+  const selfKey = `student_self_${roomCode.toUpperCase()}`;
+  const paneKey = `student_media_min_${roomCode.toUpperCase()}`;
+  const [selfMode, setSelfMode] = useState<SelfMode>(() => {
+    try {
+      const v = sessionStorage.getItem(selfKey);
+      if (v === 'show' || v === 'min' || v === 'off') return v;
+    } catch {
+      /* ignore */
+    }
+    return 'show';
+  });
+  const [paneMin, setPaneMin] = useState(() => {
+    try {
+      return sessionStorage.getItem(paneKey) === '1';
+    } catch {
+      return false;
+    }
+  });
 
   const defaultPos = useCallback((): FloatPos => {
     const w = sizeRef.current.w;
@@ -549,23 +630,40 @@ function TeacherCameraFloat({
     return clampFloatPos(window.innerWidth - w - 12, window.innerHeight - h - 100, w, h);
   }, []);
 
-  const { pos, dragHandlers } = useDraggableFloat(
+  const { pos, reclamp, dragHandlers } = useDraggableFloat(
     `teacher_cam_pos_${roomCode.toUpperCase()}`,
     defaultPos,
     sizeRef
   );
 
   useEffect(() => {
+    try {
+      sessionStorage.setItem(selfKey, selfMode);
+    } catch {
+      /* ignore */
+    }
+  }, [selfKey, selfMode]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(paneKey, paneMin ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  }, [paneKey, paneMin]);
+
+  useEffect(() => {
     const el = paneRef.current;
     if (!el) return;
     const sync = () => {
       sizeRef.current = { w: el.offsetWidth || 186, h: el.offsetHeight || 105 };
+      reclamp();
     };
     sync();
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null;
     ro?.observe(el);
     return () => ro?.disconnect();
-  }, []);
+  }, [reclamp, paneMin, selfMode]);
 
   useEffect(() => {
     if (!room) return;
@@ -644,33 +742,113 @@ function TeacherCameraFloat({
     return () => {
       el.srcObject = null;
     };
-  }, [mediaTrack]);
+  }, [mediaTrack, paneMin]);
 
   const hasVideo = !!mediaTrack && !teacherPub?.isMuted;
-  // Hide the floating pane entirely when the teacher is not publishing camera.
-  if (!hasVideo) return null;
+
+  useEffect(() => {
+    const el = selfVideoRef.current;
+    if (!el) return;
+    const track = selfStream?.getVideoTracks().find((t) => t.readyState === 'live') ?? null;
+    if (!track || selfMode !== 'show' || paneMin) {
+      el.srcObject = null;
+      return;
+    }
+    el.srcObject = new MediaStream([track]);
+    void el.play().catch(() => {});
+    return () => {
+      el.srcObject = null;
+    };
+  }, [selfStream, selfMode, paneMin, camOn]);
 
   const style = pos ? { left: pos.x, top: pos.y } : { right: 12, bottom: 88 };
+  const showSelfTile = selfMode === 'show';
 
   return (
     <div
       ref={paneRef}
-      className="teacher-float-pane"
+      className="student-media-float"
+      data-minimized={paneMin ? '1' : '0'}
       style={style}
-      aria-label="Teacher camera — drag to move"
+      aria-label="Videos — drag to move"
       title="Drag to move"
       {...dragHandlers}
     >
-      <video
-        ref={videoRef}
-        className="pointer-events-none h-full w-full object-cover"
-        autoPlay
-        playsInline
-        muted
-      />
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-2.5 pb-2 pt-6">
-        <span className="text-2xs font-semibold tracking-wide text-white">{teacherName}</span>
-      </div>
+      {paneMin ? (
+        <div className="student-media-restore">
+          <span>Videos</span>
+          <button type="button" className="student-media-btn" onClick={() => setPaneMin(false)}>
+            Show videos
+          </button>
+        </div>
+      ) : (
+        <>
+          <div className="student-media-head">
+            <span className="student-media-title">Videos</span>
+            <span className="flex items-center gap-1">
+              {selfMode === 'off' && (
+                <button type="button" className="student-media-btn" onClick={() => setSelfMode('show')}>
+                  Show me
+                </button>
+              )}
+              <button type="button" className="student-media-btn" onClick={() => setPaneMin(true)}>
+                Minimize
+              </button>
+            </span>
+          </div>
+          <div className="student-media-row">
+            {hasVideo && (
+              <div className="student-media-tile" aria-label="Teacher camera">
+                <video
+                  ref={videoRef}
+                  className="pointer-events-none h-full w-full object-cover"
+                  autoPlay
+                  playsInline
+                  muted
+                />
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-2 pb-1 pt-4">
+                  <span className="text-2xs font-semibold tracking-wide text-white">{teacherName}</span>
+                </div>
+              </div>
+            )}
+            {showSelfTile && (
+              <div className="student-media-tile" aria-label="Your camera">
+                {camOn && selfStream ? (
+                  <video
+                    ref={selfVideoRef}
+                    className="student-media-mirror pointer-events-none h-full w-full object-cover"
+                    autoPlay
+                    playsInline
+                    muted
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center px-2 text-center text-[10px] text-slate-300">
+                    Camera off
+                  </div>
+                )}
+                <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-1 bg-gradient-to-t from-black/75 to-transparent px-1.5 pb-1 pt-4">
+                  <span className="pointer-events-none truncate text-2xs font-semibold text-white">
+                    {selfName || 'Me'}
+                  </span>
+                  <span className="flex gap-1">
+                    <button type="button" className="student-media-btn" onClick={() => setSelfMode('min')}>
+                      Min
+                    </button>
+                    <button type="button" className="student-media-btn" onClick={() => setSelfMode('off')}>
+                      Hide
+                    </button>
+                  </span>
+                </div>
+              </div>
+            )}
+            {selfMode === 'min' && (
+              <button type="button" className="student-media-me" onClick={() => setSelfMode('show')}>
+                Me
+              </button>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1579,6 +1757,13 @@ function RoomInner({
   /** Teacher still wants the screen shared across a LiveKit reconnect. */
   const shareWantedRef = useRef(false);
   const shareEndTimer = useRef<number | null>(null);
+  const shareWindowRef = useRef<Window | null>(null);
+  const shareCloseRef = useRef<(() => void) | null>(null);
+  const shareHideCleanup = useRef<(() => void) | null>(null);
+  const closingShareRef = useRef(false);
+  const shareStartRef = useRef(false);
+  const [shareMount, setShareMount] = useState<HTMLElement | null>(null);
+  const [shareWindow, setShareWindow] = useState<Window | null>(null);
   const { state, refresh } = useRoomState(code, 2000);
   /** Student-camera cap chosen from the float, shown before the next poll confirms it. */
   const [sampleCap, setSampleCap] = useState<number | null>(null);
@@ -1797,10 +1982,71 @@ function RoomInner({
       window.clearTimeout(shareEndTimer.current);
       shareEndTimer.current = null;
     }
+    closingShareRef.current = true;
+    shareHideCleanup.current?.();
+    shareHideCleanup.current = null;
+    const close = shareCloseRef.current;
+    shareCloseRef.current = null;
+    shareWindowRef.current = null;
+    try {
+      close?.();
+    } catch {
+      /* ignore */
+    }
+    closingShareRef.current = false;
+    setShareWindow(null);
+    setShareMount(null);
     setScreenOn(false);
     setHudOpen(false);
     setHudNotice('');
     setAnnotateOn(false);
+  }, []);
+
+  const attachShareSurface = useCallback((surface: ShareControlSurface | null) => {
+    shareHideCleanup.current?.();
+    shareHideCleanup.current = null;
+    const prevClose = shareCloseRef.current;
+    const prevWin = shareWindowRef.current;
+    shareCloseRef.current = null;
+    shareWindowRef.current = null;
+    if (prevClose && prevWin && (!surface || prevWin !== surface.window)) {
+      closingShareRef.current = true;
+      try {
+        prevClose();
+      } catch {
+        /* ignore */
+      }
+      closingShareRef.current = false;
+    }
+    if (!surface || surface.window.closed) {
+      setShareWindow(null);
+      setShareMount(null);
+      setHudOpen(false);
+      return;
+    }
+    shareWindowRef.current = surface.window;
+    shareCloseRef.current = surface.close;
+    const onHide = () => {
+      // The teacher closed the controls. The share keeps going; the page
+      // offers a button to open the window again. Do not dock the bar back.
+      if (closingShareRef.current) return;
+      shareWindowRef.current = null;
+      shareCloseRef.current = null;
+      setShareWindow(null);
+      setShareMount(null);
+      setHudOpen(false);
+    };
+    surface.window.addEventListener('pagehide', onHide);
+    shareHideCleanup.current = () => {
+      try {
+        surface.window.removeEventListener('pagehide', onHide);
+      } catch {
+        /* ignore */
+      }
+    };
+    setShareWindow(surface.window);
+    setShareMount(surface.mount);
+    setHudOpen(true);
   }, []);
 
   // The browser's own "Stop sharing" bar ends the capture. A reconnect only
@@ -1849,7 +2095,8 @@ function RoomInner({
         shareEndTimer.current = null;
       }
       setScreenOn(true);
-      setHudOpen(true);
+      const win = shareWindowRef.current;
+      if (win && !win.closed) setHudOpen(true);
       void postStage('screen');
     };
 
@@ -1874,21 +2121,46 @@ function RoomInner({
     return () => window.removeEventListener('freeze', keepAlive, true);
   }, []);
 
-  /** Re-show the compact share bar if the teacher hid it. */
-  const openShareHud = useCallback(() => {
-    setHudOpen(true);
-    setHudNotice('');
+  useEffect(() => {
+    return () => {
+      closingShareRef.current = true;
+      shareHideCleanup.current?.();
+      try {
+        shareCloseRef.current?.();
+      } catch {
+        /* ignore */
+      }
+    };
   }, []);
 
+  /** Re-open the controls window. Must run in the click, before any await. */
+  const reopenShareControls = useCallback(() => {
+    const pending = beginShareControls();
+    void pending.then((surface) => {
+      if (!shareWantedRef.current) {
+        surface?.close();
+        return;
+      }
+      if (!surface) {
+        setHudNotice(
+          'The browser blocked the share controls window. Allow pop-ups for this site, then try Open share controls again.'
+        );
+        return;
+      }
+      attachShareSurface(surface);
+      setHudNotice('');
+    });
+  }, [attachShareSurface]);
+
   /**
-   * One click must both start getDisplayMedia AND show the teacher HUD.
-   * Previously the HUD (Document PiP / popup) ran first and consumed the user
-   * gesture, so share only started on the second click. The HUD is now an
-   * inline compact bar that does not need a gesture — start share first.
+   * The click fires getDisplayMedia and the controls window in the same turn,
+   * before any await. Awaiting either one first spends the user gesture, and
+   * the other call is rejected.
    */
   const toggleScreen = useCallback(async () => {
     if (!localParticipant || !isTeacher) return;
     if (screenOn) {
+      shareWantedRef.current = false;
       stageSwitchRef.current = true;
       try {
         await enqueueLocalPublish(async () => {
@@ -1906,47 +2178,109 @@ function RoomInner({
       return;
     }
 
-    // Unsupported browsers: still open the HUD with a clear reason (no silent no-op).
+    if (shareStartRef.current) return;
+
     if (!canShareScreen()) {
-      setHudOpen(true);
       setHudNotice(screenShareErrorMessage(null));
-      setChatOpen(false);
-      setRosterOpen(false);
       return;
     }
 
+    shareStartRef.current = true;
+    const controlsPromise = beginShareControls();
+    const streamPromise = captureScreen();
+
+    let stream: MediaStream;
     try {
-      shareWantedRef.current = true;
-      await enqueueLocalPublish(async () => {
-        await localParticipant.setScreenShareEnabled(
-          true,
-          {
-            audio: false,
-            contentHint: 'detail',
-            resolution: { width: 1280, height: 720, frameRate: 15 },
-          },
-          {
-            simulcast: false,
-            screenShareEncoding: { maxBitrate: 1_200_000, maxFramerate: 15 },
-          }
-        );
-      });
-      setScreenOn(true);
-      setHudOpen(true);
-      setChatOpen(false);
-      setRosterOpen(false);
-      setHudNotice('');
-      await postStage('screen');
+      stream = await streamPromise;
     } catch (e) {
-      shareWantedRef.current = false;
+      shareStartRef.current = false;
+      const controls = await controlsPromise.catch(() => null);
+      controls?.close();
       console.warn('screen share', e);
       setScreenOn(false);
-      setHudOpen(true);
       setHudNotice(screenShareErrorMessage(e));
-      setChatOpen(false);
-      setRosterOpen(false);
+      return;
     }
-  }, [localParticipant, screenOn, isTeacher, postStage, endShareSession]);
+
+    const media = stream.getVideoTracks()[0];
+    stream.getAudioTracks().forEach((track) => {
+      try {
+        track.stop();
+      } catch {
+        /* ignore */
+      }
+    });
+    if (!media || media.readyState === 'ended') {
+      shareStartRef.current = false;
+      try {
+        media?.stop();
+      } catch {
+        /* ignore */
+      }
+      const controls = await controlsPromise.catch(() => null);
+      controls?.close();
+      setHudNotice('No screen was selected.');
+      return;
+    }
+    try {
+      media.contentHint = 'detail';
+    } catch {
+      /* Safari may reject the hint */
+    }
+
+    shareWantedRef.current = true;
+    try {
+      const published = new LocalVideoTrack(media, undefined, true);
+      await enqueueLocalPublish(async () => {
+        await localParticipant.publishTrack(published, {
+          name: 'screen',
+          source: Track.Source.ScreenShare,
+          simulcast: false,
+          screenShareEncoding: { maxBitrate: 1_500_000, maxFramerate: 15 },
+        });
+      });
+    } catch (e) {
+      shareWantedRef.current = false;
+      shareStartRef.current = false;
+      try {
+        media.stop();
+      } catch {
+        /* ignore */
+      }
+      const controls = await controlsPromise.catch(() => null);
+      controls?.close();
+      console.warn('screen share', e);
+      setScreenOn(false);
+      setHudNotice(screenShareErrorMessage(e));
+      return;
+    }
+
+    const controls = await controlsPromise.catch(() => null);
+    attachShareSurface(controls);
+    if (!controls) {
+      setHudNotice(
+        'Screen is sharing, but the browser blocked the controls window. Allow pop-ups, then use Open share controls.'
+      );
+    }
+    setScreenOn(true);
+    setChatOpen(false);
+    setRosterOpen(false);
+    shareStartRef.current = false;
+    await postStage('screen');
+
+    const onMediaEnded = () => {
+      if (!shareWantedRef.current || stageSwitchRef.current) return;
+      if (
+        room.state === ConnectionState.Reconnecting ||
+        room.state === ConnectionState.SignalReconnecting
+      ) {
+        return;
+      }
+      endShareSession();
+      void postStage('idle');
+    };
+    media.addEventListener('ended', onMediaEnded);
+  }, [localParticipant, screenOn, isTeacher, postStage, endShareSession, attachShareSurface, room]);
 
   async function leave() {
     await roomFetch(code, '/leave', {
@@ -2134,7 +2468,13 @@ function RoomInner({
           )}
         </div>
 
-        <TeacherCameraFloat teacherIdentities={teacherIdentities} roomCode={code} />
+        <TeacherCameraFloat
+          teacherIdentities={teacherIdentities}
+          roomCode={code}
+          selfName={displayName}
+          selfStream={localCamStream}
+          camOn={camOn}
+        />
 
         <div className="stage-float-chrome">
           <Controls
@@ -2227,8 +2567,8 @@ function RoomInner({
         </div>
 
         <div className="flex items-center gap-1.5 sm:gap-2">
-          {isTeacher && screenOn && !hudOpen && (
-            <Button variant="primary" size="sm" onClick={() => openShareHud()}>
+          {isTeacher && screenOn && !shareMount && (
+            <Button variant="primary" size="sm" onClick={() => reopenShareControls()}>
               <IconScreen size={14} />
               Open share controls
             </Button>
@@ -2492,9 +2832,11 @@ function RoomInner({
         onSlotsChange={(slots) => void setStudentCameraCap(slots)}
       />
 
-      {/* Share controls sit in the column, above the dock, so they never cover Mute / End. */}
-      {isTeacher && hudOpen && (
+      {/* Controls render only inside the pop-out. Nothing is painted here. */}
+      {isTeacher && shareMount && (
         <TeacherShareHud
+          host={shareMount}
+          hostWindow={shareWindow}
           admitted={state?.admitted ?? []}
           waiting={(state?.waiting ?? []).map((w) => ({
             id: w.id,
@@ -2528,10 +2870,6 @@ function RoomInner({
           annotateColor={annotateColor}
           onAnnotateColorChange={setAnnotateColor}
           notice={hudNotice || undefined}
-          onClose={() => {
-            // Closing the HUD must never stop the share.
-            setHudOpen(false);
-          }}
         />
       )}
 
@@ -2539,6 +2877,9 @@ function RoomInner({
       <footer className="shrink-0 border-t border-white/[0.06] bg-surface-1/90 px-3 py-2.5 backdrop-blur-xl sm:px-4">
         <Controls
           {...controlsProps}
+          onPrepareScreenShare={() => {
+            if (!screenOn && canShareScreen()) preopenShareControls();
+          }}
           onEnd={endClass}
           onRotateSample={rotateSample}
           onMuteAll={() => muteAllStudents(true)}

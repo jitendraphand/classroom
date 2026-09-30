@@ -247,6 +247,50 @@ body {
     cursor: grabbing;
   }
 
+  /* Student stage: teacher camera and the student's own preview, side by side. */
+  .student-media-float {
+    @apply absolute z-[35] w-max max-w-[calc(100vw-16px)] overflow-hidden rounded-2xl border border-white/20 bg-black/80 shadow-lift backdrop-blur-md;
+    touch-action: none;
+    cursor: grab;
+  }
+  .student-media-float:active {
+    cursor: grabbing;
+  }
+  .student-media-float[data-minimized='1'] {
+    width: auto;
+    height: auto;
+  }
+  .student-media-head,
+  .student-media-restore {
+    @apply flex items-center justify-between gap-2 px-2 py-1;
+  }
+  .student-media-restore {
+    @apply text-2xs font-semibold text-white;
+  }
+  .student-media-title {
+    @apply text-2xs font-semibold tracking-wide text-white/90;
+  }
+  .student-media-btn {
+    @apply rounded-md border border-white/15 bg-black/50 px-1.5 py-0.5 text-[10px] font-semibold text-white hover:bg-white/15;
+    cursor: pointer;
+  }
+  .student-media-row {
+    @apply flex items-stretch gap-1.5 p-1.5 pt-0;
+  }
+  .student-media-tile {
+    @apply relative shrink-0 overflow-hidden rounded-xl bg-black;
+    width: min(42vw, 168px);
+    aspect-ratio: 16 / 9;
+  }
+  .student-media-mirror {
+    transform: scaleX(-1);
+  }
+  .student-media-me {
+    @apply flex shrink-0 items-center rounded-xl border border-white/15 bg-black/60 px-3 text-2xs font-semibold text-white;
+    cursor: pointer;
+    min-height: 36px;
+  }
+
   /* Pane width/height are set inline for the selected slot count.
      Orientation lives here so 6 cannot flip into 3 columns. */
   .peers-float-pane {

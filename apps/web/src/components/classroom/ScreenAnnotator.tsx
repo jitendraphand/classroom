@@ -9,7 +9,7 @@ import {
   type RefObject,
 } from 'react';
 import { useRoomContext } from '@livekit/components-react';
-import { RoomEvent, type Room } from 'livekit-client';
+import { RoomEvent } from 'livekit-client';
 import { roomFetch } from '@/lib/classroomClient';
 
 /**
@@ -40,8 +40,11 @@ const MAX_PACKET_BYTES = 14_000;
 const MAX_STROKES = 400;
 /** Points per stroke are simplified beyond this (keeps a scribble cheap). */
 const MAX_POINTS_PER_STROKE = 1_200;
-/** Debounce before writing the Redis snapshot. */
-const PERSIST_DEBOUNCE_MS = 2_000;
+/** Debounce before writing the Redis snapshot. Short enough that a late joiner is not a stroke behind. */
+const PERSIST_DEBOUNCE_MS = 400;
+/** Coalesce pointer moves so a scribble is not one data packet per event. */
+const POINT_FLUSH_MS = 40;
+const POINT_FLUSH_COUNT = 6;
 
 export type AnnotateTool = 'pen' | 'highlighter';
 /** `eraser` is a pointer mode, not a stroke kind — nothing is recorded for it. */
@@ -60,9 +63,11 @@ export type AnnotateStroke = {
 type AnnotateMsg =
   | { v: 1; type: 'begin'; stroke: AnnotateStroke; from: string }
   | { v: 1; type: 'point'; id: string; p: AnnotatePoint; from: string }
+  | { v: 1; type: 'points'; id: string; pts: AnnotatePoint[]; from: string }
   | { v: 1; type: 'end'; id: string; from: string }
   | { v: 1; type: 'erase'; ids: string[]; from: string }
-  | { v: 1; type: 'clear'; from: string };
+  | { v: 1; type: 'clear'; from: string }
+  | { v: 1; type: 'snapshot'; strokes: AnnotateStroke[]; from: string };
 
 export const ANNOTATE_COLORS = ['#ef4444', '#22c55e', '#f59e0b', '#3b82f6', '#ffffff'];
 
@@ -80,23 +85,30 @@ function uid() {
 }
 
 /**
- * Where the video content actually lands inside its box, given
- * `object-contain` letterboxing. Falls back to the full box before the video has
- * reported its intrinsic size.
+ * Where the video pixels land inside the frame, given `object-contain`.
+ * Uses the real <video> box (LiveKit renders it inside the frame) so teacher
+ * and student letterboxing agree. Returns an empty rect until intrinsic size
+ * is known — mapping onto the whole tile is what made strokes miss.
  */
-function contentRect(
+function measureContent(
   frame: HTMLElement,
-  videoW: number,
-  videoH: number
+  video: HTMLVideoElement | null
 ): { x: number; y: number; w: number; h: number } {
-  const w = frame.clientWidth;
-  const h = frame.clientHeight;
-  if (!w || !h) return { x: 0, y: 0, w: 0, h: 0 };
-  if (!videoW || !videoH) return { x: 0, y: 0, w, h };
-  const scale = Math.min(w / videoW, h / videoH);
-  const dw = videoW * scale;
-  const dh = videoH * scale;
-  return { x: (w - dw) / 2, y: (h - dh) / 2, w: dw, h: dh };
+  const frameBox = frame.getBoundingClientRect();
+  if (!frameBox.width || !frameBox.height || !video) return { x: 0, y: 0, w: 0, h: 0 };
+  const videoBox = video.getBoundingClientRect();
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  if (!vw || !vh || !videoBox.width || !videoBox.height) return { x: 0, y: 0, w: 0, h: 0 };
+  const scale = Math.min(videoBox.width / vw, videoBox.height / vh);
+  const dw = vw * scale;
+  const dh = vh * scale;
+  return {
+    x: videoBox.left - frameBox.left + (videoBox.width - dw) / 2,
+    y: videoBox.top - frameBox.top + (videoBox.height - dh) / 2,
+    w: dw,
+    h: dh,
+  };
 }
 
 export type ScreenAnnotateApi = {
@@ -137,12 +149,24 @@ export function useScreenAnnotate(opts: {
   const draftRef = useRef<AnnotateStroke | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const identityRef = useRef('anon');
+  const pointBuf = useRef<{ id: string; pts: AnnotatePoint[] } | null>(null);
+  const pointTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loadedRef = useRef(false);
+  /** Bumps on every local or remote edit so a slow Redis read cannot wipe newer strokes. */
+  const revision = useRef(0);
 
   const commit = useCallback((next: AnnotateStroke[]) => {
+    revision.current += 1;
     const capped = next.length > MAX_STROKES ? next.slice(next.length - MAX_STROKES) : next;
     strokesRef.current = capped;
     setStrokes(capped);
   }, []);
+
+  const sender = useCallback(() => {
+    const id = room?.localParticipant?.identity;
+    if (id) identityRef.current = id;
+    return identityRef.current || 'anon';
+  }, [room]);
 
   useEffect(() => {
     if (room?.localParticipant?.identity) {
@@ -169,14 +193,23 @@ export function useScreenAnnotate(opts: {
 
   // Late joiners / reconnects pull the durable snapshot.
   const loadSnapshot = useCallback(async () => {
+    const seen = revision.current;
     try {
       const res = await roomFetch(code, '/annotate');
       if (!res.ok) return;
       const data = await res.json();
-      if (!Array.isArray(data.strokes)) return;
-      commit(data.strokes as AnnotateStroke[]);
+      const raw = data?.strokes;
+      const list = Array.isArray(raw)
+        ? raw
+        : raw && typeof raw === 'object' && Array.isArray(raw.strokes)
+          ? raw.strokes
+          : null;
+      if (!list || seen !== revision.current) return;
+      commit(list as AnnotateStroke[]);
     } catch {
       /* ignore */
+    } finally {
+      loadedRef.current = true;
     }
   }, [code, commit]);
 
@@ -223,9 +256,21 @@ export function useScreenAnnotate(opts: {
                 : { ...s, points: [...s.points, msg.p] }
             )
           );
+        } else if (msg.type === 'points') {
+          const incoming = Array.isArray(msg.pts) ? msg.pts : [];
+          commit(
+            strokesRef.current.map((s) => {
+              if (s.id !== msg.id || incoming.length === 0) return s;
+              const roomLeft = MAX_POINTS_PER_STROKE - s.points.length;
+              if (roomLeft <= 0) return s;
+              return { ...s, points: [...s.points, ...incoming.slice(0, roomLeft)] };
+            })
+          );
+        } else if (msg.type === 'snapshot') {
+          if (Array.isArray(msg.strokes)) commit(msg.strokes.slice(-MAX_STROKES));
         } else if (msg.type === 'end') {
-          // Nothing to do: the draft is already in the list and the final point
-          // arrived as a `point`.
+          // Nothing to do: the draft is already in the list and the final points
+          // arrived ahead of this message.
         } else if (msg.type === 'erase') {
           const drop = new Set(msg.ids);
           commit(strokesRef.current.filter((s) => !drop.has(s.id)));
@@ -240,12 +285,28 @@ export function useScreenAnnotate(opts: {
     return () => {
       room.off(RoomEvent.DataReceived, onData);
     };
-  }, [active, room]);
+  }, [active, room, commit]);
+
+  const writeSnapshot = useCallback(
+    (next: AnnotateStroke[]) => {
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+      }
+      void roomFetch(code, '/annotate', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ strokes: next }),
+      }).catch(() => undefined);
+    },
+    [code]
+  );
 
   const persist = useCallback(
     (next: AnnotateStroke[]) => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => {
+        saveTimer.current = null;
         void roomFetch(code, '/annotate', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -256,15 +317,37 @@ export function useScreenAnnotate(opts: {
     [code]
   );
 
+  const flushPoints = useCallback(() => {
+    if (pointTimer.current) {
+      clearTimeout(pointTimer.current);
+      pointTimer.current = null;
+    }
+    const buf = pointBuf.current;
+    pointBuf.current = null;
+    if (!buf || buf.pts.length === 0) return Promise.resolve();
+    return publish({ v: 1, type: 'points', id: buf.id, pts: buf.pts, from: sender() });
+  }, [publish, sender]);
+
+  const discardPoints = useCallback(() => {
+    if (pointTimer.current) {
+      clearTimeout(pointTimer.current);
+      pointTimer.current = null;
+    }
+    pointBuf.current = null;
+  }, []);
+
   useEffect(() => {
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
+      if (pointTimer.current) clearTimeout(pointTimer.current);
+      pointBuf.current = null;
     };
   }, []);
 
   const begin = useCallback(
     (p: AnnotatePoint, tool: AnnotateTool, color: string) => {
       if (!active || !canDraw) return;
+      flushPoints();
       const point: AnnotatePoint = [clamp01(p[0]), clamp01(p[1])];
       const stroke: AnnotateStroke = {
         id: uid(),
@@ -275,9 +358,9 @@ export function useScreenAnnotate(opts: {
       };
       draftRef.current = stroke;
       commit([...strokesRef.current, stroke]);
-      void publish({ v: 1, type: 'begin', stroke, from: identityRef.current });
+      void publish({ v: 1, type: 'begin', stroke, from: sender() });
     },
-    [active, canDraw, publish, commit]
+    [active, canDraw, publish, commit, flushPoints, sender]
   );
 
   const extend = useCallback(
@@ -290,18 +373,37 @@ export function useScreenAnnotate(opts: {
       const updated: AnnotateStroke = { ...draft, points: [...draft.points, point] };
       draftRef.current = updated;
       commit(strokesRef.current.map((s) => (s.id === updated.id ? updated : s)));
-      void publish({ v: 1, type: 'point', id: updated.id, p: point, from: identityRef.current });
+      const buf = pointBuf.current;
+      if (!buf || buf.id !== updated.id) {
+        flushPoints();
+        pointBuf.current = { id: updated.id, pts: [point] };
+      } else {
+        buf.pts.push(point);
+      }
+      const pending = pointBuf.current;
+      if (pending && pending.pts.length >= POINT_FLUSH_COUNT) {
+        flushPoints();
+      } else if (!pointTimer.current) {
+        pointTimer.current = setTimeout(() => {
+          pointTimer.current = null;
+          flushPoints();
+        }, POINT_FLUSH_MS);
+      }
     },
-    [active, canDraw, publish, commit]
+    [active, canDraw, commit, flushPoints]
   );
 
   const end = useCallback(() => {
     const draft = draftRef.current;
     if (!draft) return;
     draftRef.current = null;
-    void publish({ v: 1, type: 'end', id: draft.id, from: identityRef.current });
-    persist(strokesRef.current);
-  }, [publish, persist]);
+    const id = draft.id;
+    void (async () => {
+      await flushPoints();
+      await publish({ v: 1, type: 'end', id, from: sender() });
+      persist(strokesRef.current);
+    })();
+  }, [publish, persist, flushPoints, sender]);
 
   const eraseAt = useCallback(
     (p: AnnotatePoint) => {
@@ -321,33 +423,60 @@ export function useScreenAnnotate(opts: {
       if (!hit.length) return;
       commit(kept);
       persist(kept);
-      void publish({ v: 1, type: 'erase', ids: hit, from: identityRef.current });
+      void publish({ v: 1, type: 'erase', ids: hit, from: sender() });
     },
-    [active, canDraw, publish, persist, commit]
+    [active, canDraw, publish, persist, commit, sender]
   );
 
   const clear = useCallback(() => {
     if (!active) return;
     draftRef.current = null;
+    discardPoints();
     commit([]);
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    void publish({ v: 1, type: 'clear', from: identityRef.current });
+    void publish({ v: 1, type: 'clear', from: sender() });
     // Drop the durable copy too, otherwise the next late joiner resurrects it.
-    void roomFetch(code, '/annotate', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ strokes: [] }),
-    }).catch(() => undefined);
-  }, [active, code, publish, commit]);
+    writeSnapshot([]);
+  }, [active, publish, commit, discardPoints, sender, writeSnapshot]);
+
+  // A student who joins mid-share never saw the live packets. Push the current
+  // layer immediately; fall back to Redis when it will not fit in one packet.
+  useEffect(() => {
+    if (!active || !room || !canDraw) return;
+    const send = () => {
+      if (!loadedRef.current) return;
+      const from = sender();
+      void (async () => {
+        // Pending points are already in the stroke list. Ship them first so a
+        // snapshot that follows cannot be applied and then doubled.
+        await flushPoints();
+        const strokes = strokesRef.current;
+        const msg: AnnotateMsg = { v: 1, type: 'snapshot', strokes, from };
+        let bytes = MAX_PACKET_BYTES + 1;
+        try {
+          bytes = encoder ? encoder.encode(JSON.stringify(msg)).byteLength : bytes;
+        } catch {
+          bytes = MAX_PACKET_BYTES + 1;
+        }
+        if (bytes <= MAX_PACKET_BYTES) await publish(msg);
+        else writeSnapshot(strokes);
+      })();
+    };
+    room.on(RoomEvent.ParticipantConnected, send);
+    return () => {
+      room.off(RoomEvent.ParticipantConnected, send);
+    };
+  }, [active, room, canDraw, publish, sender, writeSnapshot, flushPoints]);
 
   // Turning the stage off must not leave a stale layer behind for the next share.
   useEffect(() => {
     if (!active) {
       draftRef.current = null;
+      discardPoints();
+      loadedRef.current = false;
       commit([]);
       if (saveTimer.current) clearTimeout(saveTimer.current);
     }
-  }, [active, commit]);
+  }, [active, commit, discardPoints]);
 
   return useMemo(
     () => ({ strokes, begin, extend, end, eraseAt, clear }),
@@ -397,46 +526,80 @@ export function ScreenAnnotator({
   const [rect, setRect] = useState({ x: 0, y: 0, w: 0, h: 0 });
   const drawingRef = useRef(false);
 
-  // Recompute on resize and whenever the video reports its intrinsic size.
+  // The <video> is attached by LiveKit after this layer mounts. Watch the frame
+  // until the element exists and reports videoWidth, then track its box.
   useEffect(() => {
     const frame = frameRef.current;
-    const video = videoRef?.current ?? null;
     if (!frame) return;
+    let video: HTMLVideoElement | null = null;
+    let stopped = false;
+    let interval = 0;
+    let metaCleanup: (() => void) | null = null;
 
     const measure = () => {
-      const next = contentRect(
-        frame,
-        video?.videoWidth ?? 0,
-        video?.videoHeight ?? 0
-      );
+      if (stopped) return;
+      const next = measureContent(frame, video);
       setRect((prev) =>
-        prev.x === next.x && prev.y === next.y && prev.w === next.w && prev.h === next.h
-          ? prev
-          : next
+        prev.x === next.x && prev.y === next.y && prev.w === next.w && prev.h === next.h ? prev : next
       );
     };
+    const videoRo = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => measure()) : null;
 
-    measure();
-    if (typeof ResizeObserver !== 'undefined') {
-      const ro = new ResizeObserver(measure);
-      ro.observe(frame);
-      return () => ro.disconnect();
-    }
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
-  }, [frameRef, videoRef]);
-
-  // A late-loading screen share can change aspect after first paint.
-  useEffect(() => {
-    const video = videoRef?.current;
-    if (!video) return;
-    const onMeta = () => {
-      const frame = frameRef.current;
-      if (!frame) return;
-      setRect(contentRect(frame, video.videoWidth, video.videoHeight));
+    const bindVideo = (next: HTMLVideoElement | null) => {
+      if (next === video) return;
+      metaCleanup?.();
+      metaCleanup = null;
+      if (video) videoRo?.unobserve(video);
+      video = next;
+      if (!video) return;
+      const onMeta = () => measure();
+      video.addEventListener('loadedmetadata', onMeta);
+      video.addEventListener('resize', onMeta);
+      video.addEventListener('loadeddata', onMeta);
+      videoRo?.observe(video);
+      metaCleanup = () => {
+        video?.removeEventListener('loadedmetadata', onMeta);
+        video?.removeEventListener('resize', onMeta);
+        video?.removeEventListener('loadeddata', onMeta);
+      };
+      measure();
     };
-    video.addEventListener('loadedmetadata', onMeta);
-    return () => video.removeEventListener('loadedmetadata', onMeta);
+
+    const scan = () => {
+      const found = videoRef?.current ?? frame.querySelector('video');
+      bindVideo(found);
+      if (found && found.videoWidth > 0 && interval) {
+        window.clearInterval(interval);
+        interval = 0;
+      }
+    };
+
+    scan();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => {
+      scan();
+      measure();
+    }) : null;
+    ro?.observe(frame);
+    const mo = typeof MutationObserver !== 'undefined' ? new MutationObserver(scan) : null;
+    mo?.observe(frame, { childList: true, subtree: true });
+    const started = Date.now();
+    interval = window.setInterval(() => {
+      scan();
+      if ((video && video.videoWidth > 0) || Date.now() - started > 8000) {
+        window.clearInterval(interval);
+        interval = 0;
+      }
+    }, 500);
+    window.addEventListener('resize', measure);
+    return () => {
+      stopped = true;
+      ro?.disconnect();
+      videoRo?.disconnect();
+      mo?.disconnect();
+      metaCleanup?.();
+      if (interval) window.clearInterval(interval);
+      window.removeEventListener('resize', measure);
+    };
   }, [frameRef, videoRef]);
 
   const toLocal = useCallback(
@@ -501,8 +664,9 @@ export function ScreenAnnotator({
         top: rect.y,
         width: rect.w,
         height: rect.h,
-        // Above the video element it overlays; below nothing.
-        zIndex: 2,
+        zIndex: 5,
+        touchAction: 'none',
+        cursor: canDraw ? 'crosshair' : 'default',
         // Read-only overlays must not swallow taps meant for the controls
         // beneath them.
         pointerEvents: canDraw ? 'auto' : 'none',
@@ -512,7 +676,7 @@ export function ScreenAnnotator({
         className="h-full w-full"
         viewBox={`0 0 ${VB} ${VB}`}
         preserveAspectRatio="none"
-        style={{ touchAction: 'none', overflow: 'visible' }}
+        style={{ touchAction: 'none', overflow: 'visible', cursor: canDraw ? 'crosshair' : 'default' }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}

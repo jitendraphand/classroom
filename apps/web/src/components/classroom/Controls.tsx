@@ -46,6 +46,12 @@ type Props = {
   /** Student raise-hand */
   handRaised?: boolean;
   onToggleHand?: () => void;
+  /**
+   * Fired on pointer-down / Enter / Space before the share click, so Firefox
+   * and Safari can open the controls popup without consuming the gesture that
+   * getDisplayMedia needs.
+   */
+  onPrepareScreenShare?: () => void;
 };
 
 export function Controls({
@@ -73,6 +79,7 @@ export function Controls({
   rosterBadge = 0,
   handRaised,
   onToggleHand,
+  onPrepareScreenShare,
 }: Props) {
   void _canPublishVideo;
   const micLocked = !!mutedByTeacher && !isTeacher;
@@ -119,6 +126,13 @@ export function Controls({
           <IconButton
             label={screenOn ? 'Stop sharing screen' : 'Share screen'}
             active={screenOn}
+            onPointerDown={() => {
+              if (!screenOn) onPrepareScreenShare?.();
+            }}
+            onKeyDown={(e) => {
+              if (screenOn) return;
+              if (e.key === 'Enter' || e.key === ' ') onPrepareScreenShare?.();
+            }}
             onClick={onToggleScreen}
           >
             <IconScreen />

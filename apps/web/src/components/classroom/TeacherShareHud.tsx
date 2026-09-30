@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { createPortal, flushSync } from 'react-dom';
+import { createPortal } from 'react-dom';
 import { Avatar } from '@/components/ui/Avatar';
 import {
   ANNOTATE_COLORS,
@@ -11,13 +11,11 @@ import {
 import { IconChat, IconHand, IconMic, IconMicOff, IconScreen, IconUsers } from '@/components/ui/Icons';
 
 /**
- * Compact teacher-only floating control bar shown while screen sharing.
- *
- * Intentionally inline (no Document PiP / popup): those consume the same user
- * gesture as getDisplayMedia, which caused the "first click opens HUD, second
- * click starts share" bug. A slim bar also works on mobile and stays small.
- *
- * Students never render this component.
+ * Teacher share controls. They render only inside a separate window (Document
+ * Picture-in-Picture where the browser has it, otherwise a same-origin popup).
+ * They are never painted in the classroom page, so a tab or window capture
+ * does not show them to students. Chromium also leaves the Picture-in-Picture
+ * window out of the capture.
  */
 
 export type RosterEntry = {
@@ -30,8 +28,10 @@ export type RosterEntry = {
 };
 
 export type TeacherShareHudProps = {
+  /** Mount node that lives in the control window, not in the classroom page. */
+  host: HTMLElement | null;
+  hostWindow: Window | null;
   admitted: RosterEntry[];
-  /** Students still in the waiting room. Admitted from this bar without stopping the share. */
   waiting?: RosterEntry[];
   waitingCount?: number;
   onAdmit?: (participantId: string) => void;
@@ -43,11 +43,8 @@ export type TeacherShareHudProps = {
   onMuteAll: (muted: boolean) => void;
   onLowerHand: (participantId: string) => void;
   chatUnread: number;
-  /** Shared chat thread UI. Unread is owned by the parent so it survives this panel closing. */
   chat?: ReactNode;
   onChatOpenChange?: (open: boolean) => void;
-  /** Closing the HUD never stops the share. */
-  onClose: () => void;
   annotate: ReturnType<typeof useScreenAnnotate>;
   annotateOn: boolean;
   onAnnotateOnChange: (on: boolean) => void;
@@ -55,7 +52,6 @@ export type TeacherShareHudProps = {
   onAnnotateModeChange: (mode: AnnotateMode) => void;
   annotateColor: string;
   onAnnotateColorChange: (color: string) => void;
-  /** Optional browser-limit tip shown under the bar (e.g. mobile). */
   notice?: string;
 };
 
@@ -63,64 +59,225 @@ type Panel = 'chat' | 'hands' | 'roster' | null;
 
 const TOOL_LABEL: Record<AnnotateMode, string> = {
   pen: 'Pen',
-  highlighter: 'Highlighter',
-  eraser: 'Eraser',
+  highlighter: 'Marker',
+  eraser: 'Erase',
 };
+
+const POPUP_FEATURES =
+  'popup=yes,width=860,height=72,menubar=no,toolbar=no,location=no,status=no,resizable=yes';
+
+type PictureInPictureApi = {
+  requestWindow: (opts: { width: number; height: number }) => Promise<Window>;
+};
+
+export type ShareControlSurface = {
+  window: Window;
+  mount: HTMLElement;
+  close: () => void;
+};
+
+let preparedWindow: Window | null = null;
+
+function pictureInPictureApi(): PictureInPictureApi | null {
+  if (typeof window === 'undefined' || !window.isSecureContext) return null;
+  const api = (window as Window & { documentPictureInPicture?: PictureInPictureApi })
+    .documentPictureInPicture;
+  if (!api || typeof api.requestWindow !== 'function') return null;
+  return api;
+}
+
+export function supportsDocumentPip(): boolean {
+  return pictureInPictureApi() !== null;
+}
+
+function controlUrl(): string {
+  // Static file, not the Next /hud route: that route boots the app layout,
+  // including idle logout, which would sign the teacher out from the popup.
+  return `${window.location.origin}/share-controls.html`;
+}
+
+/** Open the popup on pointer-down so Firefox and Safari still have a gesture for getDisplayMedia on click. */
+export function preopenShareControls() {
+  if (typeof window === 'undefined' || supportsDocumentPip()) return;
+  if (preparedWindow && !preparedWindow.closed) return;
+  const opened = window.open(controlUrl(), 'classroom-share-controls', POPUP_FEATURES);
+  preparedWindow = opened;
+  if (!opened) return;
+  window.setTimeout(() => {
+    if (preparedWindow === opened) {
+      try {
+        opened.close();
+      } catch {
+        /* ignore */
+      }
+      preparedWindow = null;
+    }
+  }, 2500);
+}
+
+function styleControlDocument(win: Window, mount: HTMLElement): ShareControlSurface {
+  const doc = win.document;
+  doc.title = 'Share controls';
+  const root = doc.documentElement;
+  const body = doc.body;
+  root.className = document.documentElement.className;
+  body.className = document.body.className;
+  root.style.background = '#0d1219';
+  root.style.height = 'auto';
+  body.style.margin = '0';
+  body.style.minHeight = '0';
+  body.style.height = 'auto';
+  body.style.background = '#0d1219';
+  body.style.overflow = 'hidden';
+  return {
+    window: win,
+    mount,
+    close: () => {
+      try {
+        win.close();
+      } catch {
+        /* ignore */
+      }
+    },
+  };
+}
+
+function copyParentStyles(win: Window) {
+  const head = win.document.head;
+  let base = head.querySelector('base');
+  if (!base) {
+    base = win.document.createElement('base');
+    head.prepend(base);
+  }
+  base.setAttribute('href', `${window.location.origin}/`);
+  head.querySelectorAll('[data-share-style="1"]').forEach((node) => node.remove());
+  document.querySelectorAll('style, link[rel="stylesheet"]').forEach((node) => {
+    const copy = node.cloneNode(true) as HTMLElement;
+    copy.setAttribute('data-share-style', '1');
+    head.appendChild(copy);
+  });
+}
+
+function mountIn(win: Window): HTMLElement {
+  const doc = win.document;
+  let mount = doc.getElementById('share-controls-root');
+  if (!mount) {
+    mount = doc.createElement('div');
+    mount.id = 'share-controls-root';
+  }
+  doc.body.replaceChildren(mount);
+  return mount;
+}
+
+function waitForWindow(win: Window): Promise<Window | null> {
+  return new Promise((resolve) => {
+    const finish = () => resolve(win.closed ? null : win);
+    try {
+      if (win.document.readyState === 'complete') {
+        finish();
+        return;
+      }
+    } catch {
+      resolve(null);
+      return;
+    }
+    const timer = window.setTimeout(finish, 4000);
+    win.addEventListener(
+      'load',
+      () => {
+        window.clearTimeout(timer);
+        finish();
+      },
+      { once: true }
+    );
+  });
+}
+
+function openPopupSurface(): Promise<ShareControlSurface | null> {
+  const existing = preparedWindow && !preparedWindow.closed ? preparedWindow : null;
+  preparedWindow = null;
+  const win = existing ?? window.open(controlUrl(), 'classroom-share-controls', POPUP_FEATURES);
+  if (!win) return Promise.resolve(null);
+  return waitForWindow(win).then((ready) => {
+    if (!ready || ready.closed) return null;
+    try {
+      copyParentStyles(ready);
+      return styleControlDocument(ready, mountIn(ready));
+    } catch {
+      return null;
+    }
+  });
+}
+
+/**
+ * Call synchronously inside the share click, before any await, so the browser
+ * still counts it as a user gesture. Chromium opens Document Picture-in-Picture.
+ * Other browsers reuse the popup opened on pointer-down, or open one now.
+ */
+export function beginShareControls(): Promise<ShareControlSurface | null> {
+  if (typeof window === 'undefined') return Promise.resolve(null);
+  const pip = pictureInPictureApi();
+  if (pip) {
+    let request: Promise<Window>;
+    try {
+      request = pip.requestWindow({ width: 860, height: 64 });
+    } catch {
+      return openPopupSurface();
+    }
+    return request
+      .then((win) => {
+        copyParentStyles(win);
+        return styleControlDocument(win, mountIn(win));
+      })
+      .catch(() => openPopupSurface());
+  }
+  return openPopupSurface();
+}
 
 const HUD_CSS = `
 .tsh{--bg:#0d1219;--line:rgba(255,255,255,.12);--text:#eef2ff;--dim:#94a3b8;--accent:#3385ff;--warn:#f59e0b;
-position:relative;z-index:40;width:min(560px,calc(100% - 16px));margin:0 auto 8px;flex-shrink:0;
-display:flex;flex-direction:column;gap:6px;pointer-events:none;
-font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:12px;line-height:1.3;color:var(--text)}
-.tsh-pip{width:auto;margin:0;padding:8px}
-.tsh-wait{pointer-events:auto;display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 8px;border-radius:12px;
-background:rgba(245,158,11,.16);border:1px solid rgba(245,158,11,.45);color:#fde68a}
-.tsh-wait-name{flex:1;min-width:0;font-weight:700;font-size:12px}
-.tsh-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+display:block;width:max-content;margin:0;background:#0d1219;color:var(--text);
+font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:12px;line-height:1.2}
 .tsh *{box-sizing:border-box}
-.tsh-bar,.tsh-tools,.tsh-panel,.tsh-tip{pointer-events:auto;background:rgba(13,18,25,.94);border:1px solid var(--line);
-backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);box-shadow:0 10px 36px rgba(0,0,0,.45)}
-.tsh-bar{display:flex;align-items:center;gap:4px;padding:5px 6px;border-radius:14px;flex-wrap:wrap}
-.tsh-tools{display:flex;align-items:center;gap:4px;padding:5px 7px;border-radius:12px;flex-wrap:wrap}
-.tsh-panel{border-radius:14px;overflow:hidden;max-height:min(42dvh,360px);display:flex;flex-direction:column}
-.tsh-tip{border-radius:10px;padding:6px 9px;font-size:10.5px;line-height:1.4;color:#fde68a;background:rgba(245,158,11,.16);border-color:rgba(245,158,11,.35)}
-.tsh-live{font-size:8px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;padding:2px 6px;border-radius:999px;
+.tsh-bar{display:flex;align-items:center;gap:3px;flex-wrap:nowrap;width:max-content;
+padding:4px 6px;overflow-x:auto;background:#0d1219}
+.tsh-panel{width:min(420px,100vw);max-height:280px;display:flex;flex-direction:column;border-top:1px solid var(--line);background:#0d1219}
+.tsh-tip{padding:4px 8px;font-size:11px;color:#fde68a;background:rgba(245,158,11,.16);white-space:nowrap}
+.tsh-live{font-size:8px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:2px 6px;border-radius:999px;
 color:#bbf7d0;border:1px solid rgba(34,197,94,.4);background:rgba(34,197,94,.14);white-space:nowrap}
-.tsh-title{font-weight:650;font-size:11px;color:var(--dim);margin-right:2px;white-space:nowrap}
-.tsh-sep{width:1px;height:22px;background:var(--line);margin:0 2px;flex:0 0 auto}
+.tsh-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 .tsh-btn{all:unset;box-sizing:border-box;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:4px;
-min-height:32px;min-width:32px;padding:4px 8px;border-radius:10px;border:1px solid transparent;color:var(--text);
-font-size:11px;font-weight:600;line-height:1.15;position:relative}
+height:28px;padding:0 7px;border-radius:8px;border:1px solid transparent;color:var(--text);
+font-size:11px;font-weight:650;white-space:nowrap;position:relative;flex:0 0 auto}
 .tsh-btn:hover{background:rgba(255,255,255,.1)}
 .tsh-btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .tsh-btn[aria-pressed="true"]{background:rgba(51,133,255,.28);border-color:rgba(51,133,255,.55)}
 .tsh-btn-danger{color:#fecaca}
-.tsh-btn-danger:hover,.tsh-btn-danger[aria-pressed="true"]{background:rgba(239,68,68,.28);border-color:rgba(239,68,68,.5)}
+.tsh-btn-danger:hover{background:rgba(239,68,68,.28);border-color:rgba(239,68,68,.5)}
 .tsh-btn[disabled]{opacity:.4;cursor:default}
-.tsh-count{position:absolute;top:-3px;right:-3px;min-width:14px;height:14px;padding:0 3px;border-radius:999px;
+.tsh-sep{width:1px;height:18px;background:var(--line);flex:0 0 auto}
+.tsh-count{position:absolute;top:-4px;right:-4px;min-width:14px;height:14px;padding:0 3px;border-radius:999px;
 background:var(--warn);color:#1a1206;font-size:9px;font-weight:800;display:inline-grid;place-items:center}
 .tsh-count-blue{background:var(--accent);color:#04122b}
-.tsh-swatch{all:unset;box-sizing:border-box;cursor:pointer;width:18px;height:18px;border-radius:999px;border:2px solid transparent;flex:0 0 auto}
+.tsh-swatch{all:unset;box-sizing:border-box;cursor:pointer;width:14px;height:14px;border-radius:999px;border:2px solid transparent;flex:0 0 auto}
 .tsh-swatch[aria-pressed="true"]{border-color:#fff}
-.tsh-panel-head{display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid var(--line);flex:0 0 auto}
+.tsh-panel-head{display:flex;align-items:center;gap:6px;padding:4px 8px;border-bottom:1px solid var(--line)}
 .tsh-panel-title{font-weight:650;font-size:11px;flex:1}
-.tsh-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:6px 8px;-webkit-overflow-scrolling:touch}
-.tsh-empty{color:var(--dim);font-size:11px;text-align:center;padding:16px 8px;margin:0}
-.tsh-person{display:flex;align-items:center;gap:6px;padding:6px;border-radius:8px;background:rgba(255,255,255,.04);margin-bottom:5px}
-.tsh-person:last-child{margin-bottom:0}
+.tsh-scroll{flex:1 1 auto;min-height:0;overflow:auto;padding:6px 8px}
+.tsh-empty{color:var(--dim);font-size:11px;text-align:center;padding:12px 8px;margin:0}
+.tsh-person{display:flex;align-items:center;gap:6px;padding:5px;border-radius:8px;background:rgba(255,255,255,.04);margin-bottom:4px}
 .tsh-person-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;font-size:11px}
 .tsh-person-sub{font-size:10px;color:var(--dim);font-weight:500}
-.tsh-chip{display:inline-block;font-size:9px;font-weight:700;padding:1px 4px;border-radius:999px;border:1px solid var(--line);color:var(--dim)}
-.tsh-chip-muted{color:#fcd34d;border-color:rgba(245,158,11,.4);background:rgba(245,158,11,.12)}
-.tsh-chat{height:min(38dvh,300px);min-height:180px}
-@media (pointer:coarse){
-.tsh-btn{min-height:40px;min-width:40px;padding:6px 10px;font-size:12px}
-.tsh-swatch{width:24px;height:24px}
-}
+.tsh-chip{font-size:9px;font-weight:700;padding:1px 4px;border-radius:999px;border:1px solid var(--line);color:var(--dim)}
+.tsh-chip-muted{color:#fcd34d;border-color:rgba(245,158,11,.4)}
+.tsh-chat{height:220px;min-height:160px}
+.tsh-admit{max-width:140px;overflow:hidden;text-overflow:ellipsis}
 `;
 
 export function TeacherShareHud(props: TeacherShareHudProps) {
   const {
+    host,
+    hostWindow,
     admitted,
     waiting = [],
     waitingCount = 0,
@@ -135,7 +292,6 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     chatUnread,
     chat,
     onChatOpenChange,
-    onClose,
     annotate,
     annotateOn,
     onAnnotateOnChange,
@@ -147,8 +303,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
   } = props;
 
   const [panel, setPanel] = useState<Panel>(null);
-  const [pipBody, setPipBody] = useState<HTMLElement | null>(null);
-  const [pipNote, setPipNote] = useState('');
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const prevWaiting = useRef(waitingCount);
 
   useEffect(() => {
@@ -164,89 +319,70 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     return () => onChatOpenChange?.(false);
   }, [onChatOpenChange]);
 
+  useEffect(() => {
+    const win = hostWindow;
+    const root = rootRef.current;
+    if (!win || !root || win.closed) return;
+    const fit = () => {
+      if (win.closed) return;
+      const bar = root.querySelector('.tsh-bar') as HTMLElement | null;
+      let barW = 0;
+      if (bar) {
+        const styles = win.getComputedStyle(bar);
+        const gap = parseFloat(styles.columnGap || styles.gap || '0') || 0;
+        const kids = Array.from(bar.children) as HTMLElement[];
+        barW = kids.reduce((sum, el, i) => sum + el.offsetWidth + (i ? gap : 0), 0);
+        barW += (parseFloat(styles.paddingLeft) || 0) + (parseFloat(styles.paddingRight) || 0);
+      }
+      const contentW = Math.max(barW, root.scrollWidth);
+      const contentH = root.scrollHeight;
+      const width = Math.ceil(Math.min(980, Math.max(520, contentW + 8)));
+      const height = Math.ceil(Math.min(460, Math.max(48, contentH + 8)));
+      if (bar) bar.style.maxWidth = contentW + 8 > 980 ? '972px' : '';
+      const extraW = win.innerWidth > 0 ? Math.max(0, win.outerWidth - win.innerWidth) : 0;
+      const extraH = win.innerHeight > 0 ? Math.max(0, win.outerHeight - win.innerHeight) : 0;
+      try {
+        win.resizeTo(width + extraW, height + extraH);
+      } catch {
+        /* some browsers refuse resize */
+      }
+    };
+    fit();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(fit) : null;
+    ro?.observe(root);
+    return () => ro?.disconnect();
+  }, [hostWindow, panel, annotateOn, waitingCount, notice, mode]);
+
   const students = useMemo(() => admitted.filter((a) => a.role === 'STUDENT'), [admitted]);
   const hands = useMemo(() => students.filter((s) => s.handRaised), [students]);
 
-  const togglePanel = (p: Exclude<Panel, null>) => {
-    setPanel((cur) => (cur === p ? null : p));
+  const togglePanel = (next: Exclude<Panel, null>) => {
+    setPanel((cur) => (cur === next ? null : next));
   };
 
-  async function popOut() {
-    const api = (
-      window as Window & {
-        documentPictureInPicture?: {
-          requestWindow: (opts: { width: number; height: number }) => Promise<Window>;
-        };
-      }
-    ).documentPictureInPicture;
-    if (!api || !window.isSecureContext) {
-      setPipNote('Pop-out controls need desktop Chrome or Edge. This bar stays above the class controls.');
-      return;
-    }
-    try {
-      const pip = await api.requestWindow({ width: 440, height: 320 });
-      document.querySelectorAll('style, link[rel="stylesheet"]').forEach((node) => {
-        pip.document.head.appendChild(node.cloneNode(true));
-      });
-      pip.document.body.style.margin = '0';
-      pip.document.body.style.background = '#0d1219';
-      setPipBody(pip.document.body);
-      setPipNote('');
-      // pagehide is the last moment the pop-out document is still alive.
-      // A deferred setState runs after Chrome destroys it and the controls never return.
-      pip.addEventListener(
-        'pagehide',
-        () => {
-          try {
-            flushSync(() => setPipBody(null));
-          } catch {
-            setPipBody(null);
-          }
-        },
-        { once: true }
-      );
-    } catch {
-      setPipNote('Could not pop the controls out. They stay on this page, above the class controls.');
-    }
-  }
+  if (!host) return null;
 
   const waitingLabel =
     waitingCount === 1
-      ? `${waiting[0]?.displayName || 'A student'} is waiting to join`
+      ? `${waiting[0]?.displayName || 'A student'} is waiting`
       : waitingCount > 1
-        ? `${waitingCount} students are waiting to join`
+        ? `${waitingCount} students are waiting`
         : '';
 
   const tree = (
-    <div className={pipBody ? 'tsh tsh-pip' : 'tsh'} role="region" aria-label="Share controls">
+    <div ref={rootRef} className="tsh" role="region" aria-label="Share controls">
       <style>{HUD_CSS}</style>
       <div className="tsh-sr" aria-live="polite">
         {waitingLabel}
       </div>
-
       {notice ? <div className="tsh-tip">{notice}</div> : null}
-      {pipNote ? <div className="tsh-tip">{pipNote}</div> : null}
-
-      {waiting.length > 0 && (
-        <div className="tsh-wait" role="status">
-          <span className="tsh-wait-name">{waitingLabel}</span>
-          <button type="button" className="tsh-btn" onClick={() => onAdmit?.(waiting[0].id)}>
-            Admit
-          </button>
-          {waiting.length > 1 && (
-            <button type="button" className="tsh-btn" onClick={() => onAdmitAll?.()}>
-              Admit all
-            </button>
-          )}
-        </div>
-      )}
 
       {panel === 'chat' && (
         <div className="tsh-panel">
           <div className="tsh-panel-head">
             <span className="tsh-panel-title">Chat</span>
             <button type="button" className="tsh-btn" onClick={() => setPanel(null)} aria-label="Close chat">
-              ✕
+              Close
             </button>
           </div>
           <div className="tsh-chat">{chat}</div>
@@ -258,7 +394,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
           <div className="tsh-panel-head">
             <span className="tsh-panel-title">Raised hands</span>
             <button type="button" className="tsh-btn" onClick={() => setPanel(null)} aria-label="Close hands">
-              ✕
+              Close
             </button>
           </div>
           <div className="tsh-scroll">
@@ -268,10 +404,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
               hands.map((s) => (
                 <div className="tsh-person" key={s.id}>
                   <Avatar name={s.displayName} size="sm" />
-                  <span className="tsh-person-name">
-                    {s.displayName}
-                    <span className="tsh-person-sub"> · raised</span>
-                  </span>
+                  <span className="tsh-person-name">{s.displayName}</span>
                   <button type="button" className="tsh-btn" onClick={() => onLowerHand(s.id)}>
                     Lower
                   </button>
@@ -288,7 +421,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
             <span className="tsh-panel-title">Roster</span>
             {waitingCount > 0 && <span className="tsh-chip">{waitingCount} waiting</span>}
             <button type="button" className="tsh-btn" onClick={() => setPanel(null)} aria-label="Close roster">
-              ✕
+              Close
             </button>
           </div>
           <div className="tsh-scroll">
@@ -296,9 +429,11 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
               <div style={{ marginBottom: 8 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                   <span className="tsh-panel-title">Waiting</span>
-                  <button type="button" className="tsh-btn" onClick={() => onAdmitAll?.()}>
-                    Admit all
-                  </button>
+                  {waiting.length > 1 && (
+                    <button type="button" className="tsh-btn" onClick={() => onAdmitAll?.()}>
+                      Admit all
+                    </button>
+                  )}
                 </div>
                 {waiting.map((w) => (
                   <div className="tsh-person" key={w.id}>
@@ -311,7 +446,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                 ))}
               </div>
             )}
-            <div style={{ display: 'flex', gap: 4, marginBottom: 8, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
               <button type="button" className="tsh-btn" onClick={() => onMuteAll(true)}>
                 Mute all
               </button>
@@ -328,11 +463,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                   <span className="tsh-person-name">
                     {s.displayName}
                     <span className="tsh-person-sub" style={{ display: 'block' }}>
-                      {s.mutedByTeacher
-                        ? 'muted by you'
-                        : s.isVisible
-                          ? 'in sample'
-                          : 'local only'}
+                      {s.mutedByTeacher ? 'muted by you' : s.isVisible ? 'in sample' : 'local only'}
                     </span>
                   </span>
                   {s.mutedByTeacher ? <span className="tsh-chip tsh-chip-muted">muted</span> : null}
@@ -350,9 +481,29 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
         </div>
       )}
 
-      {annotateOn && (
-        <div className="tsh-tools" role="toolbar" aria-label="Annotation tools">
-          {(['pen', 'highlighter', 'eraser'] as const).map((m) => (
+      <div className="tsh-bar" role="toolbar" aria-label="Share tools">
+        <span className="tsh-live">Live</span>
+        <button
+          type="button"
+          className="tsh-btn"
+          aria-pressed={!teacherMicOn}
+          onClick={onToggleTeacherMic}
+          aria-label={teacherMicOn ? 'Mute mic' : 'Unmute mic'}
+          title={teacherMicOn ? 'Mute mic' : 'Unmute mic'}
+        >
+          {teacherMicOn ? <IconMic size={14} /> : <IconMicOff size={14} />}
+        </button>
+        <button
+          type="button"
+          className="tsh-btn"
+          aria-pressed={annotateOn}
+          onClick={() => onAnnotateOnChange(!annotateOn)}
+          title="Draw on the shared screen"
+        >
+          Annotate
+        </button>
+        {annotateOn &&
+          (['pen', 'highlighter', 'eraser'] as const).map((m) => (
             <button
               key={m}
               type="button"
@@ -363,8 +514,8 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
               {TOOL_LABEL[m]}
             </button>
           ))}
-          <span style={{ flex: 1 }} />
-          {ANNOTATE_COLORS.map((c) => (
+        {annotateOn &&
+          ANNOTATE_COLORS.map((c) => (
             <button
               key={c}
               type="button"
@@ -375,6 +526,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
               onClick={() => setColor(c)}
             />
           ))}
+        {annotateOn && (
           <button
             type="button"
             className="tsh-btn"
@@ -383,152 +535,65 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
           >
             Clear
           </button>
-        </div>
-      )}
-
-      <div className="tsh-bar">
-        <span className="tsh-live">Live</span>
-        <span className="tsh-title">Share</span>
-
-        <button
-          type="button"
-          className="tsh-btn"
-          aria-pressed={!teacherMicOn}
-          onClick={onToggleTeacherMic}
-          title={teacherMicOn ? 'Mute mic' : 'Unmute mic'}
-          aria-label={teacherMicOn ? 'Mute mic' : 'Unmute mic'}
-        >
-          {teacherMicOn ? <IconMic size={15} /> : <IconMicOff size={15} />}
-        </button>
-
-        <button
-          type="button"
-          className="tsh-btn"
-          aria-pressed={annotateOn}
-          onClick={() => onAnnotateOnChange(!annotateOn)}
-          title="Annotate on shared screen"
-        >
-          Annotate
-        </button>
-
+        )}
         <span className="tsh-sep" aria-hidden />
-
         <button
           type="button"
           className="tsh-btn"
           aria-pressed={panel === 'chat'}
           onClick={() => togglePanel('chat')}
-          title="Chat"
           aria-label="Chat"
+          title="Chat"
         >
-          <IconChat size={15} />
+          <IconChat size={14} />
           {chatUnread > 0 && panel !== 'chat' && (
             <span className="tsh-count">{chatUnread > 9 ? '9+' : chatUnread}</span>
           )}
         </button>
-
         <button
           type="button"
           className="tsh-btn"
           aria-pressed={panel === 'hands'}
           onClick={() => togglePanel('hands')}
-          title="Raised hands"
           aria-label="Raised hands"
+          title="Raised hands"
         >
-          <IconHand size={15} />
-          {hands.length > 0 && panel !== 'hands' && (
-            <span className="tsh-count">{hands.length}</span>
-          )}
+          <IconHand size={14} />
+          {hands.length > 0 && panel !== 'hands' && <span className="tsh-count">{hands.length}</span>}
         </button>
-
         <button
           type="button"
           className="tsh-btn"
           aria-pressed={panel === 'roster'}
           onClick={() => togglePanel('roster')}
-          title="Roster"
           aria-label="Roster"
+          title="Roster"
         >
-          <IconUsers size={15} />
+          <IconUsers size={14} />
           {waitingCount > 0 && panel !== 'roster' ? (
             <span className="tsh-count">{waitingCount > 9 ? '9+' : waitingCount}</span>
           ) : students.length > 0 && panel !== 'roster' ? (
             <span className="tsh-count tsh-count-blue">{students.length}</span>
           ) : null}
         </button>
-
+        {waiting.length > 0 && (
+          <button type="button" className="tsh-btn" onClick={() => onAdmit?.(waiting[0].id)}>
+            <span className="tsh-admit">Admit {waiting.length === 1 ? waiting[0].displayName : waiting.length}</span>
+          </button>
+        )}
+        {waiting.length > 1 && (
+          <button type="button" className="tsh-btn" onClick={() => onAdmitAll?.()}>
+            Admit all
+          </button>
+        )}
         <span className="tsh-sep" aria-hidden />
-
-        <button
-          type="button"
-          className="tsh-btn"
-          onClick={() => void popOut()}
-          aria-label="Pop out share controls"
-          title="Keep these controls on screen if this window is minimized"
-        >
-          Pop out
-        </button>
-
         <button type="button" className="tsh-btn tsh-btn-danger" onClick={onStopSharing} title="Stop sharing">
-          <IconScreen size={15} />
+          <IconScreen size={14} />
           Stop
-        </button>
-
-        <button type="button" className="tsh-btn" onClick={onClose} aria-label="Hide share controls" title="Hide controls">
-          ✕
         </button>
       </div>
     </div>
   );
 
-  if (pipBody) {
-    return (
-      <>
-        {createPortal(tree, pipBody)}
-        <div className="tsh" role="status">
-          <div className="tsh-tip">
-            Share controls are in the pop-out window. Close that window to dock them here. Screen sharing continues if this window is minimized.
-          </div>
-        </div>
-      </>
-    );
-  }
-  return tree;
-}
-
-/** @deprecated Kept for import compatibility; HUD is always inline now. */
-export function supportsDocumentPip(): boolean {
-  return false;
-}
-
-/** Minimal stub — HUD open state is owned by ClassroomRoom. */
-export type UseShareHud = {
-  host: 'inline' | null;
-  container: null;
-  expanded: boolean;
-  setExpanded: (v: boolean) => void;
-  open: () => 'inline';
-  close: () => void;
-  detached: false;
-};
-
-export function useShareHud(): UseShareHud {
-  const [host, setHost] = useState<'inline' | null>(null);
-  const [expanded, setExpanded] = useState(true);
-  return {
-    host,
-    container: null,
-    expanded,
-    setExpanded,
-    open: () => {
-      setHost('inline');
-      setExpanded(true);
-      return 'inline';
-    },
-    close: () => {
-      setHost(null);
-      setExpanded(true);
-    },
-    detached: false,
-  };
+  return createPortal(tree, host);
 }

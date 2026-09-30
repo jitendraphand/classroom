@@ -75,10 +75,19 @@ export async function GET(req: Request, { params }: { params: { code: string } }
   const redis = await ensureRedis();
   const raw = await redis.get(keys.annotate(code));
 
-  let strokes: unknown = [];
+  let strokes: unknown[] = [];
   if (raw) {
     try {
-      strokes = JSON.parse(raw) as unknown;
+      const parsed = JSON.parse(raw) as unknown;
+      if (Array.isArray(parsed)) strokes = parsed;
+      else if (
+        parsed &&
+        typeof parsed === 'object' &&
+        Array.isArray((parsed as { strokes?: unknown }).strokes)
+      ) {
+        // PUT stores `{ strokes }` so a late joiner gets the array, not the wrapper.
+        strokes = (parsed as { strokes: unknown[] }).strokes;
+      }
     } catch (e) {
       // A corrupt value must degrade to an empty layer, not 500 the join path.
       console.warn('annotation snapshot unreadable, serving empty', code, e);
