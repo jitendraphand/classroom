@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { resolveRoomAccess } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
+import { livekitRoomName, sendRoomData } from '@/lib/livekit';
+import { chatAudience } from '@/lib/chatAudience';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,7 +12,7 @@ const MAX_BODY = 2000;
 const MAX_HISTORY = 500;
 
 type AccessCtx = {
-  room: { id: string; code: string; status: string; teacherId: string };
+  room: { id: string; code: string; status: string; teacherId: string; sessionId: string };
   isTeacher: boolean;
   participantId: string | null;
   myRole: 'TEACHER' | 'STUDENT' | null;
@@ -88,8 +90,8 @@ const messageInclude = {
   recipient: { select: { id: true, displayName: true, role: true } },
 } as const;
 
-export async function GET(req: Request, { params }: { params: { code: string } }) {
-  const code = params.code.toUpperCase();
+export async function GET(req: Request, { params }: { params: Promise<{ code: string }> }) {
+  const code = (await params).code.toUpperCase();
   const ctx = await resolveAccess(req, code);
   if (!ctx) return jsonError('Unauthorized', 401);
 
@@ -132,13 +134,46 @@ export async function GET(req: Request, { params }: { params: { code: string } }
   });
 }
 
+/** Topic shared with Chat.tsx. */
+const CHAT_TOPIC = 'chat';
+
+/**
+ * Low-latency delivery of a message that was just stored. Sent by the server,
+ * never by a browser, and only to the identities allowed to read it (the same
+ * rule as the GET filter above). Clients still poll GET /messages as the
+ * source of truth, so a failed push only costs latency.
+ */
+async function pushMessage(
+  room: AccessCtx['room'],
+  msg: Parameters<typeof serializeMessage>[0]
+) {
+  const people = await prisma.participant.findMany({
+    where: { roomId: room.id, status: 'ADMITTED' },
+    select: { id: true, role: true, livekitIdentity: true },
+  });
+  const audience = chatAudience(
+    {
+      scope: msg.scope as 'BROADCAST' | 'TEACHER' | 'DIRECT',
+      senderParticipantId: msg.senderParticipantId,
+      recipientParticipantId: msg.recipientParticipantId,
+    },
+    people
+  );
+  if (audience.length === 0) return;
+  await sendRoomData(
+    livekitRoomName(room.code, room.sessionId),
+    { v: 1, type: 'message', message: serializeMessage(msg) },
+    { topic: CHAT_TOPIC, destinationIdentities: audience }
+  );
+}
+
 const postSchema = z.object({
   text: z.string().trim().min(1).max(MAX_BODY),
   to: z.union([z.literal('teacher'), z.literal('all'), z.string().min(1)]).optional(),
 });
 
-export async function POST(req: Request, { params }: { params: { code: string } }) {
-  const code = params.code.toUpperCase();
+export async function POST(req: Request, { params }: { params: Promise<{ code: string }> }) {
+  const code = (await params).code.toUpperCase();
   const ctx = await resolveAccess(req, code);
   if (!ctx) return jsonError('Unauthorized', 401);
 
@@ -176,6 +211,7 @@ export async function POST(req: Request, { params }: { params: { code: string } 
           },
           include: messageInclude,
         });
+        void pushMessage(ctx.room, msg).catch((e) => console.warn('chat push', e));
         return jsonOk({ message: serializeMessage(msg) });
       }
 
@@ -204,6 +240,7 @@ export async function POST(req: Request, { params }: { params: { code: string } 
         },
         include: messageInclude,
       });
+      void pushMessage(ctx.room, msg).catch((e) => console.warn('chat push', e));
       return jsonOk({ message: serializeMessage(msg) });
     }
 
@@ -222,6 +259,7 @@ export async function POST(req: Request, { params }: { params: { code: string } 
       },
       include: messageInclude,
     });
+    void pushMessage(ctx.room, msg).catch((e) => console.warn('chat push', e));
     return jsonOk({ message: serializeMessage(msg) });
   } catch (e) {
     console.error(e);

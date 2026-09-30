@@ -32,12 +32,8 @@ export const keys = {
   visible: (code: string) => `room:${code}:visible`,
   muted: (code: string) => `room:${code}:muted`,
   rotation: (code: string) => `room:${code}:rotation`,
-  /** Legacy whiteboard snapshot key (feature removed; still cleared on end). */
-  whiteboard: (code: string) => `room:${code}:whiteboard`,
-  /** Exclusive presentation stage: idle | screen (whiteboard legacy → idle) */
+  /** Exclusive presentation stage: idle | screen */
   stage: (code: string) => `room:${code}:stage`,
-  /** Legacy student whiteboard-write flag (unused). */
-  wbWrite: (code: string) => `room:${code}:wb-write`,
   /** Screen-share annotation strokes (JSON array), for late joiners */
   annotate: (code: string) => `room:${code}:screen-annotate`,
   /** Hash identity → pinnedAt ms for active-speaker pins */
@@ -50,5 +46,15 @@ export const keys = {
   hands: (code: string) => `room:${code}:hands`,
 };
 
-export type StageMode = 'idle' | 'screen' | 'whiteboard';
+export type StageMode = 'idle' | 'screen';
+
+/**
+ * Keys left behind by the removed whiteboard feature. Only deleted (on end /
+ * reopen) so old deployments do not leak them; nothing reads or writes them.
+ * Safe to drop after one release.
+ */
+export const legacyKeys = (code: string) => [
+  `room:${code}:whiteboard`,
+  `room:${code}:wb-write`,
+];
 

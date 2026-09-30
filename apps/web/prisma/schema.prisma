@@ -33,6 +33,8 @@ model Room {
   teacher          Teacher       @relation(fields: [teacherId], references: [id], onDelete: Cascade)
   maxVisibleVideos Int           @default(6)
   status           RoomStatus    @default(WAITING)
+  /// Rotated on every (re)open; part of the LiveKit room name so old tokens die with the session.
+  sessionId        String        @default(cuid())
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
   endedAt          DateTime?

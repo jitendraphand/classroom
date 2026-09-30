@@ -3,14 +3,15 @@ import { getStudentParticipant, clearStudentCookie, getTeacherSession } from '@/
 import { jsonError, jsonOk } from '@/lib/response';
 import { ensureRedis, keys } from '@/lib/redis';
 import { rotateVisibleSample, unpinSpeaker } from '@/lib/sample';
+import { livekitRoomName, removeLiveKitParticipant } from '@/lib/livekit';
 import { z } from 'zod';
 
 const schema = z.object({
   participantId: z.string().optional(),
 });
 
-export async function POST(req: Request, { params }: { params: { code: string } }) {
-  const code = params.code.toUpperCase();
+export async function POST(req: Request, { params }: { params: Promise<{ code: string }> }) {
+  const code = (await params).code.toUpperCase();
   const room = await prisma.room.findUnique({ where: { code } });
   if (!room) return jsonError('Room not found', 404);
 
@@ -61,7 +62,14 @@ export async function POST(req: Request, { params }: { params: { code: string } 
   await redis.srem(keys.hands(code), target.id);
   await redis.srem(keys.visible(code), target.livekitIdentity);
 
-  if (self && self.id === target.id) clearStudentCookie();
+  if (self && self.id === target.id) await clearStudentCookie();
+
+  // Cut the media connection too. For a teacher-removed student this is what
+  // actually stops them receiving the class; the LEFT status above revokes their
+  // admission so /token will not mint them a new LiveKit token.
+  if (target.role === 'STUDENT') {
+    await removeLiveKitParticipant(livekitRoomName(room.code, room.sessionId), target.livekitIdentity);
+  }
 
   if (target.role === 'STUDENT') {
     // Frees the departing student's sticky speak-pin along with their slot.

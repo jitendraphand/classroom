@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/db';
 import { generateRoomCode, generateIdentity, generateSessionToken } from '@/lib/codes';
-import { ensureRedis, keys } from '@/lib/redis';
+import { ensureRedis, keys, legacyKeys } from '@/lib/redis';
 import { clampMaxVisible } from '@/lib/sample';
 
 /** Allocate a unique permanent class code not used by any teacher or room. */
@@ -51,6 +51,10 @@ export async function ensureTeacherPermanentCode(teacherId: string): Promise<str
   return code;
 }
 
+function newSessionId() {
+  return crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+}
+
 async function clearRoomRedis(code: string) {
   const redis = await ensureRedis();
   await redis.del(
@@ -59,12 +63,11 @@ async function clearRoomRedis(code: string) {
     keys.visible(code),
     keys.muted(code),
     keys.rotation(code),
-    keys.whiteboard(code),
     keys.hands(code),
     keys.stage(code),
-    keys.wbWrite(code),
     keys.annotate(code),
-    keys.pinnedSpeakers(code)
+    keys.pinnedSpeakers(code),
+    ...legacyKeys(code)
   );
 }
 
@@ -93,6 +96,7 @@ export async function startOrReopenTeacherRoom(
         teacherId: teacher.id,
         maxVisibleVideos: clampMaxVisible(opts.maxVisibleVideos ?? 6),
         status: 'WAITING',
+        sessionId: newSessionId(),
         participants: {
           create: {
             displayName: teacher.name,
@@ -114,6 +118,9 @@ export async function startOrReopenTeacherRoom(
       data: {
         status: 'WAITING',
         endedAt: null,
+        // New LiveKit room name for the new session: tokens minted for the last
+        // class (same permanent code) no longer name this room.
+        sessionId: newSessionId(),
         name: opts.name?.trim() || room.name,
         maxVisibleVideos: clampMaxVisible(opts.maxVisibleVideos ?? room.maxVisibleVideos),
       },

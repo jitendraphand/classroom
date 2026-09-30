@@ -7,25 +7,23 @@ import { ensureRedis, keys, type StageMode } from '@/lib/redis';
 export const dynamic = 'force-dynamic';
 
 const schema = z.object({
-  // 'whiteboard' accepted for backward compat only — mapped to idle (feature removed).
-  mode: z.enum(['idle', 'screen', 'whiteboard']),
+  mode: z.enum(['idle', 'screen']),
 });
 
 const STAGE_TTL = 60 * 60 * 6;
 
-export async function POST(req: Request, { params }: { params: { code: string } }) {
+export async function POST(req: Request, { params }: { params: Promise<{ code: string }> }) {
   const teacher = await getTeacherSession();
   if (!teacher) return jsonError('Unauthorized', 401);
 
-  const code = params.code.toUpperCase();
+  const code = (await params).code.toUpperCase();
   const room = await prisma.room.findUnique({ where: { code } });
   if (!room || room.teacherId !== teacher.id) return jsonError('Room not found', 404);
   if (room.status === 'ENDED') return jsonError('Class ended', 410, { ended: true });
 
   try {
     const body = schema.parse(await req.json());
-    const requested = body.mode as StageMode;
-    const mode: StageMode = requested === 'whiteboard' ? 'idle' : requested;
+    const mode: StageMode = body.mode;
     const redis = await ensureRedis();
     await redis.set(keys.stage(code), mode, 'EX', STAGE_TTL);
 

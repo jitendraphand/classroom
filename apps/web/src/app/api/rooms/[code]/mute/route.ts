@@ -17,11 +17,11 @@ const schema = z.union([
   }),
 ]);
 
-export async function POST(req: Request, { params }: { params: { code: string } }) {
+export async function POST(req: Request, { params }: { params: Promise<{ code: string }> }) {
   const teacher = await getTeacherSession();
   if (!teacher) return jsonError('Unauthorized', 401);
 
-  const code = params.code.toUpperCase();
+  const code = (await params).code.toUpperCase();
   const room = await prisma.room.findUnique({ where: { code } });
   if (!room || room.teacherId !== teacher.id) return jsonError('Room not found', 404);
   if (room.status === 'ENDED') return jsonError('Class ended', 410);

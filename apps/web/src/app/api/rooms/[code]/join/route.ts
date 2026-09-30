@@ -9,9 +9,9 @@ const schema = z.object({
   displayName: z.string().min(1).max(60),
 });
 
-export async function POST(req: Request, { params }: { params: { code: string } }) {
+export async function POST(req: Request, { params }: { params: Promise<{ code: string }> }) {
   try {
-    const code = params.code.toUpperCase();
+    const code = (await params).code.toUpperCase();
     const body = schema.parse(await req.json());
     const room = await prisma.room.findUnique({ where: { code } });
     if (!room) return jsonError('Room not found', 404);
@@ -34,9 +34,9 @@ export async function POST(req: Request, { params }: { params: { code: string } 
     const redis = await ensureRedis();
     await redis.sadd(keys.waiting(code), participant.id);
 
-    setStudentCookie(sessionToken);
+    await setStudentCookie(sessionToken);
     // Prefer student identity for this tab even if a teacher cookie exists
-    setActAsStudent();
+    await setActAsStudent();
 
     return jsonOk({
       participantId: participant.id,

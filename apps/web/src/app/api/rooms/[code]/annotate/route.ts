@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
  *
  * Live-streamed over the LiveKit data channel (topic `annotate`); this route is
  * only the durable copy so a student who joins mid-class, or reconnects, can
- * catch up. Same size-cap discipline as the whiteboard route: a bounded key
+ * catch up. Size-capped: a bounded key
  * here, so a runaway drawing client cannot exhaust Redis.
  */
 const MAX_SNAPSHOT_BYTES = 256_000;
@@ -66,8 +66,8 @@ function deny(result: AccessResult) {
   return jsonError('Unauthorized', 401);
 }
 
-export async function GET(req: Request, { params }: { params: { code: string } }) {
-  const code = params.code.toUpperCase();
+export async function GET(req: Request, { params }: { params: Promise<{ code: string }> }) {
+  const code = (await params).code.toUpperCase();
   const result = await canAccess(req, code);
   const err = deny(result);
   if (err) return err;
@@ -97,8 +97,8 @@ export async function GET(req: Request, { params }: { params: { code: string } }
   return jsonOk({ strokes });
 }
 
-export async function PUT(req: Request, { params }: { params: { code: string } }) {
-  const code = params.code.toUpperCase();
+export async function PUT(req: Request, { params }: { params: Promise<{ code: string }> }) {
+  const code = (await params).code.toUpperCase();
   const result = await canAccess(req, code);
   const err = deny(result);
   if (err) return err;

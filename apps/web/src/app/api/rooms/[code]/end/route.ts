@@ -1,14 +1,14 @@
 import { prisma } from '@/lib/db';
 import { getTeacherSession } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
-import { ensureRedis, keys } from '@/lib/redis';
+import { ensureRedis, keys, legacyKeys } from '@/lib/redis';
 import { roomService, livekitRoomName } from '@/lib/livekit';
 
-export async function POST(_req: Request, { params }: { params: { code: string } }) {
+export async function POST(_req: Request, { params }: { params: Promise<{ code: string }> }) {
   const teacher = await getTeacherSession();
   if (!teacher) return jsonError('Unauthorized', 401);
 
-  const code = params.code.toUpperCase();
+  const code = (await params).code.toUpperCase();
   const room = await prisma.room.findUnique({ where: { code } });
   if (!room || room.teacherId !== teacher.id) return jsonError('Room not found', 404);
 
@@ -28,16 +28,15 @@ export async function POST(_req: Request, { params }: { params: { code: string }
     keys.visible(code),
     keys.muted(code),
     keys.rotation(code),
-    keys.whiteboard(code),
     keys.hands(code),
     keys.stage(code),
-    keys.wbWrite(code),
     keys.annotate(code),
-    keys.pinnedSpeakers(code)
+    keys.pinnedSpeakers(code),
+    ...legacyKeys(code)
   );
 
   try {
-    await roomService().deleteRoom(livekitRoomName(code));
+    await roomService().deleteRoom(livekitRoomName(room.code, room.sessionId));
   } catch (e) {
     console.warn('LiveKit deleteRoom', e);
   }

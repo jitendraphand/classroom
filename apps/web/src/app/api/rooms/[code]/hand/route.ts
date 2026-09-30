@@ -22,8 +22,8 @@ const schema = z.object({
 
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: Request, { params }: { params: { code: string } }) {
-  const code = params.code.toUpperCase();
+export async function POST(req: Request, { params }: { params: Promise<{ code: string }> }) {
+  const code = (await params).code.toUpperCase();
   const url = new URL(req.url);
   const forceStudent =
     url.searchParams.get('as') === 'student' ||

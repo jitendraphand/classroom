@@ -3,7 +3,7 @@ import { jsonOk } from '@/lib/response';
 
 export async function POST() {
   await clearTeacherCookie();
-  clearStudentCookie();
-  clearActAs();
+  await clearStudentCookie();
+  await clearActAs();
   return jsonOk({ ok: true });
 }

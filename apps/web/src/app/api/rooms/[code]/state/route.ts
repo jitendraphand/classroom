@@ -6,8 +6,8 @@ import { ensureRedis, keys } from '@/lib/redis';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: Request, { params }: { params: { code: string } }) {
-  const code = params.code.toUpperCase();
+export async function GET(req: Request, { params }: { params: Promise<{ code: string }> }) {
+  const code = (await params).code.toUpperCase();
   const url = new URL(req.url);
   const forceStudent =
     url.searchParams.get('as') === 'student' ||
@@ -110,8 +110,6 @@ export async function GET(req: Request, { params }: { params: { code: string } }
         visibleCount: 0,
         raisedHands: [],
         stageMode,
-        whiteboardCanWrite: false,
-        whiteboardWriteAllowed: false,
       });
     }
   }
@@ -124,8 +122,6 @@ export async function GET(req: Request, { params }: { params: { code: string } }
   const stageRaw = await redis.get(keys.stage(code));
   const stageMode =
     stageRaw === 'screen' ? 'screen' : 'idle';
-  const wbWriteAllowed = (await redis.get(keys.wbWrite(code))) === '1';
-  const whiteboardCanWrite = isTeacher || wbWriteAllowed;
 
   const waiting = room.participants.filter((p) => p.status === 'WAITING' && p.role === 'STUDENT');
   const admitted = room.participants.filter((p) => p.status === 'ADMITTED');
@@ -183,9 +179,6 @@ export async function GET(req: Request, { params }: { params: { code: string } }
     visibleCount: visible.length,
     raisedHands,
     stageMode,
-    whiteboardCanWrite,
-    /** Raw Redis wb-write flag (students may draw when true). */
-    whiteboardWriteAllowed: wbWriteAllowed,
     sampleNote:
       'Only a rotating sample of students publish video to the teacher. Everyone keeps a local preview and may appear visible.',
   });

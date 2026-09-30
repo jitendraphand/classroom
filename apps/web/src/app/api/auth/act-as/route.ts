@@ -11,7 +11,7 @@ const schema = z.object({
 export async function GET() {
   const teacher = await getTeacherSession();
   return jsonOk({
-    actAs: getActAs(),
+    actAs: await getActAs(),
     teacherSignedIn: !!teacher,
     teacherName: teacher?.name ?? null,
   });
@@ -25,10 +25,10 @@ export async function POST(req: Request) {
       if (!teacher) {
         // Still allow setting — harmless if not a teacher
       }
-      setActAsStudent();
+      await setActAsStudent();
       return jsonOk({ actAs: 'student' });
     }
-    clearActAs();
+    await clearActAs();
     return jsonOk({ actAs: null });
   } catch (e) {
     if (e instanceof z.ZodError) return jsonError(e.errors[0]?.message || 'Invalid input');

@@ -100,8 +100,11 @@ class ClassroomApi(rawBase: String) {
         }
         client.newCall(builder.build()).execute().use { response ->
             if (captureTeacherCookie) {
+                // HTTPS deploys use the `__Host-` prefixed name (see web lib/auth.ts).
                 response.headers("Set-Cookie")
-                    .firstOrNull { it.startsWith("classroom_teacher=") }
+                    .firstOrNull {
+                        it.startsWith("__Host-classroom_teacher=") || it.startsWith("classroom_teacher=")
+                    }
                     ?.substringBefore(';')
                     ?.let { teacherCookie = it }
             }

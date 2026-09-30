@@ -4,8 +4,35 @@ import bcrypt from 'bcryptjs';
 import { prisma } from './db';
 import { cookieSecureFlag } from './url';
 
-const COOKIE = 'classroom_teacher';
-const STUDENT_COOKIE = 'classroom_student';
+/**
+ * Cookie names. Over HTTPS the `__Host-` prefix is used: the browser then only
+ * accepts the cookie from this exact host (Secure, Path=/, no Domain). That
+ * matters on sslip.io, where any sibling `*.sslip.io` page could otherwise plant
+ * a `Domain=sslip.io` cookie (session fixation). Plain HTTP deploys cannot use
+ * the prefix, so they keep the bare names.
+ */
+function cookieName(base: string) {
+  return cookieSecureFlag() ? `__Host-${base}` : base;
+}
+const teacherCookieName = () => cookieName('classroom_teacher');
+const studentCookieName = () => cookieName('classroom_student');
+const actAsCookieName = () => cookieName('classroom_act_as');
+
+/**
+ * SameSite=Strict: every page is a client component that authenticates through
+ * same-origin fetches, so Strict never hides the session from the app itself.
+ * It does not stop same-site (sibling sslip.io) requests; `middleware.ts`
+ * handles those with an Origin check.
+ */
+function cookieOptions(maxAge: number) {
+  return {
+    httpOnly: true,
+    sameSite: 'strict' as const,
+    secure: cookieSecureFlag(),
+    path: '/',
+    maxAge,
+  };
+}
 
 function secret() {
   const s = process.env.NEXTAUTH_SECRET;
@@ -30,21 +57,15 @@ export async function createTeacherToken(teacher: { id: string; email: string; n
 }
 
 export async function setTeacherCookie(token: string) {
-  cookies().set(COOKIE, token, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: cookieSecureFlag(),
-    path: '/',
-    maxAge: 60 * 60 * 24 * 7,
-  });
+  (await cookies()).set(teacherCookieName(), token, cookieOptions(60 * 60 * 24 * 7));
 }
 
 export async function clearTeacherCookie() {
-  cookies().set(COOKIE, '', { httpOnly: true, sameSite: 'lax', secure: cookieSecureFlag(), path: '/', maxAge: 0 });
+  (await cookies()).set(teacherCookieName(), '', cookieOptions(0));
 }
 
 export async function getTeacherSession() {
-  const token = cookies().get(COOKIE)?.value;
+  const token = (await cookies()).get(teacherCookieName())?.value;
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, secret());
@@ -74,26 +95,20 @@ export async function requireTeacher() {
   return session;
 }
 
-export function setStudentCookie(sessionToken: string) {
-  cookies().set(STUDENT_COOKIE, sessionToken, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: cookieSecureFlag(),
-    path: '/',
-    maxAge: 60 * 60 * 12,
-  });
+export async function setStudentCookie(sessionToken: string) {
+  (await cookies()).set(studentCookieName(), sessionToken, cookieOptions(60 * 60 * 12));
 }
 
-export function clearStudentCookie() {
-  cookies().set(STUDENT_COOKIE, '', { httpOnly: true, sameSite: 'lax', secure: cookieSecureFlag(), path: '/', maxAge: 0 });
+export async function clearStudentCookie() {
+  (await cookies()).set(studentCookieName(), '', cookieOptions(0));
 }
 
-export function getStudentSessionToken() {
-  return cookies().get(STUDENT_COOKIE)?.value ?? null;
+export async function getStudentSessionToken() {
+  return (await cookies()).get(studentCookieName())?.value ?? null;
 }
 
 export async function getStudentParticipant() {
-  const token = getStudentSessionToken();
+  const token = await getStudentSessionToken();
   if (!token) return null;
   return prisma.participant.findUnique({
     where: { sessionToken: token },
@@ -102,24 +117,16 @@ export async function getStudentParticipant() {
 }
 
 /** Prefer student identity when a teacher also has a session (join-as-student). */
-const ACT_AS_COOKIE = 'classroom_act_as';
-
-export function setActAsStudent() {
-  cookies().set(ACT_AS_COOKIE, 'student', {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: cookieSecureFlag(),
-    path: '/',
-    maxAge: 60 * 60 * 12,
-  });
+export async function setActAsStudent() {
+  (await cookies()).set(actAsCookieName(), 'student', cookieOptions(60 * 60 * 12));
 }
 
-export function clearActAs() {
-  cookies().set(ACT_AS_COOKIE, '', { httpOnly: true, sameSite: 'lax', secure: cookieSecureFlag(), path: '/', maxAge: 0 });
+export async function clearActAs() {
+  (await cookies()).set(actAsCookieName(), '', cookieOptions(0));
 }
 
-export function getActAs(): 'student' | null {
-  const v = cookies().get(ACT_AS_COOKIE)?.value;
+export async function getActAs(): Promise<'student' | null> {
+  const v = (await cookies()).get(actAsCookieName())?.value;
   return v === 'student' ? 'student' : null;
 }
 
@@ -133,7 +140,7 @@ export async function resolveRoomAccess(
 ) {
   const teacher = await getTeacherSession();
   const student = await getStudentParticipant();
-  const forceStudent = opts?.forceStudent || getActAs() === 'student';
+  const forceStudent = opts?.forceStudent || (await getActAs()) === 'student';
 
   const teacherOwns = !!teacher && teacher.id === room.teacherId;
   const studentInRoom =

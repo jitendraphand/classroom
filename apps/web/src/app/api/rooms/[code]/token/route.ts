@@ -7,8 +7,8 @@ import { ensureRedis, keys } from '@/lib/redis';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: Request, { params }: { params: { code: string } }) {
-  const code = params.code.toUpperCase();
+export async function GET(req: Request, { params }: { params: Promise<{ code: string }> }) {
+  const code = (await params).code.toUpperCase();
   const url = new URL(req.url);
   const forceStudent =
     url.searchParams.get('as') === 'student' ||
@@ -24,12 +24,23 @@ export async function GET(req: Request, { params }: { params: { code: string } }
     access.isTeacher
       ? await prisma.participant.findFirst({
           where: { roomId: room.id, role: 'TEACHER' },
+          orderBy: { createdAt: 'asc' },
         })
       : access.mode === 'student' && access.student && access.student.roomId === room.id
         ? access.student
         : null;
 
   if (!participant) return jsonError('Unauthorized', 401);
+
+  // The owning teacher pressed Leave earlier and is coming back from the lobby
+  // (or Back button) while the class is still open: re-admit instead of 403.
+  // Only the authenticated room owner reaches this branch (access.isTeacher).
+  if (access.isTeacher && participant.role === 'TEACHER' && participant.status === 'LEFT') {
+    participant = await prisma.participant.update({
+      where: { id: participant.id },
+      data: { status: 'ADMITTED', leftAt: null },
+    });
+  }
   if (participant.role === 'STUDENT' && participant.status === 'WAITING') {
     return jsonError('Still in waiting room', 403);
   }
@@ -44,13 +55,12 @@ export async function GET(req: Request, { params }: { params: { code: string } }
   const mutedByTeacher =
     !isTeacher && (participant.mutedByTeacher || mutedIds.includes(participant.id));
 
+  const roomName = livekitRoomName(room.code, room.sessionId);
   const token = await createParticipantToken({
-    roomName: livekitRoomName(code),
+    role: participant.role,
+    roomName,
     identity: participant.livekitIdentity,
     name: participant.displayName,
-    canPublish: true,
-    canPublishData: true,
-    canSubscribe: true,
     mutedByTeacher,
     // Server-side enforcement of selective video: a student outside the visible
     // sample is granted every source EXCEPT camera, so their video cannot reach
@@ -67,7 +77,7 @@ export async function GET(req: Request, { params }: { params: { code: string } }
   return jsonOk({
     token,
     url: getPublicLiveKitUrl(req),
-    roomName: livekitRoomName(code),
+    roomName,
     identity: participant.livekitIdentity,
     canPublishVideo,
     visibleIdentities: sample.visible,
