@@ -75,6 +75,18 @@ The collapsed sheet is a small pill, so it never covers the whole screen.
 
 Details, browser matrix and limitations: **[SHARE_HUD_NOTES.md](SHARE_HUD_NOTES.md)**.
 
+### Students are muted while the teacher is away
+
+Whenever the teacher is **not connected** to the LiveKit room (not joined yet,
+left, or lost internet), every student is force-muted: the SFU grant has no
+microphone, so a student cannot unmute even with a modified client. The student
+mic button shows **"Mic locked — teacher not in class"**. When the teacher is
+back, students stay muted until they unmute themselves; a teacher mute
+(per-student or Mute all) still wins. Presence comes from the live LiveKit
+connection via a **LiveKit webhook** — `infra/livekit.yaml` must contain the
+`webhook:` block (re-run `./scripts/sync-livekit-keys.sh`). Details:
+**[docs/TEACHER_PRESENCE_MIC_LOCK.md](docs/TEACHER_PRESENCE_MIC_LOCK.md)**.
+
 ## Quick start
 
 ### Prerequisites
@@ -197,6 +209,7 @@ See `.env.example`. Important:
 | `APP_URL` / `NEXT_PUBLIC_APP_URL` | `http://localhost:3000` | Browser-facing app origin — `http://PUBLIC_IP:3000` (bare IP) or `https://DOMAIN` (Caddy) |
 | `NEXT_PUBLIC_LIVEKIT_URL` | `ws://localhost:7880` | Browser-facing LiveKit — `ws://PUBLIC_IP:7880` or `wss://livekit.DOMAIN` |
 | `DOMAIN` / `ACME_EMAIL` | _(unset)_ | Domain TLS via `configure-domain-tls.sh`; optional LE account email |
+| `LIVEKIT_WEBHOOK_URL` | `http://127.0.0.1:3000/api/livekit/webhook` | Where LiveKit posts room/participant events (teacher presence → student mic lock). Written into `infra/livekit.yaml` by `sync-livekit-keys.sh` |
 | `LIVEKIT_USE_EXTERNAL_IP` | `false` | `true` on VPS so ICE advertises the public IP (`sync-livekit-keys.sh`) |
 | `LIVEKIT_NODE_IP` | _(unset)_ | Optional pin of advertised IP (set by configure-public-ip / configure-domain-tls) |
 | `COOKIE_SECURE` | derived from `APP_URL` | `false` for HTTP / bare IP; `true` behind HTTPS (Caddy) |

@@ -53,6 +53,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { PageLoading } from '@/components/ui/Skeleton';
 import { IconHand, IconScreen, IconUsers, IconVideo } from '@/components/ui/Icons';
 import { cn } from '@/lib/cn';
+import { MIC_LOCKED_NO_TEACHER } from '@/lib/teacherPresenceLogic';
 import { roomFetch, rememberClassroomRole, getClassroomRole, claimTeacherTab } from '@/lib/classroomClient';
 import { forwardActivityFrom, setLiveSession } from '@/lib/liveSession';
 
@@ -64,6 +65,43 @@ type TokenPayload = {
   visibleIdentities: string[];
   mutedByTeacher: boolean;
 };
+
+/**
+ * Live teacher presence from the LiveKit room (not the DB roster): true while a
+ * teacher participant is connected, false when none is, null until this
+ * client's own connection is up (so a join does not flash "absent").
+ * While this client is itself reconnecting, the last answer is kept.
+ */
+function useTeacherLive(teacherIdentities: string[]): boolean | null {
+  const room = useRoomContext();
+  const key = teacherIdentities.join(',');
+  const [live, setLive] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!room) return;
+    const set = new Set(key ? key.split(',') : []);
+    const update = () => {
+      if (room.state !== ConnectionState.Connected) {
+        if (room.state === ConnectionState.Disconnected) setLive(null);
+        return;
+      }
+      setLive(
+        Array.from(room.remoteParticipants.values()).some((p) => isTeacherParticipant(p, set))
+      );
+    };
+    update();
+    room.on(RoomEvent.ParticipantConnected, update);
+    room.on(RoomEvent.ParticipantDisconnected, update);
+    room.on(RoomEvent.ConnectionStateChanged, update);
+    room.on(RoomEvent.Reconnected, update);
+    return () => {
+      room.off(RoomEvent.ParticipantConnected, update);
+      room.off(RoomEvent.ParticipantDisconnected, update);
+      room.off(RoomEvent.ConnectionStateChanged, update);
+      room.off(RoomEvent.Reconnected, update);
+    };
+  }, [room, key]);
+  return live;
+}
 
 function isTeacherParticipant(
   p: { metadata?: string; identity: string; name?: string },
@@ -1876,11 +1914,21 @@ function RoomInner({
 
   const effectiveCanPublish = state?.me?.canPublishVideo ?? canPublishVideo;
   const effectiveMuted = state?.me?.mutedByTeacher ?? mutedByTeacher;
+  // Students are force-muted while the teacher is not connected (enforced by
+  // the SFU grant via the LiveKit webhook; this mirrors it in the UI).
+  const teacherLive = useTeacherLive(teacherIdentities);
+  const micLockedNoTeacher = !isTeacher && teacherLive === false;
   const visibles = state?.visibleIdentities ?? visibleIdentities;
 
   useEffect(() => {
     if (effectiveMuted) setMicOn(false);
   }, [effectiveMuted]);
+
+  // Teacher away → mic off. It stays off when the teacher returns: the student
+  // unmutes themselves (never auto-unmute the class).
+  useEffect(() => {
+    if (micLockedNoTeacher) setMicOn(false);
+  }, [micLockedNoTeacher]);
 
   useEffect(() => {
     if (state?.status === 'ENDED' || state?.ended) {
@@ -2542,7 +2590,7 @@ function RoomInner({
     camOn,
     screenOn,
     onToggleMic: () => {
-      if (effectiveMuted && !isTeacher) return;
+      if ((effectiveMuted || micLockedNoTeacher) && !isTeacher) return;
       setMicOn((v) => !v);
     },
     onToggleCam: () => setCamOn((v) => !v),
@@ -2551,6 +2599,7 @@ function RoomInner({
     isTeacher,
     canPublishVideo: effectiveCanPublish,
     mutedByTeacher: effectiveMuted,
+    micLockReason: micLockedNoTeacher ? MIC_LOCKED_NO_TEACHER : null,
     showScreenShare: isTeacher,
     handRaised,
     onToggleHand: isTeacher ? undefined : toggleHand,
@@ -2570,7 +2619,7 @@ function RoomInner({
       <div className="stage-fullscreen">
         <SelectivePublisher
           canPublishVideo={effectiveCanPublish}
-          mutedByTeacher={effectiveMuted}
+          mutedByTeacher={effectiveMuted || micLockedNoTeacher}
           camDesired={camOn}
           micDesired={micOn}
           localCamStream={localCamStream}

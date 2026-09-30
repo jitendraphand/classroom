@@ -67,6 +67,7 @@ async function clearRoomRedis(code: string) {
     keys.stage(code),
     keys.annotate(code),
     keys.pinnedSpeakers(code),
+    keys.teacherPresent(code),
     ...legacyKeys(code)
   );
 }

@@ -32,6 +32,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ code: 
     keys.stage(code),
     keys.annotate(code),
     keys.pinnedSpeakers(code),
+    keys.teacherPresent(code),
     ...legacyKeys(code)
   );
 

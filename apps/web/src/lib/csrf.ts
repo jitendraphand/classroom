@@ -20,6 +20,18 @@
  * Kept free of Next.js imports so it runs in middleware and in unit tests.
  */
 
+/**
+ * Server-to-server endpoints with their own authentication, not reachable
+ * with a victim's cookies to any effect. The LiveKit webhook is verified by
+ * the signed `Authorization` JWT (WebhookReceiver) and carries
+ * `application/webhook+json` with no browser Origin.
+ */
+export const CSRF_EXEMPT_PATHS = new Set(['/api/livekit/webhook']);
+
+export function isCsrfExempt(pathname: string): boolean {
+  return CSRF_EXEMPT_PATHS.has(pathname.replace(/\/+$/, ''));
+}
+
 export const STATE_CHANGING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 export type CsrfInput = {

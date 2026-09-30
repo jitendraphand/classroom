@@ -31,6 +31,11 @@ type Props = {
   onUnmuteAll?: () => void;
   canPublishVideo: boolean;
   mutedByTeacher?: boolean;
+  /**
+   * Student mic locked for a reason other than a teacher mute (e.g. the
+   * teacher is not connected). Disables unmute and shows this short reason.
+   */
+  micLockReason?: string | null;
   /** When false, hide the screen-share button (students). Default true. */
   showScreenShare?: boolean;
   /** Dock sits in the bottom bar; float is a denser floating panel. */
@@ -69,6 +74,7 @@ export function Controls({
   onUnmuteAll,
   canPublishVideo: _canPublishVideo,
   mutedByTeacher,
+  micLockReason,
   showScreenShare = true,
   variant = 'dock',
   onToggleChat,
@@ -82,7 +88,9 @@ export function Controls({
   onPrepareScreenShare,
 }: Props) {
   void _canPublishVideo;
-  const micLocked = !!mutedByTeacher && !isTeacher;
+  const teacherMuted = !!mutedByTeacher && !isTeacher;
+  const lockReason = !isTeacher && micLockReason ? micLockReason : null;
+  const micLocked = teacherMuted || !!lockReason;
   const isFloat = variant === 'float';
 
   return (
@@ -96,8 +104,10 @@ export function Controls({
       <div className={cn('flex flex-wrap items-center justify-center', isFloat ? 'gap-1.5' : 'gap-2')}>
         <IconButton
           label={
-            micLocked
+            teacherMuted
               ? 'Muted by teacher'
+              : lockReason
+                ? lockReason
               : micOn
                 ? 'Mute microphone'
                 : 'Unmute microphone'
@@ -216,8 +226,8 @@ export function Controls({
       </div>
 
       {micLocked && (
-        <p className="mt-2 w-full text-center text-2xs text-amber-200/90">
-          Muted by teacher — wait to be unmuted
+        <p className="mt-2 w-full text-center text-2xs text-amber-200/90" role="status">
+          {teacherMuted ? 'Muted by teacher — wait to be unmuted' : lockReason}
         </p>
       )}
     </div>

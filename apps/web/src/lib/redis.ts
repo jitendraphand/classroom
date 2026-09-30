@@ -44,6 +44,8 @@ export const keys = {
   rotateLock: (code: string) => `room:${code}:rotate-lock`,
   /** Set of participant ids with raised hands */
   hands: (code: string) => `room:${code}:hands`,
+  /** JSON {s: sessionId, p: boolean}: is the teacher connected to the LiveKit room (webhook / probe) */
+  teacherPresent: (code: string) => `room:${code}:teacher-present`,
 };
 
 export type StageMode = 'idle' | 'screen';

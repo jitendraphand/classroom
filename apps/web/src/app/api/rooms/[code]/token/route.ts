@@ -4,6 +4,7 @@ import { createParticipantToken, getPublicLiveKitUrl, livekitRoomName } from '@/
 import { jsonError, jsonOk } from '@/lib/response';
 import { ensureSampleFresh } from '@/lib/sample';
 import { ensureRedis, keys } from '@/lib/redis';
+import { isTeacherPresent } from '@/lib/teacherPresence';
 
 export const dynamic = 'force-dynamic';
 
@@ -55,6 +56,18 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   const mutedByTeacher =
     !isTeacher && (participant.mutedByTeacher || mutedIds.includes(participant.id));
 
+  // Students joining while the teacher is not connected to the SFU get a token
+  // without microphone publish; the LiveKit webhook grants it when the teacher
+  // connects (and revokes it again when the teacher leaves).
+  const teacherPresent = isTeacher ? true : await isTeacherPresent(code, room);
+  if (isTeacher) {
+    // The teacher is (re)connecting: drop any cached presence so a missed
+    // webhook cannot keep the class locked. Checks until the webhook confirms
+    // the join fall back to asking LiveKit directly.
+    await redis.del(keys.teacherPresent(code)).catch(() => undefined);
+  }
+  const micLocked = !isTeacher && !teacherPresent;
+
   const roomName = livekitRoomName(room.code, room.sessionId);
   const token = await createParticipantToken({
     role: participant.role,
@@ -62,6 +75,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     identity: participant.livekitIdentity,
     name: participant.displayName,
     mutedByTeacher,
+    micLocked,
     // Server-side enforcement of selective video: a student outside the visible
     // sample is granted every source EXCEPT camera, so their video cannot reach
     // the SFU regardless of what the client does.
@@ -71,6 +85,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       participantId: participant.id,
       canPublishVideo,
       mutedByTeacher,
+      micLocked,
     },
   });
 
@@ -82,5 +97,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     canPublishVideo,
     visibleIdentities: sample.visible,
     mutedByTeacher,
+    teacherPresent,
   });
 }

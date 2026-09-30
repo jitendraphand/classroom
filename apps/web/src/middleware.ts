@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { checkCsrf } from '@/lib/csrf';
+import { checkCsrf, isCsrfExempt } from '@/lib/csrf';
 
 /**
  * Origin + content-type guard for every state-changing API call. See
@@ -7,6 +7,7 @@ import { checkCsrf } from '@/lib/csrf';
  * sslip.io deploys.
  */
 export function middleware(req: NextRequest) {
+  if (isCsrfExempt(req.nextUrl.pathname)) return NextResponse.next();
   const result = checkCsrf({
     method: req.method,
     headers: req.headers,

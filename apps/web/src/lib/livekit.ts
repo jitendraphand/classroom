@@ -7,6 +7,8 @@ import {
 } from 'livekit-server-sdk';
 import { prisma } from './db';
 import { resolvePublicLiveKitUrl } from './url';
+import { isTeacherPresent } from './teacherPresence';
+import { studentMicAllowed } from './teacherPresenceLogic';
 
 /**
  * LiveKit access-token lifetime. Short on purpose: LiveKit refreshes the token
@@ -72,6 +74,11 @@ export type ParticipantGrantInput = {
   allowCamera?: boolean;
   /** Teacher-muted student → no microphone. Ignored for teachers. */
   mutedByTeacher?: boolean;
+  /**
+   * Teacher is not connected to the LiveKit room → student gets no microphone
+   * (force-muted until the teacher is back). Ignored for teachers.
+   */
+  micLocked?: boolean;
 };
 
 /**
@@ -89,7 +96,10 @@ export function classroomGrant(input: ParticipantGrantInput) {
     ? publishSourcesFor({ allowCamera: true, allowMic: true, allowScreen: true })
     : publishSourcesFor({
         allowCamera: input.allowCamera ?? false,
-        allowMic: !input.mutedByTeacher,
+        allowMic: studentMicAllowed({
+          mutedByTeacher: !!input.mutedByTeacher,
+          teacherPresent: !input.micLocked,
+        }),
       });
   return {
     roomJoin: true,
@@ -189,11 +199,20 @@ export async function sendRoomData(
 export async function setParticipantPublishPermissions(
   code: string,
   identity: string,
-  perms: PublishPermissions
+  requested: PublishPermissions,
+  opts: { teacherPresent?: boolean } = {}
 ): Promise<void> {
   const svc = roomService();
   const roomName = await livekitRoomNameForCode(code);
   if (!roomName) return;
+  // Students are force-muted while the teacher is not connected, whatever the
+  // caller asked for (sample rotation, "Unmute all", …). The teacher's own mute
+  // state is already folded into requested.allowMic.
+  const teacherPresent = opts.teacherPresent ?? (await isTeacherPresent(code));
+  const perms: PublishPermissions = {
+    ...requested,
+    allowMic: studentMicAllowed({ mutedByTeacher: !requested.allowMic, teacherPresent }),
+  };
   // Only ever called for students: never re-grant data publishing or screen share.
   const allowed = publishSourcesFor({ allowCamera: perms.allowCamera, allowMic: perms.allowMic });
 

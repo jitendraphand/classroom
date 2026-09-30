@@ -17,6 +17,15 @@ redis:
   address: 127.0.0.1:6379
 keys:
   __LIVEKIT_API_KEY__: __LIVEKIT_API_SECRET__
+# Room/participant events → web app. Drives "students are force-muted while
+# the teacher is not connected" (apps/web/src/app/api/livekit/webhook).
+# api_key must be one of the keys above: LiveKit signs each delivery with its
+# secret and the web app verifies it (WebhookReceiver). Host networking, so the
+# web service is on loopback. Override with LIVEKIT_WEBHOOK_URL in .env.
+webhook:
+  api_key: __LIVEKIT_API_KEY__
+  urls:
+    - __LIVEKIT_WEBHOOK_URL__
 logging:
   level: info
 room:
