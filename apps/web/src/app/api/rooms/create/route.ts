@@ -34,7 +34,7 @@ export async function POST(req: Request) {
       maxVisibleVideos: room.maxVisibleVideos,
       permanent: true,
       joinUrl: `${appUrl}/join/${room.code}`,
-      teacherUrl: `${appUrl}/teacher/room/${room.code}`,
+      teacherUrl: `${appUrl}/classroom/${room.code}`,
     });
   } catch (e) {
     if (e instanceof z.ZodError) return jsonError(e.errors[0]?.message || 'Invalid input');

@@ -48,6 +48,7 @@ class MainActivity : AppCompatActivity() {
 
     private var room: Room? = null
     private var code: String = ""
+    private var joinUrl: String = ""
     private var micOn = false
     private var sharing = false
     private var pollJob: Job? = null
@@ -173,9 +174,12 @@ class MainActivity : AppCompatActivity() {
                 val created = withContext(Dispatchers.IO) { api.startClass(name, max) }
                 code = created.optString("code")
                 if (code.isBlank()) throw ApiException("The server did not return a room code")
+                joinUrl = created.optString("joinUrl")
                 binding.codeText.text = code
-                binding.joinText.text = created.optString("joinUrl").ifBlank { "Join code $code" }
-                showLobby()
+                binding.joinText.text = joinUrl.ifBlank { "Join code $code" }
+                // Go straight into the class (same as the website): waiting
+                // students are admitted from the in-class list below the status.
+                enterClass()
             } catch (e: Exception) {
                 showError(e.message ?: "Could not start class")
             } finally {
@@ -225,7 +229,8 @@ class MainActivity : AppCompatActivity() {
                 room = connected
                 listen(connected)
                 connected.connect(url, token)
-                binding.classStatus.text = "In class $code. Share screen when you are ready. Sharing keeps going if you leave this screen."
+                val invite = if (joinUrl.isNotBlank()) " Students join at $joinUrl" else ""
+                binding.classStatus.text = "In class $code.$invite Share screen when you are ready. Sharing keeps going if you leave this screen."
                 binding.shareButton.isEnabled = true
                 if (needsNotificationPermission()) {
                     notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)

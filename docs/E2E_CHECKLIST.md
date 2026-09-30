@@ -13,7 +13,8 @@ Use two browsers (or normal + incognito). Start from a healthy stack (`GET /api/
 - [ ] Register new teacher (or login)
 - [ ] Dashboard shows name/email; **Create room**
 - [ ] Room code + join link appear; **Copy join link** works
-- [ ] **Open teacher lobby** → status, share URL, sample size field
+- [ ] **Start class** goes straight to `/classroom/CODE` in teacher view, camera OFF
+- [ ] Header **Copy invite link** / **Copy code** work; old `/teacher/room/CODE` redirects to the classroom
 
 ## C. Join as student (no teacher hijack)
 
@@ -24,7 +25,7 @@ Use two browsers (or normal + incognito). Start from a healthy stack (`GET /api/
 
 ## D. Admit / waiting room
 
-- [ ] Teacher lobby lists waiters with avatars
+- [ ] Classroom header shows **N waiting · Admit**; Roster lists waiters with avatars
 - [ ] **Admit** one → student auto-enters `/classroom/CODE`
 - [ ] **Admit all** works with multiple waiters
 - [ ] Grammar: "1 student admitted" vs "N students"

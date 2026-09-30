@@ -120,10 +120,10 @@ curl -s http://localhost:3000/api/health
 1. **Teacher** → http://localhost:3000/login  
    - Seeded demo (from smoke test): `teacher@example.com` / `password123`  
    - Or register a new account at `/register`
-2. Dashboard → **Create room** → copy join code/link
-3. Teacher lobby → **Enter classroom** (allow camera/mic)
+2. Dashboard → **Start class** → you land directly in the classroom (camera starts off; turn it on from the dock)
+3. In the classroom header: **Copy invite link** / **Copy code**
 4. **Student** (incognito / second browser) → http://localhost:3000/join/{CODE} → name → waiting room
-5. Teacher **Admit** → student enters class (floating teacher cam + float controls)
+5. Teacher **N waiting · Admit** (or Roster → Admit / Admit all) → student enters class (floating teacher cam + float controls)
 6. Try **Chat**, mute / mute-all, screen share + annotate, **Rotate sample**, speak as a student to force pin into sample
 
 ### Stop

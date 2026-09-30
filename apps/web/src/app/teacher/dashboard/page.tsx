@@ -63,6 +63,13 @@ export default function TeacherDashboard() {
     if (me && data.code) {
       setMe({ ...me, permanentCode: data.code });
     }
+    if (data.code) {
+      // Straight into the classroom (no separate teacher lobby). Claim the tab
+      // as teacher first so a leftover join-as-student role cannot flip the
+      // classroom into the student view.
+      await claimTeacherTab(data.code);
+      router.push(`/classroom/${data.code}`);
+    }
   }
 
   async function logout() {
@@ -127,7 +134,7 @@ export default function TeacherDashboard() {
       <Card>
         <CardHeader
           title="Start class"
-          subtitle="Opens (or reactivates) your permanent classroom. Students wait in the lobby until you admit them."
+          subtitle="Opens (or reactivates) your permanent classroom and takes you straight in. Students wait in the waiting room until you admit them from the roster."
         />
         <form onSubmit={startClass} className="space-y-4">
           <Input
@@ -153,7 +160,7 @@ export default function TeacherDashboard() {
             </p>
           )}
           <Button type="submit" fullWidth className="py-3" disabled={starting}>
-            {starting ? 'Starting…' : 'Start class'}
+            {starting ? 'Starting…' : created ? 'Opening classroom…' : 'Start class'}
           </Button>
         </form>
 
@@ -170,13 +177,13 @@ export default function TeacherDashboard() {
             <p className="mt-3 break-all text-xs text-slate-400">Join link: {created.joinUrl}</p>
             <div className="mt-4 flex flex-wrap gap-2">
               <Link
-                href={`/teacher/room/${created.code}`}
+                href={`/classroom/${created.code}`}
                 className="btn-primary"
                 onClick={() => {
                   if (created?.code) void claimTeacherTab(created.code);
                 }}
               >
-                Open teacher lobby
+                Open classroom
               </Link>
               <Button variant="secondary" onClick={copyLink}>
                 {copied ? 'Copied!' : 'Copy join link'}

@@ -1798,7 +1798,10 @@ function RoomInner({
   const room = useRoomContext();
   const { localParticipant } = useLocalParticipant();
   const [micOn, setMicOn] = useState(true);
-  const [camOn, setCamOn] = useState(true);
+  // Teacher camera starts OFF (turned on from the dock). Students keep their
+  // previous default. Nothing is captured or published until camOn is true.
+  const [camOn, setCamOn] = useState(() => !isTeacher);
+  const [inviteCopied, setInviteCopied] = useState<'' | 'link' | 'code'>('');
   const [screenOn, setScreenOn] = useState(false);
   const [chatUnread, setChatUnread] = useState(0);
   const [localCamStream, setLocalCamStream] = useState<MediaStream | null>(null);
@@ -2196,6 +2199,22 @@ function RoomInner({
     };
   }, [isTeacher, localParticipant, room, postStage, endShareSession]);
 
+  // A teacher who dropped off mid-share (lost internet, closed the tab) could
+  // not tell the server the share ended, so Redis still says stage=screen and
+  // students sit on "Waiting for teacher screen…" after the teacher reloads.
+  // On the first room-state snapshot of a fresh teacher session, clear that
+  // stale stage (and its annotations) unless this tab is already sharing.
+  const staleStageChecked = useRef(false);
+  useEffect(() => {
+    if (!isTeacher || !state || staleStageChecked.current) return;
+    staleStageChecked.current = true;
+    if (state.stageMode !== 'screen') return;
+    if (screenOn || shareStartRef.current || shareWantedRef.current) return;
+    const pub = localParticipant?.getTrackPublication(Track.Source.ScreenShare);
+    if (screenCaptureLive(pub)) return;
+    void postStage('idle');
+  }, [isTeacher, state, screenOn, localParticipant, postStage]);
+
   useEffect(() => {
     // LiveKit disconnects on the page "freeze" event even when
     // disconnectOnPageLeave is off. A backgrounded or minimized window must
@@ -2398,6 +2417,18 @@ function RoomInner({
     room?.disconnect();
     onClassEnded();
     router.push('/teacher/dashboard');
+  }
+
+  async function copyInvite(kind: 'link' | 'code') {
+    const text =
+      kind === 'link' ? `${window.location.origin}/join/${code.toUpperCase()}` : code.toUpperCase();
+    try {
+      await navigator.clipboard.writeText(text);
+      setInviteCopied(kind);
+      window.setTimeout(() => setInviteCopied(''), 2000);
+    } catch {
+      setHudNotice(`Could not copy. Share: ${text}`);
+    }
   }
 
   async function rotateSample() {
@@ -2697,7 +2728,38 @@ function RoomInner({
           </p>
         </div>
 
-        <div className="flex items-center gap-1.5 sm:gap-2">
+        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+          {isTeacher && waitingCount > 0 && !screenOn && (
+            <Button
+              variant="warning"
+              size="sm"
+              onClick={() => setRosterOpen(true)}
+              aria-label={`${waitingCount} waiting — open roster to admit`}
+            >
+              <IconUsers size={14} />
+              {waitingCount} waiting · Admit
+            </Button>
+          )}
+          {isTeacher && (
+            <>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => void copyInvite('link')}
+                title={`Copy the student join link for ${code}`}
+              >
+                {inviteCopied === 'link' ? 'Copied!' : 'Copy invite link'}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => void copyInvite('code')}
+                title="Copy the class code"
+              >
+                {inviteCopied === 'code' ? 'Copied!' : 'Copy code'}
+              </Button>
+            </>
+          )}
           {isTeacher && screenOn && !shareMount && (
             <Button variant="primary" size="sm" onClick={() => reopenShareControls()}>
               <IconScreen size={14} />
@@ -2895,9 +2957,20 @@ function RoomInner({
             </ul>
             {waitingCount > 0 && (
               <div className="shrink-0 border-t border-white/5 pt-3" data-no-drag>
-                <h3 className="text-2xs font-semibold uppercase tracking-wider text-slate-400">
-                  Waiting ({waitingCount})
-                </h3>
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-2xs font-semibold uppercase tracking-wider text-slate-400">
+                    Waiting ({waitingCount})
+                  </h3>
+                  {waitingCount > 1 && (
+                    <button
+                      type="button"
+                      className="text-xs font-semibold text-brand-300 hover:underline"
+                      onClick={() => void admitStudents(undefined, true)}
+                    >
+                      Admit all
+                    </button>
+                  )}
+                </div>
                 <ul className="mt-2 max-h-32 space-y-1.5 overflow-y-auto text-sm">
                   {state!.waiting!.map((p) => (
                     <li
