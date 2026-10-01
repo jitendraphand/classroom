@@ -137,7 +137,9 @@ function styleControlDocument(
   body.style.minHeight = '0';
   body.style.height = 'auto';
   body.style.background = '#0d1219';
-  body.style.overflow = 'hidden';
+  // Bar is sticky at the top; if the window cannot grow, the panel scrolls.
+  body.style.overflowX = 'hidden';
+  body.style.overflowY = 'auto';
   return {
     kind,
     window: win,
@@ -249,9 +251,9 @@ const HUD_CSS = `
 display:block;width:max-content;margin:0;background:#0d1219;color:var(--text);
 font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:12px;line-height:1.2}
 .tsh *{box-sizing:border-box}
-.tsh-bar{display:flex;align-items:center;gap:3px;flex-wrap:nowrap;width:max-content;
-padding:4px 6px;overflow-x:auto;background:#0d1219}
-.tsh-panel{width:min(420px,100vw);max-height:280px;display:flex;flex-direction:column;border-top:1px solid var(--line);background:#0d1219}
+.tsh-bar{display:flex;align-items:center;gap:3px;flex-wrap:nowrap;width:max-content;min-width:100%;
+padding:4px 6px;overflow-x:auto;background:#0d1219;position:sticky;top:0;z-index:2}
+.tsh-panel{width:min(420px,100vw);max-height:280px;border-bottom:0;display:flex;flex-direction:column;border-top:1px solid var(--line);background:#0d1219}
 .tsh-tip{padding:4px 8px;font-size:11px;color:#fde68a;background:rgba(245,158,11,.16);white-space:nowrap}
 .tsh-live{font-size:8px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:2px 6px;border-radius:999px;
 color:#bbf7d0;border:1px solid rgba(34,197,94,.4);background:rgba(34,197,94,.14);white-space:nowrap}
@@ -314,12 +316,10 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
 
   const [panel, setPanel] = useState<Panel>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const prevWaiting = useRef(waitingCount);
-
-  useEffect(() => {
-    if (waitingCount > prevWaiting.current) setPanel('roster');
-    prevWaiting.current = waitingCount;
-  }, [waitingCount]);
+  // A new waiting student does NOT open the roster by itself. Document PiP and
+  // pop-ups refuse resizeTo() without a user gesture, so an auto-opened panel
+  // could not grow the window. The bar already shows a waiting badge and an
+  // "Admit <name>" button; the teacher opens the roster with a click.
 
   useEffect(() => {
     onChatOpenChange?.(panel === 'chat');
@@ -384,6 +384,122 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
       <style>{HUD_CSS}</style>
       <div className="tsh-sr" aria-live="polite">
         {waitingLabel}
+      </div>
+      <div className="tsh-bar" role="toolbar" aria-label="Share tools">
+        <span className="tsh-live">Live</span>
+        <button
+          type="button"
+          className="tsh-btn"
+          aria-pressed={!teacherMicOn}
+          onClick={onToggleTeacherMic}
+          aria-label={teacherMicOn ? 'Mute mic' : 'Unmute mic'}
+          title={teacherMicOn ? 'Mute mic' : 'Unmute mic'}
+        >
+          {teacherMicOn ? <IconMic size={14} /> : <IconMicOff size={14} />}
+        </button>
+        <button
+          type="button"
+          className="tsh-btn"
+          aria-pressed={annotateOn}
+          onClick={() => onAnnotateOnChange(!annotateOn)}
+          title="Draw on the shared screen"
+        >
+          Annotate
+        </button>
+        {annotateOn &&
+          (['pen', 'highlighter', 'eraser'] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              className="tsh-btn"
+              aria-pressed={mode === m}
+              onClick={() => setMode(m)}
+            >
+              {TOOL_LABEL[m]}
+            </button>
+          ))}
+        {annotateOn &&
+          ANNOTATE_COLORS.map((c) => (
+            <button
+              key={c}
+              type="button"
+              className="tsh-swatch"
+              style={{ background: c }}
+              aria-label={`Colour ${c}`}
+              aria-pressed={color === c}
+              onClick={() => setColor(c)}
+            />
+          ))}
+        {annotateOn && (
+          <button
+            type="button"
+            className="tsh-btn"
+            onClick={annotate.clear}
+            disabled={!annotate.strokes.length}
+          >
+            Clear
+          </button>
+        )}
+        <span className="tsh-sep" aria-hidden />
+        <button
+          type="button"
+          className="tsh-btn"
+          aria-pressed={panel === 'chat'}
+          onClick={() => togglePanel('chat')}
+          aria-label="Chat"
+          title="Chat"
+        >
+          <IconChat size={14} />
+          {chatUnread > 0 && panel !== 'chat' && (
+            <span className="tsh-count">{chatUnread > 9 ? '9+' : chatUnread}</span>
+          )}
+        </button>
+        <button
+          type="button"
+          className="tsh-btn"
+          aria-pressed={panel === 'hands'}
+          onClick={() => togglePanel('hands')}
+          aria-label="Raised hands"
+          title="Raised hands"
+        >
+          <IconHand size={14} />
+          {hands.length > 0 && panel !== 'hands' && <span className="tsh-count">{hands.length}</span>}
+        </button>
+        <button
+          type="button"
+          className="tsh-btn"
+          aria-pressed={panel === 'roster'}
+          onClick={() => togglePanel('roster')}
+          aria-label="Roster"
+          title="Roster"
+        >
+          <IconUsers size={14} />
+          {waitingCount > 0 && panel !== 'roster' ? (
+            <span className="tsh-count">{waitingCount > 9 ? '9+' : waitingCount}</span>
+          ) : students.length > 0 && panel !== 'roster' ? (
+            <span className="tsh-count tsh-count-blue">{students.length}</span>
+          ) : null}
+        </button>
+        {waiting.length > 0 && (
+          <button
+            type="button"
+            className="tsh-btn"
+            onClick={() => onAdmit?.(waiting[0].id)}
+            title={`Admit ${waiting[0].displayName}`}
+          >
+            <span className="tsh-admit">Admit {waiting[0].displayName}</span>
+          </button>
+        )}
+        {waiting.length > 1 && (
+          <button type="button" className="tsh-btn" onClick={() => onAdmitAll?.()}>
+            Admit all
+          </button>
+        )}
+        <span className="tsh-sep" aria-hidden />
+        <button type="button" className="tsh-btn tsh-btn-danger" onClick={onStopSharing} title="Stop sharing">
+          <IconScreen size={14} />
+          Stop
+        </button>
       </div>
       {notice ? <div className="tsh-tip">{notice}</div> : null}
 
@@ -491,117 +607,6 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
         </div>
       )}
 
-      <div className="tsh-bar" role="toolbar" aria-label="Share tools">
-        <span className="tsh-live">Live</span>
-        <button
-          type="button"
-          className="tsh-btn"
-          aria-pressed={!teacherMicOn}
-          onClick={onToggleTeacherMic}
-          aria-label={teacherMicOn ? 'Mute mic' : 'Unmute mic'}
-          title={teacherMicOn ? 'Mute mic' : 'Unmute mic'}
-        >
-          {teacherMicOn ? <IconMic size={14} /> : <IconMicOff size={14} />}
-        </button>
-        <button
-          type="button"
-          className="tsh-btn"
-          aria-pressed={annotateOn}
-          onClick={() => onAnnotateOnChange(!annotateOn)}
-          title="Draw on the shared screen"
-        >
-          Annotate
-        </button>
-        {annotateOn &&
-          (['pen', 'highlighter', 'eraser'] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              className="tsh-btn"
-              aria-pressed={mode === m}
-              onClick={() => setMode(m)}
-            >
-              {TOOL_LABEL[m]}
-            </button>
-          ))}
-        {annotateOn &&
-          ANNOTATE_COLORS.map((c) => (
-            <button
-              key={c}
-              type="button"
-              className="tsh-swatch"
-              style={{ background: c }}
-              aria-label={`Colour ${c}`}
-              aria-pressed={color === c}
-              onClick={() => setColor(c)}
-            />
-          ))}
-        {annotateOn && (
-          <button
-            type="button"
-            className="tsh-btn"
-            onClick={annotate.clear}
-            disabled={!annotate.strokes.length}
-          >
-            Clear
-          </button>
-        )}
-        <span className="tsh-sep" aria-hidden />
-        <button
-          type="button"
-          className="tsh-btn"
-          aria-pressed={panel === 'chat'}
-          onClick={() => togglePanel('chat')}
-          aria-label="Chat"
-          title="Chat"
-        >
-          <IconChat size={14} />
-          {chatUnread > 0 && panel !== 'chat' && (
-            <span className="tsh-count">{chatUnread > 9 ? '9+' : chatUnread}</span>
-          )}
-        </button>
-        <button
-          type="button"
-          className="tsh-btn"
-          aria-pressed={panel === 'hands'}
-          onClick={() => togglePanel('hands')}
-          aria-label="Raised hands"
-          title="Raised hands"
-        >
-          <IconHand size={14} />
-          {hands.length > 0 && panel !== 'hands' && <span className="tsh-count">{hands.length}</span>}
-        </button>
-        <button
-          type="button"
-          className="tsh-btn"
-          aria-pressed={panel === 'roster'}
-          onClick={() => togglePanel('roster')}
-          aria-label="Roster"
-          title="Roster"
-        >
-          <IconUsers size={14} />
-          {waitingCount > 0 && panel !== 'roster' ? (
-            <span className="tsh-count">{waitingCount > 9 ? '9+' : waitingCount}</span>
-          ) : students.length > 0 && panel !== 'roster' ? (
-            <span className="tsh-count tsh-count-blue">{students.length}</span>
-          ) : null}
-        </button>
-        {waiting.length > 0 && (
-          <button type="button" className="tsh-btn" onClick={() => onAdmit?.(waiting[0].id)}>
-            <span className="tsh-admit">Admit {waiting.length === 1 ? waiting[0].displayName : waiting.length}</span>
-          </button>
-        )}
-        {waiting.length > 1 && (
-          <button type="button" className="tsh-btn" onClick={() => onAdmitAll?.()}>
-            Admit all
-          </button>
-        )}
-        <span className="tsh-sep" aria-hidden />
-        <button type="button" className="tsh-btn tsh-btn-danger" onClick={onStopSharing} title="Stop sharing">
-          <IconScreen size={14} />
-          Stop
-        </button>
-      </div>
     </div>
   );
 

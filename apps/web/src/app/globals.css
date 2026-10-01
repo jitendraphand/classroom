@@ -306,6 +306,11 @@ body {
   .peers-float-pane:active {
     cursor: grabbing;
   }
+  /* Docked beside the shared screen: fixed in the stage corner, not draggable. */
+  .peers-float-pane[data-docked='1'],
+  .peers-float-pane[data-docked='1'] .peers-float-header {
+    cursor: default;
+  }
   .peers-float-header {
     @apply flex cursor-grab items-center justify-between gap-2 border-b border-white/10 bg-black/40 px-2 py-1.5;
   }

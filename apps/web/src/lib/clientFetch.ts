@@ -1,6 +1,8 @@
 'use client';
 
 /** Small same-origin JSON fetch helper for dashboard pages. */
+// Untyped callers read ad-hoc fields from the JSON body; T defaults to any on purpose.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function api<T = any>(
   path: string,
   opts: { method?: string; body?: unknown } = {}

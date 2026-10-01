@@ -212,6 +212,10 @@ function ParticipantGrid({
         </div>
       )}
 
+      {/* While the teacher shares, student cameras and the teacher's own tile
+          live only in the docked Class panel (TeacherPeersFloat); a second
+          copy here would duplicate them and squeeze under the dock. */}
+      {!(isTeacher && hasScreen) && (
       <div
         className={cn(
           'stage-strip grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4',
@@ -248,6 +252,7 @@ function ParticipantGrid({
         })}
         <div className={hasScreen ? 'max-h-36' : undefined}>{localPreview}</div>
       </div>
+      )}
     </div>
   );
 }
@@ -596,10 +601,12 @@ function captureScreen(): Promise<MediaStream> {
 
 
 const PEER_TOP_RESERVE = 152;
+/** Gap between the docked Class panel and the stage edges (share mode). */
+const PEER_DOCK_MARGIN = 8;
 /** Above the teacher dock. The share bar is no longer in this page. */
 const PEER_BOTTOM_RESERVE = 120;
 
-function peerFloatLayout(slots: 2 | 4 | 6, vw: number, vh: number) {
+function peerFloatLayout(slots: 2 | 4 | 6, vw: number, vh: number, availH?: number) {
   const cols = slots === 6 ? 2 : 1;
   const rows = slots === 2 ? 2 : slots === 4 ? 4 : 3;
   const header = 34;
@@ -608,7 +615,8 @@ function peerFloatLayout(slots: 2 | 4 | 6, vw: number, vh: number) {
   const border = 2;
   const bottomReserve = PEER_BOTTOM_RESERVE;
   const maxPaneW = Math.max(200, vw - 16);
-  const maxPaneH = Math.max(180, vh - PEER_TOP_RESERVE - bottomReserve);
+  const maxPaneH =
+    availH !== undefined ? Math.max(180, availH) : Math.max(180, vh - PEER_TOP_RESERVE - bottomReserve);
   const scale = Math.min(
     1,
     (maxPaneW - pad - border - gap * (cols - 1)) / (PEER_TILE_W * cols),
@@ -898,6 +906,8 @@ function TeacherPeersFloat({
   selfName,
   selfStream,
   onSlotsChange,
+  dock = null,
+  onDockSpace,
 }: {
   roomCode: string;
   teacherIdentities: string[];
@@ -906,6 +916,14 @@ function TeacherPeersFloat({
   selfStream: MediaStream | null;
   /** Student-camera count that fills this window (tiles minus the teacher). */
   onSlotsChange?: (studentSlots: number) => void;
+  /**
+   * Stage rectangle (viewport px) while the teacher shares a screen. The panel
+   * then docks to the stage's top-left corner (no dragging), starts minimized,
+   * and reports the room it needs via onDockSpace so the stage can make space
+   * instead of being covered.
+   */
+  dock?: { top: number; left: number; height: number } | null;
+  onDockSpace?: (space: { left: number; top: number }) => void;
 }) {
   const room = useRoomContext();
   const teacherSet = new Set(teacherIdentities);
@@ -930,17 +948,26 @@ function TeacherPeersFloat({
       return false;
     }
   });
+  const docked = !!dock;
+  // Minimized state while docked. Starts collapsed at every share; the
+  // teacher's normal (floating) minimized preference is untouched.
+  const [dockMinimized, setDockMinimized] = useState(true);
+  useEffect(() => {
+    if (docked) setDockMinimized(true);
+  }, [docked]);
+  const isMin = docked ? dockMinimized : minimized;
   const [rotationTick, setRotationTick] = useState(0);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [stickyVersion, setStickyVersion] = useState(0);
   const [tick, setTick] = useState(0);
   const [viewport, setViewport] = useState({ w: 1400, h: 900 });
 
+  const dockAvailH = dock ? Math.max(0, dock.height - 2 * PEER_DOCK_MARGIN) : undefined;
   const layout = useMemo(
-    () => peerFloatLayout(slotCount, viewport.w, viewport.h),
-    [slotCount, viewport.w, viewport.h]
+    () => peerFloatLayout(slotCount, viewport.w, viewport.h, dockAvailH),
+    [slotCount, viewport.w, viewport.h, dockAvailH]
   );
-  sizeRef.current = minimized
+  sizeRef.current = isMin
     ? { w: 168, h: 36 }
     : { w: layout.paneW, h: layout.paneH };
 
@@ -986,15 +1013,28 @@ function TeacherPeersFloat({
     if (!el) return;
     const sync = () => {
       const w = el.offsetWidth || layout.paneW;
-      const h = el.offsetHeight || (minimized ? 36 : layout.paneH);
+      const h = el.offsetHeight || (isMin ? 36 : layout.paneH);
       sizeRef.current = { w, h };
-      reclamp();
+      if (docked) {
+        // Expanded: a left gutter. Minimized: a thin top band for the pill.
+        onDockSpace?.(
+          isMin
+            ? { left: 0, top: h + 2 * PEER_DOCK_MARGIN }
+            : { left: w + 2 * PEER_DOCK_MARGIN, top: 0 }
+        );
+      } else {
+        reclamp();
+      }
     };
     sync();
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null;
     ro?.observe(el);
     return () => ro?.disconnect();
-  }, [layout.paneW, layout.paneH, minimized, reclamp]);
+  }, [layout.paneW, layout.paneH, isMin, docked, reclamp, onDockSpace]);
+
+  useEffect(() => {
+    if (!docked) onDockSpace?.({ left: 0, top: 0 });
+  }, [docked, onDockSpace]);
 
   // Random mosaic rotation ~8s among non-sticky students
   useEffect(() => {
@@ -1176,10 +1216,12 @@ function TeacherPeersFloat({
   const cells: Array<string | null> = ['__self__'];
   for (let i = 0; i < slotCount - 1; i++) cells.push(peerIds[i] ?? null);
 
-  const style: CSSProperties = pos
-    ? { left: pos.x, top: pos.y }
-    : { left: 12, top: PEER_TOP_RESERVE };
-  if (!minimized) {
+  const style: CSSProperties = dock
+    ? { left: dock.left + PEER_DOCK_MARGIN, top: dock.top + PEER_DOCK_MARGIN }
+    : pos
+      ? { left: pos.x, top: pos.y }
+      : { left: 12, top: PEER_TOP_RESERVE };
+  if (!isMin) {
     // Size is the selected slot layout, even when some tiles are blank.
     style.width = layout.paneW;
     style.height = layout.paneH;
@@ -1191,17 +1233,18 @@ function TeacherPeersFloat({
       className="peers-float-pane"
       role="region"
       data-slots={slotCount}
-      data-minimized={minimized ? '1' : '0'}
+      data-minimized={isMin ? '1' : '0'}
+      data-docked={docked ? '1' : '0'}
       style={style}
-      aria-label="Class videos — drag to move"
-      {...dragHandlers}
+      aria-label={docked ? 'Class videos' : 'Class videos — drag to move'}
+      {...(docked ? {} : dragHandlers)}
     >
       <div className="peers-float-header">
         <span className="text-2xs font-semibold text-slate-200">
-          Class{minimized ? ` · ${peerIds.length + 1}` : ''}
+          Class{isMin ? ` · ${peerIds.length + 1}` : ''}
         </span>
         <div className="flex items-center gap-1" data-no-drag onPointerDown={(e) => e.stopPropagation()}>
-          {!minimized &&
+          {!isMin &&
             ([2, 4, 6] as const).map((n) => (
               <button
                 key={n}
@@ -1225,15 +1268,15 @@ function TeacherPeersFloat({
           <button
             type="button"
             className="rounded px-1.5 py-0.5 text-[10px] font-bold text-slate-300 hover:bg-white/10"
-            onClick={() => setMinimized((v) => !v)}
-            aria-label={minimized ? 'Expand class videos' : 'Minimize class videos'}
-            title={minimized ? 'Expand' : 'Minimize'}
+            onClick={() => (docked ? setDockMinimized((v) => !v) : setMinimized((v) => !v))}
+            aria-label={isMin ? 'Expand class videos' : 'Minimize class videos'}
+            title={isMin ? 'Expand' : 'Minimize'}
           >
-            {minimized ? '▢' : '—'}
+            {isMin ? '▢' : '—'}
           </button>
         </div>
       </div>
-      {!minimized && (
+      {!isMin && (
         <div
           className="peers-float-grid"
           data-slots={slotCount}
@@ -2563,6 +2606,40 @@ function RoomInner({
   const studentCount = state?.admitted?.filter((a) => a.role === 'STUDENT').length ?? 0;
   const waitingCount = state?.waiting?.length ?? 0;
 
+  // Teacher share layout: the Class panel docks to the stage's corner and the
+  // stage makes room for it (left gutter when expanded, top band when
+  // minimized) instead of being covered by a floating window.
+  const shareLayout = isTeacher && (screenOn || stageMode === 'screen');
+  const stageWrapRef = useRef<HTMLDivElement | null>(null);
+  const [dockArea, setDockArea] = useState<{ top: number; left: number; height: number } | null>(null);
+  const [dockSpace, setDockSpace] = useState({ left: 0, top: 0 });
+  const onDockSpace = useCallback((next: { left: number; top: number }) => {
+    setDockSpace((prev) => (prev.left === next.left && prev.top === next.top ? prev : next));
+  }, []);
+  useEffect(() => {
+    if (!shareLayout) {
+      setDockArea(null);
+      return;
+    }
+    const el = stageWrapRef.current;
+    if (!el) return;
+    const read = () => {
+      const r = el.getBoundingClientRect();
+      const next = { top: Math.round(r.top), left: Math.round(r.left), height: Math.round(r.height) };
+      setDockArea((prev) =>
+        prev && prev.top === next.top && prev.left === next.left && prev.height === next.height ? prev : next
+      );
+    };
+    read();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(read) : null;
+    ro?.observe(el);
+    window.addEventListener('resize', read);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener('resize', read);
+    };
+  }, [shareLayout]);
+
   /** Teacher lowers a student's raised hand. Shared by the roster and the HUD. */
   async function lowerHand(participantId: string) {
     try {
@@ -2607,9 +2684,14 @@ function RoomInner({
 
   // —— Student path: always fullscreen stage + floating teacher cam + float chrome ——
   if (!isTeacher) {
-    const teacherHere = teacherIdentities.length > 0;
+    // teacherLive === false: the teacher's media connection is gone (dropped
+    // mid-share, closed the tab). Redis may still say stage=screen until the
+    // teacher returns, so do not show a stale "Teacher screen" stage.
+    const teacherGone = teacherLive === false;
+    const teacherHere = teacherIdentities.length > 0 && !teacherGone;
+    const showTeacherScreen = effectiveStage === 'screen' && !teacherGone;
     const badge =
-      effectiveStage === 'screen'
+      showTeacherScreen
         ? 'Teacher screen'
         : teacherHere
           ? 'Teacher is in the room'
@@ -2660,11 +2742,11 @@ function RoomInner({
         )}
 
         <div className="absolute inset-0 z-10">
-          {effectiveStage === 'screen' ? (
+          {showTeacherScreen ? (
             <TeacherScreenStage
               teacherIdentities={teacherIdentities}
               code={code}
-              active={effectiveStage === 'screen'}
+              active={showTeacherScreen}
             />
           ) : (
             <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-ink-950 px-6 text-center text-slate-400">
@@ -2846,7 +2928,7 @@ function RoomInner({
       )}
 
       {/* Main stage — screen share fills the middle when active */}
-      <div className="relative min-h-0 flex-1 overflow-hidden">
+      <div ref={stageWrapRef} className="relative min-h-0 flex-1 overflow-hidden">
           <section
             className={
               screenOn || stageMode === 'screen'
@@ -2857,8 +2939,13 @@ function RoomInner({
             <div
               className={
                 screenOn || stageMode === 'screen'
-                  ? 'flex h-full min-h-0 flex-col'
+                  ? 'flex h-full min-h-0 flex-col bg-ink-950'
                   : 'flex min-h-0 flex-col gap-3 pb-2'
+              }
+              style={
+                shareLayout
+                  ? { paddingLeft: dockSpace.left, paddingTop: dockSpace.top }
+                  : undefined
               }
             >
               <ParticipantGrid
@@ -3091,6 +3178,8 @@ function RoomInner({
         selfName={displayName}
         selfStream={localCamStream}
         onSlotsChange={(slots) => void setStudentCameraCap(slots)}
+        dock={shareLayout ? dockArea : null}
+        onDockSpace={onDockSpace}
       />
 
       {/* Controls render only inside the pop-out. Nothing is painted here. */}
