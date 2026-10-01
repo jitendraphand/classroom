@@ -47,7 +47,7 @@ export function useIdleLogout() {
         const res = await fetch('/api/auth/me', { cache: 'no-store' });
         const data = await res.json();
         if (cancelled) return;
-        authedRef.current = data.role === 'teacher' || data.role === 'student';
+        authedRef.current = data.role === 'teacher' || data.role === 'student' || data.role === 'admin';
         if (authedRef.current) armTimer();
         else clearTimer();
       } catch {

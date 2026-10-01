@@ -32,12 +32,15 @@ RUN groupadd --system --gid 1001 nodejs && useradd --system --uid 1001 nextjs
 
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/scripts ./scripts
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh && chown -R nextjs:nodejs /app
+# /app/secrets: mount point for the admin bootstrap password file (see
+# scripts/create-admin.sh); container-only permissions.
+RUN chmod +x /docker-entrypoint.sh && mkdir -p /app/secrets && chmod 700 /app/secrets && chown -R nextjs:nodejs /app
 
 USER nextjs
 EXPOSE 3000

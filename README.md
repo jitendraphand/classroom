@@ -129,9 +129,11 @@ curl -s http://localhost:3000/api/health
 
 ### Demo in two browsers
 
-1. **Teacher** → http://localhost:3000/login  
-   - Seeded demo (from smoke test): `teacher@example.com` / `password123`  
-   - Or register a new account at `/register`
+1. **Admin** → set `ADMIN_EMAIL` in `.env`, run `./scripts/create-admin.sh`, read the
+   generated password from `secrets/admin-initial-password`, sign in at
+   http://localhost:3000/login (you must set a new password) and add a teacher at `/admin`.
+   **Teacher** → sign in with the temporary password shown to the admin (must be changed).
+   Public self-registration was removed; `/register` redirects to `/login`.
 2. Dashboard → **Start class** → you land directly in the classroom (camera starts off; turn it on from the dock)
 3. In the classroom header: **Copy invite link** / **Copy code**
 4. **Student** (incognito / second browser) → http://localhost:3000/join/{CODE} → name → waiting room
@@ -188,8 +190,8 @@ Opens `https://…` and `wss://livekit.…`. Firewall: **80/443**, **7881/tcp**,
 | URL | Purpose |
 |-----|---------|
 | http://localhost:3000 | Web app |
-| http://localhost:3000/register | Teacher registration |
-| http://localhost:3000/login | Teacher login |
+| http://localhost:3000/login | Admin + teacher login |
+| http://localhost:3000/admin | School admin (teachers) |
 | http://localhost:3000/join | Student join (enter code) |
 | http://localhost:3000/join/{CODE} | Direct join link |
 | http://localhost:3000/api/health | Health check |
@@ -213,7 +215,8 @@ See `.env.example`. Important:
 | `LIVEKIT_USE_EXTERNAL_IP` | `false` | `true` on VPS so ICE advertises the public IP (`sync-livekit-keys.sh`) |
 | `LIVEKIT_NODE_IP` | _(unset)_ | Optional pin of advertised IP (set by configure-public-ip / configure-domain-tls) |
 | `COOKIE_SECURE` | derived from `APP_URL` | `false` for HTTP / bare IP; `true` behind HTTPS (Caddy) |
-| `NEXTAUTH_SECRET` | generated | JWT signing for teachers |
+| `NEXTAUTH_SECRET` | generated | JWT signing for admin / teacher sessions |
+| `ADMIN_EMAIL` | _(unset)_ | Email of the single school admin, created on first boot or by `scripts/create-admin.sh` (generated password → `./secrets/admin-initial-password`) |
 | `DATABASE_URL` | `postgresql://…@127.0.0.1:5432/…` | Host-network Postgres |
 | `REDIS_URL` | `redis://127.0.0.1:6379` | Host-network Redis |
 

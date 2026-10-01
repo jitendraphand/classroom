@@ -20,3 +20,7 @@ apps/web/coverage
 
 # Generated LiveKit config (contains the API secret). Template: infra/livekit.example.yaml
 infra/livekit.yaml
+
+# Admin bootstrap / reset password files (scripts/create-admin.sh). Never commit.
+secrets/
+apps/web/secrets/

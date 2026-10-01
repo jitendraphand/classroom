@@ -40,6 +40,7 @@ export default function TeacherDashboard() {
       .then((r) => r.json())
       .then((data) => {
         if (data.role !== 'teacher') router.replace('/login');
+        else if (data.mustChangePassword) router.replace('/account/password');
         else setMe(data);
       });
   }, [router]);
@@ -102,9 +103,14 @@ export default function TeacherDashboard() {
         compact
         subtitle="Teacher dashboard"
         right={
-          <Button variant="secondary" onClick={logout}>
-            Log out
-          </Button>
+          <>
+            <Link href="/account/password" className="btn-ghost px-3 py-1.5 text-xs">
+              Change password
+            </Link>
+            <Button variant="secondary" onClick={logout}>
+              Log out
+            </Button>
+          </>
         }
       />
 

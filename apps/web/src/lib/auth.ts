@@ -1,8 +1,8 @@
-import { SignJWT, jwtVerify } from 'jose';
 import { cookies } from 'next/headers';
 import bcrypt from 'bcryptjs';
 import { prisma } from './db';
 import { cookieSecureFlag } from './url';
+import { signSession, verifySession, sessionStillValid } from './sessionTokens';
 
 /**
  * Cookie names. Over HTTPS the `__Host-` prefix is used: the browser then only
@@ -17,6 +17,7 @@ function cookieName(base: string) {
 const teacherCookieName = () => cookieName('classroom_teacher');
 const studentCookieName = () => cookieName('classroom_student');
 const actAsCookieName = () => cookieName('classroom_act_as');
+const adminCookieName = () => cookieName('classroom_admin');
 
 /**
  * SameSite=Strict: every page is a client component that authenticates through
@@ -34,12 +35,6 @@ function cookieOptions(maxAge: number) {
   };
 }
 
-function secret() {
-  const s = process.env.NEXTAUTH_SECRET;
-  if (!s) throw new Error('NEXTAUTH_SECRET is not set');
-  return new TextEncoder().encode(s);
-}
-
 export async function hashPassword(password: string) {
   return bcrypt.hash(password, 12);
 }
@@ -48,12 +43,16 @@ export async function verifyPassword(password: string, hash: string) {
   return bcrypt.compare(password, hash);
 }
 
-export async function createTeacherToken(teacher: { id: string; email: string; name: string }) {
-  return new SignJWT({ sub: teacher.id, email: teacher.email, name: teacher.name, role: 'teacher' })
-    .setProtectedHeader({ alg: 'HS256' })
-    .setIssuedAt()
-    .setExpirationTime('7d')
-    .sign(secret());
+export async function createTeacherToken(teacher: {
+  id: string;
+  email: string;
+  name: string;
+  sessionVersion?: number;
+}) {
+  return signSession('teacher', teacher.id, teacher.sessionVersion ?? 0, {
+    email: teacher.email,
+    name: teacher.name,
+  });
 }
 
 export async function setTeacherCookie(token: string) {
@@ -64,14 +63,31 @@ export async function clearTeacherCookie() {
   (await cookies()).set(teacherCookieName(), '', cookieOptions(0));
 }
 
-export async function getTeacherSession() {
+export type TeacherSession = {
+  id: string;
+  email: string;
+  name: string;
+  permanentCode: string;
+  mustChangePassword: boolean;
+};
+
+/**
+ * The signed-in teacher, or null. A disabled teacher, a stale session version
+ * (password reset / disable) or a pending forced password change all yield
+ * null, so every existing teacher API refuses them without per-route checks.
+ * Only the change-password flow and /api/auth/me pass
+ * `allowPendingPasswordChange` to see a teacher who still has to change it.
+ */
+export async function getTeacherSession(
+  opts: { allowPendingPasswordChange?: boolean } = {}
+): Promise<TeacherSession | null> {
   const token = (await cookies()).get(teacherCookieName())?.value;
-  if (!token) return null;
+  const claims = await verifySession(token, 'teacher').catch(() => null);
+  if (!claims) return null;
   try {
-    const { payload } = await jwtVerify(token, secret());
-    if (payload.role !== 'teacher' || typeof payload.sub !== 'string') return null;
-    const teacher = await prisma.teacher.findUnique({ where: { id: payload.sub } });
-    if (!teacher) return null;
+    const teacher = await prisma.teacher.findUnique({ where: { id: claims.sub } });
+    if (!teacher || !sessionStillValid(claims, teacher)) return null;
+    if (teacher.mustChangePassword && !opts.allowPendingPasswordChange) return null;
     let permanentCode = teacher.permanentCode;
     if (!permanentCode) {
       // Lazy backfill if migration row somehow lacks a code
@@ -83,6 +99,7 @@ export async function getTeacherSession() {
       email: teacher.email,
       name: teacher.name,
       permanentCode,
+      mustChangePassword: teacher.mustChangePassword,
     };
   } catch {
     return null;
@@ -93,6 +110,44 @@ export async function requireTeacher() {
   const session = await getTeacherSession();
   if (!session) throw new Error('UNAUTHORIZED');
   return session;
+}
+
+// ---------------------------------------------------------------- admin
+
+export async function createAdminToken(admin: { id: string; sessionVersion: number }) {
+  return signSession('admin', admin.id, admin.sessionVersion);
+}
+
+export async function setAdminCookie(token: string) {
+  (await cookies()).set(adminCookieName(), token, cookieOptions(60 * 60 * 12));
+}
+
+export async function clearAdminCookie() {
+  (await cookies()).set(adminCookieName(), '', cookieOptions(0));
+}
+
+export type AdminSession = { id: string; email: string; name: string; mustChangePassword: boolean };
+
+/** The signed-in admin, or null (same rules as getTeacherSession). */
+export async function getAdminSession(
+  opts: { allowPendingPasswordChange?: boolean } = {}
+): Promise<AdminSession | null> {
+  const token = (await cookies()).get(adminCookieName())?.value;
+  const claims = await verifySession(token, 'admin').catch(() => null);
+  if (!claims) return null;
+  try {
+    const admin = await prisma.admin.findUnique({ where: { id: claims.sub } });
+    if (!admin || !sessionStillValid(claims, admin)) return null;
+    if (admin.mustChangePassword && !opts.allowPendingPasswordChange) return null;
+    return {
+      id: admin.id,
+      email: admin.email,
+      name: admin.name,
+      mustChangePassword: admin.mustChangePassword,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function setStudentCookie(sessionToken: string) {

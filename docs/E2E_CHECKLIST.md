@@ -5,12 +5,12 @@ Use two browsers (or normal + incognito). Start from a healthy stack (`GET /api/
 ## A. Smoke (curl / load)
 
 - [ ] `curl -s http://localhost:3000/api/health` → `status: healthy`
-- [ ] `/`, `/login`, `/register`, `/join` render without console errors
+- [ ] `/`, `/login`, `/join` render (`/register` redirects to `/login`) without console errors
 - [ ] Favicon `200`
 
 ## B. Teacher auth + room
 
-- [ ] Register new teacher (or login)
+- [ ] Admin creates the teacher at `/admin`; teacher logs in with the temporary password and must set a new one
 - [ ] Dashboard shows name/email; **Create room**
 - [ ] Room code + join link appear; **Copy join link** works
 - [ ] **Start class** goes straight to `/classroom/CODE` in teacher view, camera OFF

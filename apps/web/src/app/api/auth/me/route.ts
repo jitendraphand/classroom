@@ -1,10 +1,13 @@
-import { getTeacherSession, getStudentParticipant } from '@/lib/auth';
+import { getAdminSession, getTeacherSession, getStudentParticipant } from '@/lib/auth';
 import { jsonOk } from '@/lib/response';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  const teacher = await getTeacherSession();
+  const admin = await getAdminSession({ allowPendingPasswordChange: true });
+  if (admin) return jsonOk({ role: 'admin', ...admin });
+
+  const teacher = await getTeacherSession({ allowPendingPasswordChange: true });
   if (teacher) return jsonOk({ role: 'teacher', ...teacher });
 
   const student = await getStudentParticipant();

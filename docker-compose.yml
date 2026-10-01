@@ -94,6 +94,10 @@ services:
     network_mode: host
     env_file:
       - .env
+    # Admin bootstrap password file (gitignored ./secrets, mode 700, owned by the
+    # container user 1001; prepared by scripts/create-admin.sh).
+    volumes:
+      - ./secrets:/app/secrets
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-classroom}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@127.0.0.1:5432/${POSTGRES_DB:-classroom}
       REDIS_URL: redis://127.0.0.1:6379

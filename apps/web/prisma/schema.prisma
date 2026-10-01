@@ -7,16 +7,51 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/// The single school administrator (bootstrapped by scripts/create-admin.sh /
+/// the container entrypoint from ADMIN_EMAIL). Kept apart from Teacher so an
+/// admin session can never be used as a teacher session and vice versa.
+model Admin {
+  id                 String   @id @default(cuid())
+  email              String   @unique
+  passwordHash       String
+  name               String   @default("Administrator")
+  /// Set for a generated (bootstrap / reset) password: must change on first login.
+  mustChangePassword Boolean  @default(true)
+  /// Bumped on password change/reset; session JWTs carry it so old sessions die.
+  sessionVersion     Int      @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
 model Teacher {
-  id            String   @id @default(cuid())
-  email         String   @unique
-  passwordHash  String
-  name          String
+  id                 String              @id @default(cuid())
+  email              String              @unique
+  passwordHash       String
+  name               String
   /// Stable meeting code reused for every class this teacher starts.
-  permanentCode String   @unique
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  rooms         Room[]
+  permanentCode      String              @unique
+  /// Disabled teachers cannot sign in; existing sessions stop working.
+  disabled           Boolean             @default(false)
+  /// Admin-issued temporary password: the teacher must change it on first login.
+  mustChangePassword Boolean             @default(false)
+  /// Bumped on password change/reset/disable; session JWTs carry it.
+  sessionVersion     Int                 @default(0)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  rooms              Room[]
+  assignments        TeacherAssignment[]
+}
+
+/// Grade/division a teacher may teach. division "*" = every division of the grade.
+model TeacherAssignment {
+  id        String  @id @default(cuid())
+  teacherId String
+  teacher   Teacher @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  grade     String
+  division  String
+
+  @@unique([teacherId, grade, division])
+  @@index([grade, division])
 }
 
 enum RoomStatus {

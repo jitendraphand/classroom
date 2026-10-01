@@ -85,6 +85,14 @@ if ! npx prisma migrate deploy; then
   exit 1
 fi
 
+# First boot: create the single school admin from ADMIN_EMAIL (no-op once an
+# admin exists, so a redeploy never resets it). The generated password goes to
+# /app/secrets/admin-initial-password (host ./secrets, see
+# scripts/create-admin.sh) or, if that is not writable, is printed once here.
+if ! node /app/scripts/admin.mjs bootstrap; then
+  echo "[classroom] WARNING: admin bootstrap failed (see above); continuing. Run ./scripts/create-admin.sh on the host." >&2
+fi
+
 echo "[classroom] Starting Next.js..."
 # Allow `docker compose run --rm web <cmd>` to execute that command instead of
 # silently starting the production server. The base image's CMD is inherited, so

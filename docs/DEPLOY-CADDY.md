@@ -175,8 +175,8 @@ curl -sI https://livekit.DOMAIN/
 
 Browser:
 
-1. Open `https://DOMAIN/register` → create teacher  
-2. Create room → join link should be `https://DOMAIN/join/CODE`  
+1. Create the school admin (`ADMIN_EMAIL` in `.env`, then `./scripts/create-admin.sh`; see DEPLOY-VPS.md → "School admin bootstrap"), sign in at `https://DOMAIN/login` and add a teacher  
+2. Sign in as the teacher and start a class → join link should be `https://DOMAIN/join/CODE`  
 3. Student joins → LiveKit URL in network tab: `wss://livekit.DOMAIN`  
 4. Camera/mic prompts behave better on HTTPS than on bare HTTP IP  
 

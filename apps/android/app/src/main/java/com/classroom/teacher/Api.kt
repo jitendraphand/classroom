@@ -30,7 +30,19 @@ class ClassroomApi(rawBase: String) {
         val body = JSONObject()
             .put("email", email.trim())
             .put("password", password)
-        return call("POST", "/api/auth/login", body, captureTeacherCookie = true)
+        val res = call("POST", "/api/auth/login", body, captureTeacherCookie = true)
+        // Accounts are created by the school admin with a temporary password
+        // that must be changed in the browser first; the admin account has no
+        // teacher features.
+        if (res.optString("role") == "admin") {
+            teacherCookie = null
+            throw ApiException("This is the school admin account. Sign in with a teacher account.")
+        }
+        if (res.optBoolean("mustChangePassword", false)) {
+            teacherCookie = null
+            throw ApiException("Set your own password first: open $base/login in a browser, then sign in here.")
+        }
+        return res
     }
 
     fun me(): JSONObject = call("GET", "/api/auth/me", null)

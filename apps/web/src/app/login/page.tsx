@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { BackLink } from '@/components/layout/AppHeader';
@@ -30,15 +29,16 @@ export default function LoginPage() {
       setError(data.error || 'Login failed');
       return;
     }
-    router.push('/teacher/dashboard');
+    if (data.mustChangePassword) router.push('/account/password');
+    else router.push(data.role === 'admin' ? '/admin' : '/teacher/dashboard');
   }
 
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-5 py-10 sm:px-6">
       <BackLink href="/">Home</BackLink>
       <Card>
-        <h1 className="font-display text-2xl font-semibold tracking-tight">Teacher login</h1>
-        <p className="mt-2 text-sm text-slate-400">Sign in to create and run live classes.</p>
+        <h1 className="font-display text-2xl font-semibold tracking-tight">Staff login</h1>
+        <p className="mt-2 text-sm text-slate-400">Teachers and the school administrator sign in here.</p>
         <form onSubmit={onSubmit} className="mt-6 space-y-4">
           <Input
             label="Email"
@@ -68,10 +68,7 @@ export default function LoginPage() {
           </Button>
         </form>
         <p className="mt-6 text-center text-sm text-slate-400">
-          No account?{' '}
-          <Link href="/register" className="font-medium text-brand-300 hover:underline">
-            Register
-          </Link>
+          Teacher accounts are created by the school administrator.
         </p>
       </Card>
     </main>

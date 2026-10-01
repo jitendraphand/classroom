@@ -71,12 +71,38 @@ the configure scripts and by `sync-livekit-keys.sh` whenever they are missing,
 placeholders or known-leaked values. They are never printed and never written
 to a tracked file.
 
-Then sync LiveKit config (writes the gitignored `infra/livekit.yaml`) and start:
+Then sync LiveKit config (writes the gitignored `infra/livekit.yaml`), set the
+school admin's email, create the admin and start:
 
 ```bash
 ./scripts/sync-livekit-keys.sh
+echo 'ADMIN_EMAIL=principal@your-school.org' >> .env   # the ONE admin account
+./scripts/create-admin.sh        # creates the admin (no-op if one exists)
 docker compose up --build -d
+sudo cat secrets/admin-initial-password   # generated password, root/container-only
 ```
+
+### School admin bootstrap
+
+- There is exactly one admin. It is created from `ADMIN_EMAIL` the first time
+  either `./scripts/create-admin.sh` runs or the web container boots with no
+  admin in the database. If an admin already exists nothing happens, so
+  redeploys never reset it.
+- The password is generated (20 random characters) and written to
+  `./secrets/admin-initial-password` (directory mode 700 owned by the container
+  user uid 1001, file mode 600; `secrets/` is gitignored). `create-admin.sh`
+  prepares that directory. If the container cannot write it (for example
+  `docker compose up` created `./secrets` as root before you ran the script),
+  the password is printed **once** to `docker compose logs web` instead.
+- Sign in at `/login` with it: you are forced to choose a new password at
+  once, so a copy left in the file or the logs stops working. Delete the file
+  afterwards (`sudo rm secrets/admin-initial-password`).
+- Lost admin password: `./scripts/create-admin.sh --reset-password` generates a
+  new one (same file / console rules), ends every admin session and forces a
+  change at next sign-in.
+- Teachers no longer self-register: the admin creates them at `/admin`
+  (name, email, assigned grades/divisions) and hands over the temporary
+  password shown once; the teacher must change it at first sign-in.
 
 ## 3. Verify
 
@@ -92,8 +118,8 @@ curl -sI http://PUBLIC_IP:7880 | head -1
 
 Browser:
 
-1. Open `http://PUBLIC_IP:3000/register` → create teacher
-2. Create a room → join link should be `http://PUBLIC_IP:3000/join/CODE` (not localhost)
+1. Sign in at `http://PUBLIC_IP:3000/login` as the admin → **Teachers** → add a teacher
+2. Sign in as that teacher (temporary password, then set a new one) → start a class → join link should be `http://PUBLIC_IP:3000/join/CODE` (not localhost)
 3. Second browser/device on another network → open that join link
 4. Admit student → video/audio should connect (LiveKit URL in network tab: `ws://PUBLIC_IP:7880`)
 
