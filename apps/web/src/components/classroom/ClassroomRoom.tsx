@@ -34,7 +34,7 @@ import {
   type RefObject,
 } from 'react';
 import { useRouter } from 'next/navigation';
-import { useRoomState } from '@/hooks/useRoomState';
+import { useRoomState, type RosterInfo } from '@/hooks/useRoomState';
 import { Controls } from './Controls';
 import { LocalPreview } from './LocalPreview';
 import { ChatView, useChatThread } from './Chat';
@@ -2964,6 +2964,7 @@ function RoomInner({
                                 {p.role === 'TEACHER' ? ' · Teacher' : ''}
                               </span>
                             </p>
+                            {p.role === 'STUDENT' && <RosterMeta info={p} />}
                             {p.mutedByTeacher && p.role === 'STUDENT' && (
                               <span className="chip-muted mt-0.5">Muted by teacher</span>
                             )}
@@ -3028,7 +3029,10 @@ function RoomInner({
                     >
                       <div className="flex min-w-0 items-center gap-2">
                         <Avatar name={p.displayName} size="sm" />
-                        <span className="truncate">{p.displayName}</span>
+                        <div className="min-w-0">
+                          <span className="block truncate">{p.displayName}</span>
+                          <RosterMeta info={p} />
+                        </div>
                       </div>
                       <button
                         type="button"
@@ -3097,7 +3101,7 @@ function RoomInner({
           admitted={state?.admitted ?? []}
           waiting={(state?.waiting ?? []).map((w) => ({
             id: w.id,
-            displayName: w.displayName,
+            displayName: rosterLabel(w),
             role: 'STUDENT',
           }))}
           waitingCount={waitingCount}
@@ -3316,5 +3320,37 @@ export function ClassroomRoom({ code }: { code: string }) {
         onClassEnded={markEnded}
       />
     </LiveKitRoom>
+  );
+}
+
+/** "Name · Roll 12 · 7-B · late" for compact lists (share HUD). */
+function rosterLabel(p: { displayName: string } & RosterInfo): string {
+  const bits = [p.displayName];
+  if (p.rollNumber) bits.push(`Roll ${p.rollNumber}`);
+  if (p.gradeDivision) bits.push(p.gradeDivision);
+  if (p.late) bits.push('late');
+  if (p.viaSchoolApp && !p.onTimetable) bits.push('not on timetable');
+  if (!p.viaSchoolApp) bits.push('guest');
+  return bits.join(' · ');
+}
+
+/** Roll number, grade-division and timetable / late markers under a student's name (teacher roster). */
+function RosterMeta({ info }: { info: RosterInfo }) {
+  if (info.viaSchoolApp === undefined) return null;
+  return (
+    <span className="mt-0.5 flex flex-wrap items-center gap-1 text-2xs text-slate-400">
+      {info.rollNumber && <span>Roll {info.rollNumber}</span>}
+      {info.gradeDivision && <span>· {info.gradeDivision}</span>}
+      {info.viaSchoolApp ? (
+        info.onTimetable ? (
+          <span className="rounded bg-emerald-500/15 px-1 font-semibold text-emerald-200">On timetable</span>
+        ) : (
+          <span className="rounded bg-amber-500/15 px-1 font-semibold text-amber-100">Not on timetable</span>
+        )
+      ) : (
+        <span className="rounded bg-white/10 px-1 font-semibold text-slate-300">Guest (no school ID)</span>
+      )}
+      {info.late && <span className="rounded bg-red-500/15 px-1 font-semibold text-red-200">Late</span>}
+    </span>
   );
 }

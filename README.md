@@ -107,6 +107,27 @@ connection via a **LiveKit webhook** — `infra/livekit.yaml` must contain the
   previous one.
 - Every class is recorded as a `ClassSession` (slot + date, or ad-hoc;
   teacher, grade, divisions, scheduled and actual start/end).
+- **Students join only from the school app** via a signed, single-use,
+  ≤120 s link `GET /join?t=<JWT>` (EdDSA/RS256 public key preferred, HS256
+  secret fallback; see **[docs/SCHOOL_APP_INTEGRATION.md](docs/SCHOOL_APP_INTEGRATION.md)**).
+  The school's student ID is the identity key; roll number is display only.
+  The student is routed to the class open now for their grade-division
+  (combined / all-division and ad-hoc classes included), a countdown for a
+  later class today, or "no class right now". They still wait for the teacher
+  to admit them; the roster shows name, roll no, grade-division, timetable and
+  late badges. A student session cannot enter another grade-division's class.
+  Manual code + name join is off (`ALLOW_MANUAL_STUDENT_JOIN=false`; dev only).
+- **Attendance** per student per class: first joined, admitted, left, total
+  connected time (LiveKit webhook joins/leaves, union across reconnects and
+  duplicate tabs), late (after start + `LATE_GRACE_MINUTES`), status
+  present / late / waited-not-admitted / absent. Admin → **Attendance**
+  (`/admin/reports`): per class (scheduled vs actual start, counts, classes not
+  held), per student (percentage) and detail, filter by dates, teacher, grade,
+  division, subject, CSV export of each. Teachers see their own classes at
+  `/teacher/attendance`.
+- **Absent is only known for known students**: a student exists in the system
+  after their first signed join, or after the admin imports the roster
+  (Admin → **Students**, CSV `externalId,name,grade,division,roll`).
 
 ## Quick start
 
@@ -157,7 +178,9 @@ curl -s http://localhost:3000/api/health
    Public self-registration was removed; `/register` redirects to `/login`.
 2. Dashboard → **Start class** → you land directly in the classroom (camera starts off; turn it on from the dock)
 3. In the classroom header: **Copy invite link** / **Copy code**
-4. **Student** (incognito / second browser) → http://localhost:3000/join/{CODE} → name → waiting room
+4. **Student** (incognito / second browser) → a signed test link from
+   `node apps/web/scripts/make-join-link.mjs …` (see docs/SCHOOL_APP_INTEGRATION.md §6) → waiting room.
+   (Or set `ALLOW_MANUAL_STUDENT_JOIN=true` for the old http://localhost:3000/join/{CODE} → name flow.)
 5. Teacher **N waiting · Admit** (or Roster → Admit / Admit all) → student enters class (floating teacher cam + float controls)
 6. Try **Chat**, mute / mute-all, screen share + annotate, **Rotate sample**, speak as a student to force pin into sample
 
@@ -240,6 +263,13 @@ See `.env.example`. Important:
 | `NEXTAUTH_SECRET` | generated | JWT signing for admin / teacher sessions |
 | `APP_TIMEZONE` | `Asia/Kolkata` | Time zone of the timetable |
 | `WAITING_ROOM_EARLY_MINUTES` | `10` | A timetabled class can be opened / its waiting room opens this many minutes early |
+| `LATE_GRACE_MINUTES` | `5` | Students arriving later than class start + this are marked late |
+| `SCHOOL_APP_JWT_ISSUER` | _(unset)_ | Required `iss` of school-app join tokens (joining is disabled until set) |
+| `SCHOOL_APP_JWT_PUBLIC_KEY` / `SCHOOL_APP_JWT_PUBLIC_KEY_FILE` | _(unset)_ | School app's Ed25519/RSA public key (PEM). Preferred; disables HS256 |
+| `SCHOOL_APP_JWT_SECRET` | _(unset)_ | HS256 shared secret, only used when no public key is set |
+| `SCHOOL_APP_JWT_AUDIENCE` | `classroom` | Required `aud` |
+| `SCHOOL_APP_JWT_MAX_LIFETIME_SECONDS` / `_CLOCK_SKEW_SECONDS` | `120` / `30` | Max `exp − iat`; clock tolerance |
+| `ALLOW_MANUAL_STUDENT_JOIN` | `false` | Dev/testing: allow the old code + name student join |
 | `ADMIN_EMAIL` | _(unset)_ | Email of the single school admin, created on first boot or by `scripts/create-admin.sh` (generated password → `./secrets/admin-initial-password`) |
 | `DATABASE_URL` | `postgresql://…@127.0.0.1:5432/…` | Host-network Postgres |
 | `REDIS_URL` | `redis://127.0.0.1:6379` | Host-network Redis |
@@ -297,6 +327,8 @@ Targets: ~20 concurrent rooms × ~150 attendees. Selective publish is the main l
 - No built-in TURN — restrictive NATs may need a TURN server for media.
 - No recording (by design).
 - Student sessions are cookie-bound to the joining browser (`POST /api/auth/clear-student` to switch names).
+- Absent counts cover only students known to the classroom (first signed join or roster import).
+- Connected time comes from LiveKit webhooks; if the webhook is not reachable, attendance still records waiting-room arrival, admission and explicit leave, but connected minutes stay 0.
 - Compose uses **host** networking on a single VM (best for LiveKit UDP on a public IP).
 
 ## License

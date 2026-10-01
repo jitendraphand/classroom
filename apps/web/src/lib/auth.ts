@@ -18,6 +18,8 @@ const teacherCookieName = () => cookieName('classroom_teacher');
 const studentCookieName = () => cookieName('classroom_student');
 const actAsCookieName = () => cookieName('classroom_act_as');
 const adminCookieName = () => cookieName('classroom_admin');
+/** Identity of a student who arrived through the signed school-app link. */
+const pupilCookieName = () => cookieName('classroom_pupil');
 
 /**
  * SameSite=Strict: every page is a client component that authenticates through
@@ -148,6 +150,25 @@ export async function getAdminSession(
   } catch {
     return null;
   }
+}
+
+// ---------------------------------------------------------------- pupil
+
+export async function setPupilCookie(student: { id: string }) {
+  const token = await signSession('pupil', student.id, 0);
+  (await cookies()).set(pupilCookieName(), token, cookieOptions(60 * 60 * 12));
+}
+
+export async function clearPupilCookie() {
+  (await cookies()).set(pupilCookieName(), '', cookieOptions(0));
+}
+
+/** The school-app student signed in on this browser (from the signed join link), or null. */
+export async function getPupil() {
+  const token = (await cookies()).get(pupilCookieName())?.value;
+  const claims = await verifySession(token, 'pupil').catch(() => null);
+  if (!claims) return null;
+  return prisma.student.findUnique({ where: { id: claims.sub } }).catch(() => null);
 }
 
 export async function setStudentCookie(sessionToken: string) {

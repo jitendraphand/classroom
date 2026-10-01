@@ -47,7 +47,10 @@ export function useIdleLogout() {
         const res = await fetch('/api/auth/me', { cache: 'no-store' });
         const data = await res.json();
         if (cancelled) return;
-        authedRef.current = data.role === 'teacher' || data.role === 'student' || data.role === 'admin';
+        // School-app students are not idle-logged out: their session can only be
+        // re-created from the school app, and they often just wait or watch.
+        authedRef.current =
+          data.role === 'teacher' || data.role === 'admin' || (data.role === 'student' && !data.viaSchoolApp);
         if (authedRef.current) armTimer();
         else clearTimer();
       } catch {

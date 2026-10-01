@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Card } from '@/components/ui/Card';
 import { rememberClassroomRole } from '@/lib/classroomClient';
+import { SchoolAppOnly } from '@/components/join/SchoolAppOnly';
 
 type State = {
   code?: string;
@@ -15,7 +16,8 @@ type State = {
   status?: string;
   teacherName?: string;
   public?: boolean;
-  me?: { status: string; displayName: string; role?: string };
+  me?: { status: string; displayName: string; role?: string; viaSchoolApp?: boolean };
+  manualJoinAllowed?: boolean;
   teacherSessionActive?: boolean;
   teacherSessionName?: string;
   actingAsStudent?: boolean;
@@ -144,16 +146,28 @@ export default function JoinRoomPage() {
           <p className="mt-2 text-sm text-slate-400">
             Your teacher will admit you shortly. Keep this tab open.
           </p>
-          <Button type="button" variant="secondary" className="mt-6 w-full" onClick={joinAsDifferentStudent}>
-            Not you? Join with a different name
-          </Button>
-          <p className="mt-8 font-display text-3xl tracking-[0.3em] text-brand-300">{code}</p>
+          {!roomInfo?.me?.viaSchoolApp && (
+            <Button type="button" variant="secondary" className="mt-6 w-full" onClick={joinAsDifferentStudent}>
+              Not you? Join with a different name
+            </Button>
+          )}
+          {!roomInfo?.me?.viaSchoolApp && (
+            <p className="mt-8 font-display text-3xl tracking-[0.3em] text-brand-300">{code}</p>
+          )}
         </Card>
-        <Link href="/" className="mt-6 text-sm text-slate-500 transition hover:text-slate-300">
+        <Link
+          href={roomInfo?.me?.viaSchoolApp ? '/student' : '/'}
+          className="mt-6 text-sm text-slate-500 transition hover:text-slate-300"
+        >
           Leave
         </Link>
       </main>
     );
+  }
+
+  // Manual code + name joining is off (default): students come from the school app.
+  if (roomInfo && roomInfo.manualJoinAllowed === false && !roomInfo.me) {
+    return <SchoolAppOnly />;
   }
 
   return (

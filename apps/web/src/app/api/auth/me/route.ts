@@ -19,6 +19,7 @@ export async function GET() {
       status: student.status,
       roomCode: student.room.code,
       roomName: student.room.name,
+      viaSchoolApp: !!student.studentId,
     });
   }
 

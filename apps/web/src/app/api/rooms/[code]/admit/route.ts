@@ -4,6 +4,7 @@ import { getTeacherSession } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
 import { ensureRedis, keys } from '@/lib/redis';
 import { rotateVisibleSample } from '@/lib/sample';
+import { markAdmitted } from '@/lib/attendanceService';
 
 const schema = z.object({
   participantIds: z.array(z.string()).optional(),
@@ -30,10 +31,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
           id: { in: body.participantIds || [] },
         };
 
+    const toAdmit = await prisma.participant.findMany({ where, select: { id: true } });
     const updated = await prisma.participant.updateMany({
-      where,
+      where: { ...where, id: { in: toAdmit.map((p) => p.id) } },
       data: { status: 'ADMITTED' },
     });
+    await markAdmitted(toAdmit.map((p) => p.id)).catch((e) => console.error('attendance admit', e));
 
     if (room.status === 'WAITING') {
       await prisma.room.update({ where: { id: room.id }, data: { status: 'LIVE' } });

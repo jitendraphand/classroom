@@ -3,6 +3,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { roomFetch, getClassroomRole } from '@/lib/classroomClient';
 
+/** Teacher-only roster details (school-app students). */
+export type RosterInfo = {
+  rollNumber?: string | null;
+  gradeDivision?: string | null;
+  late?: boolean;
+  onTimetable?: boolean;
+  viaSchoolApp?: boolean;
+};
+
 export type RoomState = {
   code: string;
   name: string;
@@ -24,8 +33,8 @@ export type RoomState = {
     inVisibleSample: boolean;
     handRaised?: boolean;
   } | null;
-  waiting?: { id: string; displayName: string }[];
-  admitted: {
+  waiting?: ({ id: string; displayName: string } & RosterInfo)[];
+  admitted: ({
     id: string;
     displayName: string;
     role: string;
@@ -33,7 +42,9 @@ export type RoomState = {
     mutedByTeacher: boolean;
     isVisible: boolean;
     handRaised?: boolean;
-  }[];
+  } & RosterInfo)[];
+  /** Teacher only: the class session running in this room. */
+  classSession?: { subject: string; audience: string; adHoc: boolean } | null;
   visibleIdentities: string[];
   visibleCount: number;
   raisedHands?: string[];

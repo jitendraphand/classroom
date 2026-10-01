@@ -6,6 +6,7 @@ import { dateValue, formatHHMM, localDateOf, phaseOf, type Occurrence } from './
 import { appTimeZone, earlyWindowMinutes } from './schoolConfig';
 import { endRoom, ensureTeacherPermanentCode, startOrReopenTeacherRoom } from './teacherRoom';
 import { getTeacherAssignments } from './teachers';
+import { refreshLateFlags } from './attendanceService';
 
 export class SessionError extends Error {
   constructor(message: string, public status = 400) {
@@ -75,6 +76,7 @@ async function openRoomForSession(
     where: { id: cs.id },
     data: { roomId: room.id, startedAt: cs.startedAt ?? new Date(), endedAt: null },
   });
+  if (!cs.startedAt) await refreshLateFlags(classSession);
   return { room, classSession };
 }
 

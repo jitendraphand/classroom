@@ -248,4 +248,6 @@ export async function onClassSessionEnded(classSessionId: string, at: Date) {
     where: { id: classSessionId, endedAt: null },
     data: { endedAt: at },
   });
+  const { closeSessionAttendance } = await import('./attendanceService');
+  await closeSessionAttendance(classSessionId, at);
 }

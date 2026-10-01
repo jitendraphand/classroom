@@ -166,6 +166,9 @@ export default function TeacherDashboard() {
         subtitle="Teacher dashboard"
         right={
           <>
+            <Link href="/teacher/attendance" className="btn-ghost px-3 py-1.5 text-xs">
+              Attendance
+            </Link>
             <Link href="/account/password" className="btn-ghost px-3 py-1.5 text-xs">
               Change password
             </Link>

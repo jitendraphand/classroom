@@ -16,7 +16,16 @@ Use two browsers (or normal + incognito). Start from a healthy stack (`GET /api/
 - [ ] **Start class** goes straight to `/classroom/CODE` in teacher view, camera OFF
 - [ ] Header **Copy invite link** / **Copy code** work; old `/teacher/room/CODE` redirects to the classroom
 
-## C. Join as student (no teacher hijack)
+## C0. School-app join (default)
+
+- [ ] Signed link (`apps/web/scripts/make-join-link.mjs`) for a grade-division with a class open now → that class's waiting room; roster shows name, roll no, grade-division, **On timetable**
+- [ ] Same link opened again → "This link was already used"; link older than its `exp` → "This link has expired"
+- [ ] Class later today → countdown, moves on by itself when the waiting room opens; no class → "No class right now" + next class
+- [ ] Student of another grade-division cannot enter the class via the teacher's code (`/join/CODE`)
+- [ ] `/join/CODE` shows "Join from the school app" (no name form) while `ALLOW_MANUAL_STUDENT_JOIN=false`
+- [ ] Join > grace minutes after the start → **Late** badge; admin Attendance shows the student late with connected minutes after leaving
+
+## C. Join as student (no teacher hijack; needs `ALLOW_MANUAL_STUDENT_JOIN=true`)
 
 - [ ] Open join link in **same** profile while teacher-signed-in
 - [ ] Banner: signed in as teacher → **Continue as student for this tab**

@@ -104,6 +104,30 @@ sudo cat secrets/admin-initial-password   # generated password, root/container-o
   (name, email, assigned grades/divisions) and hands over the temporary
   password shown once; the teacher must change it at first sign-in.
 
+### School app join links
+
+Students join only through signed links from the school app
+(see [SCHOOL_APP_INTEGRATION.md](SCHOOL_APP_INTEGRATION.md)). On the server:
+
+```bash
+# public key from the school app's developers (never their private key)
+sudo cp school-app-public.pem secrets/ && sudo chown 1001 secrets/school-app-public.pem
+cat >> .env <<'ENV'
+SCHOOL_APP_JWT_ISSUER=https://app.your-school.org
+SCHOOL_APP_JWT_PUBLIC_KEY_FILE=/app/secrets/school-app-public.pem
+APP_TIMEZONE=Asia/Kolkata
+LATE_GRACE_MINUTES=5
+ALLOW_MANUAL_STUDENT_JOIN=false
+ENV
+docker compose up -d web   # recreate to pick up .env
+```
+
+Use `SCHOOL_APP_JWT_SECRET` (HS256) only if the school app cannot use a key
+pair; it is ignored once a public key is set. The server clock must be right
+(NTP): tokens live at most 120 s. Redis must be up: each token id is recorded
+there to make links single-use. Optional: Admin → Students → import the roster
+CSV so absentees are counted from day one.
+
 ## 3. Verify
 
 From your laptop (not only on the VM):
@@ -120,7 +144,9 @@ Browser:
 
 1. Sign in at `http://PUBLIC_IP:3000/login` as the admin → **Teachers** → add a teacher
 2. Sign in as that teacher (temporary password, then set a new one) → start a class → join link should be `http://PUBLIC_IP:3000/join/CODE` (not localhost)
-3. Second browser/device on another network → open that join link
+3. Second browser/device on another network → open a signed school-app link
+   (or a test link from `apps/web/scripts/make-join-link.mjs`; the plain code
+   link only works with `ALLOW_MANUAL_STUDENT_JOIN=true`)
 4. Admit student → video/audio should connect (LiveKit URL in network tab: `ws://PUBLIC_IP:7880`)
 
 ## 4. How URLs are resolved

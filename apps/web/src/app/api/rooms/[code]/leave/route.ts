@@ -5,6 +5,7 @@ import { ensureRedis, keys } from '@/lib/redis';
 import { rotateVisibleSample, unpinSpeaker } from '@/lib/sample';
 import { livekitRoomName, removeLiveKitParticipant } from '@/lib/livekit';
 import { z } from 'zod';
+import { closeParticipantAttendance } from '@/lib/attendanceService';
 
 const schema = z.object({
   participantId: z.string().optional(),
@@ -54,6 +55,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     where: { id: target.id },
     data: { status: 'LEFT', leftAt: new Date() },
   });
+  if (target.role === 'STUDENT') {
+    await closeParticipantAttendance(target).catch((e) => console.error('attendance leave', e));
+  }
 
   const redis = await ensureRedis();
   await redis.srem(keys.waiting(code), target.id);

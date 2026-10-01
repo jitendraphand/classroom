@@ -110,11 +110,17 @@ model Participant {
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   leftAt           DateTime?
+  /// Set for students who came through the signed school-app link.
+  studentId        String?
+  student          Student?          @relation(fields: [studentId], references: [id], onDelete: SetNull)
+  /// ClassSession this participant joined (attendance).
+  classSessionId   String?
   sentMessages     Message[]         @relation("MessageSender")
   receivedMessages Message[]         @relation("MessageRecipient")
 
   @@index([roomId, status])
   @@index([sessionToken])
+  @@index([studentId])
 }
 
 enum MessageScope {
@@ -204,32 +210,82 @@ model ScheduleOverride {
 /// class. Scheduled occurrences have a unique occurrenceKey so starting the
 /// same class again that day reuses this row.
 model ClassSession {
-  id             String         @id @default(cuid())
+  id             String             @id @default(cuid())
   /// "slot:<slotId>:<YYYY-MM-DD>" or "extra:<overrideId>"; null for ad-hoc.
-  occurrenceKey  String?        @unique
+  occurrenceKey  String?            @unique
   slotId         String?
-  slot           TimetableSlot? @relation(fields: [slotId], references: [id], onDelete: SetNull)
+  slot           TimetableSlot?     @relation(fields: [slotId], references: [id], onDelete: SetNull)
   overrideId     String?
   /// Local (APP_TIMEZONE) date of the class.
-  sessionDate    DateTime       @db.Date
+  sessionDate    DateTime           @db.Date
   teacherId      String
-  teacher        Teacher        @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  teacher        Teacher            @relation(fields: [teacherId], references: [id], onDelete: Cascade)
   roomId         String?
-  room           Room?          @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  room           Room?              @relation(fields: [roomId], references: [id], onDelete: SetNull)
   grade          String
   divisions      String[]
-  allDivisions   Boolean        @default(false)
+  allDivisions   Boolean            @default(false)
   subject        String
-  adHoc          Boolean        @default(false)
+  adHoc          Boolean            @default(false)
   scheduledStart DateTime?
   scheduledEnd   DateTime?
   /// Set when the teacher starts the class (first start; kept on reopen).
   startedAt      DateTime?
   endedAt        DateTime?
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  attendance     AttendanceRecord[]
 
   @@index([teacherId, sessionDate])
   @@index([grade, sessionDate])
   @@index([sessionDate])
+}
+
+/// A student known from the external school app (first signed join) or an
+/// admin roster import. externalId is the school app's permanent student id.
+model Student {
+  id           String             @id @default(cuid())
+  externalId   String             @unique
+  name         String
+  grade        String
+  division     String
+  /// Display only.
+  rollNumber   String?
+  email        String?
+  phone        String?
+  /// "join" (signed link) or "import" (admin CSV).
+  source       String             @default("join")
+  lastSeenAt   DateTime?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  participants Participant[]
+  attendance   AttendanceRecord[]
+
+  @@index([grade, division])
+}
+
+/// One student's attendance in one class session (across reconnects).
+model AttendanceRecord {
+  id             String       @id @default(cuid())
+  classSessionId String
+  classSession   ClassSession @relation(fields: [classSessionId], references: [id], onDelete: Cascade)
+  studentId      String
+  student        Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  /// First arrival in the waiting room (or the pre-start lobby).
+  firstJoinedAt  DateTime
+  admittedAt     DateTime?
+  leftAt         DateTime?
+  /// Sum of closed media-connection intervals (union across reconnects).
+  connectedMs    Int          @default(0)
+  /// Start of the currently open interval (some connection is live).
+  connectedSince DateTime?
+  /// LiveKit participant SIDs currently connected.
+  openSids       String[]
+  connections    Int          @default(0)
+  late           Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([classSessionId, studentId])
+  @@index([studentId])
 }

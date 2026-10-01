@@ -3,6 +3,8 @@ import { resolveRoomAccess } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
 import { clampMaxVisible, ensureSampleFresh, getVisibleSample } from '@/lib/sample';
 import { ensureRedis, keys } from '@/lib/redis';
+import { audienceIncludes, formatAudience } from '@/lib/grades';
+import { manualStudentJoinAllowed } from '@/lib/schoolConfig';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,6 +30,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
           livekitIdentity: true,
           mutedByTeacher: true,
           createdAt: true,
+          studentId: true,
+          student: { select: { rollNumber: true, grade: true, division: true } },
         },
       },
     },
@@ -66,6 +70,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       public: true,
       teacherSessionActive: !!access.teacher,
       teacherSessionName: access.teacher?.name ?? null,
+      manualJoinAllowed: manualStudentJoinAllowed(),
     });
   }
 
@@ -98,6 +103,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
               displayName: me.displayName,
               role: me.role,
               status: me.status,
+              viaSchoolApp: !!me.studentId,
               livekitIdentity: me.livekitIdentity,
               mutedByTeacher: false,
               canPublishVideo: false,
@@ -124,6 +130,35 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     stageRaw === 'screen' ? 'screen' : 'idle';
 
   const waiting = room.participants.filter((p) => p.status === 'WAITING' && p.role === 'STUDENT');
+
+  // Roster details for the teacher: roll number, grade-division, late flag and
+  // whether the student belongs to this class's timetabled audience.
+  let classSession: { id: string; grade: string; divisions: string[]; allDivisions: boolean; subject: string; adHoc: boolean } | null = null;
+  const lateByStudent = new Map<string, boolean>();
+  if (isTeacher && room.classSessionId) {
+    classSession = await prisma.classSession.findUnique({
+      where: { id: room.classSessionId },
+      select: { id: true, grade: true, divisions: true, allDivisions: true, subject: true, adHoc: true },
+    });
+    if (classSession) {
+      const recs = await prisma.attendanceRecord.findMany({
+        where: { classSessionId: classSession.id },
+        select: { studentId: true, late: true },
+      });
+      for (const r of recs) lateByStudent.set(r.studentId, r.late);
+    }
+  }
+  const rosterInfo = (p: (typeof room.participants)[number]) => {
+    if (!isTeacher || p.role !== 'STUDENT') return {};
+    const st = p.student;
+    return {
+      rollNumber: st?.rollNumber ?? null,
+      gradeDivision: st ? `${st.grade}-${st.division}` : null,
+      late: p.studentId ? lateByStudent.get(p.studentId) ?? false : false,
+      onTimetable: !!st && !!classSession && audienceIncludes(classSession, st.grade, st.division),
+      viaSchoolApp: !!p.studentId,
+    };
+  };
   const admitted = room.participants.filter((p) => p.status === 'ADMITTED');
 
   const me = isTeacher
@@ -164,8 +199,16 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
           id: p.id,
           displayName: p.displayName,
           createdAt: p.createdAt,
+          ...rosterInfo(p),
         }))
       : undefined,
+    classSession: classSession
+      ? {
+          subject: classSession.subject,
+          audience: formatAudience(classSession.grade, classSession.divisions, classSession.allDivisions),
+          adHoc: classSession.adHoc,
+        }
+      : null,
     admitted: admitted.map((p) => ({
       id: p.id,
       displayName: p.displayName,
@@ -174,6 +217,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       mutedByTeacher: p.mutedByTeacher || mutedIds.includes(p.id),
       isVisible: p.role === 'TEACHER' || visible.includes(p.livekitIdentity),
       handRaised: p.role === 'STUDENT' && raisedHands.includes(p.id),
+      ...rosterInfo(p),
     })),
     visibleIdentities: visible,
     visibleCount: visible.length,
