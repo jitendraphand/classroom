@@ -87,6 +87,27 @@ connection via a **LiveKit webhook** — `infra/livekit.yaml` must contain the
 `webhook:` block (re-run `./scripts/sync-livekit-keys.sh`). Details:
 **[docs/TEACHER_PRESENCE_MIC_LOCK.md](docs/TEACHER_PRESENCE_MIC_LOCK.md)**.
 
+## School management
+
+- **Admin** (`/admin`, one account bootstrapped from `ADMIN_EMAIL`): creates
+  teachers and assigns them grades/divisions, maintains the weekly
+  **timetable** (`/admin/timetable`) and one-off changes.
+- **Timetable**: weekly slots (teacher, grade, one or more divisions or ALL
+  divisions, subject, weekday, start/end, optional term dates) in
+  `APP_TIMEZONE` (default Asia/Kolkata). One-off changes: cancel a date,
+  substitute teacher / new time / subject, or an extra class. A teacher can
+  never have two overlapping slots; a grade-division overlap needs the admin
+  to confirm.
+- **Teacher dashboard**: today's and the next 6 days' classes. **Start class**
+  is enabled from `WAITING_ROOM_EARLY_MINUTES` (default 10) before the start
+  until the end; starting the same class again that day reuses the same class
+  session. **Ad-hoc classes** are allowed outside the timetable, only for the
+  teacher's assigned grades/divisions. A teacher runs one class at a time in
+  their permanent room (code unchanged); starting another class ends the
+  previous one.
+- Every class is recorded as a `ClassSession` (slot + date, or ad-hoc;
+  teacher, grade, divisions, scheduled and actual start/end).
+
 ## Quick start
 
 ### Prerequisites
@@ -192,6 +213,7 @@ Opens `https://…` and `wss://livekit.…`. Firewall: **80/443**, **7881/tcp**,
 | http://localhost:3000 | Web app |
 | http://localhost:3000/login | Admin + teacher login |
 | http://localhost:3000/admin | School admin (teachers) |
+| http://localhost:3000/admin/timetable | Weekly timetable + one-off changes |
 | http://localhost:3000/join | Student join (enter code) |
 | http://localhost:3000/join/{CODE} | Direct join link |
 | http://localhost:3000/api/health | Health check |
@@ -216,6 +238,8 @@ See `.env.example`. Important:
 | `LIVEKIT_NODE_IP` | _(unset)_ | Optional pin of advertised IP (set by configure-public-ip / configure-domain-tls) |
 | `COOKIE_SECURE` | derived from `APP_URL` | `false` for HTTP / bare IP; `true` behind HTTPS (Caddy) |
 | `NEXTAUTH_SECRET` | generated | JWT signing for admin / teacher sessions |
+| `APP_TIMEZONE` | `Asia/Kolkata` | Time zone of the timetable |
+| `WAITING_ROOM_EARLY_MINUTES` | `10` | A timetabled class can be opened / its waiting room opens this many minutes early |
 | `ADMIN_EMAIL` | _(unset)_ | Email of the single school admin, created on first boot or by `scripts/create-admin.sh` (generated password → `./secrets/admin-initial-password`) |
 | `DATABASE_URL` | `postgresql://…@127.0.0.1:5432/…` | Host-network Postgres |
 | `REDIS_URL` | `redis://127.0.0.1:6379` | Host-network Redis |

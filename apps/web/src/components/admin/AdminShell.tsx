@@ -11,6 +11,7 @@ import { cn } from '@/lib/cn';
 
 export const ADMIN_NAV = [
   { href: '/admin', label: 'Teachers' },
+  { href: '/admin/timetable', label: 'Timetable' },
 ];
 
 /** Admin page frame: checks the admin session, renders header + section nav. */

@@ -2,6 +2,7 @@ import { prisma } from '@/lib/db';
 import { generateRoomCode, generateIdentity, generateSessionToken } from '@/lib/codes';
 import { ensureRedis, keys, legacyKeys } from '@/lib/redis';
 import { clampMaxVisible } from '@/lib/sample';
+import { roomService, livekitRoomName } from '@/lib/livekit';
 
 /** Allocate a unique permanent class code not used by any teacher or room. */
 export async function allocateUniqueCode(): Promise<string> {
@@ -55,7 +56,7 @@ function newSessionId() {
   return crypto.randomUUID().replace(/-/g, '').slice(0, 16);
 }
 
-async function clearRoomRedis(code: string) {
+export async function clearRoomRedis(code: string) {
   const redis = await ensureRedis();
   await redis.del(
     keys.waiting(code),
@@ -213,4 +214,38 @@ export async function startOrReopenTeacherRoom(
   }
 
   return room;
+}
+
+/**
+ * End the class running in a room: room ENDED, everyone LEFT, Redis state
+ * cleared, LiveKit room deleted and the room's current ClassSession closed.
+ * Shared by POST /end and by switching the permanent room to another class.
+ */
+export async function endRoom(room: { id: string; code: string; sessionId: string; classSessionId?: string | null }) {
+  const now = new Date();
+  await prisma.room.update({
+    where: { id: room.id },
+    data: { status: 'ENDED', endedAt: now },
+  });
+  await prisma.participant.updateMany({
+    where: { roomId: room.id, status: { not: 'LEFT' } },
+    data: { status: 'LEFT', leftAt: now },
+  });
+  if (room.classSessionId) {
+    await onClassSessionEnded(room.classSessionId, now);
+  }
+  await clearRoomRedis(room.code);
+  try {
+    await roomService().deleteRoom(livekitRoomName(room.code, room.sessionId));
+  } catch (e) {
+    console.warn('LiveKit deleteRoom', e instanceof Error ? e.message : e);
+  }
+}
+
+/** Close a class session (idempotent: keeps the first end time unless reopened). */
+export async function onClassSessionEnded(classSessionId: string, at: Date) {
+  await prisma.classSession.updateMany({
+    where: { id: classSessionId, endedAt: null },
+    data: { endedAt: at },
+  });
 }

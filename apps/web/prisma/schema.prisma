@@ -40,6 +40,9 @@ model Teacher {
   updatedAt          DateTime            @updatedAt
   rooms              Room[]
   assignments        TeacherAssignment[]
+  slots              TimetableSlot[]
+  overrides          ScheduleOverride[]
+  classSessions      ClassSession[]
 }
 
 /// Grade/division a teacher may teach. division "*" = every division of the grade.
@@ -61,20 +64,23 @@ enum RoomStatus {
 }
 
 model Room {
-  id               String        @id @default(cuid())
-  code             String        @unique
+  id               String         @id @default(cuid())
+  code             String         @unique
   name             String
   teacherId        String
-  teacher          Teacher       @relation(fields: [teacherId], references: [id], onDelete: Cascade)
-  maxVisibleVideos Int           @default(6)
-  status           RoomStatus    @default(WAITING)
+  teacher          Teacher        @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  maxVisibleVideos Int            @default(6)
+  status           RoomStatus     @default(WAITING)
   /// Rotated on every (re)open; part of the LiveKit room name so old tokens die with the session.
-  sessionId        String        @default(cuid())
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+  sessionId        String         @default(cuid())
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
   endedAt          DateTime?
+  /// ClassSession currently running in this (permanent) room, if any.
+  classSessionId   String?
   participants     Participant[]
   messages         Message[]
+  classSessions    ClassSession[]
 
   @@index([teacherId])
   @@index([status])
@@ -92,20 +98,20 @@ enum ParticipantStatus {
 }
 
 model Participant {
-  id              String            @id @default(cuid())
-  roomId          String
-  room            Room              @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  displayName     String
-  role            ParticipantRole   @default(STUDENT)
-  status          ParticipantStatus @default(WAITING)
-  livekitIdentity String            @unique
-  sessionToken    String            @unique
-  mutedByTeacher  Boolean           @default(false)
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
-  leftAt          DateTime?
-  sentMessages    Message[]         @relation("MessageSender")
-  receivedMessages Message[]        @relation("MessageRecipient")
+  id               String            @id @default(cuid())
+  roomId           String
+  room             Room              @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  displayName      String
+  role             ParticipantRole   @default(STUDENT)
+  status           ParticipantStatus @default(WAITING)
+  livekitIdentity  String            @unique
+  sessionToken     String            @unique
+  mutedByTeacher   Boolean           @default(false)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  leftAt           DateTime?
+  sentMessages     Message[]         @relation("MessageSender")
+  receivedMessages Message[]         @relation("MessageRecipient")
 
   @@index([roomId, status])
   @@index([sessionToken])
@@ -132,4 +138,98 @@ model Message {
   @@index([roomId, createdAt])
   @@index([senderParticipantId])
   @@index([recipientParticipantId])
+}
+
+/// Recurring weekly lesson. Times are minutes after local midnight in
+/// APP_TIMEZONE (default Asia/Kolkata); weekday 0 = Sunday … 6 = Saturday.
+model TimetableSlot {
+  id            String             @id @default(cuid())
+  teacherId     String
+  teacher       Teacher            @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  grade         String
+  /// Combined divisions (e.g. ["A","B"]); ignored when allDivisions.
+  divisions     String[]
+  allDivisions  Boolean            @default(false)
+  subject       String
+  weekday       Int
+  startMinute   Int
+  endMinute     Int
+  /// Optional inclusive local-date range (term dates).
+  effectiveFrom DateTime?          @db.Date
+  effectiveTo   DateTime?          @db.Date
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  overrides     ScheduleOverride[]
+  sessions      ClassSession[]
+
+  @@index([teacherId, weekday])
+  @@index([grade, weekday])
+}
+
+enum OverrideKind {
+  /// Slot does not happen on that date.
+  CANCEL
+  /// Slot happens with changes (substitute teacher, time, subject).
+  MODIFY
+  /// One-off extra class (no slot).
+  EXTRA
+}
+
+/// One-off change to the timetable on one local date.
+model ScheduleOverride {
+  id           String         @id @default(cuid())
+  kind         OverrideKind
+  date         DateTime       @db.Date
+  slotId       String?
+  slot         TimetableSlot? @relation(fields: [slotId], references: [id], onDelete: Cascade)
+  /// MODIFY: substitute teacher; EXTRA: the teacher.
+  teacherId    String?
+  teacher      Teacher?       @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  /// EXTRA (and optionally MODIFY): audience.
+  grade        String?
+  divisions    String[]
+  allDivisions Boolean        @default(false)
+  subject      String?
+  startMinute  Int?
+  endMinute    Int?
+  note         String?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@unique([slotId, date])
+  @@index([date])
+}
+
+/// One held (or about-to-be-held) class: a timetable occurrence or an ad-hoc
+/// class. Scheduled occurrences have a unique occurrenceKey so starting the
+/// same class again that day reuses this row.
+model ClassSession {
+  id             String         @id @default(cuid())
+  /// "slot:<slotId>:<YYYY-MM-DD>" or "extra:<overrideId>"; null for ad-hoc.
+  occurrenceKey  String?        @unique
+  slotId         String?
+  slot           TimetableSlot? @relation(fields: [slotId], references: [id], onDelete: SetNull)
+  overrideId     String?
+  /// Local (APP_TIMEZONE) date of the class.
+  sessionDate    DateTime       @db.Date
+  teacherId      String
+  teacher        Teacher        @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  roomId         String?
+  room           Room?          @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  grade          String
+  divisions      String[]
+  allDivisions   Boolean        @default(false)
+  subject        String
+  adHoc          Boolean        @default(false)
+  scheduledStart DateTime?
+  scheduledEnd   DateTime?
+  /// Set when the teacher starts the class (first start; kept on reopen).
+  startedAt      DateTime?
+  endedAt        DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([teacherId, sessionDate])
+  @@index([grade, sessionDate])
+  @@index([sessionDate])
 }

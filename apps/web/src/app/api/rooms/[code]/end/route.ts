@@ -1,8 +1,7 @@
 import { prisma } from '@/lib/db';
 import { getTeacherSession } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
-import { ensureRedis, keys, legacyKeys } from '@/lib/redis';
-import { roomService, livekitRoomName } from '@/lib/livekit';
+import { endRoom } from '@/lib/teacherRoom';
 
 export async function POST(_req: Request, { params }: { params: Promise<{ code: string }> }) {
   const teacher = await getTeacherSession();
@@ -12,35 +11,6 @@ export async function POST(_req: Request, { params }: { params: Promise<{ code: 
   const room = await prisma.room.findUnique({ where: { code } });
   if (!room || room.teacherId !== teacher.id) return jsonError('Room not found', 404);
 
-  await prisma.room.update({
-    where: { id: room.id },
-    data: { status: 'ENDED', endedAt: new Date() },
-  });
-  await prisma.participant.updateMany({
-    where: { roomId: room.id, status: { not: 'LEFT' } },
-    data: { status: 'LEFT', leftAt: new Date() },
-  });
-
-  const redis = await ensureRedis();
-  await redis.del(
-    keys.waiting(code),
-    keys.admitted(code),
-    keys.visible(code),
-    keys.muted(code),
-    keys.rotation(code),
-    keys.hands(code),
-    keys.stage(code),
-    keys.annotate(code),
-    keys.pinnedSpeakers(code),
-    keys.teacherPresent(code),
-    ...legacyKeys(code)
-  );
-
-  try {
-    await roomService().deleteRoom(livekitRoomName(room.code, room.sessionId));
-  } catch (e) {
-    console.warn('LiveKit deleteRoom', e);
-  }
-
+  await endRoom(room);
   return jsonOk({ ok: true });
 }

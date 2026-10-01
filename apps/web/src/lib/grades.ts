@@ -104,3 +104,10 @@ export function audiencesOverlap(
   const set = new Set(a.divisions.map(normalizeDivision));
   return b.divisions.some((d) => set.has(normalizeDivision(d)));
 }
+
+/** "A, B" → {divisions:["A","B"]}; "ALL" / "*" → {allDivisions:true}. */
+export function parseDivisionList(raw: string | string[]): { divisions: string[]; allDivisions: boolean } {
+  const items = (Array.isArray(raw) ? raw : raw.split(/[,;\s/]+/)).map(normalizeDivision).filter(Boolean);
+  if (items.includes(ALL_DIVISIONS)) return { divisions: [], allDivisions: true };
+  return { divisions: [...new Set(items)].sort(), allDivisions: false };
+}
