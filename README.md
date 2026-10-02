@@ -87,6 +87,20 @@ connection via a **LiveKit webhook** — `infra/livekit.yaml` must contain the
 `webhook:` block (re-run `./scripts/sync-livekit-keys.sh`). Details:
 **[docs/TEACHER_PRESENCE_MIC_LOCK.md](docs/TEACHER_PRESENCE_MIC_LOCK.md)**.
 
+## Media quality
+
+Defined in `apps/web/src/lib/videoQuality.ts`:
+
+| Track | Capture | Encoding |
+|---|---|---|
+| Teacher camera | 1280×720, 30 fps | simulcast 320×180 @15 fps ≤140 kbps · 640×360 @24 fps ≤500 kbps · 720p @30 fps ≤1.5 Mbps |
+| Student camera | 320×180, 15 fps | single layer ≤200 kbps |
+| Screen share | up to 1920×1080, 15 fps | single layer ≤1.5 Mbps |
+
+Subscribers use `adaptiveStream` (the SFU forwards the layer that fits the
+element, kept playing in background tabs) and publishers use `dynacast`
+(unreceived layers are not encoded).
+
 ## School management
 
 - **Admin** (`/admin`, one account bootstrapped from `ADMIN_EMAIL`): creates

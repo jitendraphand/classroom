@@ -17,6 +17,7 @@ import {
   RoomEvent,
   ConnectionState,
   AudioPresets,
+  VideoPreset,
   type LocalTrackPublication,
   type Participant,
   type ParticipantTrackPermission,
@@ -56,6 +57,7 @@ import { cn } from '@/lib/cn';
 import { MIC_LOCKED_NO_TEACHER } from '@/lib/teacherPresenceLogic';
 import { roomFetch, rememberClassroomRole, getClassroomRole, claimTeacherTab } from '@/lib/classroomClient';
 import { forwardActivityFrom, setLiveSession } from '@/lib/liveSession';
+import { cameraProfile, SCREEN_SHARE, STUDENT_CAMERA, TEACHER_CAMERA } from '@/lib/videoQuality';
 
 type TokenPayload = {
   token: string;
@@ -572,11 +574,7 @@ function captureScreen(): Promise<MediaStream> {
   if (safari) return bare();
 
   const withHints = {
-    video: {
-      frameRate: { ideal: 15, max: 30 },
-      width: { ideal: 1920 },
-      height: { ideal: 1080 },
-    },
+    video: SCREEN_SHARE.capture,
     audio: false as const,
     selfBrowserSurface: 'include',
     surfaceSwitching: 'include',
@@ -1569,6 +1567,7 @@ function cameraErrorMessage(err: unknown): string {
  * opened, nothing is published and `onCameraError` explains why.
  */
 function SelectivePublisher({
+  isTeacher,
   canPublishVideo,
   mutedByTeacher,
   camDesired,
@@ -1577,6 +1576,8 @@ function SelectivePublisher({
   setLocalCamStream,
   onCameraError,
 }: {
+  /** Teacher: 720p simulcast camera; student: small single-layer camera. */
+  isTeacher: boolean;
   canPublishVideo: boolean;
   mutedByTeacher: boolean;
   camDesired: boolean;
@@ -1605,7 +1606,7 @@ function SelectivePublisher({
       }
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 640, height: 360, frameRate: 15 },
+          video: cameraProfile(isTeacher).capture,
           audio: false,
         });
       } catch (deviceErr) {
@@ -1667,11 +1668,23 @@ function SelectivePublisher({
       const clone = source.clone();
       const track = new LocalVideoTrack(clone, undefined, true);
       try {
-        await participant.publishTrack(track, {
-          source: Track.Source.Camera,
-          simulcast: false,
-          videoEncoding: { maxBitrate: 400_000, maxFramerate: 15 },
-        });
+        await participant.publishTrack(
+          track,
+          isTeacher
+            ? {
+                source: Track.Source.Camera,
+                simulcast: TEACHER_CAMERA.simulcast,
+                videoEncoding: TEACHER_CAMERA.encoding,
+                videoSimulcastLayers: TEACHER_CAMERA.layers.map(
+                  (l) => new VideoPreset(l.width, l.height, l.maxBitrate, l.maxFramerate)
+                ),
+              }
+            : {
+                source: Track.Source.Camera,
+                simulcast: STUDENT_CAMERA.simulcast,
+                videoEncoding: STUDENT_CAMERA.encoding,
+              }
+        );
       } catch (e) {
         console.warn('publish video', e);
         await unpublishThenStop(participant, track);
@@ -1684,7 +1697,7 @@ function SelectivePublisher({
       camTrackRef.current = track;
       camSourceRef.current = source;
     });
-  }, [canPublishVideo, camDesired, previewTrack, localParticipant, room]);
+  }, [canPublishVideo, camDesired, previewTrack, localParticipant, room, isTeacher]);
 
   // Unmount: stop the published clone (the preview stream is stopped by its owner).
   useEffect(() => {
@@ -2457,8 +2470,8 @@ function RoomInner({
         await localParticipant.publishTrack(published, {
           name: 'screen',
           source: Track.Source.ScreenShare,
-          simulcast: false,
-          screenShareEncoding: { maxBitrate: 1_500_000, maxFramerate: 15 },
+          simulcast: SCREEN_SHARE.simulcast,
+          screenShareEncoding: SCREEN_SHARE.encoding,
         });
       });
     } catch (e) {
@@ -2742,6 +2755,7 @@ function RoomInner({
     return (
       <div className="stage-fullscreen">
         <SelectivePublisher
+          isTeacher={false}
           canPublishVideo={effectiveCanPublish}
           mutedByTeacher={effectiveMuted || micLockedNoTeacher}
           camDesired={camOn}
@@ -2855,6 +2869,7 @@ function RoomInner({
   return (
     <div className="flex h-[100dvh] max-h-[100dvh] flex-col overflow-hidden bg-surface-0/40">
       <SelectivePublisher
+        isTeacher
         canPublishVideo={effectiveCanPublish}
         mutedByTeacher={effectiveMuted}
         camDesired={camOn}
@@ -3434,14 +3449,22 @@ export function ClassroomRoom({ code }: { code: string }) {
         // Minimizing the window must not drop the room. pagehide is how some
         // browsers report that; the socket still closes if the tab is destroyed.
         disconnectOnPageLeave: false,
+        // Subscribers ask the SFU for the video layer that fits the element
+        // showing it (teacher camera: 180p/360p/720p simulcast). Kept playing in
+        // background tabs so a student alt-tabbing back never sees a frozen
+        // share while the stream resumes.
+        adaptiveStream: { pauseVideoInBackground: false },
+        // Publishers stop encoding simulcast layers nobody is receiving.
+        dynacast: true,
+        // Per-track options in SelectivePublisher / screen share override these.
         publishDefaults: {
           simulcast: false,
           backupCodec: false,
           dtx: true,
           red: true,
           audioPreset: AudioPresets.speech,
-          videoEncoding: { maxBitrate: 400_000, maxFramerate: 15 },
-          screenShareEncoding: { maxBitrate: 1_200_000, maxFramerate: 15 },
+          videoEncoding: STUDENT_CAMERA.encoding,
+          screenShareEncoding: SCREEN_SHARE.encoding,
         },
       }}
       // Students never auto-subscribe: StudentMediaPrivacy subscribes them to
