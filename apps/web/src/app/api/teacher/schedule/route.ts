@@ -6,6 +6,8 @@ import { addDays, formatHHMM, localDateOf, opensAt, phaseOf } from '@/lib/schedu
 import { occurrencesForRange } from '@/lib/scheduleService';
 import { appTimeZone, earlyWindowMinutes } from '@/lib/schoolConfig';
 import { getTeacherAssignments } from '@/lib/teachers';
+import { loadMaster } from '@/lib/gradeMaster';
+import { teacherGradeChoices } from '@/lib/gradeMasterLogic';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,10 +24,11 @@ export async function GET() {
     (o) => o.teacherId === teacher.id || o.originalTeacherId === teacher.id
   );
 
-  const [sessions, room, assignments] = await Promise.all([
+  const [sessions, room, assignments, master] = await Promise.all([
     prisma.classSession.findMany({ where: { occurrenceKey: { in: occs.map((o) => o.key) } } }),
     prisma.room.findUnique({ where: { code: teacher.permanentCode } }),
     getTeacherAssignments(teacher.id),
+    loadMaster(),
   ]);
   const byKey = new Map(sessions.map((s) => [s.occurrenceKey, s]));
   const otherTeacherIds = [...new Set(occs.flatMap((o) => [o.teacherId, o.originalTeacherId]).filter((x): x is string => !!x && x !== teacher.id))];
@@ -85,5 +88,8 @@ export async function GET() {
     classes,
     active,
     assignments: assignments.map((a) => ({ ...a, label: formatAssignment(a) })),
+    /** Ad-hoc start dropdowns: assigned grades, divisions from Grades & divisions (active only). */
+    gradeChoices: teacherGradeChoices(assignments, master),
+    gradesConfigured: master.length > 0,
   });
 }

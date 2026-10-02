@@ -289,3 +289,38 @@ model AttendanceRecord {
   @@unique([classSessionId, studentId])
   @@index([studentId])
 }
+
+/// Master list of grades (Admin → Grades & divisions). Other tables keep the
+/// canonical grade string (no foreign key), so editing this list never rewrites
+/// timetable, attendance or student history; it drives the admin dropdowns and
+/// validation of new entries.
+model Grade {
+  id        String     @id @default(cuid())
+  /// Canonical form (normalizeGrade): "7", "XII".
+  name      String     @unique
+  /// Display form ("7", "Grade 7", "KG").
+  label     String
+  sortOrder Int        @default(0)
+  active    Boolean    @default(true)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  divisions Division[]
+
+  @@index([sortOrder])
+}
+
+/// A division of a grade.
+model Division {
+  id        String   @id @default(cuid())
+  gradeId   String
+  grade     Grade    @relation(fields: [gradeId], references: [id], onDelete: Cascade)
+  /// Canonical form (normalizeDivision): upper-case, no spaces ("A", "MAHAVEER").
+  name      String
+  /// Display form ("A", "Mahaveer").
+  label     String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([gradeId, name])
+}

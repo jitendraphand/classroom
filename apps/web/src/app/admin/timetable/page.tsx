@@ -5,6 +5,7 @@ import { AdminShell } from '@/components/admin/AdminShell';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader } from '@/components/ui/Card';
+import { DivisionSelect, DivisionsPicker, GradeSelect, useGradeOptions } from '@/components/admin/GradePickers';
 import { api } from '@/lib/clientFetch';
 import { cn } from '@/lib/cn';
 
@@ -76,6 +77,7 @@ function TimetableEditor() {
   const [notice, setNotice] = useState('');
   const [slotForm, setSlotForm] = useState(emptySlot);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const gradeOptions = useGradeOptions();
   const [ov, setOv] = useState({
     kind: 'CANCEL' as Override['kind'],
     date: '',
@@ -244,8 +246,17 @@ function TimetableEditor() {
             </select>
           ) : (
             <>
-              <input className="input w-24" placeholder="Grade" value={grade} onChange={(e) => setGrade(e.target.value)} aria-label="Grade" />
-              <input className="input w-28" placeholder="Division" value={division} onChange={(e) => setDivision(e.target.value)} aria-label="Division (optional)" />
+              <GradeSelect
+                className="w-40"
+                value={grade}
+                onChange={(g) => {
+                  setGrade(g);
+                  setDivision('');
+                }}
+                options={gradeOptions}
+                emptyLabel="Choose a grade…"
+              />
+              <DivisionSelect className="w-40" grade={grade} value={division} onChange={setDivision} options={gradeOptions} ariaLabel="Division (optional)" />
             </>
           )}
           <p className="text-xs text-slate-500">Times are in {view?.timezone ?? '…'}.</p>
@@ -286,7 +297,7 @@ function TimetableEditor() {
           </div>
         ) : (
           <p className="mt-5 text-sm text-slate-400">
-            {mode === 'teacher' ? 'Choose a teacher to see their week.' : 'Enter a grade (and optionally a division) to see its week.'}
+            {mode === 'teacher' ? 'Choose a teacher to see their week.' : 'Choose a grade (and optionally a division) to see its week.'}
           </p>
         )}
       </Card>
@@ -294,7 +305,7 @@ function TimetableEditor() {
       <Card id="slot-form">
         <CardHeader
           title={editingId ? 'Edit weekly slot' : 'Add weekly slot'}
-          subtitle="Repeats every week. Divisions: 'A, B' (or words such as 'Mahaveer, Shivaji') to combine, or ALL for every division of the grade. Case does not matter."
+          subtitle="Repeats every week. Pick one division, several to combine them, or All divisions for the whole grade. Grades and divisions come from Grades & divisions."
         />
         <form onSubmit={(e) => void saveSlot(e)} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <label className="block">
@@ -310,12 +321,17 @@ function TimetableEditor() {
           </label>
           <label className="block">
             <span className="label">Grade</span>
-            <input className="input" required value={slotForm.grade} onChange={(e) => setSlotForm({ ...slotForm, grade: e.target.value })} placeholder="7" />
+            <GradeSelect
+              required
+              value={slotForm.grade}
+              onChange={(g) => setSlotForm({ ...slotForm, grade: g, divisions: g === slotForm.grade ? slotForm.divisions : '' })}
+              options={gradeOptions}
+            />
           </label>
-          <label className="block">
+          <div className="block sm:col-span-2 lg:col-span-1">
             <span className="label">Divisions</span>
-            <input className="input" required value={slotForm.divisions} onChange={(e) => setSlotForm({ ...slotForm, divisions: e.target.value })} placeholder="A, B, Mahaveer or ALL" />
-          </label>
+            <DivisionsPicker grade={slotForm.grade} value={slotForm.divisions} onChange={(d) => setSlotForm({ ...slotForm, divisions: d })} options={gradeOptions} />
+          </div>
           <label className="block">
             <span className="label">Subject</span>
             <input className="input" required value={slotForm.subject} onChange={(e) => setSlotForm({ ...slotForm, subject: e.target.value })} placeholder="Mathematics" />
@@ -425,12 +441,17 @@ function TimetableEditor() {
                 <>
                   <label className="block">
                     <span className="label">Grade</span>
-                    <input className="input" required value={ov.grade} onChange={(e) => setOv({ ...ov, grade: e.target.value })} />
+                    <GradeSelect
+                      required
+                      value={ov.grade}
+                      onChange={(g) => setOv({ ...ov, grade: g, divisions: g === ov.grade ? ov.divisions : '' })}
+                      options={gradeOptions}
+                    />
                   </label>
-                  <label className="block">
+                  <div className="block sm:col-span-2 lg:col-span-1">
                     <span className="label">Divisions</span>
-                    <input className="input" required value={ov.divisions} onChange={(e) => setOv({ ...ov, divisions: e.target.value })} placeholder="A, B, Mahaveer or ALL" />
-                  </label>
+                    <DivisionsPicker grade={ov.grade} value={ov.divisions} onChange={(d) => setOv({ ...ov, divisions: d })} options={gradeOptions} />
+                  </div>
                 </>
               )}
             </>

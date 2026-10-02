@@ -1,7 +1,8 @@
 /**
- * Grade / division helpers. Grades and divisions are plain normalised strings
- * (grade "7", division "B"): the external school app is the source of truth,
- * so no Grade table is needed. Pure module (no Prisma) so it is unit-tested.
+ * Grade / division helpers. Grades and divisions are stored as plain
+ * normalised strings (grade "7", division "B") on every row; the admin master
+ * list (Grade / Division tables, lib/gradeMaster.ts) only feeds dropdowns and
+ * validates new entries. Pure module (no Prisma) so it is unit-tested.
  */
 
 /** Division value meaning "every division of the grade". */

@@ -42,6 +42,11 @@ https://CLASSROOM_HOST/join?FirstName=Arohi&LastName=Patil&SID=GOS000123&Grade=7
 - Divisions are matched case-insensitively everywhere (timetable, teacher
   assignments, roster CSV): `Mahaveer`, `MAHAVEER` and `mahaveer` are the same
   division and are shown as "Mahaveer".
+- A Grade/Division that is not in the admin's master list (Admin → **Grades &
+  divisions**) is still accepted: the student is saved and sees "No class right
+  now" (nothing can be scheduled for it). The admin sees it under
+  "Unrecognised grade/divisions seen from the school app" with a one-click
+  **Add**; typos should be fixed in the school app instead.
 - Bad input lands on `/student/error` with `missing_details` / `invalid_details`
   and the field name. Too many joins from one IP (default 120 per minute,
   `JOIN_RATE_LIMIT_PER_MINUTE`, 0 = off) → `rate_limited`.

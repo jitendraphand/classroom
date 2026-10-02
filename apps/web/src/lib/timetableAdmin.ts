@@ -18,6 +18,7 @@ import {
   type SlotLike,
 } from './schedule';
 import { loadSchedule, toSlotLike } from './scheduleService';
+import { audienceUnknownMessage } from './gradeMaster';
 import { appTimeZone } from './schoolConfig';
 
 export class TimetableError extends Error {
@@ -80,9 +81,18 @@ async function teacherNames() {
   return new Map(rows.map((r) => [r.id, r.name]));
 }
 
-async function validateSlot(input: SlotInput, force: boolean) {
+/** Same audience as the stored row (editing other fields of a legacy slot stays possible). */
+function sameAudience(a: { grade: string; divisions: string[]; allDivisions: boolean }, b: typeof a) {
+  return a.grade === b.grade && a.allDivisions === b.allDivisions && [...a.divisions].sort().join() === [...b.divisions].sort().join();
+}
+
+async function validateSlot(input: SlotInput, force: boolean, existing?: { grade: string; divisions: string[]; allDivisions: boolean }) {
   const problem = slotProblem(input);
   if (problem) throw new TimetableError(problem);
+  if (!existing || !sameAudience(existing, input)) {
+    const unknown = await audienceUnknownMessage(input.grade, input.divisions, input.allDivisions);
+    if (unknown) throw new TimetableError(unknown);
+  }
   const teacher = await prisma.teacher.findUnique({ where: { id: input.teacherId } });
   if (!teacher) throw new TimetableError('Teacher not found', 404);
   const sameDay = (await prisma.timetableSlot.findMany({ where: { weekday: input.weekday } })).map(toSlotLike);
@@ -129,7 +139,7 @@ export async function updateSlot(id: string, body: SlotBody) {
   const existing = await prisma.timetableSlot.findUnique({ where: { id } });
   if (!existing) throw new TimetableError('Slot not found', 404);
   const input = toInput(body, id);
-  await validateSlot(input, !!body.force);
+  await validateSlot(input, !!body.force, existing);
   return prisma.timetableSlot.update({ where: { id }, data: slotData(input) });
 }
 
@@ -211,6 +221,10 @@ export async function createOverride(body: OverrideBody) {
     }
     if (startMinute == null || endMinute == null) throw new TimetableError('Give start and end times');
     if (!subject) throw new TimetableError('Give a subject');
+  }
+  if (body.kind !== 'CANCEL' && grade && div) {
+    const unknown = await audienceUnknownMessage(grade, div.divisions, div.allDivisions);
+    if (unknown) throw new TimetableError(unknown);
   }
   const effStart = startMinute ?? slot?.startMinute ?? 0;
   const effEnd = endMinute ?? slot?.endMinute ?? 0;

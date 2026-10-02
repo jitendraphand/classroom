@@ -3,6 +3,8 @@ import { hashPassword } from './auth';
 import { generatePassword } from './passwords';
 import { allocateUniqueCode } from './teacherRoom';
 import { formatAssignment, type Assignment } from './grades';
+import { loadMaster } from './gradeMaster';
+import { assignmentsProblem } from './gradeMasterLogic';
 
 export type TeacherRow = {
   id: string;
@@ -62,7 +64,14 @@ export class TeacherError extends Error {
 }
 
 /** Create a teacher with a temporary password (returned once, never stored in clear). */
+/** New assignments must use grades/divisions from Admin → Grades & divisions. */
+async function checkAssignments(assignments: Assignment[], keep: Assignment[] = []) {
+  const problem = assignmentsProblem(await loadMaster(), assignments, keep);
+  if (problem) throw new TeacherError(problem);
+}
+
 export async function createTeacher(input: { name: string; email: string; assignments: Assignment[] }) {
+  await checkAssignments(input.assignments);
   const email = input.email.trim().toLowerCase();
   const [existing, admin] = await Promise.all([
     prisma.teacher.findUnique({ where: { email } }),
@@ -90,6 +99,7 @@ export async function updateTeacher(
 ) {
   const current = await prisma.teacher.findUnique({ where: { id } });
   if (!current) throw new TeacherError('Teacher not found', 404);
+  if (input.assignments) await checkAssignments(input.assignments, await getTeacherAssignments(id));
   const teacher = await prisma.$transaction(async (tx) => {
     if (input.assignments) {
       await tx.teacherAssignment.deleteMany({ where: { teacherId: id } });

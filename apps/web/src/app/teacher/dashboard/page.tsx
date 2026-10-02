@@ -11,7 +11,6 @@ import { Input } from '@/components/ui/Input';
 import { PageLoading } from '@/components/ui/Skeleton';
 import { claimTeacherTab } from '@/lib/classroomClient';
 import { api } from '@/lib/clientFetch';
-import { displayDivision } from '@/lib/grades';
 
 type Me = { role: string; name?: string; email?: string; permanentCode?: string; mustChangePassword?: boolean };
 type ClassItem = {
@@ -38,6 +37,8 @@ type Schedule = {
   classes: ClassItem[];
   active: { id: string | null; subject: string; audience: string; adHoc: boolean; code: string } | null;
   assignments: { grade: string; division: string; label: string }[];
+  gradeChoices: { grade: string; label: string; whole: boolean; divisions: { name: string; label: string }[] }[];
+  gradesConfigured: boolean;
 };
 
 function fmtDate(date: string) {
@@ -91,15 +92,17 @@ export default function TeacherDashboard() {
     return () => clearInterval(t);
   }, [me, loadSchedule]);
 
-  const grades = useMemo(() => [...new Set((schedule?.assignments ?? []).map((a) => a.grade))], [schedule]);
-  const gradeDivs = useMemo(
-    () => (schedule?.assignments ?? []).filter((a) => a.grade === adhoc.grade).map((a) => a.division),
-    [schedule, adhoc.grade]
-  );
-  const wholeGrade = gradeDivs.includes('*');
+  // Assigned grades only; divisions come from Grades & divisions (active entries).
+  const choices = useMemo(() => schedule?.gradeChoices ?? [], [schedule]);
+  const grades = useMemo(() => choices.map((c) => c.grade), [choices]);
+  const choice = choices.find((c) => c.grade === adhoc.grade);
+  const gradeDivs = choice?.divisions ?? [];
+  const wholeGrade = !!choice?.whole;
+  // Free-text extra divisions only before the admin has set up Grades & divisions.
+  const freeTextExtra = wholeGrade && !schedule?.gradesConfigured;
 
   useEffect(() => {
-    if (!adhoc.grade && grades.length) setAdhoc((a) => ({ ...a, grade: grades[0]! }));
+    if ((!adhoc.grade || !grades.includes(adhoc.grade)) && grades.length) setAdhoc((a) => ({ ...a, grade: grades[0]!, divisions: [], all: false }));
   }, [grades, adhoc.grade]);
 
   async function go(code: string) {
@@ -124,7 +127,7 @@ export default function TeacherDashboard() {
 
   function startAdhoc(e: React.FormEvent) {
     e.preventDefault();
-    const extra = adhoc.extra
+    const extra = (freeTextExtra ? adhoc.extra : '')
       .split(/[,\s]+/)
       .map((d) => d.trim())
       .filter(Boolean);
@@ -272,9 +275,9 @@ export default function TeacherDashboard() {
                   value={adhoc.grade}
                   onChange={(e) => setAdhoc({ ...adhoc, grade: e.target.value, divisions: [], all: false, extra: '' })}
                 >
-                  {grades.map((g) => (
-                    <option key={g} value={g}>
-                      {g}
+                  {choices.map((c) => (
+                    <option key={c.grade} value={c.grade}>
+                      {c.label !== c.grade ? `${c.label} (${c.grade})` : c.grade}
                     </option>
                   ))}
                 </select>
@@ -291,24 +294,22 @@ export default function TeacherDashboard() {
             <fieldset>
               <legend className="label">Divisions</legend>
               <div className="flex flex-wrap gap-3">
-                {gradeDivs
-                  .filter((d) => d !== '*')
-                  .map((d) => (
-                    <label key={d} className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        disabled={adhoc.all}
-                        checked={adhoc.divisions.includes(d)}
-                        onChange={(e) =>
-                          setAdhoc({
-                            ...adhoc,
-                            divisions: e.target.checked ? [...adhoc.divisions, d] : adhoc.divisions.filter((x) => x !== d),
-                          })
-                        }
-                      />
-                      {adhoc.grade}-{displayDivision(d)}
-                    </label>
-                  ))}
+                {gradeDivs.map((d) => (
+                  <label key={d.name} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      disabled={adhoc.all}
+                      checked={adhoc.divisions.includes(d.name)}
+                      onChange={(e) =>
+                        setAdhoc({
+                          ...adhoc,
+                          divisions: e.target.checked ? [...adhoc.divisions, d.name] : adhoc.divisions.filter((x) => x !== d.name),
+                        })
+                      }
+                    />
+                    {adhoc.grade}-{d.label}
+                  </label>
+                ))}
                 {wholeGrade && (
                   <label className="flex items-center gap-2 text-sm">
                     <input type="checkbox" checked={adhoc.all} onChange={(e) => setAdhoc({ ...adhoc, all: e.target.checked })} />
@@ -316,7 +317,7 @@ export default function TeacherDashboard() {
                   </label>
                 )}
               </div>
-              {wholeGrade && !adhoc.all && (
+              {freeTextExtra && !adhoc.all && (
                 <input
                   className="input mt-3 max-w-xs"
                   placeholder="Divisions, e.g. A, C"

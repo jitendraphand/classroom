@@ -151,9 +151,14 @@ displays (or HiDPI) receive the 1080p layer, the admin tiles the 720p one.
   held), per student (percentage) and detail, filter by dates, teacher, grade,
   division, subject, CSV export of each. Teachers see their own classes at
   `/teacher/attendance`.
+- **Grades & divisions** (`/admin/grades`): the master list behind every
+  grade/division dropdown (timetable slots and one-off changes, teacher
+  assignments, attendance and student filters, the teacher's ad-hoc start, and
+  roster import validation). See **[docs/GRADES_DIVISIONS.md](docs/GRADES_DIVISIONS.md)**.
 - **Absent is only known for known students**: a student exists in the system
   after their first signed join, or after the admin imports the roster
-  (Admin → **Students**, CSV `externalId,name,grade,division,roll`).
+  (Admin → **Students**, CSV `externalId,name,grade,division,roll`; grade and
+  division must be active entries of Grades & divisions).
 
 ## Quick start
 

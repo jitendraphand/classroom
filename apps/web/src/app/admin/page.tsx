@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { AdminShell, SecretOnce } from '@/components/admin/AdminShell';
+import { AssignmentsPicker, useGradeOptions } from '@/components/admin/GradePickers';
 import { LiveNowBanner } from '@/components/admin/LiveNowBanner';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -36,6 +37,7 @@ function TeachersPanel() {
   const [editing, setEditing] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ name: '', assignments: '' });
   const [filter, setFilter] = useState('');
+  const gradeOptions = useGradeOptions();
 
   const load = useCallback(async () => {
     const { ok, data } = await api<{ teachers: Teacher[] }>('/api/admin/teachers');
@@ -131,14 +133,11 @@ function TeachersPanel() {
             required
           />
           <div className="sm:col-span-2">
-            <Input
-              label="Assigned grades / divisions"
-              name="assignments"
-              value={form.assignments}
-              onChange={(e) => setForm({ ...form, assignments: e.target.value })}
-              placeholder="7-A, 7-B, 7-Mahaveer, 8-ALL"
-              hint="Comma separated grade-division; divisions may be letters or one word (7-Mahaveer), any case. 8-ALL = every division of grade 8. Ad-hoc classes are limited to these."
-            />
+            <span className="label">Assigned grades / divisions</span>
+            <AssignmentsPicker value={form.assignments} onChange={(a) => setForm({ ...form, assignments: a })} options={gradeOptions} />
+            <p className="mt-1.5 text-xs text-slate-500">
+              Pick a grade and a division, or All divisions for the whole grade. Ad-hoc classes are limited to these. Lists come from Grades &amp; divisions.
+            </p>
           </div>
           <div className="sm:col-span-2">
             <Button type="submit" disabled={busy}>
@@ -169,20 +168,14 @@ function TeachersPanel() {
               <li key={t.id} className="flex flex-col gap-3 px-5 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
                 {editing === t.id ? (
                   <form
-                    className="grid w-full gap-3 sm:grid-cols-[1fr_2fr_auto]"
+                    className="grid w-full items-start gap-3 sm:grid-cols-[1fr_2fr_auto]"
                     onSubmit={async (e) => {
                       e.preventDefault();
                       if (await patch(t.id, editForm)) setEditing(null);
                     }}
                   >
                     <input className="input" value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} aria-label="Name" required />
-                    <input
-                      className="input"
-                      value={editForm.assignments}
-                      onChange={(e) => setEditForm({ ...editForm, assignments: e.target.value })}
-                      aria-label="Assignments"
-                      placeholder="7-A, 7-B"
-                    />
+                    <AssignmentsPicker value={editForm.assignments} onChange={(a) => setEditForm({ ...editForm, assignments: a })} options={gradeOptions} />
                     <div className="flex gap-2">
                       <Button type="submit" size="sm">Save</Button>
                       <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>

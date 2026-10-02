@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
+import { DivisionSelect, GradeSelect, useGradeOptions } from '@/components/admin/GradePickers';
 import { api } from '@/lib/clientFetch';
 import { cn } from '@/lib/cn';
 
@@ -91,6 +92,7 @@ export function ReportView({
   const [total, setTotal] = useState<number | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const gradeOptions = useGradeOptions();
 
   const qs = useMemo(() => {
     const p = new URLSearchParams();
@@ -146,11 +148,11 @@ export function ReportView({
           )}
           <label className="block">
             <span className="label">Grade</span>
-            <input className="input" value={filter.grade} onChange={set('grade')} placeholder="Any" />
+            <GradeSelect value={filter.grade} onChange={(g) => setFilter({ ...filter, grade: g, division: '' })} options={gradeOptions} emptyLabel="Any" />
           </label>
           <label className="block">
             <span className="label">Division</span>
-            <input className="input" value={filter.division} onChange={set('division')} placeholder="Any" />
+            <DivisionSelect grade={filter.grade} value={filter.division} onChange={(d) => setFilter({ ...filter, division: d })} options={gradeOptions} emptyLabel="Any" />
           </label>
           <label className="block">
             <span className="label">Subject</span>

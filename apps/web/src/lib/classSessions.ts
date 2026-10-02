@@ -1,5 +1,6 @@
 import type { ClassSession, Room } from '@prisma/client';
 import { prisma } from './db';
+import { audienceUnknownMessage } from './gradeMaster';
 import { canTeachAudience, formatAudience, normalizeGrade, parseDivisionList } from './grades';
 import { findOccurrence, occurrencesForDate } from './scheduleService';
 import { dateValue, formatHHMM, localDateOf, phaseOf, type Occurrence } from './schedule';
@@ -119,6 +120,13 @@ export async function startAdHocClass(
   const assignments = await getTeacherAssignments(teacher.id);
   if (!canTeachAudience(assignments, grade, parsed.divisions, parsed.allDivisions)) {
     throw new SessionError('You can only start classes for your assigned grades and divisions.', 403);
+  }
+  // Whole-grade ("*") teachers pick divisions from Grades & divisions; explicitly
+  // assigned divisions were already checked when the admin assigned them.
+  const explicit = new Set(assignments.filter((a) => normalizeGrade(a.grade) === grade).map((a) => a.division));
+  if (!parsed.allDivisions && parsed.divisions.some((d) => !explicit.has(d))) {
+    const unknown = await audienceUnknownMessage(grade, parsed.divisions, false);
+    if (unknown) throw new SessionError(unknown.replace(' Add it there first.', ' Ask the admin to add it.'), 400);
   }
   const subject = (input.subject || '').trim().slice(0, 80) || 'Class';
 

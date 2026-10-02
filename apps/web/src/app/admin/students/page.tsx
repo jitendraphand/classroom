@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { AdminShell } from '@/components/admin/AdminShell';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader } from '@/components/ui/Card';
+import { DivisionSelect, GradeSelect, useGradeOptions } from '@/components/admin/GradePickers';
 import { api } from '@/lib/clientFetch';
 import { displayDivision } from '@/lib/grades';
 
@@ -33,6 +34,7 @@ function StudentsPanel() {
   const [result, setResult] = useState<string>('');
   const [errors, setErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const gradeOptions = useGradeOptions();
 
   const load = useCallback(async () => {
     const p = new URLSearchParams(Object.entries(filter).filter(([, v]) => v));
@@ -74,7 +76,11 @@ function StudentsPanel() {
         />
         <p className="mb-2 text-xs text-slate-400">
           CSV columns: <code className="text-slate-200">externalId,name,grade,division,roll</code> (header row optional). The
-          externalId must be the same student ID the school app sends.
+          externalId must be the same student ID the school app sends. Grade and division must be active entries in{' '}
+          <a href="/admin/grades" className="text-brand-300 hover:underline">
+            Grades &amp; divisions
+          </a>{' '}
+          (case and spaces do not matter); other rows are reported and skipped.
         </p>
         <input
           type="file"
@@ -112,8 +118,8 @@ function StudentsPanel() {
 
       <Card padding={false}>
         <div className="flex flex-wrap items-end gap-3 p-5 sm:p-6">
-          <input className="input w-24" placeholder="Grade" value={filter.grade} onChange={(e) => setFilter({ ...filter, grade: e.target.value })} aria-label="Grade" />
-          <input className="input w-24" placeholder="Division" value={filter.division} onChange={(e) => setFilter({ ...filter, division: e.target.value })} aria-label="Division" />
+          <GradeSelect className="w-40" value={filter.grade} onChange={(g) => setFilter({ ...filter, grade: g, division: '' })} options={gradeOptions} emptyLabel="All grades" />
+          <DivisionSelect className="w-40" grade={filter.grade} value={filter.division} onChange={(d) => setFilter({ ...filter, division: d })} options={gradeOptions} />
           <input className="input max-w-xs" placeholder="Name, ID or roll no" value={filter.q} onChange={(e) => setFilter({ ...filter, q: e.target.value })} aria-label="Search" />
           <p className="text-sm text-slate-400">{data ? `${data.total} student(s)` : ''}</p>
         </div>

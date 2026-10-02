@@ -1,6 +1,7 @@
 import { prisma } from './db';
 import { parseCsv } from './csv';
 import { ALL_DIVISIONS, normalizeDivision, normalizeGrade } from './grades';
+import { rosterAudienceProblem, type MasterGrade } from './gradeMasterLogic';
 
 export type RosterRow = { externalId: string; name: string; grade: string; division: string; rollNumber: string | null };
 
@@ -15,8 +16,10 @@ const HEADER_ALIASES: Record<keyof RosterRow, string[]> = {
 /**
  * Parse an admin roster CSV: externalId,name,grade,division,roll (header row
  * optional, column names flexible). Returns valid rows + per-line errors.
+ * With `master` (Grades & divisions), grade/division must be active entries of
+ * it; an empty master list (not set up yet) accepts any grade/division.
  */
-export function parseRoster(text: string): { rows: RosterRow[]; errors: string[] } {
+export function parseRoster(text: string, master: MasterGrade[] = []): { rows: RosterRow[]; errors: string[] } {
   const table = parseCsv(text);
   const errors: string[] = [];
   if (!table.length) return { rows: [], errors: ['The file is empty'] };
@@ -53,6 +56,11 @@ export function parseRoster(text: string): { rows: RosterRow[]; errors: string[]
     }
     if (!grade || !division || division === ALL_DIVISIONS) {
       errors.push(`Line ${line}: missing grade or division`);
+      continue;
+    }
+    const unknown = rosterAudienceProblem(master, grade, division);
+    if (unknown) {
+      errors.push(`Line ${line}: ${unknown} (add it in Grades & divisions first)`);
       continue;
     }
     if (seen.has(externalId)) {
