@@ -39,14 +39,19 @@ If the browser blocks the window, sharing continues and the page shows
   the toolbar out of the 62 px window). The roster icon shows a waiting badge
   and the bar shows an **Admit &lt;name&gt;** button.
 
-## Teacher's own page while sharing
+## Teacher's own page (sharing or not)
 
-- The shared screen fills the stage. The floating **Class** panel (2/4/6
-  student-camera mosaic) docks to the stage's top-left corner and starts
-  **minimized** at every share; the stage leaves room for it (top band when
-  minimized, left gutter when expanded), so nothing covers the share.
-- Student tiles appear only in the Class panel (no second strip under the
-  stage), and the teacher's own tile stays inside the panel, clear of the dock.
+- The **Class** panel (2/4/6 student-camera mosaic; the first tile is the
+  teacher) is docked to the stage's top-left corner, never floating over it.
+  The stage leaves room for it: a top band when minimized, a left column when
+  expanded. On narrow stages (< 640 px) the expanded panel is a top band
+  limited to about half the stage height, with the stage below it.
+- While sharing, the panel starts **minimized** at every share; when not
+  sharing, the teacher's saved minimized/expanded choice is kept.
+- Student cameras appear only in the Class panel (never again on the stage),
+  and the teacher's own tile stays inside the panel or the stage, clear of
+  the bottom controls. 2 and 4 are one column, 6 is 2×3 (blank tiles fill
+  empty slots), hard max 6; speaker pinning and rotation are unchanged.
 
 ## History
 
@@ -57,6 +62,7 @@ If the browser blocks the window, sharing continues and the page shows
 | Mobile silent no-op | Share failure swallowed | Detect `getDisplayMedia`; show a clear notice |
 | Toolbar vanished when a student started waiting (2026-10-01) | Roster auto-opened above the bar; `resizeTo` refused without a gesture | No auto-open; bar first + sticky; panel scrolls |
 | Teacher view cluttered while sharing (2026-10-01) | Class float over the stage + duplicate camera strip | Class panel docked/minimized; strip removed during share |
+| Same clutter when not sharing (2026-10-02) | Class float over the stage + student cameras repeated on the stage | Panel docked in both views; stage shows no student cameras |
 
 ## Files
 
@@ -65,7 +71,7 @@ If the browser blocks the window, sharing continues and the page shows
 | `TeacherShareHud.tsx` | PiP / pop-up window management + compact bar and panels |
 | `public/share-controls.html` | Static pop-up host page (fallback) |
 | `ScreenAnnotator.tsx` | Annotation overlay + LiveKit transport |
-| `ClassroomRoom.tsx` | One-click `toggleScreen`; teacher-only HUD; docked Class panel during share |
+| `ClassroomRoom.tsx` | One-click `toggleScreen`; teacher-only HUD; docked Class panel |
 | `app/api/rooms/[code]/annotate/route.ts` | Redis snapshot for late joiners |
 
 ## Browser limits (mobile)

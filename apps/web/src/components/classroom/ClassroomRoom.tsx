@@ -159,11 +159,10 @@ function ParticipantGrid({
 
   const cameras = tracks.filter((t) => {
     if (t.source !== Track.Source.Camera || t.participant.isLocal) return false;
-    // Students: only teacher remote videos — never other students
-    if (!isTeacher) {
-      return isTeacherParticipant(t.participant, teacherSet);
-    }
-    return true;
+    // Only teacher remote videos. Students never see other students; the
+    // teacher sees student cameras once, in the docked Class panel
+    // (TeacherPeersFloat, with the 2/4/6 mosaic), not again on the stage.
+    return isTeacherParticipant(t.participant, teacherSet);
   });
 
   const hasScreen = screenShares.length > 0;
@@ -176,7 +175,7 @@ function ParticipantGrid({
           title="Waiting for live video"
           description={
             isTeacher
-              ? 'When someone shares a camera or screen, it will appear here.'
+              ? 'Student cameras are in the Class panel. Share your screen to fill this stage.'
               : 'When your teacher shares a camera or screen, it will appear here.'
           }
           className="min-h-[28vh]"
@@ -212,9 +211,9 @@ function ParticipantGrid({
         </div>
       )}
 
-      {/* While the teacher shares, student cameras and the teacher's own tile
-          live only in the docked Class panel (TeacherPeersFloat); a second
-          copy here would duplicate them and squeeze under the dock. */}
+      {/* While the teacher shares, the teacher's own tile lives only in the
+          docked Class panel (TeacherPeersFloat); a second copy here would
+          squeeze under the dock. */}
       {!(isTeacher && hasScreen) && (
       <div
         className={cn(
@@ -601,8 +600,15 @@ function captureScreen(): Promise<MediaStream> {
 
 
 const PEER_TOP_RESERVE = 152;
-/** Gap between the docked Class panel and the stage edges (share mode). */
+/** Gap between the docked Class panel and the stage edges. */
 const PEER_DOCK_MARGIN = 8;
+/**
+ * Below this stage width the expanded Class panel docks as a top band (stage
+ * below it) instead of a left column, and is limited to about half the stage
+ * height, so a phone-width stage keeps usable room.
+ */
+const PEER_DOCK_NARROW_W = 640;
+const PEER_DOCK_NARROW_MAX_H = 0.5;
 /** Above the teacher dock. The share bar is no longer in this page. */
 const PEER_BOTTOM_RESERVE = 120;
 
@@ -907,6 +913,7 @@ function TeacherPeersFloat({
   selfStream,
   onSlotsChange,
   dock = null,
+  sharing = false,
   onDockSpace,
 }: {
   roomCode: string;
@@ -917,12 +924,15 @@ function TeacherPeersFloat({
   /** Student-camera count that fills this window (tiles minus the teacher). */
   onSlotsChange?: (studentSlots: number) => void;
   /**
-   * Stage rectangle (viewport px) while the teacher shares a screen. The panel
-   * then docks to the stage's top-left corner (no dragging), starts minimized,
-   * and reports the room it needs via onDockSpace so the stage can make space
-   * instead of being covered.
+   * Stage rectangle (viewport px). The panel docks to the stage's top-left
+   * corner (no dragging) and reports the room it needs via onDockSpace so the
+   * stage makes space instead of being covered: a top band when minimized, a
+   * left column when expanded (a top band on narrow stages). While sharing it
+   * starts minimized each share; otherwise the teacher's saved choice holds.
    */
-  dock?: { top: number; left: number; height: number } | null;
+  dock?: { top: number; left: number; width: number; height: number } | null;
+  /** Teacher is screen sharing: the docked panel starts minimized each share. */
+  sharing?: boolean;
   onDockSpace?: (space: { left: number; top: number }) => void;
 }) {
   const room = useRoomContext();
@@ -949,20 +959,24 @@ function TeacherPeersFloat({
     }
   });
   const docked = !!dock;
-  // Minimized state while docked. Starts collapsed at every share; the
-  // teacher's normal (floating) minimized preference is untouched.
-  const [dockMinimized, setDockMinimized] = useState(true);
+  const sharingDock = docked && sharing;
+  // Minimized state during a share. Starts collapsed at every share; the
+  // teacher's saved (non-share) minimized preference is untouched.
+  const [shareMinimized, setShareMinimized] = useState(true);
   useEffect(() => {
-    if (docked) setDockMinimized(true);
-  }, [docked]);
-  const isMin = docked ? dockMinimized : minimized;
+    if (sharingDock) setShareMinimized(true);
+  }, [sharingDock]);
+  const isMin = sharingDock ? shareMinimized : minimized;
+  const narrowDock = !!dock && dock.width < PEER_DOCK_NARROW_W;
   const [rotationTick, setRotationTick] = useState(0);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [stickyVersion, setStickyVersion] = useState(0);
   const [tick, setTick] = useState(0);
   const [viewport, setViewport] = useState({ w: 1400, h: 900 });
 
-  const dockAvailH = dock ? Math.max(0, dock.height - 2 * PEER_DOCK_MARGIN) : undefined;
+  const dockAvailH = dock
+    ? Math.max(0, (narrowDock ? dock.height * PEER_DOCK_NARROW_MAX_H : dock.height) - 2 * PEER_DOCK_MARGIN)
+    : undefined;
   const layout = useMemo(
     () => peerFloatLayout(slotCount, viewport.w, viewport.h, dockAvailH),
     [slotCount, viewport.w, viewport.h, dockAvailH]
@@ -1016,9 +1030,10 @@ function TeacherPeersFloat({
       const h = el.offsetHeight || (isMin ? 36 : layout.paneH);
       sizeRef.current = { w, h };
       if (docked) {
-        // Expanded: a left gutter. Minimized: a thin top band for the pill.
+        // Expanded: a left column (top band when narrow). Minimized: a thin
+        // top band for the pill.
         onDockSpace?.(
-          isMin
+          isMin || narrowDock
             ? { left: 0, top: h + 2 * PEER_DOCK_MARGIN }
             : { left: w + 2 * PEER_DOCK_MARGIN, top: 0 }
         );
@@ -1030,7 +1045,7 @@ function TeacherPeersFloat({
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null;
     ro?.observe(el);
     return () => ro?.disconnect();
-  }, [layout.paneW, layout.paneH, isMin, docked, reclamp, onDockSpace]);
+  }, [layout.paneW, layout.paneH, isMin, docked, narrowDock, reclamp, onDockSpace]);
 
   useEffect(() => {
     if (!docked) onDockSpace?.({ left: 0, top: 0 });
@@ -1268,7 +1283,7 @@ function TeacherPeersFloat({
           <button
             type="button"
             className="rounded px-1.5 py-0.5 text-[10px] font-bold text-slate-300 hover:bg-white/10"
-            onClick={() => (docked ? setDockMinimized((v) => !v) : setMinimized((v) => !v))}
+            onClick={() => (sharingDock ? setShareMinimized((v) => !v) : setMinimized((v) => !v))}
             aria-label={isMin ? 'Expand class videos' : 'Minimize class videos'}
             title={isMin ? 'Expand' : 'Minimize'}
           >
@@ -2606,18 +2621,23 @@ function RoomInner({
   const studentCount = state?.admitted?.filter((a) => a.role === 'STUDENT').length ?? 0;
   const waitingCount = state?.waiting?.length ?? 0;
 
-  // Teacher share layout: the Class panel docks to the stage's corner and the
-  // stage makes room for it (left gutter when expanded, top band when
-  // minimized) instead of being covered by a floating window.
+  // Teacher layout: the Class panel docks to the stage's corner and the stage
+  // makes room for it (left column when expanded, top band when minimized or
+  // narrow) instead of being covered by a floating window, shared or not.
   const shareLayout = isTeacher && (screenOn || stageMode === 'screen');
   const stageWrapRef = useRef<HTMLDivElement | null>(null);
-  const [dockArea, setDockArea] = useState<{ top: number; left: number; height: number } | null>(null);
+  const [dockArea, setDockArea] = useState<{
+    top: number;
+    left: number;
+    width: number;
+    height: number;
+  } | null>(null);
   const [dockSpace, setDockSpace] = useState({ left: 0, top: 0 });
   const onDockSpace = useCallback((next: { left: number; top: number }) => {
     setDockSpace((prev) => (prev.left === next.left && prev.top === next.top ? prev : next));
   }, []);
   useEffect(() => {
-    if (!shareLayout) {
+    if (!isTeacher) {
       setDockArea(null);
       return;
     }
@@ -2625,9 +2645,20 @@ function RoomInner({
     if (!el) return;
     const read = () => {
       const r = el.getBoundingClientRect();
-      const next = { top: Math.round(r.top), left: Math.round(r.left), height: Math.round(r.height) };
+      const next = {
+        top: Math.round(r.top),
+        left: Math.round(r.left),
+        width: Math.round(r.width),
+        height: Math.round(r.height),
+      };
       setDockArea((prev) =>
-        prev && prev.top === next.top && prev.left === next.left && prev.height === next.height ? prev : next
+        prev &&
+        prev.top === next.top &&
+        prev.left === next.left &&
+        prev.width === next.width &&
+        prev.height === next.height
+          ? prev
+          : next
       );
     };
     read();
@@ -2638,7 +2669,7 @@ function RoomInner({
       ro?.disconnect();
       window.removeEventListener('resize', read);
     };
-  }, [shareLayout]);
+  }, [isTeacher]);
 
   /** Teacher lowers a student's raised hand. Shared by the roster and the HUD. */
   async function lowerHand(participantId: string) {
@@ -2928,7 +2959,17 @@ function RoomInner({
       )}
 
       {/* Main stage — screen share fills the middle when active */}
-      <div ref={stageWrapRef} className="relative min-h-0 flex-1 overflow-hidden">
+      <div
+        ref={stageWrapRef}
+        className="relative min-h-0 flex-1 overflow-hidden"
+        // Not sharing: reserve the docked panel's room here (the share stage is
+        // absolutely positioned, so it pads its inner box instead, below).
+        style={
+          isTeacher && !shareLayout
+            ? { paddingLeft: dockSpace.left, paddingTop: dockSpace.top }
+            : undefined
+        }
+      >
           <section
             className={
               screenOn || stageMode === 'screen'
@@ -3178,7 +3219,8 @@ function RoomInner({
         selfName={displayName}
         selfStream={localCamStream}
         onSlotsChange={(slots) => void setStudentCameraCap(slots)}
-        dock={shareLayout ? dockArea : null}
+        dock={dockArea}
+        sharing={shareLayout}
         onDockSpace={onDockSpace}
       />
 
