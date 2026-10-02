@@ -609,10 +609,18 @@ const PEER_DOCK_MARGIN = 8;
  */
 const PEER_DOCK_NARROW_W = 640;
 const PEER_DOCK_NARROW_MAX_H = 0.5;
+/** Wide stages: the expanded column never takes more than this share of the stage width. */
+const PEER_DOCK_MAX_W = 0.45;
 /** Above the teacher dock. The share bar is no longer in this page. */
 const PEER_BOTTOM_RESERVE = 120;
 
-function peerFloatLayout(slots: 2 | 4 | 6, vw: number, vh: number, availH?: number) {
+function peerFloatLayout(
+  slots: 2 | 4 | 6,
+  vw: number,
+  vh: number,
+  availH?: number,
+  availW?: number
+) {
   const cols = slots === 6 ? 2 : 1;
   const rows = slots === 2 ? 2 : slots === 4 ? 4 : 3;
   const header = 34;
@@ -620,7 +628,7 @@ function peerFloatLayout(slots: 2 | 4 | 6, vw: number, vh: number, availH?: numb
   const gap = 6;
   const border = 2;
   const bottomReserve = PEER_BOTTOM_RESERVE;
-  const maxPaneW = Math.max(200, vw - 16);
+  const maxPaneW = availW !== undefined ? Math.max(200, availW) : Math.max(200, vw - 16);
   const maxPaneH =
     availH !== undefined ? Math.max(180, availH) : Math.max(180, vh - PEER_TOP_RESERVE - bottomReserve);
   const scale = Math.min(
@@ -977,9 +985,12 @@ function TeacherPeersFloat({
   const dockAvailH = dock
     ? Math.max(0, (narrowDock ? dock.height * PEER_DOCK_NARROW_MAX_H : dock.height) - 2 * PEER_DOCK_MARGIN)
     : undefined;
+  const dockAvailW = dock
+    ? Math.max(0, (narrowDock ? dock.width : dock.width * PEER_DOCK_MAX_W) - 2 * PEER_DOCK_MARGIN)
+    : undefined;
   const layout = useMemo(
-    () => peerFloatLayout(slotCount, viewport.w, viewport.h, dockAvailH),
-    [slotCount, viewport.w, viewport.h, dockAvailH]
+    () => peerFloatLayout(slotCount, viewport.w, viewport.h, dockAvailH, dockAvailW),
+    [slotCount, viewport.w, viewport.h, dockAvailH, dockAvailW]
   );
   sizeRef.current = isMin
     ? { w: 168, h: 36 }
