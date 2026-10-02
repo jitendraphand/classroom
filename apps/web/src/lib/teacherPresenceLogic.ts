@@ -96,9 +96,11 @@ export function presenceActionFor(event: WebhookLike): PresenceAction {
   const teacher = isTeacherIdentity(p.identity, p.metadata);
 
   if (event.event === 'participant_joined') {
-    return teacher
-      ? { kind: 'teacher', ...room, joined: p, leftSid: null }
-      : { kind: 'student-joined', ...room, identity: p.identity };
+    if (teacher) return { kind: 'teacher', ...room, joined: p, leftSid: null };
+    // Hidden admin observers/previews (`admin…_`) are neither role: nothing to do.
+    return p.identity.startsWith('student_')
+      ? { kind: 'student-joined', ...room, identity: p.identity }
+      : { kind: 'ignore' };
   }
   if (LEFT_EVENTS.has(event.event) && teacher) {
     return { kind: 'teacher', ...room, joined: null, leftSid: p.sid ?? null };

@@ -103,7 +103,7 @@ function useTeacherLive(teacherIdentities: string[]): boolean | null {
   return live;
 }
 
-function isTeacherParticipant(
+export function isTeacherParticipant(
   p: { metadata?: string; identity: string; name?: string },
   teacherIdentities: Set<string>
 ) {
@@ -319,7 +319,7 @@ function TeacherShareTile({
   );
 }
 
-function TeacherScreenStage({
+export function TeacherScreenStage({
   teacherIdentities,
   code,
   active,

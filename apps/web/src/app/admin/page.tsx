@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { AdminShell, SecretOnce } from '@/components/admin/AdminShell';
+import { LiveNowBanner } from '@/components/admin/LiveNowBanner';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader } from '@/components/ui/Card';
@@ -106,6 +107,7 @@ function TeachersPanel() {
 
   return (
     <div className="space-y-6">
+      <LiveNowBanner />
       {secret && <SecretOnce title={secret.title} lines={secret.lines} onClose={() => setSecret(null)} />}
       {error && (
         <p className="rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-2 text-sm text-danger-fg" role="alert">

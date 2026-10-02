@@ -129,6 +129,64 @@ export async function createParticipantToken(
 }
 
 /**
+ * Admin observer tokens ("Ongoing classes" on /admin).
+ *
+ * - `preview`: the small live tile. Subscribe-only, very short TTL.
+ * - `observe`: the admin sitting in the class (listen/watch only).
+ *
+ * Both are `hidden` (no participant-joined broadcast, not in anyone's
+ * participant list → never in the teacher's mosaic or a student's roster, never
+ * counted by attendance, which only tracks `student_` identities) and can
+ * publish nothing — no media, no data, no metadata. LiveKit grants cannot
+ * restrict *which* tracks a subscriber may take; student tracks are protected
+ * by the students' own per-track subscription permissions (StudentMediaPrivacy
+ * allows only participants they can see, and a hidden participant is not one).
+ */
+export type ObserverMode = 'preview' | 'observe';
+export const OBSERVER_PREVIEW_TTL = '2m';
+export const OBSERVER_TOKEN_TTL = '10m';
+
+export function observerGrant(roomName: string) {
+  return {
+    roomJoin: true,
+    room: roomName,
+    canPublish: false,
+    canPublishData: false,
+    canPublishSources: [] as TrackSource[],
+    canSubscribe: true,
+    canUpdateOwnMetadata: false,
+    hidden: true,
+  };
+}
+
+/** Never `teacher_…` / `student_…`, so no classroom logic mistakes it for either role. */
+export function observerIdentity(adminId: string, mode: ObserverMode, nonce: string) {
+  return `${mode === 'preview' ? 'adminpreview' : 'adminobserver'}_${adminId}_${nonce}`;
+}
+
+export async function createObserverToken(opts: {
+  roomName: string;
+  adminId: string;
+  adminName: string;
+  mode: ObserverMode;
+  nonce?: string;
+}) {
+  const identity = observerIdentity(
+    opts.adminId,
+    opts.mode,
+    opts.nonce ?? crypto.randomUUID().replace(/-/g, '').slice(0, 10)
+  );
+  const at = new AccessToken(process.env.LIVEKIT_API_KEY!, process.env.LIVEKIT_API_SECRET!, {
+    identity,
+    name: opts.mode === 'preview' ? 'Admin preview' : opts.adminName || 'School admin',
+    metadata: JSON.stringify({ role: 'ADMIN', mode: opts.mode }),
+    ttl: opts.mode === 'preview' ? OBSERVER_PREVIEW_TTL : OBSERVER_TOKEN_TTL,
+  });
+  at.addGrant(observerGrant(opts.roomName));
+  return { token: await at.toJwt(), identity };
+}
+
+/**
  * LiveKit room name for one class session. The session id rotates whenever
  * the teacher's permanent room is reopened, so a token from a previous class
  * (same code) names a different LiveKit room and cannot join this one.

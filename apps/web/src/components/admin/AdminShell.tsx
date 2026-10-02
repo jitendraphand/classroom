@@ -14,6 +14,7 @@ export const ADMIN_NAV = [
   { href: '/admin/timetable', label: 'Timetable' },
   { href: '/admin/students', label: 'Students' },
   { href: '/admin/reports', label: 'Attendance' },
+  { href: '/admin/live', label: 'Ongoing classes' },
 ];
 
 /** Admin page frame: checks the admin session, renders header + section nav. */

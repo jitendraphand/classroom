@@ -91,7 +91,10 @@ connection via a **LiveKit webhook** — `infra/livekit.yaml` must contain the
 
 - **Admin** (`/admin`, one account bootstrapped from `ADMIN_EMAIL`): creates
   teachers and assigns them grades/divisions, maintains the weekly
-  **timetable** (`/admin/timetable`) and one-off changes.
+  **timetable** (`/admin/timetable`) and one-off changes. **Ongoing classes**
+  (`/admin/live`): live muted tiles of what students see in every running class
+  (elapsed time, students connected); click one to sit in as a hidden,
+  listen-only observer. See **[docs/ADMIN_ONGOING_CLASSES.md](docs/ADMIN_ONGOING_CLASSES.md)**.
 - **Timetable**: weekly slots (teacher, grade, one or more divisions or ALL
   divisions, subject, weekday, start/end, optional term dates) in
   `APP_TIMEZONE` (default Asia/Kolkata). One-off changes: cancel a date,
@@ -237,6 +240,7 @@ Opens `https://…` and `wss://livekit.…`. Firewall: **80/443**, **7881/tcp**,
 | http://localhost:3000/login | Admin + teacher login |
 | http://localhost:3000/admin | School admin (teachers) |
 | http://localhost:3000/admin/timetable | Weekly timetable + one-off changes |
+| http://localhost:3000/admin/live | Ongoing classes (live previews, observe) |
 | http://localhost:3000/join | Student join (enter code) |
 | http://localhost:3000/join/{CODE} | Direct join link |
 | http://localhost:3000/api/health | Health check |
