@@ -5,6 +5,7 @@ import { AdminShell } from '@/components/admin/AdminShell';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { api } from '@/lib/clientFetch';
+import { displayDivision } from '@/lib/grades';
 
 type Student = {
   id: string;
@@ -118,7 +119,7 @@ function StudentsPanel() {
         </div>
         {data && data.groups.length > 0 && (
           <p className="px-6 pb-3 text-xs text-slate-500">
-            {data.groups.map((g) => `${g.grade}-${g.division}: ${g.count}`).join(' · ')}
+            {data.groups.map((g) => `${g.grade}-${displayDivision(g.division)}: ${g.count}`).join(' · ')}
           </p>
         )}
         <div className="overflow-x-auto">
@@ -138,7 +139,7 @@ function StudentsPanel() {
                   <td className="px-4 py-2 font-mono text-xs">{s.externalId}</td>
                   <td className="px-4 py-2 text-white">{s.name}</td>
                   <td className="px-4 py-2">
-                    {s.grade}-{s.division}
+                    {s.grade}-{displayDivision(s.division)}
                   </td>
                   <td className="px-4 py-2">{s.rollNumber}</td>
                   <td className="px-4 py-2 text-slate-400">{s.source === 'import' ? 'Roster import' : 'School app'}</td>

@@ -25,7 +25,12 @@ export type JoinErrorCode =
   | 'lifetime_too_long'
   | 'replayed'
   | 'bad_claims'
-  | 'unavailable';
+  | 'unavailable'
+  // Unsigned (plain-parameter) links, see lib/schoolJoin.ts.
+  | 'missing_details'
+  | 'invalid_details'
+  | 'unsigned_disabled'
+  | 'rate_limited';
 
 export class JoinTokenError extends Error {
   constructor(public code: JoinErrorCode, detail?: string) {
@@ -241,4 +246,20 @@ export const JOIN_ERROR_TEXT: Record<JoinErrorCode, { title: string; body: strin
     body: 'The school app did not send your class details. Please tell your school.',
   },
   unavailable: { title: 'Please try again', body: 'The classroom is busy right now. Wait a moment and try again from the school app.' },
+  missing_details: {
+    title: 'Your details are incomplete',
+    body: 'The school app link is missing your student ID, name, grade or division. Please tell your school.',
+  },
+  invalid_details: {
+    title: 'Your details could not be read',
+    body: 'The school app link has a value the classroom cannot accept. Please tell your school.',
+  },
+  unsigned_disabled: {
+    title: 'This link is not valid',
+    body: 'This classroom only accepts secure links from the school app. Go back to the school app and tap "Join class" again.',
+  },
+  rate_limited: {
+    title: 'Too many attempts',
+    body: 'Too many join attempts came from this network. Wait a minute and try again from the school app.',
+  },
 };

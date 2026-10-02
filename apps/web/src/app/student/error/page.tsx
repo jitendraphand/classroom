@@ -1,12 +1,16 @@
 import Link from 'next/link';
 import { Card } from '@/components/ui/Card';
+import { ERROR_FIELDS } from '@/lib/schoolJoin';
 import { JOIN_ERROR_TEXT, type JoinErrorCode } from '@/lib/schoolJwt';
 
 export const dynamic = 'force-dynamic';
 
-export default async function JoinErrorPage({ searchParams }: { searchParams: Promise<{ reason?: string }> }) {
-  const reason = (await searchParams).reason as JoinErrorCode | undefined;
-  const text = (reason && JOIN_ERROR_TEXT[reason]) || JOIN_ERROR_TEXT.malformed;
+export default async function JoinErrorPage({ searchParams }: { searchParams: Promise<{ reason?: string; field?: string }> }) {
+  const sp = await searchParams;
+  const reason = sp.reason as JoinErrorCode | undefined;
+  // Only known field names are shown (never echo arbitrary query text).
+  const field = sp.field && Object.hasOwn(ERROR_FIELDS, sp.field) ? ERROR_FIELDS[sp.field] : null;
+  const text = (reason && Object.hasOwn(JOIN_ERROR_TEXT, reason) && JOIN_ERROR_TEXT[reason]) || JOIN_ERROR_TEXT.malformed;
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-5 py-10 sm:px-6">
       <Card className="text-center">
@@ -18,6 +22,11 @@ export default async function JoinErrorPage({ searchParams }: { searchParams: Pr
         </div>
         <h1 className="font-display text-2xl font-semibold tracking-tight">{text.title}</h1>
         <p className="mt-3 text-sm text-slate-300">{text.body}</p>
+        {field && (reason === 'missing_details' || reason === 'invalid_details') && (
+          <p className="mt-3 text-sm text-amber-200">
+            {reason === 'missing_details' ? 'Missing' : 'Not accepted'}: {field}
+          </p>
+        )}
         {reason && <p className="mt-4 text-2xs uppercase tracking-wider text-slate-600">Code: {reason}</p>}
         <Link href="/" className="mt-6 inline-block text-sm text-slate-500 transition hover:text-slate-300">
           Home

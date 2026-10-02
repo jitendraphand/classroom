@@ -9,6 +9,10 @@
  *        --student S1001 --name "Asha Patil" --grade 7 --division A --roll 12
  *   SCHOOL_APP_JWT_SECRET=... node scripts/make-join-link.mjs --student S1001 ...   # HS256
  *
+ *   # Unsigned mode (SCHOOL_JOIN_MODE=unsigned): plain parameters, no key needed
+ *   node scripts/make-join-link.mjs --unsigned --student GOS000123 \
+ *        --first Arohi --last Patil --grade 7 --division Mahaveer
+ *
  * Options: --url (APP_URL, default http://localhost:3000), --iss
  * (SCHOOL_APP_JWT_ISSUER), --aud (SCHOOL_APP_JWT_AUDIENCE or "classroom"),
  * --ttl seconds (default 60), --alg (EdDSA|RS256, inferred from the key).
@@ -45,6 +49,21 @@ if (args.includes('--gen-keys')) {
   console.log(`Wrote ${dir}/private.pem (keep secret) and ${dir}/public.pem (${type}).`);
   console.log('For the classroom .env (one line):');
   console.log(`SCHOOL_APP_JWT_PUBLIC_KEY="${String(pub).trim().replace(/\n/g, '\\n')}"`);
+  process.exit(0);
+}
+
+if (args.includes('--unsigned')) {
+  const base = (opt('url', process.env.APP_URL || 'http://localhost:3000')).replace(/\/$/, '');
+  let first = opt('first');
+  let last = opt('last');
+  if (!first && opt('name')) [first, last] = [opt('name').split(' ')[0], opt('name').split(' ').slice(1).join(' ')];
+  const q = new URLSearchParams();
+  q.set('FirstName', first || die('Pass --first'));
+  if (last) q.set('LastName', last);
+  q.set('SID', opt('student') || die('Pass --student <SID>'));
+  q.set('Grade', opt('grade') || die('Pass --grade'));
+  q.set('Division', opt('division') || die('Pass --division'));
+  console.log(`${base}/join?${q.toString()}`);
   process.exit(0);
 }
 

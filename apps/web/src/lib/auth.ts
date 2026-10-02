@@ -159,6 +159,22 @@ export async function setPupilCookie(student: { id: string }) {
   (await cookies()).set(pupilCookieName(), token, cookieOptions(60 * 60 * 12));
 }
 
+/** Re-issue the pupil session after this long, so it slides while the student keeps a page open. */
+export const PUPIL_REFRESH_AFTER_S = 60 * 60;
+
+/**
+ * Sliding pupil session: a student who keeps /student (or a class) open has
+ * their 12 h session renewed by the page's polls, so waiting for hours never
+ * signs them out. Only a valid, unexpired token is renewed.
+ */
+export async function refreshPupilCookie(student: { id: string }) {
+  const token = (await cookies()).get(pupilCookieName())?.value;
+  const claims = await verifySession(token, 'pupil').catch(() => null);
+  if (!claims || claims.sub !== student.id) return;
+  const iat = typeof claims.iat === 'number' ? claims.iat : 0;
+  if (Date.now() / 1000 - iat >= PUPIL_REFRESH_AFTER_S) await setPupilCookie(student);
+}
+
 export async function clearPupilCookie() {
   (await cookies()).set(pupilCookieName(), '', cookieOptions(0));
 }

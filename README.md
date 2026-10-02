@@ -127,9 +127,15 @@ displays (or HiDPI) receive the 1080p layer, the admin tiles the 720p one.
   previous one.
 - Every class is recorded as a `ClassSession` (slot + date, or ad-hoc;
   teacher, grade, divisions, scheduled and actual start/end).
-- **Students join only from the school app** via a signed, single-use,
-  ≤120 s link `GET /join?t=<JWT>` (EdDSA/RS256 public key preferred, HS256
-  secret fallback; see **[docs/SCHOOL_APP_INTEGRATION.md](docs/SCHOOL_APP_INTEGRATION.md)**).
+- **Students join only from the school app.** Default `SCHOOL_JOIN_MODE=unsigned`:
+  a plain link `GET /join?FirstName=…&LastName=…&SID=…&Grade=…&Division=…` (no
+  signature or expiry — anyone with a student's SID can join as them; per-IP
+  rate limit). `SCHOOL_JOIN_MODE=signed`: a signed, single-use, ≤120 s link
+  `GET /join?t=<JWT>` (EdDSA/RS256 public key preferred, HS256 secret fallback).
+  See **[docs/SCHOOL_APP_INTEGRATION.md](docs/SCHOOL_APP_INTEGRATION.md)**.
+  Divisions may be letters or words ("Mahaveer"), matched case-insensitively.
+  The "no class right now" / "class ended" / countdown pages move the student
+  into the waiting room automatically when a class opens.
   The school's student ID is the identity key; roll number is display only.
   The student is routed to the class open now for their grade-division
   (combined / all-division and ad-hoc classes included), a countdown for a

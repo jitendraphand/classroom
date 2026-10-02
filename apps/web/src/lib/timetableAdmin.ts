@@ -37,7 +37,7 @@ const optDate = z
 export const slotBody = z.object({
   teacherId: z.string().min(1),
   grade: z.string().min(1).max(16),
-  divisions: z.union([z.string().max(200), z.array(z.string().max(16)).max(40)]),
+  divisions: z.union([z.string().max(200), z.array(z.string().max(32)).max(40)]),
   subject: z.string().trim().min(1).max(80),
   weekday: z.number().int().min(0).max(6),
   start: time,
@@ -148,7 +148,7 @@ export const overrideBody = z.object({
   slotId: z.string().optional().nullable(),
   teacherId: z.string().optional().nullable(),
   grade: z.string().max(16).optional().nullable(),
-  divisions: z.union([z.string().max(200), z.array(z.string().max(16)).max(40)]).optional().nullable(),
+  divisions: z.union([z.string().max(200), z.array(z.string().max(32)).max(40)]).optional().nullable(),
   subject: z.string().max(80).optional().nullable(),
   start: z.string().optional().nullable(),
   end: z.string().optional().nullable(),

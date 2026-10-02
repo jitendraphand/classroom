@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/Input';
 import { PageLoading } from '@/components/ui/Skeleton';
 import { claimTeacherTab } from '@/lib/classroomClient';
 import { api } from '@/lib/clientFetch';
+import { displayDivision } from '@/lib/grades';
 
 type Me = { role: string; name?: string; email?: string; permanentCode?: string; mustChangePassword?: boolean };
 type ClassItem = {
@@ -305,7 +306,7 @@ export default function TeacherDashboard() {
                           })
                         }
                       />
-                      {adhoc.grade}-{d}
+                      {adhoc.grade}-{displayDivision(d)}
                     </label>
                   ))}
                 {wholeGrade && (

@@ -294,7 +294,7 @@ function TimetableEditor() {
       <Card id="slot-form">
         <CardHeader
           title={editingId ? 'Edit weekly slot' : 'Add weekly slot'}
-          subtitle="Repeats every week. Divisions: 'A, B' to combine, or ALL for every division of the grade."
+          subtitle="Repeats every week. Divisions: 'A, B' (or words such as 'Mahaveer, Shivaji') to combine, or ALL for every division of the grade. Case does not matter."
         />
         <form onSubmit={(e) => void saveSlot(e)} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <label className="block">
@@ -314,7 +314,7 @@ function TimetableEditor() {
           </label>
           <label className="block">
             <span className="label">Divisions</span>
-            <input className="input" required value={slotForm.divisions} onChange={(e) => setSlotForm({ ...slotForm, divisions: e.target.value })} placeholder="A, B or ALL" />
+            <input className="input" required value={slotForm.divisions} onChange={(e) => setSlotForm({ ...slotForm, divisions: e.target.value })} placeholder="A, B, Mahaveer or ALL" />
           </label>
           <label className="block">
             <span className="label">Subject</span>
@@ -429,7 +429,7 @@ function TimetableEditor() {
                   </label>
                   <label className="block">
                     <span className="label">Divisions</span>
-                    <input className="input" required value={ov.divisions} onChange={(e) => setOv({ ...ov, divisions: e.target.value })} placeholder="A, B or ALL" />
+                    <input className="input" required value={ov.divisions} onChange={(e) => setOv({ ...ov, divisions: e.target.value })} placeholder="A, B, Mahaveer or ALL" />
                   </label>
                 </>
               )}

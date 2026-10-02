@@ -9,29 +9,46 @@ import { upsertOccurrenceSession } from './classSessions';
 import { occurrencesForRange } from './scheduleService';
 import { addDays, forAudience, formatHHMM, localDateOf, type Occurrence } from './schedule';
 import { appTimeZone, earlyWindowMinutes } from './schoolConfig';
-import { decideRoute, type SessionState } from './studentRouting';
+import { decideRoute, routeSignature, type SessionState } from './studentRouting';
 import type { JoinClaims } from './schoolJwt';
 
-/** Create/refresh the student from verified join-token claims (externalId is the key). */
-export async function upsertStudentFromClaims(c: JoinClaims): Promise<Student> {
+type StudentStore = {
+  student: {
+    upsert: (args: {
+      where: { externalId: string };
+      create: Record<string, unknown> & { externalId: string };
+      update: Record<string, unknown>;
+    }) => Promise<Student>;
+    update: (args: { where: { externalId: string }; data: Record<string, unknown> }) => Promise<Student>;
+  };
+};
+
+/**
+ * Create/refresh the student from join claims (signed JWT or unsigned link),
+ * keyed on the school's permanent student ID (externalId = SID). Later joins
+ * update name / grade / division (e.g. promotion to a new grade). Optional
+ * fields (roll, email, phone) are only overwritten when the link carries them.
+ */
+export async function upsertStudentFromClaims(c: JoinClaims, db: StudentStore = prisma as unknown as StudentStore): Promise<Student> {
   const data = {
     name: c.name,
     grade: c.grade,
     division: c.division,
-    rollNumber: c.rollNumber,
+    ...(c.rollNumber ? { rollNumber: c.rollNumber } : {}),
     ...(c.email ? { email: c.email } : {}),
     ...(c.phone ? { phone: c.phone } : {}),
     lastSeenAt: new Date(),
   };
   try {
-    return await prisma.student.upsert({
+    return await db.student.upsert({
       where: { externalId: c.studentId },
       create: { externalId: c.studentId, source: 'join', ...data },
       update: data,
     });
   } catch (e) {
+    // Two first joins racing: the loser updates the row the winner created.
     if ((e as { code?: string }).code === 'P2002') {
-      return prisma.student.update({ where: { externalId: c.studentId }, data });
+      return db.student.update({ where: { externalId: c.studentId }, data });
     }
     throw e;
   }
@@ -135,11 +152,11 @@ async function sessionInfo(cs: ClassSession): Promise<ClassInfo> {
 }
 
 /**
- * Route a signed-in student by the timetable (and live ad-hoc classes of their
- * grade-division), checking them in when a class is open. Called repeatedly by
- * the /student page; idempotent.
+ * The routing decision for a student right now, with no side effects (no
+ * check-in, no ClassSession created). Shared by routeStudent and the
+ * lightweight /api/student/check poll.
  */
-export async function routeStudent(student: Student): Promise<StudentRoutePayload> {
+export async function decideStudentRoute(student: Student) {
   const tz = appTimeZone();
   const early = earlyWindowMinutes();
   const now = new Date();
@@ -152,7 +169,7 @@ export async function routeStudent(student: Student): Promise<StudentRoutePayloa
 
   const [sessions, liveRooms] = await Promise.all([
     prisma.classSession.findMany({ where: { occurrenceKey: { in: occurrences.map((o) => o.key) } }, include: { room: true } }),
-    prisma.room.findMany({ where: { status: { not: 'ENDED' }, classSessionId: { not: null } } }),
+    prisma.room.findMany({ where: { status: { not: 'ENDED' }, classSessionId: { not: null } }, select: { classSessionId: true } }),
   ]);
   const states = new Map<string, SessionState>();
   for (const s of sessions) {
@@ -174,7 +191,25 @@ export async function routeStudent(student: Student): Promise<StudentRoutePayloa
     earlyMinutes: early,
     today,
   });
+  return { decision, adHoc };
+}
 
+/**
+ * Route a signed-in student by the timetable (and live ad-hoc classes of their
+ * grade-division), checking them in when a class is open. Called by the
+ * /student page whenever /api/student/check reports a change; idempotent.
+ */
+export async function routeStudent(student: Student): Promise<StudentRoutePayload & { sig: string }> {
+  const { decision, adHoc } = await decideStudentRoute(student);
+  const sig = routeSignature(decision);
+  return { ...(await payloadFor(student, decision, adHoc)), sig };
+}
+
+async function payloadFor(
+  student: Student,
+  decision: Awaited<ReturnType<typeof decideStudentRoute>>['decision'],
+  adHoc: ClassSession[]
+): Promise<StudentRoutePayload> {
   if (decision.kind === 'adhoc') {
     const cs = adHoc.find((s) => s.id === decision.session.id)!;
     const { room } = await arrive(student, cs);

@@ -14,11 +14,31 @@ export function normalizeGrade(raw: unknown): string {
   return s.toUpperCase().slice(0, 16);
 }
 
-/** " b " → "B"; "all" / "*" → "*". */
+/** Longest division accepted (word divisions such as "Mahaveer"). */
+export const MAX_DIVISION_LENGTH = 32;
+
+/**
+ * Canonical division: trimmed, upper-cased, inner spaces removed.
+ * " b " → "B"; "Mahaveer" / "MAHAVEER" → "MAHAVEER"; "Div A" / "Section-B" → "A" / "B";
+ * "all" / "*" → "*". Comparisons everywhere go through this, so matching is
+ * case-insensitive; `displayDivision` gives the friendly form back.
+ * The prefix is only stripped when followed by a separator, so words that
+ * merely start with it ("Divya", "Second") are kept intact.
+ */
 export function normalizeDivision(raw: unknown): string {
   const s = String(raw ?? '').trim().replace(/\s+/g, ' ').toUpperCase();
   if (s === '*' || s === 'ALL') return ALL_DIVISIONS;
-  return s.replace(/^(DIV\.?|DIVISION|SECTION|SEC\.?)\s*/i, '').slice(0, 16);
+  return s
+    .replace(/^(?:(?:DIV|SEC)\.\s*|(?:DIV|DIVISION|SECTION|SEC)(?:\s+|\s*[-:]\s*))(?=\S)/, '')
+    .replace(/\s+/g, '')
+    .slice(0, MAX_DIVISION_LENGTH);
+}
+
+/** Friendly form of a canonical division: "A" → "A", "MAHAVEER" → "Mahaveer", "*" → "ALL". */
+export function displayDivision(d: string): string {
+  if (d === ALL_DIVISIONS) return 'ALL';
+  if (d.length > 1 && /^[A-Z]+$/.test(d)) return d.charAt(0) + d.slice(1).toLowerCase();
+  return d;
 }
 
 export type Assignment = { grade: string; division: string };
@@ -35,6 +55,7 @@ export function parseAssignments(text: string): Assignment[] {
     .map((t) => t.trim())
     .filter(Boolean);
   for (const tok of tokens) {
+    // "7-A", "7 A", "7/Mahaveer", "Grade 7: Mahaveer", "7A".
     const m = /^(.+?)\s*[-/:\s]\s*(\*|all|[A-Za-z0-9]+)$/i.exec(tok) || /^(\d+)([A-Za-z])$/.exec(tok);
     if (!m) throw new Error(`Cannot read "${tok}". Use grade-division, e.g. 7-A or 8-ALL.`);
     const grade = normalizeGrade(m[1]);
@@ -49,13 +70,13 @@ export function parseAssignments(text: string): Assignment[] {
 }
 
 export function formatAssignment(a: Assignment): string {
-  return `${a.grade}-${a.division === ALL_DIVISIONS ? 'ALL' : a.division}`;
+  return `${a.grade}-${displayDivision(a.division)}`;
 }
 
 /** "7-A, B" or "7 (all divisions)". */
 export function formatAudience(grade: string, divisions: string[], allDivisions: boolean): string {
   if (allDivisions) return `${grade} (all divisions)`;
-  return `${grade}-${[...divisions].sort().join(', ')}`;
+  return `${grade}-${[...divisions].sort().map(displayDivision).join(', ')}`;
 }
 
 /**

@@ -65,3 +65,23 @@ export function decideRoute(input: {
   if (endedToday) return { kind: 'ended', occurrence: endedToday, next };
   return { kind: 'none', next };
 }
+
+/**
+ * Compact fingerprint of a decision: changes exactly when the /student page
+ * would show something different (another class, the class going live,
+ * ending, a new "next" class). Contains no class details.
+ */
+export function routeSignature(d: RouteDecision): string {
+  switch (d.kind) {
+    case 'adhoc':
+      return `adhoc:${d.session.id}:1`;
+    case 'scheduled':
+      return `scheduled:${d.occurrence.key}:${d.session?.live ? 1 : 0}`;
+    case 'upcoming':
+      return `upcoming:${d.occurrence.key}`;
+    case 'ended':
+      return `ended:${d.occurrence.key}:${d.next?.key ?? ''}`;
+    default:
+      return `none:${d.next?.key ?? ''}`;
+  }
+}

@@ -136,8 +136,8 @@ function TeachersPanel() {
               name="assignments"
               value={form.assignments}
               onChange={(e) => setForm({ ...form, assignments: e.target.value })}
-              placeholder="7-A, 7-B, 8-ALL"
-              hint="Comma separated grade-division. 8-ALL = every division of grade 8. Ad-hoc classes are limited to these."
+              placeholder="7-A, 7-B, 7-Mahaveer, 8-ALL"
+              hint="Comma separated grade-division; divisions may be letters or one word (7-Mahaveer), any case. 8-ALL = every division of grade 8. Ad-hoc classes are limited to these."
             />
           </div>
           <div className="sm:col-span-2">

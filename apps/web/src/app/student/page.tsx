@@ -8,6 +8,7 @@ import { PageLoading } from '@/components/ui/Skeleton';
 import { SchoolAppOnly } from '@/components/join/SchoolAppOnly';
 import { rememberClassroomRole } from '@/lib/classroomClient';
 import { api } from '@/lib/clientFetch';
+import { nextPollDelay } from '@/lib/studentCheck';
 
 type ClassInfo = {
   subject: string;
@@ -20,6 +21,8 @@ type ClassInfo = {
 type Route = {
   student: { name: string; rollNumber: string | null; gradeDivision: string };
   now: string;
+  /** Routing fingerprint; /api/student/check returns the same value. */
+  sig: string;
 } & (
   | { kind: 'room'; waitingUrl: string; cls: ClassInfo }
   | { kind: 'waiting_for_teacher'; cls: ClassInfo }
@@ -52,8 +55,9 @@ function countdown(ms: number) {
 }
 
 /**
- * Landing page after the signed school-app link: routes the student to their
- * class's waiting room, a countdown, or "no class right now". Polls.
+ * Landing page after the school-app link: routes the student to their class's
+ * waiting room, a countdown, "class ended" or "no class right now", and moves
+ * them on automatically when a class opens (see the auto-check below).
  */
 export default function StudentHome() {
   const router = useRouter();
@@ -89,17 +93,60 @@ export default function StudentHome() {
     void load();
   }, [load]);
 
-  // Poll faster while waiting for the teacher or close to opening time.
+  /**
+   * Auto-check: poll the cheap, read-only GET /api/student/check (10–15 s with
+   * jitter; ~4–6 s while checked in and waiting for the teacher; on time for a
+   * countdown) and only call the full POST /api/student/route — which checks
+   * the student in and moves them to the waiting room — when the routing
+   * signature changes. Paused while the tab is hidden; checks at once when it
+   * becomes visible again.
+   */
   useEffect(() => {
     if (!route || route.kind === 'room') return;
-    let ms = 30_000;
-    if (route.kind === 'waiting_for_teacher') ms = 4_000;
-    if (route.kind === 'upcoming') {
-      const left = new Date(route.opensAt).getTime() - (Date.now() + skew.current);
-      ms = Math.max(1_000, Math.min(30_000, left + 500));
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let stopped = false;
+
+    const delay = () => {
+      let ms = route.kind === 'waiting_for_teacher' ? nextPollDelay(5_000, 1_000) : nextPollDelay();
+      if (route.kind === 'upcoming') {
+        const left = new Date(route.opensAt).getTime() - (Date.now() + skew.current);
+        ms = Math.max(1_000, Math.min(ms, left + 500 + Math.random() * 1_500));
+      }
+      return ms;
+    };
+    const schedule = () => {
+      if (stopped || document.visibilityState !== 'visible') return;
+      timer = setTimeout(check, delay());
+    };
+    async function check() {
+      timer = null;
+      if (stopped) return;
+      const { ok, status, data } = await api<{ sig: string }>('/api/student/check');
+      if (stopped) return;
+      if (status === 401) {
+        setUnauth(true);
+        return;
+      }
+      if (ok && data.sig !== route!.sig) {
+        await load(); // a new `route` restarts this effect (and stops this loop)
+      }
+      schedule();
     }
-    const t = setTimeout(load, ms);
-    return () => clearTimeout(t);
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') {
+        if (timer) clearTimeout(timer);
+        timer = null;
+      } else if (!timer) {
+        void check();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    schedule();
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [route, load]);
 
   useEffect(() => {
@@ -179,6 +226,9 @@ export default function StudentHome() {
         <h2 className="mt-3 font-display text-xl font-semibold">{route.cls.subject}</h2>
         <p className="mt-2 text-sm text-slate-400">Your teacher has ended this class.</p>
         {nextLine(route.next)}
+        <p className="mt-6 text-xs text-slate-500">
+          Keep this page open: if your teacher starts another class for you, you&apos;ll be taken in automatically.
+        </p>
       </>
     );
   } else {
@@ -187,7 +237,8 @@ export default function StudentHome() {
         <h2 className="font-display text-xl font-semibold">No class right now</h2>
         {nextLine(route.next)}
         <p className="mt-6 text-xs text-slate-500">
-          This page checks again by itself. You can also close it and open your class from the school app later.
+          Keep this page open: when your class starts you&apos;ll be taken in automatically. You can also close it
+          and open your class from the school app later.
         </p>
       </>
     );
