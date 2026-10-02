@@ -67,8 +67,10 @@ intervals (`AttendanceRecord.connectedSince`) are used and `countSource` is
 
 - The teacher camera is simulcast (180p / 360p / 720p, see
   `lib/videoQuality.ts`), so a tile receives the ~140 kbps 180p layer. The
-  screen share is single-layer (≤1080p, ≤1.5 Mbps), so a tile showing a share
-  receives the full share stream.
+  screen share has a 720p @10 fps ≤500 kbps low layer, which is what a tile
+  showing a share receives (still the biggest cost per tile). Shares from
+  Firefox, or captures with a short side under 900 px, are single-layer, so a
+  tile then receives the full share stream (≤1.5 Mbps).
 - One WebRTC connection per visible tile; with many simultaneous classes, scroll
   (off-screen tiles disconnect).
 - Annotation strokes drawn before the observer joined are not shown (the

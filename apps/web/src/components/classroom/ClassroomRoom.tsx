@@ -57,7 +57,13 @@ import { cn } from '@/lib/cn';
 import { MIC_LOCKED_NO_TEACHER } from '@/lib/teacherPresenceLogic';
 import { roomFetch, rememberClassroomRole, getClassroomRole, claimTeacherTab } from '@/lib/classroomClient';
 import { forwardActivityFrom, setLiveSession } from '@/lib/liveSession';
-import { cameraProfile, SCREEN_SHARE, STUDENT_CAMERA, TEACHER_CAMERA } from '@/lib/videoQuality';
+import {
+  cameraProfile,
+  SCREEN_SHARE,
+  screenShareSimulcastFor,
+  STUDENT_CAMERA,
+  TEACHER_CAMERA,
+} from '@/lib/videoQuality';
 
 type TokenPayload = {
   token: string;
@@ -2466,13 +2472,28 @@ function RoomInner({
     shareWantedRef.current = true;
     try {
       const published = new LocalVideoTrack(media, undefined, true);
+      const { width: capW, height: capH } = media.getSettings();
+      const simulcast = SCREEN_SHARE.simulcast && screenShareSimulcastFor(capW, capH);
+      const shareOpts = (layered: boolean) => ({
+        name: 'screen',
+        source: Track.Source.ScreenShare,
+        simulcast: layered,
+        screenShareEncoding: SCREEN_SHARE.encoding,
+        screenShareSimulcastLayers: layered
+          ? SCREEN_SHARE.layers.map((l) => new VideoPreset(l.width, l.height, l.maxBitrate, l.maxFramerate))
+          : undefined,
+      });
       await enqueueLocalPublish(async () => {
-        await localParticipant.publishTrack(published, {
-          name: 'screen',
-          source: Track.Source.ScreenShare,
-          simulcast: SCREEN_SHARE.simulcast,
-          screenShareEncoding: SCREEN_SHARE.encoding,
-        });
+        try {
+          await localParticipant.publishTrack(published, shareOpts(simulcast));
+        } catch (err) {
+          // Fail safe: a browser/SFU that rejects the layered publish still
+          // gets the plain single-layer share (the pre-simulcast behaviour).
+          if (!simulcast || media.readyState !== 'live') throw err;
+          console.warn('screen share simulcast failed; publishing a single layer', err);
+          await localParticipant.unpublishTrack(published, false).catch(() => undefined);
+          await localParticipant.publishTrack(published, shareOpts(false));
+        }
       });
     } catch (e) {
       shareWantedRef.current = false;

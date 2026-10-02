@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cameraProfile, SCREEN_SHARE, STUDENT_CAMERA, TEACHER_CAMERA } from '../src/lib/videoQuality';
+import {
+  cameraProfile,
+  SCREEN_SHARE,
+  screenShareSimulcastFor,
+  STUDENT_CAMERA,
+  TEACHER_CAMERA,
+} from '../src/lib/videoQuality';
 
 test('teacher camera: 720p capture, 24–30 fps, simulcast with a ~180p low layer', () => {
   assert.equal(TEACHER_CAMERA.capture.width.ideal, 1280);
@@ -25,11 +31,31 @@ test('student camera: small, ~15 fps, low bitrate, single layer', () => {
   assert.equal(STUDENT_CAMERA.simulcast, false);
 });
 
-test('screen share unchanged: 1080p ideal, 1.5 Mbps, 15 fps, no simulcast', () => {
+test('screen share: 1080p top layer ≤1.5 Mbps @15 fps, plus a legible 720p low layer', () => {
   assert.equal(SCREEN_SHARE.capture.width.ideal, 1920);
+  assert.equal(SCREEN_SHARE.capture.height.ideal, 1080);
   assert.equal(SCREEN_SHARE.encoding.maxBitrate, 1_500_000);
   assert.equal(SCREEN_SHARE.encoding.maxFramerate, 15);
-  assert.equal(SCREEN_SHARE.simulcast, false);
+  assert.equal(SCREEN_SHARE.simulcast, true);
+  assert.equal(SCREEN_SHARE.layers.length, 1);
+  const [low] = SCREEN_SHARE.layers;
+  // Not below 720p: 540p (2x downscale of 1080p) blurs slide text.
+  assert.ok(Math.min(low.width, low.height) >= 720);
+  assert.ok(low.maxBitrate >= 400_000 && low.maxBitrate <= 600_000);
+  assert.ok(low.maxFramerate >= 10 && low.maxFramerate <= 15);
+  assert.ok(low.maxBitrate < SCREEN_SHARE.encoding.maxBitrate);
+});
+
+test('screen share simulcasts only when the capture is clearly bigger than the low layer', () => {
+  assert.equal(screenShareSimulcastFor(1920, 1080), true);
+  assert.equal(screenShareSimulcastFor(1440, 900), true); // Safari-like logical capture
+  assert.equal(screenShareSimulcastFor(2880, 1800), true);
+  assert.equal(screenShareSimulcastFor(1080, 1920), true); // portrait
+  assert.equal(screenShareSimulcastFor(1280, 720), false); // same as the low layer
+  assert.equal(screenShareSimulcastFor(1366, 768), false); // would be ~1.07x: not worth a second encode
+  assert.equal(screenShareSimulcastFor(800, 600), false); // small window share
+  assert.equal(screenShareSimulcastFor(undefined, undefined), false); // unknown → single layer
+  assert.equal(screenShareSimulcastFor(1920, 0), false);
 });
 
 test('camera profile by role', () => {

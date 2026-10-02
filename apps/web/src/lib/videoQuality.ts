@@ -11,8 +11,10 @@
  * video (at most 6 in the 2/4/6 mosaic), and simulcast would cost weak student
  * devices an extra encoder for no viewer benefit.
  *
- * Screen share: unchanged (≤1080p, single layer, 15 fps) — text needs the full
- * resolution and every student shows it full screen.
+ * Screen share: ≤1080p top layer (unchanged) plus a 720p low layer for small
+ * viewports and admin tiles, when the capture is big enough (see
+ * screenShareSimulcastFor). Firefox publishers never simulcast a screen share
+ * (livekit-client disables it there); they keep the single 1080p layer.
  */
 
 export type Layer = { width: number; height: number; maxBitrate: number; maxFramerate: number };
@@ -38,9 +40,32 @@ export const STUDENT_CAMERA = {
 
 export const SCREEN_SHARE = {
   capture: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 15, max: 30 } },
+  /** Top layer: the captured resolution (≤1080p with the capture hints). */
   encoding: { maxBitrate: 1_500_000, maxFramerate: 15 },
-  simulcast: false,
+  simulcast: true,
+  /**
+   * One lower layer, 720p @ 10 fps ≤500 kbps. 720p (a 1.5× downscale of 1080p)
+   * keeps normal slide text (≈18 pt and up) readable; 540p would be a 2× scale
+   * and blur small text, code and spreadsheet cells. Slides are mostly static,
+   * so 10 fps leaves more bits per frame for sharp text; the cost is a less
+   * smooth pointer. Received by small viewports (phones, small windows) and
+   * the admin tiles; large viewports keep the top layer.
+   */
+  layers: [{ width: 1280, height: 720, maxBitrate: 500_000, maxFramerate: 10 }] satisfies Layer[],
 } as const;
+
+/**
+ * Simulcast a screen share only when the capture is clearly bigger than the
+ * low layer: otherwise both layers would be about the same size and the
+ * teacher would encode the screen twice for nothing (small window shares,
+ * Safari captures without size hints that come out small). Unknown size →
+ * single layer. Compares the shorter side, as LiveKit scales layers by it.
+ */
+export function screenShareSimulcastFor(width: number | undefined, height: number | undefined): boolean {
+  if (!width || !height) return false;
+  const low = SCREEN_SHARE.layers[0];
+  return Math.min(width, height) >= Math.min(low.width, low.height) * 1.25;
+}
 
 export function cameraProfile(isTeacher: boolean) {
   return isTeacher ? TEACHER_CAMERA : STUDENT_CAMERA;
