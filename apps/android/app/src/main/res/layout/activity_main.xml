@@ -1,294 +1,352 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- One layout for phones and tablets, portrait and landscape: the content is
+     centred with a maximum width, and in class the controls and the chat sit
+     side by side when the window is wide (MainActivity.applyResponsiveLayout). -->
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/scroll"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:fillViewport="true">
 
-    <LinearLayout
+    <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="20dp">
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingBottom="4dp"
-            android:text="Classroom"
-            android:textColor="#F8FAFC"
-            android:textSize="28sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingBottom="16dp"
-            android:text="Teacher app for phones. Screen sharing uses Android screen capture, which the mobile browser cannot do."
-            android:textColor="#94A3B8"
-            android:textSize="14sp" />
+        android:layout_height="wrap_content">
 
         <LinearLayout
-            android:id="@+id/loginGroup"
+            android:id="@+id/content"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical">
-
-            <EditText
-                android:id="@+id/serverInput"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:hint="Server, e.g. http://192.168.1.20:3000"
-                android:importantForAutofill="no"
-                android:inputType="textUri"
-                android:textColor="#F8FAFC"
-                android:textColorHint="#64748B" />
-
-            <EditText
-                android:id="@+id/emailInput"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:hint="Email"
-                android:inputType="textEmailAddress"
-                android:textColor="#F8FAFC"
-                android:textColorHint="#64748B" />
-
-            <EditText
-                android:id="@+id/passwordInput"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:hint="Password"
-                android:inputType="textPassword"
-                android:textColor="#F8FAFC"
-                android:textColorHint="#64748B" />
-
-            <Button
-                android:id="@+id/loginButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Log in" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:id="@+id/homeGroup"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
             android:orientation="vertical"
-            android:visibility="gone">
+            android:padding="20dp">
 
             <TextView
-                android:id="@+id/helloText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:paddingBottom="8dp"
-                android:textColor="#E2E8F0"
-                android:textSize="16sp" />
-
-            <EditText
-                android:id="@+id/classNameInput"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:hint="Class name"
-                android:inputType="textCapWords"
-                android:text="Class"
+                android:id="@+id/appTitle"
+                style="@style/Wide"
+                android:text="Classroom"
                 android:textColor="#F8FAFC"
-                android:textColorHint="#64748B" />
-
-            <EditText
-                android:id="@+id/maxVisibleInput"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:hint="Student cameras on screen (1–6)"
-                android:inputType="number"
-                android:text="6"
-                android:textColor="#F8FAFC"
-                android:textColorHint="#64748B" />
-
-            <Button
-                android:id="@+id/startButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Start class" />
-
-            <Button
-                android:id="@+id/logoutButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Log out" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:id="@+id/lobbyGroup"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:visibility="gone">
-
-            <TextView
-                android:id="@+id/codeText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:paddingBottom="4dp"
-                android:textColor="#F8FAFC"
-                android:textSize="32sp"
+                android:textSize="26sp"
                 android:textStyle="bold" />
 
             <TextView
-                android:id="@+id/joinText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                android:id="@+id/appSubtitle"
+                style="@style/Body"
                 android:paddingBottom="12dp"
-                android:textColor="#93C5FD"
-                android:textSize="14sp" />
+                android:text="Teacher app. Share this device's screen and speak to your class."
+                android:textColor="#94A3B8" />
 
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:paddingBottom="6dp"
-                android:text="Waiting room"
-                android:textColor="#E2E8F0"
-                android:textStyle="bold" />
-
+            <!-- Sign in -->
             <LinearLayout
-                android:id="@+id/waitingList"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical" />
+                android:id="@+id/loginGroup"
+                style="@style/Wide"
+                android:orientation="vertical">
 
-            <Button
-                android:id="@+id/admitAllButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Admit all" />
+                <EditText
+                    android:id="@+id/serverInput"
+                    style="@style/Field"
+                    android:hint="Server address"
+                    android:importantForAutofill="no"
+                    android:inputType="textUri" />
 
-            <Button
-                android:id="@+id/enterButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Enter classroom" />
+                <EditText
+                    android:id="@+id/emailInput"
+                    style="@style/Field"
+                    android:hint="Email"
+                    android:autofillHints="emailAddress"
+                    android:inputType="textEmailAddress" />
 
-            <Button
-                android:id="@+id/backHomeButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Back" />
-        </LinearLayout>
+                <EditText
+                    android:id="@+id/passwordInput"
+                    style="@style/Field"
+                    android:hint="Password"
+                    android:autofillHints="password"
+                    android:inputType="textPassword" />
 
-        <LinearLayout
-            android:id="@+id/classGroup"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:visibility="gone">
+                <Button
+                    android:id="@+id/loginButton"
+                    style="@style/Wide"
+                    android:text="Sign in" />
 
-            <TextView
-                android:id="@+id/classStatus"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:paddingBottom="8dp"
-                android:textColor="#E2E8F0"
-                android:textSize="16sp" />
+                <TextView
+                    style="@style/Body"
+                    android:paddingTop="8dp"
+                    android:text="Signing in here signs you out of the website and any other device."
+                    android:textColor="#94A3B8"
+                    android:textSize="12sp" />
+            </LinearLayout>
 
-            <TextView
-                android:id="@+id/classWaitingTitle"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:paddingBottom="6dp"
-                android:text="Waiting to join"
-                android:textColor="#FDE68A"
-                android:textStyle="bold"
-                android:visibility="gone" />
-
+            <!-- Home: running class, today's timetable, extra (ad-hoc) class -->
             <LinearLayout
-                android:id="@+id/classWaiting"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                android:id="@+id/homeGroup"
+                style="@style/Wide"
                 android:orientation="vertical"
-                android:paddingBottom="8dp" />
+                android:visibility="gone">
 
-            <Button
-                android:id="@+id/shareButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Share screen" />
+                <TextView
+                    android:id="@+id/helloText"
+                    style="@style/Body"
+                    android:textColor="#E2E8F0"
+                    android:textSize="16sp" />
 
-            <Button
-                android:id="@+id/stopShareButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Stop sharing" />
+                <LinearLayout
+                    android:id="@+id/activeCard"
+                    style="@style/Card"
+                    android:visibility="gone">
 
-            <Button
-                android:id="@+id/micButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Turn microphone on" />
+                    <TextView
+                        android:id="@+id/activeText"
+                        style="@style/Body"
+                        android:textColor="#86EFAC" />
 
-            <Button
-                android:id="@+id/muteAllButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Mute all students" />
+                    <Button
+                        android:id="@+id/rejoinButton"
+                        style="@style/Wide"
+                        android:text="Rejoin live class" />
+                </LinearLayout>
 
-            <Button
-                android:id="@+id/unmuteAllButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Unmute all students" />
+                <TextView
+                    style="@style/Heading"
+                    android:text="Today's classes" />
+
+                <LinearLayout
+                    android:id="@+id/todayList"
+                    style="@style/Wide"
+                    android:orientation="vertical" />
+
+                <TextView
+                    style="@style/Heading"
+                    android:text="Start an extra class" />
+
+                <LinearLayout
+                    android:id="@+id/adhocCard"
+                    style="@style/Card">
+
+                    <Spinner
+                        android:id="@+id/gradeSpinner"
+                        style="@style/Field" />
+
+                    <Spinner
+                        android:id="@+id/divisionSpinner"
+                        style="@style/Field" />
+
+                    <EditText
+                        android:id="@+id/subjectInput"
+                        style="@style/Field"
+                        android:hint="Subject (optional)"
+                        android:importantForAutofill="no"
+                        android:inputType="textCapWords" />
+
+                    <Button
+                        android:id="@+id/adhocButton"
+                        style="@style/Wide"
+                        android:text="Start extra class" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/noGradesText"
+                    style="@style/Body"
+                    android:text="No grades are assigned to you yet. Ask the school admin."
+                    android:visibility="gone" />
+
+                <LinearLayout
+                    style="@style/Wide"
+                    android:orientation="horizontal"
+                    android:paddingTop="12dp">
+
+                    <Button
+                        android:id="@+id/refreshButton"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Refresh" />
+
+                    <Button
+                        android:id="@+id/logoutButton"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:text="Sign out" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- In class -->
+            <LinearLayout
+                android:id="@+id/classGroup"
+                style="@style/Wide"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/classTitle"
+                    style="@style/Wide"
+                    android:textColor="#F8FAFC"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/classStatus"
+                    style="@style/Body"
+                    android:paddingBottom="4dp"
+                    android:textColor="#E2E8F0" />
+
+                <LinearLayout
+                    android:id="@+id/classColumns"
+                    style="@style/Wide"
+                    android:orientation="vertical">
+
+                    <LinearLayout
+                        android:id="@+id/controlsColumn"
+                        style="@style/Wide"
+                        android:orientation="vertical">
+
+                        <LinearLayout
+                            android:id="@+id/waitingCard"
+                            style="@style/Card"
+                            android:background="#422006"
+                            android:visibility="gone">
+
+                            <TextView
+                                android:id="@+id/waitingText"
+                                style="@style/Body"
+                                android:textColor="#FDE68A"
+                                android:textStyle="bold" />
+
+                            <Button
+                                android:id="@+id/admitAllButton"
+                                style="@style/Wide"
+                                android:text="Admit all" />
+                        </LinearLayout>
+
+                        <Button
+                            android:id="@+id/shareButton"
+                            style="@style/Wide"
+                            android:layout_marginTop="8dp"
+                            android:text="Share screen" />
+
+                        <Button
+                            android:id="@+id/stopShareButton"
+                            style="@style/Wide"
+                            android:text="Stop sharing"
+                            android:visibility="gone" />
+
+                        <Button
+                            android:id="@+id/micButton"
+                            style="@style/Wide"
+                            android:text="Turn microphone on" />
+
+                        <LinearLayout
+                            style="@style/Wide"
+                            android:orientation="horizontal">
+
+                            <Button
+                                android:id="@+id/muteAllButton"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Mute all" />
+
+                            <Button
+                                android:id="@+id/unmuteAllButton"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="8dp"
+                                android:layout_weight="1"
+                                android:text="Allow unmute" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            style="@style/Wide"
+                            android:orientation="horizontal">
+
+                            <Button
+                                android:id="@+id/leaveButton"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Leave" />
+
+                            <Button
+                                android:id="@+id/endButton"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="8dp"
+                                android:layout_weight="1"
+                                android:backgroundTint="#B91C1C"
+                                android:text="End class" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:id="@+id/chatColumn"
+                        style="@style/Wide"
+                        android:orientation="vertical">
+
+                        <TextView
+                            style="@style/Heading"
+                            android:text="Chat" />
+
+                        <TextView
+                            android:id="@+id/chatLog"
+                            style="@style/Body"
+                            android:background="#111827"
+                            android:minHeight="120dp"
+                            android:padding="10dp"
+                            android:textColor="#E2E8F0" />
+
+                        <EditText
+                            android:id="@+id/chatInput"
+                            style="@style/Field"
+                            android:hint="Message everyone"
+                            android:importantForAutofill="no"
+                            android:inputType="textCapSentences"
+                            android:maxLength="2000" />
+
+                        <Button
+                            android:id="@+id/sendButton"
+                            style="@style/Wide"
+                            android:text="Send" />
+                    </LinearLayout>
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- This device lost the class to another connection -->
+            <LinearLayout
+                android:id="@+id/handoffGroup"
+                style="@style/Card"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/handoffTitle"
+                    style="@style/Wide"
+                    android:text="Class continued on another device"
+                    android:textColor="#F8FAFC"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/handoffText"
+                    style="@style/Body"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="8dp"
+                    android:text="This class was opened with your account on another device or tab, so this one was disconnected. The class itself carries on there." />
+
+                <Button
+                    android:id="@+id/useHereButton"
+                    style="@style/Wide"
+                    android:text="Use this device instead" />
+
+                <Button
+                    android:id="@+id/handoffHomeButton"
+                    style="@style/Wide"
+                    android:text="Back to classes" />
+            </LinearLayout>
 
             <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:paddingTop="8dp"
-                android:paddingBottom="4dp"
-                android:text="Chat"
-                android:textColor="#E2E8F0"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/chatLog"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:background="#111827"
-                android:minHeight="120dp"
-                android:padding="10dp"
-                android:textColor="#E2E8F0"
-                android:textSize="14sp" />
-
-            <EditText
-                android:id="@+id/chatInput"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:hint="Message everyone"
-                android:inputType="textCapSentences"
-                android:maxLength="2000"
-                android:textColor="#F8FAFC"
-                android:textColorHint="#64748B" />
-
-            <Button
-                android:id="@+id/sendButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Send" />
-
-            <Button
-                android:id="@+id/endButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="End class" />
-
-            <Button
-                android:id="@+id/leaveButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Leave" />
+                android:id="@+id/errorText"
+                style="@style/Body"
+                android:paddingTop="12dp"
+                android:textColor="#FCA5A5" />
         </LinearLayout>
-
-        <TextView
-            android:id="@+id/errorText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="12dp"
-            android:textColor="#FCA5A5"
-            android:textSize="14sp" />
-    </LinearLayout>
+    </FrameLayout>
 </ScrollView>

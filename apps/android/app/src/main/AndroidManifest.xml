@@ -6,7 +6,10 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Android 14+: each foreground service type needs its own permission. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- Android 13+: runtime permission for notifications (share / waiting alerts). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
@@ -20,8 +23,10 @@
 
         <activity
             android:name=".MainActivity"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:exported="true"
+            android:launchMode="singleTop"
+            android:resizeableActivity="true"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -29,15 +34,17 @@
             </intent-filter>
         </activity>
 
+        <!-- Microphone in the background while the teacher uses other apps. -->
         <service
-            android:name=".ScreenShareService"
+            android:name=".ClassAudioService"
             android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
+            android:foregroundServiceType="microphone" />
 
-        <!-- LiveKit binds this service while a screen track is published. -->
-        <service
-            android:name="io.livekit.android.room.track.screencapture.ScreenCaptureService"
-            android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
+        <receiver
+            android:name=".ShareStopReceiver"
+            android:exported="false" />
+
+        <!-- Screen capture runs in LiveKit's ScreenCaptureService (type
+             mediaProjection), declared by the SDK's manifest. -->
     </application>
 </manifest>
