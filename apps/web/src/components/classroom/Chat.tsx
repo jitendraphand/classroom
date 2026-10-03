@@ -9,6 +9,8 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { IconChat, IconSend } from '@/components/ui/Icons';
 import { Button } from '@/components/ui/Button';
 import { roomFetch } from '@/lib/classroomClient';
+import { chatPollMs } from '@/lib/pollPolicy';
+import { usePageHidden, usePushLive } from '@/hooks/usePollSignals';
 
 export type ChatMessage = {
   id: string;
@@ -148,9 +150,23 @@ export function useChatThread({
       return;
     }
     fetchMessages();
-    const t = setInterval(fetchMessages, 2000);
-    return () => clearInterval(t);
   }, [fetchMessages, stopped]);
+
+  // Messages arrive as server data packets while connected; the poll repairs gaps.
+  const hidden = usePageHidden();
+  const pushLive = usePushLive(room);
+  useEffect(() => {
+    if (stopped) return;
+    const t = setInterval(fetchMessages, chatPollMs({ hidden, pushLive }));
+    return () => clearInterval(t);
+  }, [fetchMessages, stopped, hidden, pushLive]);
+
+  // Reconnected after a drop: packets sent meanwhile were missed, fetch now.
+  const wasLive = useRef(pushLive);
+  useEffect(() => {
+    if (pushLive && !wasLive.current && !stopped) void fetchMessages();
+    wasLive.current = pushLive;
+  }, [pushLive, fetchMessages, stopped]);
 
   // Baseline only after the first fetch. History from before this client
   // joined stays read; anything newer counts while every chat surface is closed.

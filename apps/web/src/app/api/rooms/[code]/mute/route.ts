@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { nudgeRoomState } from '@/lib/roomNudge';
 import { prisma } from '@/lib/db';
 import { getTeacherSession } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
@@ -71,6 +72,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
         await clearPinnedSpeakers(code);
       }
 
+      nudgeRoomState(room.code, 'all');
       return jsonOk({ ok: true, all: true, muted: body.muted, count: ids.length });
     }
 
@@ -100,6 +102,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
       await unpinSpeaker(code, participant.livekitIdentity);
     }
 
+    nudgeRoomState(room.code, 'all');
     return jsonOk({ ok: true, muted: body.muted });
   } catch (e) {
     if (e instanceof z.ZodError) return jsonError(e.errors[0]?.message || 'Invalid input');

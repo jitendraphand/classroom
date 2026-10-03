@@ -1,7 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { RoomEvent, type Room } from 'livekit-client';
 import { roomFetch, getClassroomRole } from '@/lib/classroomClient';
+import { STATE_TOPIC, statePollMs } from '@/lib/pollPolicy';
+import { usePageHidden, usePushLive } from '@/hooks/usePollSignals';
 
 /** Teacher-only roster details (school-app students). */
 export type RosterInfo = {
@@ -64,13 +67,14 @@ export type RoomState = {
   stageMode?: 'idle' | 'screen';
 };
 
-export function useRoomState(code: string, intervalMs = 2000) {
+export function useRoomState(code: string, intervalMs = 2000, room?: Room | null) {
   const [state, setState] = useState<RoomState | null>(null);
   const [error, setError] = useState('');
   const stopped = useRef(false);
   /** One poll at a time. A mutation during that poll schedules a follow-up so an older snapshot cannot overwrite it. */
   const inflight = useRef(false);
   const again = useRef(false);
+  const lastFetchAt = useRef(0);
 
   const refresh = useCallback(async () => {
     if (stopped.current) return;
@@ -79,6 +83,7 @@ export function useRoomState(code: string, intervalMs = 2000) {
       return;
     }
     inflight.current = true;
+    lastFetchAt.current = Date.now();
     try {
       const res = await roomFetch(code, '/state');
       const data = await res.json();
@@ -128,18 +133,48 @@ export function useRoomState(code: string, intervalMs = 2000) {
     }
   }, [code]);
 
+  const hidden = usePageHidden();
+  const pushLive = usePushLive(room);
+
   useEffect(() => {
     stopped.current = false;
     refresh();
-    // Students poll mute/end faster; teachers same default
+  }, [refresh]);
+
+  // Safety-net poll. Fast (intervalMs, students ≤ 2 s) until LiveKit is
+  // connected; slower once server "state changed" pushes can arrive.
+  useEffect(() => {
     const role = typeof window !== 'undefined' ? getClassroomRole(code) : null;
-    const ms = role === 'student' ? Math.min(intervalMs, 2000) : intervalMs;
+    const base = statePollMs({ role, hidden, pushLive });
+    const ms = pushLive || hidden ? base : role === 'student' ? Math.min(intervalMs, 2000) : intervalMs;
+    // Tick at a third of the period and skip when a push-driven refresh ran
+    // recently, so pushes push the safety poll back instead of adding to it.
     const t = setInterval(() => {
       if (stopped.current) return;
+      if (Date.now() - lastFetchAt.current < ms - 250) return;
       void refresh();
-    }, ms);
+    }, Math.max(500, Math.round(ms / 3)));
     return () => clearInterval(t);
-  }, [refresh, intervalMs, code]);
+  }, [refresh, intervalMs, code, hidden, pushLive]);
+
+  // Coming back to the tab: refresh immediately rather than at the next tick.
+  useEffect(() => {
+    if (!hidden && !stopped.current) void refresh();
+  }, [hidden, refresh]);
+
+  // Server push: refetch now (coalesced by the inflight/again guard above).
+  useEffect(() => {
+    if (!room) return;
+    const onData = (_p: Uint8Array, participant?: unknown, _k?: unknown, topic?: string) => {
+      // Only the server sends this topic; a packet from a participant is ignored.
+      if (topic !== STATE_TOPIC || participant) return;
+      if (!stopped.current) void refresh();
+    };
+    room.on(RoomEvent.DataReceived, onData);
+    return () => {
+      room.off(RoomEvent.DataReceived, onData);
+    };
+  }, [room, refresh]);
 
   return { state, error, refresh, stopped: stopped.current };
 }

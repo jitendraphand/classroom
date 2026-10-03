@@ -1,4 +1,5 @@
 import type { ClassSession, Room, Student } from '@prisma/client';
+import { nudgeRoomState } from './roomNudge';
 import { prisma } from './db';
 import { setActAsStudent, setStudentCookie } from './auth';
 import { generateIdentity, generateSessionToken } from './codes';
@@ -107,6 +108,8 @@ export async function ensureStudentParticipant(student: Student, room: Room, cs:
   }
   await setStudentCookie(participant.sessionToken);
   await setActAsStudent();
+  // Teacher's roster / waiting list: refetch now instead of at the next poll.
+  nudgeRoomState(room.code, 'teacher');
   return participant;
 }
 

@@ -1,5 +1,7 @@
 'use client';
 
+import { waitingPollMs } from '@/lib/pollPolicy';
+import { usePageHidden } from '@/hooks/usePageHidden';
 import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
@@ -73,11 +75,14 @@ export default function JoinRoomPage() {
       .catch(() => {});
   }, []);
 
+  const hidden = usePageHidden();
   useEffect(() => {
     if (!waiting) return;
-    const t = setInterval(poll, 2000);
+    // Back off while the tab is hidden; check at once when it comes back.
+    if (!hidden) void poll();
+    const t = setInterval(poll, waitingPollMs(hidden));
     return () => clearInterval(t);
-  }, [waiting, poll]);
+  }, [waiting, poll, hidden]);
 
   async function enableStudentMode() {
     await fetch('/api/auth/act-as', {

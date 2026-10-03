@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { nudgeRoomState } from '@/lib/roomNudge';
 import { prisma } from '@/lib/db';
 import { resolveRoomAccess } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
@@ -49,6 +50,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     const redis = await ensureRedis();
     await redis.hset(keys.focus(code), me.id, encodeFocus(body.status, !!body.iphone, Date.now()));
     await redis.expire(keys.focus(code), TTL_SECONDS);
+    nudgeRoomState(room.code, 'teacher');
     return jsonOk({ ok: true, status: body.status });
   } catch (e) {
     console.error(e);

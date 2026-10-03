@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { nudgeRoomState } from '@/lib/roomNudge';
 import { prisma } from '@/lib/db';
 import { getTeacherSession } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
@@ -42,6 +43,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ code: 
       if (ids.length) admitted = await admitWaiting(updated, { ids });
     }
     if (body.maxVisibleVideos !== undefined) await rotateVisibleSample(code, updated.maxVisibleVideos);
+    nudgeRoomState(room.code, 'all');
     return jsonOk({
       maxVisibleVideos: updated.maxVisibleVideos,
       name: updated.name,

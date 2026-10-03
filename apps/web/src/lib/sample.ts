@@ -2,6 +2,7 @@ import type Redis from 'ioredis';
 import { ensureRedis, keys } from './redis';
 import { prisma } from './db';
 import { setParticipantCameraAllowed } from './livekit';
+import { nudgeRoomState } from './roomNudge';
 import { allocateSample, type PinnedStudent } from './classSlots';
 
 /** Hard ceiling: server never selects/publishes more than this many student videos. */
@@ -99,8 +100,19 @@ function enqueueSampleSync(roomCode: string, before: string[], after: string[]) 
     .then(() => syncSampleMembership(roomCode, [...before], [...after]))
     .catch((e) => {
       console.warn('sample sync', roomCode, e);
+    })
+    // Tell clients after the SFU permissions are in place, so a student who
+    // just entered the sample is allowed to publish when it reacts.
+    .then(() => {
+      if (sampleChanged(before, after)) nudgeRoomState(roomCode, 'all');
     });
   livekitSyncTail.set(roomCode, job);
+}
+
+function sampleChanged(a: string[], b: string[]) {
+  if (a.length !== b.length) return true;
+  const set = new Set(a);
+  return b.some((id) => !set.has(id));
 }
 
 function shuffle<T>(arr: T[]): T[] {

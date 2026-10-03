@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { nudgeRoomState } from '@/lib/roomNudge';
 import { prisma } from '@/lib/db';
 import { getPupil, setStudentCookie, setActAsStudent } from '@/lib/auth';
 import { manualStudentJoinAllowed } from '@/lib/schoolConfig';
@@ -72,6 +73,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
       status = 'ADMITTED';
     }
 
+    nudgeRoomState(room.code, 'teacher');
     await setStudentCookie(sessionToken);
     // Prefer student identity for this tab even if a teacher cookie exists
     await setActAsStudent();

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { nudgeRoomState } from '@/lib/roomNudge';
 import { prisma } from '@/lib/db';
 import { getTeacherSession } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
@@ -40,6 +41,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
       }
       return jsonError('Class ended', 410);
     }
+    nudgeRoomState(room.code, 'all');
     return jsonOk(result);
   } catch (e) {
     if (e instanceof z.ZodError) return jsonError(e.errors[0]?.message || 'Invalid input');

@@ -127,21 +127,25 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   }
 
   await ensureSampleFresh(code);
-  const { visible } = await getVisibleSample(code);
   const redis = await ensureRedis();
-  const mutedIds = await redis.smembers(keys.muted(code));
-  const handSet = (await redis.smembers(keys.hands(code))).map(String);
-  const handTimes = isTeacher ? await redis.hgetall(keys.handsAt(code)) : {};
+  // Independent reads, issued together (ioredis pipelines them on one socket).
+  const [{ visible }, mutedIds, handList, handTimes, stageRaw, focusRaw] = await Promise.all([
+    getVisibleSample(code),
+    redis.smembers(keys.muted(code)),
+    redis.smembers(keys.hands(code)),
+    isTeacher ? redis.hgetall(keys.handsAt(code)) : Promise.resolve({} as Record<string, string>),
+    redis.get(keys.stage(code)),
+    // Students' fullscreen / focus status, teacher only.
+    isTeacher ? redis.hgetall(keys.focus(code)) : Promise.resolve({} as Record<string, string>),
+  ]);
+  const handSet = handList.map(String);
   const handAt = (id: string) => (handTimes[id] ? Number(handTimes[id]) : null);
   // Earliest raise first (hands without a time, raised before it was recorded, last).
   const raisedHands = [...handSet].sort(
     (a, b) => (handAt(a) ?? Number.MAX_SAFE_INTEGER) - (handAt(b) ?? Number.MAX_SAFE_INTEGER)
   );
-  const stageRaw = await redis.get(keys.stage(code));
   const stageMode =
     stageRaw === 'screen' ? 'screen' : 'idle';
-  // Students' fullscreen / focus status, teacher only.
-  const focusRaw: Record<string, string> = isTeacher ? await redis.hgetall(keys.focus(code)) : {};
   const focusOf = (p: (typeof room.participants)[number]) => {
     if (!isTeacher || p.role !== 'STUDENT') return {};
     const f = decodeFocus(focusRaw[p.id]);

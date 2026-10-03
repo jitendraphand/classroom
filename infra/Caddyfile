@@ -14,11 +14,11 @@
 }
 
 example.com {
-	encode gzip
+	encode zstd gzip
 	reverse_proxy 127.0.0.1:3000
 }
 
 livekit.example.com {
-	encode gzip
+	encode zstd gzip
 	reverse_proxy 127.0.0.1:7880
 }

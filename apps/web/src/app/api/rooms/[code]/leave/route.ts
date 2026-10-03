@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/db';
+import { nudgeRoomState } from '@/lib/roomNudge';
 import { getStudentParticipant, clearStudentCookie, getTeacherSession } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
 import { ensureRedis, keys } from '@/lib/redis';
@@ -82,5 +83,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     await rotateVisibleSample(code);
   }
 
+  nudgeRoomState(room.code, 'all');
   return jsonOk({ ok: true });
 }

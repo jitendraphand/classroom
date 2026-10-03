@@ -21,9 +21,11 @@ export type Layer = { width: number; height: number; maxBitrate: number; maxFram
 
 export const TEACHER_CAMERA = {
   /** getUserMedia constraints (ideal; the browser picks the closest mode). */
-  capture: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+  capture: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 24, max: 30 } },
   /** Top layer (the captured 720p). */
-  encoding: { maxBitrate: 1_500_000, maxFramerate: 30 },
+  // 24 fps / 1.2 Mbps: a talking head looks the same as 30 fps / 1.5 Mbps and
+  // costs the teacher's laptop ~20% less encode CPU and uplink.
+  encoding: { maxBitrate: 1_200_000, maxFramerate: 24 },
   simulcast: true,
   /** Lower simulcast layers, smallest first. */
   layers: [
@@ -39,7 +41,9 @@ export const STUDENT_CAMERA = {
 } as const;
 
 export const SCREEN_SHARE = {
-  capture: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 15, max: 30 } },
+  // max 15: the encoder never sends more than 15 fps, so capturing (and masking)
+  // up to 30 only burned CPU. Static slides deliver far fewer frames anyway.
+  capture: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 15, max: 15 } },
   /** Top layer: the captured resolution (≤1080p with the capture hints). */
   encoding: { maxBitrate: 1_500_000, maxFramerate: 15 },
   simulcast: true,

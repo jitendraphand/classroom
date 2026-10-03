@@ -736,11 +736,14 @@ function TeacherCameraFloat({
   useEffect(() => {
     if (!room) return;
     const bump = () => setTick((n) => n + 1);
-    const ensure = () => {
+    /** Subscribes any missing teacher camera; true when it had to. */
+    const subscribeMissing = () => {
+      let did = false;
       for (const p of Array.from(room.remoteParticipants.values())) {
         if (!isTeacherParticipant(p, teacherSet)) continue;
         const pub = p.getTrackPublication(Track.Source.Camera);
         if (pub && !pub.isSubscribed) {
+          did = true;
           try {
             pub.setSubscribed(true);
           } catch (e) {
@@ -748,6 +751,10 @@ function TeacherCameraFloat({
           }
         }
       }
+      return did;
+    };
+    const ensure = () => {
+      subscribeMissing();
       bump();
     };
     ensure();
@@ -760,7 +767,11 @@ function TeacherCameraFloat({
     room.on(RoomEvent.ParticipantConnected, ensure);
     room.on(RoomEvent.ParticipantDisconnected, bump);
     room.on(RoomEvent.TrackSubscriptionFailed, ensure);
-    const iv = window.setInterval(ensure, 1500);
+    // Safety net only: events above drive re-renders, so the timer re-renders
+    // only when it actually had to subscribe something.
+    const iv = window.setInterval(() => {
+      if (subscribeMissing()) bump();
+    }, 3000);
     return () => {
       room.off(RoomEvent.TrackPublished, ensure);
       room.off(RoomEvent.TrackUnpublished, bump);
@@ -1195,11 +1206,13 @@ function TeacherPeersFloat({
   // Ensure peer cameras in sample are subscribed
   useEffect(() => {
     if (!room) return;
-    const ensure = () => {
+    const ensure = (fromTimer = false) => {
+      let changedAny = !fromTimer;
       for (const p of Array.from(room.remoteParticipants.values())) {
         if (isTeacherParticipant(p, teacherSet)) continue;
         const pub = p.getTrackPublication(Track.Source.Camera);
         if (pub && !pub.isSubscribed) {
+          changedAny = true;
           try {
             pub.setSubscribed(true);
           } catch (e) {
@@ -1212,23 +1225,29 @@ function TeacherPeersFloat({
           setStickyVersion((n) => n + 1);
         }
       }
-      setTick((n) => n + 1);
+      // The 2 s timer is a safety net: re-render only when it changed something.
+      if (changedAny) setTick((n) => n + 1);
     };
+    const onEvent = () => ensure(false);
     ensure();
-    room.on(RoomEvent.TrackPublished, ensure);
-    room.on(RoomEvent.TrackSubscribed, ensure);
-    room.on(RoomEvent.ParticipantConnected, ensure);
-    room.on(RoomEvent.ParticipantDisconnected, ensure);
-    room.on(RoomEvent.TrackMuted, ensure);
-    room.on(RoomEvent.TrackUnmuted, ensure);
-    const iv = window.setInterval(ensure, 2000);
+    room.on(RoomEvent.TrackPublished, onEvent);
+    room.on(RoomEvent.TrackSubscribed, onEvent);
+    room.on(RoomEvent.ParticipantConnected, onEvent);
+    room.on(RoomEvent.ParticipantDisconnected, onEvent);
+    room.on(RoomEvent.TrackMuted, onEvent);
+    room.on(RoomEvent.TrackUnmuted, onEvent);
+    room.on(RoomEvent.TrackUnpublished, onEvent);
+    room.on(RoomEvent.TrackUnsubscribed, onEvent);
+    const iv = window.setInterval(() => ensure(true), 3000);
     return () => {
-      room.off(RoomEvent.TrackPublished, ensure);
-      room.off(RoomEvent.TrackSubscribed, ensure);
-      room.off(RoomEvent.ParticipantConnected, ensure);
-      room.off(RoomEvent.ParticipantDisconnected, ensure);
-      room.off(RoomEvent.TrackMuted, ensure);
-      room.off(RoomEvent.TrackUnmuted, ensure);
+      room.off(RoomEvent.TrackPublished, onEvent);
+      room.off(RoomEvent.TrackSubscribed, onEvent);
+      room.off(RoomEvent.ParticipantConnected, onEvent);
+      room.off(RoomEvent.ParticipantDisconnected, onEvent);
+      room.off(RoomEvent.TrackMuted, onEvent);
+      room.off(RoomEvent.TrackUnmuted, onEvent);
+      room.off(RoomEvent.TrackUnpublished, onEvent);
+      room.off(RoomEvent.TrackUnsubscribed, onEvent);
       window.clearInterval(iv);
     };
   }, [room, teacherIdentities, visibleIdentities, isMicMuted]);
@@ -1814,8 +1833,23 @@ function SelectivePublisher({
   const previewTrack =
     localCamStream?.getVideoTracks().find((t) => t.readyState === 'live') ?? null;
 
+  // A student can learn it entered the sample (server push) a moment before the
+  // SFU grants the camera; retry the publish when our permissions change.
+  const [permTick, setPermTick] = useState(0);
+  useEffect(() => {
+    if (!room || isTeacher) return;
+    const on = (_prev: unknown, p: Participant) => {
+      if (p === room.localParticipant) setPermTick((n) => n + 1);
+    };
+    room.on(RoomEvent.ParticipantPermissionsChanged, on);
+    return () => {
+      room.off(RoomEvent.ParticipantPermissionsChanged, on);
+    };
+  }, [room, isTeacher]);
+
   useEffect(() => {
     if (!localParticipant || !room) return;
+    void permTick;
     const gen = ++videoGen.current;
     const source = camDesired && canPublishVideo ? previewTrack : null;
     const participant = localParticipant;
@@ -1875,7 +1909,7 @@ function SelectivePublisher({
       camTrackRef.current = track;
       camSourceRef.current = source;
     });
-  }, [canPublishVideo, camDesired, previewTrack, localParticipant, room, isTeacher]);
+  }, [canPublishVideo, camDesired, previewTrack, localParticipant, room, isTeacher, permTick]);
 
   // Unmount: stop the published clone (the preview stream is stopped by its owner).
   useEffect(() => {
@@ -1920,6 +1954,11 @@ function SelectivePublisher({
             await participant.publishTrack(track, {
               source: Track.Source.Microphone,
               audioPreset: AudioPresets.speech,
+              dtx: true,
+              // RED re-sends every Opus frame (~2x audio bitrate). Worth it for
+              // the one teacher voice; students hear each other, so N student
+              // mics with RED cost every listener 2N streams of audio.
+              red: isTeacher,
             });
           } catch (e) {
             safeStop(track);
@@ -2153,7 +2192,7 @@ function RoomInner({
   const [maskFallback, setMaskFallback] = useState<MaskFallback>('');
   /** Share controls start as the compact pill on every share. */
   const [hudCompact, setHudCompact] = useState(true);
-  const { state, refresh } = useRoomState(code, 2000);
+  const { state, refresh } = useRoomState(code, 2000, room);
   /** Student-camera cap chosen from the float, shown before the next poll confirms it. */
   const [sampleCap, setSampleCap] = useState<number | null>(null);
   const capQueue = useRef(Promise.resolve());
@@ -2741,6 +2780,8 @@ function RoomInner({
         source: Track.Source.ScreenShare,
         simulcast: layered,
         screenShareEncoding: SCREEN_SHARE.encoding,
+        // Text must stay sharp: under CPU/bandwidth pressure drop frames, not pixels.
+        degradationPreference: 'maintain-resolution' as RTCDegradationPreference,
         screenShareSimulcastLayers: layered
           ? SCREEN_SHARE.layers.map((l) => new VideoPreset(l.width, l.height, l.maxBitrate, l.maxFramerate))
           : undefined,
@@ -3998,7 +4039,7 @@ export function ClassroomRoom({ code }: { code: string }) {
     void load();
   }, [code, load, handoff, isTeacher]);
 
-  // NOTE: room state is polled by useRoomState() inside RoomInner (2s), which
+  // NOTE: room state is polled by useRoomState() inside RoomInner (2s, slower once server pushes are live), which
   // also surfaces the ENDED transition via onClassEnded(). A second /state
   // poller used to live here and doubled the load on the hottest endpoint in the
   // app for no behavioural gain — the props below are initial values that

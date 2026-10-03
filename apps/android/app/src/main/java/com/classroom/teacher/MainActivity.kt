@@ -60,6 +60,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.channels.Channel
 import org.json.JSONArray
 
 /**
@@ -83,6 +85,9 @@ class MainActivity : AppCompatActivity() {
     private var micOn = false
     private var sharing = false
     private var pollJob: Job? = null
+    /** Server "state changed" / chat pushes (LiveKit data) wake the poll loop early. */
+    private val pollWake = Channel<Unit>(Channel.CONFLATED)
+    @Volatile private var chatDue = false
     private var knownWaiting = 0
     private var pendingCapture = false
     /** Set while this device deliberately leaves, so the Disconnected event is not shown as an error. */
@@ -263,11 +268,13 @@ class MainActivity : AppCompatActivity() {
         super.onStart()
         appVisible = true
         updateToolbar()
+        renderVideos() // resubscribe the shown cameras
     }
 
     override fun onStop() {
         appVisible = false
         updateToolbar()
+        renderVideos() // drops student camera subscriptions while hidden
         super.onStop()
     }
 
@@ -576,6 +583,13 @@ class MainActivity : AppCompatActivity() {
                     is RoomEvent.TrackMuted, is RoomEvent.TrackUnmuted,
                     is RoomEvent.ParticipantConnected, is RoomEvent.ParticipantDisconnected,
                     -> renderVideos()
+                    // Only the server sends these topics (participant == null).
+                    is RoomEvent.DataReceived -> if (event.participant == null) {
+                        when (event.topic) {
+                            STATE_TOPIC -> pollWake.trySend(Unit)
+                            CHAT_TOPIC -> { chatDue = true; pollWake.trySend(Unit) }
+                        }
+                    }
                     else -> Unit
                 }
             }
@@ -888,7 +902,7 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * Teacher camera, published like the web teacher's (source CAMERA, name
-     * "camera"): 720p30 capture, top layer 1.5 Mbps / 30 fps, simulcast layers
+     * "camera"): 720p capture, top layer 1.2 Mbps / 24 fps, simulcast layers
      * 180p (140 kbps, 15 fps) and 360p (500 kbps, 24 fps) as in TEACHER_CAMERA.
      */
     private suspend fun startCamera() {
@@ -899,7 +913,7 @@ class MainActivity : AppCompatActivity() {
         try {
             track = connected.localParticipant.createVideoTrack(
                 "camera",
-                LocalVideoTrackOptions(false, null, cameraPosition, VideoCaptureParameter(1280, 720, 30, true)),
+                LocalVideoTrackOptions(false, null, cameraPosition, VideoCaptureParameter(1280, 720, 24, true)),
                 null,
             )
             track.startCapture()
@@ -907,7 +921,7 @@ class MainActivity : AppCompatActivity() {
                 track,
                 VideoTrackPublishOptions(
                     name = "camera",
-                    videoEncoding = VideoEncoding(1_500_000, 30),
+                    videoEncoding = VideoEncoding(1_200_000, 24),
                     simulcast = true,
                     source = Track.Source.CAMERA,
                     simulcastLayers = listOf(
@@ -1241,6 +1255,8 @@ class MainActivity : AppCompatActivity() {
         rotationJob = lifecycleScope.launch {
             while (isActive) {
                 delay(8000)
+                // Nobody sees the tiles while the app is in the background.
+                if (!appVisible) continue
                 rotationOrder = ClassLogic.rotate(rotationOrder)
                 renderVideos()
             }
@@ -1281,7 +1297,8 @@ class MainActivity : AppCompatActivity() {
         // Subscribe only to the shown cameras, at the lowest layer.
         for ((id, _) in byIdentity) {
             val pub = cameraPub(id) ?: continue
-            val want = id in shown
+            // In the background (e.g. sharing another app) receive no student video.
+            val want = appVisible && id in shown
             try {
                 if (pub.subscribed != want) pub.setSubscribed(want)
                 if (want) pub.setVideoQuality(VideoQuality.LOW)
@@ -1538,11 +1555,18 @@ class MainActivity : AppCompatActivity() {
     private fun startPolling() {
         pollJob?.cancel()
         pollJob = lifecycleScope.launch {
+            var tick = 0
             while (isActive) {
+                // While LiveKit is connected the server pushes "state changed" and
+                // chat packets, so the HTTP poll is only a safety net.
+                val live = room?.state == Room.State.CONNECTED
                 try {
                     if (!refreshState()) return@launch
                     renderConnection()
-                    refreshChat()
+                    if (!live || chatDue || tick % 3 == 0) {
+                        chatDue = false
+                        refreshChat()
+                    }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: SessionEndedException) {
@@ -1557,7 +1581,8 @@ class MainActivity : AppCompatActivity() {
                     }
                     binding.classStatus.text = "Reconnecting to the server…"
                 }
-                delay(2000)
+                tick++
+                withTimeoutOrNull(if (live) LIVE_POLL_MS else FAST_POLL_MS) { pollWake.receive() }
             }
         }
     }
@@ -1683,6 +1708,12 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "ClassroomTeacher"
+        /** LiveKit data topics sent by the web server (see apps/web lib/pollPolicy.ts, Chat.tsx). */
+        private const val STATE_TOPIC = "cls-state"
+        private const val CHAT_TOPIC = "chat"
+        /** Safety-net poll while pushes can arrive / fast poll while they cannot. */
+        private const val LIVE_POLL_MS = 5000L
+        private const val FAST_POLL_MS = 2000L
         private const val PREFS = "classroom_teacher"
         private const val KEY_SERVER = "server"
         private const val KEY_EMAIL = "email"
