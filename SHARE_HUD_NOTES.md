@@ -106,3 +106,27 @@ Rule (`shareControlsPlacement()` in `src/lib/floatGeometry.ts`):
   ("Share this instead") closes the floating window too. "Pop out" is never offered
   during a monitor capture.
 - `selfBrowserSurface: 'exclude'`: the classroom tab itself is not offered in the picker.
+
+## Floating controls over an entire-screen share: blackout mask (Oct 2026, supersedes the rule above on Chrome/Edge)
+
+- The PiP controls now stay open during a monitor capture. The published track is not the
+  raw capture: `lib/screenMaskPipeline.ts` (MediaStreamTrackProcessor → OffscreenCanvas →
+  MediaStreamTrackGenerator) paints the PiP window's rectangle black in every frame.
+  Same 1080p15 + 720p simulcast publish; driven by capture frames, so it keeps running
+  while the classroom tab is in the background.
+- Mapping (`lib/screenMask.ts`, unit-tested): frame px = (window DIP − screen origin) ×
+  frame/screen size, +16 DIP margin, union of the window rects seen in the last 350 ms
+  (covers capture lag while dragging). Position is re-read on every frame.
+- Screens: single display (`screen.isExtended === false`) → primary at the origin. Several
+  displays → only with the Window Management permission already granted
+  (`getScreenDetails`); otherwise the PiP is closed before publishing and the in-tab dock
+  shows an "Allow" button for the next share. Screens whose aspect ratio does not match
+  the frame are not candidates; two identical monitors are both masked.
+- Unusable geometry mid-share (window size 0, no matching screen): that frame is fully
+  black and the PiP is closed. Firefox/Safari (no insertable streams): PiP-less, the
+  in-tab dock as before.
+- Controls open as a compact pill (Live dot + chat / hand / waiting badges, Admit, mic,
+  Stop); click to expand, ◂ to collapse; the PiP resizes to fit.
+- Teacher stage keeps the static card for monitor shares and Annotate stays off there:
+  drawing needs a live preview of the capture, and showing the capture on the captured
+  screen recurses regardless of the mask.

@@ -21,11 +21,16 @@ import { useFloatDrag, type FloatPos } from './FloatingPanel';
  *
  * Entire-screen ("monitor") capture records every window on that screen,
  * including an always-on-top PiP window and the popup; no getDisplayMedia hint
- * or Region Capture can exclude another window from a monitor capture. So in
- * that case the floating window is closed before the track is published and
- * the same controls render inline in the classroom tab instead
- * (`InlineShareDock`). Students only see them if the teacher puts the
- * classroom tab itself on the shared screen.
+ * or Region Capture can exclude another window from a monitor capture. So on
+ * Chrome/Edge the published track is processed first: the window's rectangle
+ * is painted black in every frame (lib/screenMaskPipeline.ts) and the PiP
+ * stays. Where that is impossible (no insertable streams, several monitors
+ * without the Window Management permission, unusable geometry) the window is
+ * closed before publishing and the same controls render in the classroom tab
+ * (`InlineShareDock`).
+ *
+ * Both start as a compact pill with badges (chat, hands, waiting) and expand
+ * to the full toolbar on click.
  */
 
 export type RosterEntry = {
@@ -63,6 +68,9 @@ export type TeacherShareHudProps = {
   annotateColor: string;
   onAnnotateColorChange: (color: string) => void;
   notice?: string;
+  /** Small pill with badges; expands to the full toolbar. */
+  compact?: boolean;
+  onCompactChange?: (compact: boolean) => void;
   /** Reason drawing is off (entire-screen share: no stage preview to draw on). */
   annotateUnavailable?: string;
   /** Render in the classroom page (monitor capture / no pop-out) instead of a portal. */
@@ -76,6 +84,10 @@ const TOOL_LABEL: Record<AnnotateMode, string> = {
   highlighter: 'Marker',
   eraser: 'Erase',
 };
+
+/** Compact pill window size (CSS px). Small so it covers little of the screen and of the mask. */
+const COMPACT_W = 250;
+const COMPACT_H = 44;
 
 const POPUP_FEATURES =
   'popup=yes,width=860,height=72,menubar=no,toolbar=no,location=no,status=no,resizable=yes';
@@ -246,7 +258,8 @@ export function beginShareControls(): Promise<ShareControlSurface | null> {
   if (pip) {
     let request: Promise<Window>;
     try {
-      request = pip.requestWindow({ width: 860, height: 64 });
+      // Opens as the compact pill; expanding resizes it (TeacherShareHud fit effect).
+      request = pip.requestWindow({ width: COMPACT_W, height: COMPACT_H });
     } catch {
       return openPopupSurface();
     }
@@ -298,6 +311,12 @@ background:var(--warn);color:#1a1206;font-size:9px;font-weight:800;display:inlin
 .tsh-chip-muted{color:#fcd34d;border-color:rgba(245,158,11,.4)}
 .tsh-chat{height:220px;min-height:160px}
 .tsh-admit{max-width:140px;overflow:hidden;text-overflow:ellipsis}
+.tsh-pill{gap:2px;padding:3px 4px}
+.tsh-pill-main{gap:5px;padding:0 6px}
+.tsh-dot{width:8px;height:8px;border-radius:999px;background:#ef4444;box-shadow:0 0 0 3px rgba(239,68,68,.25);flex:0 0 auto}
+.tsh-badge{display:inline-flex;align-items:center;gap:2px;height:18px;padding:0 5px;border-radius:999px;background:var(--warn);color:#1a1206;font-size:10px;font-weight:800}
+.tsh-badge-blue{background:var(--accent);color:#04122b}
+.tsh-expand{color:var(--dim);font-size:10px}
 .tsh-inline{width:auto;max-width:calc(100vw - 16px)}
 .tsh-inline .tsh-bar{flex-wrap:wrap;width:auto;min-width:0;position:static}
 .tsh-inline .tsh-panel{width:min(420px,calc(100vw - 16px));max-height:min(280px,45vh)}
@@ -332,6 +351,8 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     notice,
     inline = false,
     annotateUnavailable,
+    compact = false,
+    onCompactChange,
   } = props;
 
   // Turn drawing off if the share switched to the entire screen.
@@ -371,8 +392,8 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
       }
       const contentW = Math.max(barW, root.scrollWidth);
       const contentH = root.scrollHeight;
-      const width = Math.ceil(Math.min(980, Math.max(520, contentW + 8)));
-      const height = Math.ceil(Math.min(460, Math.max(48, contentH + 8)));
+      const width = Math.ceil(Math.min(980, Math.max(compact ? 120 : 520, contentW + 8)));
+      const height = Math.ceil(Math.min(460, Math.max(compact ? 36 : 48, contentH + 8)));
       if (bar) bar.style.maxWidth = contentW + 8 > 980 ? '972px' : '';
       const extraW = win.innerWidth > 0 ? Math.max(0, win.outerWidth - win.innerWidth) : 0;
       const extraH = win.innerHeight > 0 ? Math.max(0, win.outerHeight - win.innerHeight) : 0;
@@ -386,7 +407,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(fit) : null;
     ro?.observe(root);
     return () => ro?.disconnect();
-  }, [hostWindow, panel, annotateOn, waitingCount, notice, mode]);
+  }, [hostWindow, panel, annotateOn, waitingCount, notice, mode, compact]);
 
   const students = useMemo(() => admitted.filter((a) => a.role === 'STUDENT'), [admitted]);
   const hands = useMemo(() => students.filter((s) => s.handRaised), [students]);
@@ -410,7 +431,74 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
       <div className="tsh-sr" aria-live="polite">
         {waitingLabel}
       </div>
+      {compact ? (
+        <div className="tsh-bar tsh-pill" role="toolbar" aria-label="Share controls (compact)">
+          <button
+            type="button"
+            className="tsh-btn tsh-pill-main"
+            onClick={() => onCompactChange?.(false)}
+            title="Expand share controls"
+            aria-label={`Expand share controls${chatUnread ? `, ${chatUnread} new messages` : ''}${
+              hands.length ? `, ${hands.length} raised hands` : ''
+            }${waitingCount ? `, ${waitingCount} waiting` : ''}`}
+          >
+            <span className="tsh-dot" aria-hidden />
+            <span className="tsh-live">Live</span>
+            {chatUnread > 0 && (
+              <span className="tsh-badge tsh-badge-blue" title="New chat message">
+                <IconChat size={12} />
+                {chatUnread > 9 ? '9+' : chatUnread}
+              </span>
+            )}
+            {hands.length > 0 && (
+              <span className="tsh-badge" title="Raised hand">
+                <IconHand size={12} />
+                {hands.length}
+              </span>
+            )}
+            {waitingCount > 0 && (
+              <span className="tsh-badge" title="Waiting to be admitted">
+                <IconUsers size={12} />
+                {waitingCount}
+              </span>
+            )}
+            <span aria-hidden className="tsh-expand">▸</span>
+          </button>
+          {waiting.length > 0 && (
+            <button type="button" className="tsh-btn" onClick={() => onAdmit?.(waiting[0].id)} title={`Admit ${waiting[0].displayName}`}>
+              Admit
+            </button>
+          )}
+          <button
+            type="button"
+            className="tsh-btn"
+            aria-pressed={!teacherMicOn}
+            onClick={onToggleTeacherMic}
+            aria-label={teacherMicOn ? 'Mute mic' : 'Unmute mic'}
+            title={teacherMicOn ? 'Mute mic' : 'Unmute mic'}
+          >
+            {teacherMicOn ? <IconMic size={14} /> : <IconMicOff size={14} />}
+          </button>
+          <button type="button" className="tsh-btn tsh-btn-danger" onClick={onStopSharing} title="Stop sharing" aria-label="Stop sharing">
+            <IconScreen size={14} />
+          </button>
+        </div>
+      ) : (
       <div className="tsh-bar" role="toolbar" aria-label="Share tools">
+        {onCompactChange && (
+          <button
+            type="button"
+            className="tsh-btn"
+            onClick={() => {
+              setPanel(null);
+              onCompactChange(true);
+            }}
+            title="Collapse to the small pill"
+            aria-label="Collapse share controls"
+          >
+            ◂
+          </button>
+        )}
         <span className="tsh-live">Live</span>
         <button
           type="button"
@@ -539,9 +627,10 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
           Stop
         </button>
       </div>
-      {notice ? <div className="tsh-tip">{notice}</div> : null}
+      )}
+      {notice && !compact ? <div className="tsh-tip">{notice}</div> : null}
 
-      {panel === 'chat' && (
+      {!compact && panel === 'chat' && (
         <div className="tsh-panel">
           <div className="tsh-panel-head">
             <span className="tsh-panel-title">Chat</span>
@@ -553,7 +642,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
         </div>
       )}
 
-      {panel === 'hands' && (
+      {!compact && panel === 'hands' && (
         <div className="tsh-panel">
           <div className="tsh-panel-head">
             <span className="tsh-panel-title">Raised hands</span>
@@ -579,7 +668,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
         </div>
       )}
 
-      {panel === 'roster' && (
+      {!compact && panel === 'roster' && (
         <div className="tsh-panel">
           <div className="tsh-panel-head">
             <span className="tsh-panel-title">Roster</span>
@@ -662,15 +751,20 @@ export function InlineShareDock({
   children,
   hint,
   onPopOut,
+  compact = false,
+  action,
 }: {
   children: ReactNode;
   hint?: string;
+  compact?: boolean;
+  /** Extra header control (e.g. allow multi-monitor floating controls). */
+  action?: ReactNode;
   /** Re-open the floating window (only offered for window/tab captures). */
   onPopOut?: () => void;
 }) {
   const paneRef = useRef<HTMLDivElement | null>(null);
   const defaultPos = useCallback(
-    (): FloatPos => ({ x: Math.max(8, (window.innerWidth - 640) / 2), y: window.innerHeight - 190 }),
+    (): FloatPos => ({ x: Math.max(8, window.innerWidth - 300), y: window.innerHeight - 160 }),
     []
   );
   const { pos, handleProps } = useFloatDrag({ id: 'share_controls', paneRef, defaultPos });
@@ -684,7 +778,8 @@ export function InlineShareDock({
     >
       <div className="share-inline-head" {...handleProps} title="Drag to move">
         <span aria-hidden className="text-slate-500">⠿</span>
-        <span className="flex-1 truncate">Share controls</span>
+        <span className="flex-1 truncate">{compact ? '' : 'Share controls'}</span>
+        {action}
         {onPopOut && (
           <button type="button" className="share-inline-btn" onClick={onPopOut}>
             Pop out

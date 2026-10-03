@@ -39,6 +39,13 @@ import { LocalPreview } from './LocalPreview';
 import { ChatView, useChatThread } from './Chat';
 import { FloatingPanel, useFloatDrag, readFloatPref, writeFloatPref, type FloatPos } from './FloatingPanel';
 import { shareControlsPlacement, showLocalSharePreview } from '@/lib/floatGeometry';
+import { candidateScreens } from '@/lib/screenMask';
+import {
+  maskPipelineSupported,
+  resolveScreenGeometry,
+  startMaskPipeline,
+  type MaskPipeline,
+} from '@/lib/screenMaskPipeline';
 import { ScreenAnnotator, useScreenAnnotate, ANNOTATE_COLORS, type AnnotateMode } from './ScreenAnnotator';
 import {
   InlineShareDock,
@@ -479,7 +486,13 @@ function displaySurfaceOf(track: MediaStreamTrack | null | undefined): string {
 }
 
 const MONITOR_SHARE_HINT =
-  'You are sharing your entire screen, so the controls stay in this tab (a floating window would be captured and seen by students). Share a window or a tab instead to get floating controls.';
+  'You are sharing your entire screen, so the controls stay in this tab (this browser cannot hide a floating window from the capture). Use Chrome or Edge, or share a window or a tab, to get floating controls.';
+const MONITOR_SCREENS_HINT =
+  'Several monitors: the floating controls need the "Window management" permission to be hidden from students, so they stay in this tab for now. Allow it, then start the share again.';
+const MONITOR_UNSAFE_HINT =
+  'The floating controls were closed because their position on the shared screen could not be tracked. They are here in this tab instead.';
+
+type MaskFallback = '' | 'unsupported' | 'screens' | 'unsafe';
 
 function isSharePermissionError(err: unknown): boolean {
   const name = err && typeof err === 'object' && 'name' in err ? String((err as { name: unknown }).name) : '';
@@ -1890,6 +1903,16 @@ function RoomInner({
   /** What the teacher is capturing ('monitor' | 'window' | 'browser' | ''). */
   const [shareSurface, setShareSurface] = useState('');
   const shareSurfaceRef = useRef('');
+  /** Whole-screen share: blackout pipeline hiding the floating controls from the capture. */
+  const maskRef = useRef<MaskPipeline | null>(null);
+  /** The window the mask paints over (the attached PiP / pop-up). */
+  const maskWindowRef = useRef<Window | null>(null);
+  /** The raw capture track (the published one is the masked copy when maskRef is set). */
+  const rawShareRef = useRef<MediaStreamTrack | null>(null);
+  const [maskActive, setMaskActive] = useState(false);
+  const [maskFallback, setMaskFallback] = useState<MaskFallback>('');
+  /** Share controls start as the compact pill on every share. */
+  const [hudCompact, setHudCompact] = useState(true);
   const { state, refresh } = useRoomState(code, 2000);
   /** Student-camera cap chosen from the float, shown before the next poll confirms it. */
   const [sampleCap, setSampleCap] = useState<number | null>(null);
@@ -2160,6 +2183,17 @@ function RoomInner({
     setAnnotateOn(false);
     shareSurfaceRef.current = '';
     setShareSurface('');
+    maskWindowRef.current = null;
+    maskRef.current?.stop();
+    maskRef.current = null;
+    try {
+      rawShareRef.current?.stop();
+    } catch {
+      /* ignore */
+    }
+    rawShareRef.current = null;
+    setMaskActive(false);
+    setMaskFallback('');
   }, []);
 
   const attachShareSurface = useCallback((surface: ShareControlSurface | null) => {
@@ -2178,6 +2212,7 @@ function RoomInner({
       }
       closingShareRef.current = false;
     }
+    maskWindowRef.current = surface && !surface.window.closed ? surface.window : null;
     if (!surface || surface.window.closed) {
       setShareWindow(null);
       setShareMount(null);
@@ -2190,6 +2225,7 @@ function RoomInner({
       // The teacher closed the controls. The share keeps going; the page
       // offers a button to open the window again. Do not dock the bar back.
       if (closingShareRef.current) return;
+      maskWindowRef.current = null;
       shareWindowRef.current = null;
       shareCloseRef.current = null;
       setShareWindow(null);
@@ -2314,14 +2350,18 @@ function RoomInner({
 
   /** Re-open the controls window. Must run in the click, before any await. */
   const reopenShareControls = useCallback(() => {
-    // Never during an entire-screen capture: the window would be recorded.
-    if (shareControlsPlacement(shareSurfaceRef.current) === 'inline') {
+    // Entire-screen capture: only when the blackout mask is running, otherwise
+    // the window would be recorded.
+    const floatingOk = () =>
+      shareControlsPlacement(shareSurfaceRef.current) === 'floating' || !!maskRef.current;
+    if (!floatingOk()) {
       setHudNotice(MONITOR_SHARE_HINT);
       return;
     }
+    setHudCompact(true);
     const pending = beginShareControls();
     void pending.then((surface) => {
-      if (!shareWantedRef.current || shareControlsPlacement(shareSurfaceRef.current) === 'inline') {
+      if (!shareWantedRef.current || !floatingOk()) {
         surface?.close();
         return;
       }
@@ -2344,12 +2384,15 @@ function RoomInner({
     if (!isTeacher || !screenOn || !localParticipant) return;
     const check = () => {
       const pub = localParticipant.getTrackPublication(Track.Source.ScreenShare);
-      const kind = displaySurfaceOf(pub?.track?.mediaStreamTrack);
+      // The published track is the masked copy (no displaySurface) when masking.
+      const kind = displaySurfaceOf(rawShareRef.current ?? pub?.track?.mediaStreamTrack);
       if (!kind || kind === shareSurfaceRef.current) return;
       shareSurfaceRef.current = kind;
       setShareSurface(kind);
-      if (shareControlsPlacement(kind) === 'inline' && shareWindowRef.current) {
+      // Switched to the entire screen without a mask running: close the window.
+      if (shareControlsPlacement(kind) === 'inline' && shareWindowRef.current && !maskRef.current) {
         attachShareSurface(null);
+        setMaskFallback('unsupported');
       }
     };
     check();
@@ -2440,16 +2483,55 @@ function RoomInner({
     const surfaceKind = displaySurfaceOf(media);
     shareSurfaceRef.current = surfaceKind;
     setShareSurface(surfaceKind);
+    rawShareRef.current = media;
+    setHudCompact(true);
+    setMaskFallback('');
     let controlsReady: Promise<ShareControlSurface | null> = controlsPromise;
+    let mask: MaskPipeline | null = null;
     if (shareControlsPlacement(surfaceKind) === 'inline') {
+      // Entire screen: keep the floating controls only if every published
+      // frame can have the window painted black (Chrome/Edge insertable
+      // streams + known screen geometry). Otherwise close it now, before
+      // anything is published.
       const early = await controlsPromise.catch(() => null);
-      early?.close();
-      controlsReady = Promise.resolve(null);
+      let fallback: MaskFallback = '';
+      if (early) {
+        const { width: fw, height: fh } = media.getSettings();
+        const screens = maskPipelineSupported() ? await resolveScreenGeometry() : null;
+        if (!maskPipelineSupported()) fallback = 'unsupported';
+        else if (!screens) fallback = 'screens';
+        else if (!fw || !fh || !candidateScreens(screens, { width: fw, height: fh }).length) fallback = 'unsafe';
+        else {
+          maskWindowRef.current = early.window;
+          mask = startMaskPipeline(media, {
+            getWindow: () => maskWindowRef.current,
+            screens,
+            onUnsafe: () => {
+              // Frame already blacked out; drop the window for good.
+              maskWindowRef.current = null;
+              attachShareSurface(null);
+              setMaskFallback('unsafe');
+            },
+          });
+          if (!mask) fallback = 'unsupported';
+        }
+      }
+      if (mask) {
+        maskRef.current = mask;
+        setMaskActive(true);
+        controlsReady = Promise.resolve(early);
+        await mask.ready;
+      } else {
+        maskWindowRef.current = null;
+        early?.close();
+        controlsReady = Promise.resolve(null);
+        setMaskFallback(fallback || 'unsupported');
+      }
     }
 
     shareWantedRef.current = true;
     try {
-      const published = new LocalVideoTrack(media, undefined, true);
+      const published = new LocalVideoTrack(mask ? mask.track : media, undefined, true);
       const { width: capW, height: capH } = media.getSettings();
       const simulcast = SCREEN_SHARE.simulcast && screenShareSimulcastFor(capW, capH);
       const shareOpts = (layered: boolean) => ({
@@ -2481,6 +2563,11 @@ function RoomInner({
       } catch {
         /* ignore */
       }
+      mask?.stop();
+      maskRef.current = null;
+      maskWindowRef.current = null;
+      rawShareRef.current = null;
+      setMaskActive(false);
       const controls = await controlsReady.catch(() => null);
       controls?.close();
       shareSurfaceRef.current = '';
@@ -2492,10 +2579,11 @@ function RoomInner({
     }
 
     const controls = await controlsReady.catch(() => null);
-    // Switched to the entire screen while publishing: same rule.
-    if (controls && shareControlsPlacement(displaySurfaceOf(media)) === 'inline') {
+    // Switched to the entire screen while publishing, with no mask: same rule.
+    if (controls && !mask && shareControlsPlacement(displaySurfaceOf(media)) === 'inline') {
       controls.close();
       attachShareSurface(null);
+      setMaskFallback('unsupported');
     } else {
       attachShareSurface(controls);
     }
@@ -3230,15 +3318,35 @@ function RoomInner({
       {isTeacher && screenOn && (
         <ShareHudSlot
           floating={!!shareMount}
+          compact={hudCompact}
           popOut={
-            shareControlsPlacement(shareSurface) === 'inline' ? undefined : () => reopenShareControls()
+            shareControlsPlacement(shareSurface) === 'inline' && !maskActive
+              ? undefined
+              : () => reopenShareControls()
           }
-          hint={shareControlsPlacement(shareSurface) === 'inline' ? MONITOR_SHARE_HINT : undefined}
+          hint={
+            shareControlsPlacement(shareSurface) === 'inline' && !maskActive
+              ? maskFallback === 'screens'
+                ? MONITOR_SCREENS_HINT
+                : maskFallback === 'unsafe'
+                  ? MONITOR_UNSAFE_HINT
+                  : MONITOR_SHARE_HINT
+              : undefined
+          }
+          action={
+            maskFallback === 'screens' ? (
+              <button type="button" className="share-inline-btn" onClick={() => void requestScreenDetails()}>
+                Allow
+              </button>
+            ) : undefined
+          }
         >
           <TeacherShareHud
             host={shareMount}
             hostWindow={shareWindow}
             inline={!shareMount}
+            compact={hudCompact}
+            onCompactChange={setHudCompact}
             admitted={state?.admitted ?? []}
             waiting={(state?.waiting ?? []).map((w) => ({
               id: w.id,
@@ -3305,6 +3413,19 @@ function RoomInner({
 }
 
 /**
+ * Ask for the Window Management permission (multi-monitor screen positions),
+ * from a click. Used before the next whole-screen share.
+ */
+async function requestScreenDetails() {
+  const w = window as unknown as { getScreenDetails?: () => Promise<unknown> };
+  try {
+    await w.getScreenDetails?.();
+  } catch {
+    /* denied */
+  }
+}
+
+/**
  * Waiting students, pinned first in the teacher header (always visible, above
  * every floating panel, also while sharing). Admits directly; "Roster" opens
  * the full list.
@@ -3353,18 +3474,22 @@ function WaitingAdmitBar({
 /** Floating window → the HUD portals itself; otherwise wrap it in the in-page dock. */
 function ShareHudSlot({
   floating,
+  compact,
   popOut,
   hint,
+  action,
   children,
 }: {
   floating: boolean;
+  compact?: boolean;
   popOut?: () => void;
   hint?: string;
+  action?: ReactNode;
   children: ReactNode;
 }) {
   if (floating) return <>{children}</>;
   return (
-    <InlineShareDock onPopOut={popOut} hint={hint}>
+    <InlineShareDock onPopOut={popOut} hint={hint} compact={compact} action={action}>
       {children}
     </InlineShareDock>
   );
