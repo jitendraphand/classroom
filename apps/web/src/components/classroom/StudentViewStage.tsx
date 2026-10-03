@@ -8,10 +8,11 @@ import {
   VideoTrack,
 } from '@livekit/components-react';
 import { RoomEvent, Track, VideoQuality, type RemoteParticipant } from 'livekit-client';
-import { useEffect } from 'react';
+import { useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { IconScreen } from '@/components/ui/Icons';
 import { cn } from '@/lib/cn';
 import { isTeacherParticipant, TeacherScreenStage } from './ClassroomRoom';
+import { useFloatDrag } from './FloatingPanel';
 
 /**
  * What a student sees on the main stage, for someone who is *not* a student
@@ -95,9 +96,9 @@ export function StudentViewStage({
           {/* Read-only annotation layer only in the full observer view. */}
           <TeacherScreenStage teacherIdentities={[]} code={code} active={!compact} />
           {!compact && camera && (
-            <div className="absolute bottom-3 right-3 aspect-video w-40 overflow-hidden rounded-xl border border-white/15 bg-black shadow-lg sm:w-52">
-              <VideoTrack trackRef={camera} className="h-full w-full object-cover" />
-            </div>
+            <ObserverCameraFloat>
+              <VideoTrack trackRef={camera} className="pointer-events-none h-full w-full object-cover" />
+            </ObserverCameraFloat>
           )}
         </>
       ) : camera ? (
@@ -108,6 +109,24 @@ export function StudentViewStage({
           <p className={compact ? 'text-xs' : 'text-sm'}>{teacherHere ? 'Teacher camera off' : 'Waiting for teacher…'}</p>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Teacher camera over the observed share: drag it anywhere (mouse or touch). */
+function ObserverCameraFloat({ children }: { children: ReactNode }) {
+  const paneRef = useRef<HTMLDivElement | null>(null);
+  const defaultPos = useCallback(() => ({ x: window.innerWidth - 232, y: window.innerHeight - 150 }), []);
+  const { pos, handleProps } = useFloatDrag({ id: 'observer_teacher_cam', paneRef, defaultPos });
+  return (
+    <div
+      ref={paneRef}
+      {...handleProps}
+      title="Drag to move"
+      className="fixed z-[35] aspect-video w-40 overflow-hidden rounded-xl border border-white/15 bg-black shadow-lg sm:w-52"
+      style={pos ? { left: pos.x, top: pos.y } : { right: 12, bottom: 12 }}
+    >
+      {children}
     </div>
   );
 }

@@ -30,18 +30,18 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type PointerEvent as ReactPointerEvent,
   type ReactNode,
-  type RefObject,
 } from 'react';
 import { useRouter } from 'next/navigation';
 import { useRoomState, type RosterInfo } from '@/hooks/useRoomState';
 import { Controls } from './Controls';
 import { LocalPreview } from './LocalPreview';
 import { ChatView, useChatThread } from './Chat';
-import { FloatingPanel } from './FloatingPanel';
+import { FloatingPanel, useFloatDrag, readFloatPref, writeFloatPref, type FloatPos } from './FloatingPanel';
+import { shareControlsPlacement } from '@/lib/floatGeometry';
 import { ScreenAnnotator, useScreenAnnotate, ANNOTATE_COLORS, type AnnotateMode } from './ScreenAnnotator';
 import {
+  InlineShareDock,
   TeacherShareHud,
   beginShareControls,
   preopenShareControls,
@@ -386,139 +386,6 @@ export function TeacherScreenStage({
 }
 
 
-type FloatPos = { x: number; y: number };
-
-function clampFloatPos(
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  topReserve = 8,
-  bottomReserve = 108
-): FloatPos {
-  const margin = 8;
-  const maxX = Math.max(margin, window.innerWidth - w - margin);
-  const maxY = Math.max(topReserve, window.innerHeight - h - bottomReserve);
-  return {
-    x: Math.min(maxX, Math.max(margin, x)),
-    y: Math.min(maxY, Math.max(topReserve, y)),
-  };
-}
-
-function useDraggableFloat(
-  storageKey: string,
-  defaultPos: () => FloatPos,
-  sizeRef: RefObject<{ w: number; h: number }>,
-  topReserve = 8,
-  bottomReserve = 108
-) {
-  const [pos, setPos] = useState<FloatPos | null>(null);
-  const dragging = useRef(false);
-  const origin = useRef({ px: 0, py: 0, x: 0, y: 0 });
-
-  useEffect(() => {
-    try {
-      const raw = sessionStorage.getItem(storageKey);
-      if (raw) {
-        const parsed = JSON.parse(raw) as FloatPos;
-        if (typeof parsed.x === 'number' && typeof parsed.y === 'number') {
-          const sz = sizeRef.current || { w: 186, h: 105 };
-          setPos(clampFloatPos(parsed.x, parsed.y, sz.w, sz.h, topReserve, bottomReserve));
-          return;
-        }
-      }
-    } catch {
-      /* ignore */
-    }
-    setPos(defaultPos());
-  }, [storageKey, topReserve, bottomReserve]);
-
-  const reclamp = useCallback(() => {
-    setPos((prev) => {
-      if (!prev) return prev;
-      const sz = sizeRef.current || { w: 186, h: 105 };
-      const next = clampFloatPos(prev.x, prev.y, sz.w, sz.h, topReserve, bottomReserve);
-      if (next.x === prev.x && next.y === prev.y) return prev;
-      return next;
-    });
-  }, [sizeRef, topReserve, bottomReserve]);
-
-  useEffect(() => {
-    const onResize = () => {
-      reclamp();
-    };
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, [reclamp]);
-
-  const onPointerDown = useCallback(
-    (e: ReactPointerEvent) => {
-      if (e.button !== 0) return;
-      const target = e.target as HTMLElement;
-      if (target.closest('button, select, input, a')) return;
-      e.preventDefault();
-      e.stopPropagation();
-      const cur = pos || defaultPos();
-      dragging.current = true;
-      origin.current = { px: e.clientX, py: e.clientY, x: cur.x, y: cur.y };
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    },
-    [pos, defaultPos]
-  );
-
-  const onPointerMove = useCallback(
-    (e: ReactPointerEvent) => {
-      if (!dragging.current) return;
-      const dx = e.clientX - origin.current.px;
-      const dy = e.clientY - origin.current.py;
-      const sz = sizeRef.current || { w: 186, h: 105 };
-      const next = clampFloatPos(
-        origin.current.x + dx,
-        origin.current.y + dy,
-        sz.w,
-        sz.h,
-        topReserve,
-        bottomReserve
-      );
-      setPos(next);
-    },
-    [sizeRef, topReserve, bottomReserve]
-  );
-
-  const onPointerUp = useCallback(
-    (e: ReactPointerEvent) => {
-      if (!dragging.current) return;
-      dragging.current = false;
-      try {
-        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-      } catch {
-        /* ignore */
-      }
-      setPos((prev) => {
-        if (!prev) return prev;
-        try {
-          sessionStorage.setItem(storageKey, JSON.stringify(prev));
-        } catch {
-          /* ignore */
-        }
-        return prev;
-      });
-    },
-    [storageKey]
-  );
-
-  return {
-    pos,
-    reclamp,
-    dragHandlers: {
-      onPointerDown,
-      onPointerMove,
-      onPointerUp,
-      onPointerCancel: onPointerUp,
-    },
-  };
-}
-
 /**
  * One student tile as it appears today: the 16:9 video area of the students
  * float at its single-tile width (~372px pane → ~354×199 content).
@@ -562,6 +429,19 @@ function screenShareErrorMessage(err: unknown): string {
   return 'Could not start screen share. Try again, or use desktop Chrome, Edge, Firefox, or Safari.';
 }
 
+/** 'monitor' | 'window' | 'browser' | '' (browser does not report it). */
+function displaySurfaceOf(track: MediaStreamTrack | null | undefined): string {
+  if (!track) return '';
+  try {
+    return String((track.getSettings() as MediaTrackSettings & { displaySurface?: string }).displaySurface ?? '');
+  } catch {
+    return '';
+  }
+}
+
+const MONITOR_SHARE_HINT =
+  'You are sharing your entire screen, so the controls stay in this tab (a floating window would be captured and seen by students). Share a window or a tab instead to get floating controls.';
+
 function isSharePermissionError(err: unknown): boolean {
   const name = err && typeof err === 'object' && 'name' in err ? String((err as { name: unknown }).name) : '';
   return name === 'NotAllowedError' || name === 'AbortError';
@@ -582,7 +462,9 @@ function captureScreen(): Promise<MediaStream> {
   const withHints = {
     video: SCREEN_SHARE.capture,
     audio: false as const,
-    selfBrowserSurface: 'include',
+    // The classroom tab is never offered: sharing it would mirror the page
+    // (and any in-page share controls) back to the students.
+    selfBrowserSurface: 'exclude',
     surfaceSwitching: 'include',
     systemAudio: 'exclude',
     monitorTypeSurfaces: 'include',
@@ -667,7 +549,6 @@ function TeacherCameraFloat({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const selfVideoRef = useRef<HTMLVideoElement | null>(null);
   const paneRef = useRef<HTMLDivElement | null>(null);
-  const sizeRef = useRef({ w: 360, h: 160 });
   type SelfMode = 'show' | 'min' | 'off';
   const selfKey = `student_self_${roomCode.toUpperCase()}`;
   const paneKey = `student_media_min_${roomCode.toUpperCase()}`;
@@ -688,17 +569,12 @@ function TeacherCameraFloat({
     }
   });
 
-  const defaultPos = useCallback((): FloatPos => {
-    const w = sizeRef.current.w;
-    const h = sizeRef.current.h;
-    return clampFloatPos(window.innerWidth - w - 12, window.innerHeight - h - 100, w, h);
-  }, []);
-
-  const { pos, reclamp, dragHandlers } = useDraggableFloat(
-    `teacher_cam_pos_${roomCode.toUpperCase()}`,
-    defaultPos,
-    sizeRef
+  // Bottom-right by default (clamped above the control bar by the hook).
+  const defaultPos = useCallback(
+    (): FloatPos => ({ x: window.innerWidth - 372, y: window.innerHeight - 200 }),
+    []
   );
+  const { pos, handleProps } = useFloatDrag({ id: 'student_videos', paneRef, defaultPos });
 
   useEffect(() => {
     try {
@@ -715,19 +591,6 @@ function TeacherCameraFloat({
       /* ignore */
     }
   }, [paneKey, paneMin]);
-
-  useEffect(() => {
-    const el = paneRef.current;
-    if (!el) return;
-    const sync = () => {
-      sizeRef.current = { w: el.offsetWidth || 186, h: el.offsetHeight || 105 };
-      reclamp();
-    };
-    sync();
-    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null;
-    ro?.observe(el);
-    return () => ro?.disconnect();
-  }, [reclamp, paneMin, selfMode]);
 
   useEffect(() => {
     if (!room) return;
@@ -834,12 +697,10 @@ function TeacherCameraFloat({
       className="student-media-float"
       data-minimized={paneMin ? '1' : '0'}
       style={style}
-      aria-label="Videos — drag to move"
-      title="Drag to move"
-      {...dragHandlers}
+      aria-label="Videos — drag the top bar to move"
     >
       {paneMin ? (
-        <div className="student-media-restore">
+        <div className="student-media-restore" {...handleProps} title="Drag to move">
           <span>Videos</span>
           <button type="button" className="student-media-btn" onClick={() => setPaneMin(false)}>
             Show videos
@@ -847,8 +708,10 @@ function TeacherCameraFloat({
         </div>
       ) : (
         <>
-          <div className="student-media-head">
-            <span className="student-media-title">Videos</span>
+          <div className="student-media-head" {...handleProps} title="Drag to move">
+            <span className="student-media-title">
+              <span aria-hidden className="mr-1 text-white/40">⠿</span>Videos
+            </span>
             <span className="flex items-center gap-1">
               {selfMode === 'off' && (
                 <button type="button" className="student-media-btn" onClick={() => setSelfMode('show')}>
@@ -970,7 +833,13 @@ function TeacherPeersFloat({
       return false;
     }
   });
-  const docked = !!dock;
+  // Docked in the stage corner by default (the stage reserves its space).
+  // Dragging the header floats it anywhere; Dock / double-click re-docks.
+  const [floating, setFloating] = useState(() => readFloatPref('class_panel.floating') === '1');
+  useEffect(() => {
+    writeFloatPref('class_panel.floating', floating ? '1' : '0');
+  }, [floating]);
+  const docked = !!dock && !floating;
   const sharingDock = docked && sharing;
   // Minimized state during a share. Starts collapsed at every share; the
   // teacher's saved (non-share) minimized preference is untouched.
@@ -1001,18 +870,24 @@ function TeacherPeersFloat({
     : { w: layout.paneW, h: layout.paneH };
 
   const defaultPos = useCallback((): FloatPos => {
-    const w = sizeRef.current.w;
     const h = sizeRef.current.h;
-    return clampFloatPos(12, window.innerHeight - h - PEER_BOTTOM_RESERVE, w, h, PEER_TOP_RESERVE);
+    return { x: 12, y: Math.max(PEER_TOP_RESERVE, window.innerHeight - h - PEER_BOTTOM_RESERVE) };
   }, []);
 
-  const { pos, reclamp, dragHandlers } = useDraggableFloat(
-    `peers_float_pos_${roomCode.toUpperCase()}`,
+  const { pos, reclamp, moveTo, handleProps } = useFloatDrag({
+    id: 'class_panel',
+    paneRef,
     defaultPos,
-    sizeRef,
-    PEER_TOP_RESERVE,
-    PEER_BOTTOM_RESERVE
-  );
+    // Dragging the docked panel pulls it out to float (the hook starts the
+    // drag from where it is drawn, so it does not jump).
+    onDragStart: () => setFloating(true),
+  });
+  const dock_ = useCallback(() => setFloating(false), []);
+  const undock = useCallback(() => {
+    const r = paneRef.current?.getBoundingClientRect();
+    if (r) moveTo({ x: r.left + 24, y: r.top + 24 });
+    setFloating(true);
+  }, [moveTo]);
 
   useEffect(() => {
     try {
@@ -1246,7 +1121,7 @@ function TeacherPeersFloat({
   const cells: Array<string | null> = ['__self__'];
   for (let i = 0; i < slotCount - 1; i++) cells.push(peerIds[i] ?? null);
 
-  const style: CSSProperties = dock
+  const style: CSSProperties = docked && dock
     ? { left: dock.left + PEER_DOCK_MARGIN, top: dock.top + PEER_DOCK_MARGIN }
     : pos
       ? { left: pos.x, top: pos.y }
@@ -1266,14 +1141,33 @@ function TeacherPeersFloat({
       data-minimized={isMin ? '1' : '0'}
       data-docked={docked ? '1' : '0'}
       style={style}
-      aria-label={docked ? 'Class videos' : 'Class videos — drag to move'}
-      {...(docked ? {} : dragHandlers)}
+      aria-label="Class videos — drag the top bar to move"
     >
-      <div className="peers-float-header">
+      <div
+        className="peers-float-header"
+        {...handleProps}
+        onDoubleClick={(e) => {
+          if ((e.target as HTMLElement).closest('button')) return;
+          if (floating && dock) dock_();
+        }}
+        title={docked ? 'Drag to float this panel' : 'Drag to move · double-click to dock'}
+      >
         <span className="text-2xs font-semibold text-slate-200">
+          <span aria-hidden className="mr-1 text-slate-500">⠿</span>
           Class{isMin ? ` · ${peerIds.length + 1}` : ''}
         </span>
-        <div className="flex items-center gap-1" data-no-drag onPointerDown={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-1" data-no-drag>
+          {dock && (
+            <button
+              type="button"
+              className="rounded px-1.5 py-0.5 text-[10px] font-bold text-slate-300 hover:bg-white/10"
+              onClick={floating ? dock_ : undock}
+              aria-label={floating ? 'Dock class videos beside the stage' : 'Float class videos'}
+              title={floating ? 'Dock beside the stage' : 'Float (drag anywhere)'}
+            >
+              {floating ? 'Dock' : 'Float'}
+            </button>
+          )}
           {!isMin &&
             ([2, 4, 6] as const).map((n) => (
               <button
@@ -1954,6 +1848,9 @@ function RoomInner({
   const shareStartRef = useRef(false);
   const [shareMount, setShareMount] = useState<HTMLElement | null>(null);
   const [shareWindow, setShareWindow] = useState<Window | null>(null);
+  /** What the teacher is capturing ('monitor' | 'window' | 'browser' | ''). */
+  const [shareSurface, setShareSurface] = useState('');
+  const shareSurfaceRef = useRef('');
   const { state, refresh } = useRoomState(code, 2000);
   /** Student-camera cap chosen from the float, shown before the next poll confirms it. */
   const [sampleCap, setSampleCap] = useState<number | null>(null);
@@ -2222,6 +2119,8 @@ function RoomInner({
     setHudOpen(false);
     setHudNotice('');
     setAnnotateOn(false);
+    shareSurfaceRef.current = '';
+    setShareSurface('');
   }, []);
 
   const attachShareSurface = useCallback((surface: ShareControlSurface | null) => {
@@ -2376,15 +2275,20 @@ function RoomInner({
 
   /** Re-open the controls window. Must run in the click, before any await. */
   const reopenShareControls = useCallback(() => {
+    // Never during an entire-screen capture: the window would be recorded.
+    if (shareControlsPlacement(shareSurfaceRef.current) === 'inline') {
+      setHudNotice(MONITOR_SHARE_HINT);
+      return;
+    }
     const pending = beginShareControls();
     void pending.then((surface) => {
-      if (!shareWantedRef.current) {
+      if (!shareWantedRef.current || shareControlsPlacement(shareSurfaceRef.current) === 'inline') {
         surface?.close();
         return;
       }
       if (!surface) {
         setHudNotice(
-          'The browser blocked the share controls window. Allow pop-ups for this site, then try Open share controls again.'
+          'The browser blocked the share controls window. Allow pop-ups for this site, or use the controls in this tab.'
         );
         return;
       }
@@ -2392,6 +2296,27 @@ function RoomInner({
       setHudNotice('');
     });
   }, [attachShareSurface]);
+
+  // Chrome's "Share this instead" (surfaceSwitching) can move a running share
+  // from a window/tab to the entire screen. Watch the live track: once it
+  // reports 'monitor', close the floating window (it would now be captured)
+  // and fall back to the in-page controls.
+  useEffect(() => {
+    if (!isTeacher || !screenOn || !localParticipant) return;
+    const check = () => {
+      const pub = localParticipant.getTrackPublication(Track.Source.ScreenShare);
+      const kind = displaySurfaceOf(pub?.track?.mediaStreamTrack);
+      if (!kind || kind === shareSurfaceRef.current) return;
+      shareSurfaceRef.current = kind;
+      setShareSurface(kind);
+      if (shareControlsPlacement(kind) === 'inline' && shareWindowRef.current) {
+        attachShareSurface(null);
+      }
+    };
+    check();
+    const iv = window.setInterval(check, 1500);
+    return () => window.clearInterval(iv);
+  }, [isTeacher, screenOn, localParticipant, attachShareSurface]);
 
   /**
    * The click fires getDisplayMedia and the controls window in the same turn,
@@ -2469,6 +2394,20 @@ function RoomInner({
       /* Safari may reject the hint */
     }
 
+    // The controls window had to be opened in the click (user gesture), before
+    // we knew what the teacher would pick. An entire-screen capture would
+    // record it (PiP is always on top; the popup is a normal window), so close
+    // it now, before anything is published, and use the in-page controls.
+    const surfaceKind = displaySurfaceOf(media);
+    shareSurfaceRef.current = surfaceKind;
+    setShareSurface(surfaceKind);
+    let controlsReady: Promise<ShareControlSurface | null> = controlsPromise;
+    if (shareControlsPlacement(surfaceKind) === 'inline') {
+      const early = await controlsPromise.catch(() => null);
+      early?.close();
+      controlsReady = Promise.resolve(null);
+    }
+
     shareWantedRef.current = true;
     try {
       const published = new LocalVideoTrack(media, undefined, true);
@@ -2503,35 +2442,26 @@ function RoomInner({
       } catch {
         /* ignore */
       }
-      const controls = await controlsPromise.catch(() => null);
+      const controls = await controlsReady.catch(() => null);
       controls?.close();
+      shareSurfaceRef.current = '';
+      setShareSurface('');
       console.warn('screen share', e);
       setScreenOn(false);
       setHudNotice(screenShareErrorMessage(e));
       return;
     }
 
-    const controls = await controlsPromise.catch(() => null);
-    attachShareSurface(controls);
-    let surfaceKind = '';
-    try {
-      surfaceKind = String(
-        (media.getSettings() as MediaTrackSettings & { displaySurface?: string }).displaySurface ?? ''
-      );
-    } catch {
-      /* older browsers do not report displaySurface */
+    const controls = await controlsReady.catch(() => null);
+    // Switched to the entire screen while publishing: same rule.
+    if (controls && shareControlsPlacement(displaySurfaceOf(media)) === 'inline') {
+      controls.close();
+      attachShareSurface(null);
+    } else {
+      attachShareSurface(controls);
     }
-    if (!controls) {
-      setHudNotice(
-        'Screen is sharing, but the browser blocked the controls window. Allow pop-ups, then use Open share controls.'
-      );
-    } else if (controls.kind === 'popup' && surfaceKind === 'monitor') {
-      // A normal pop-up window is captured like any other window when the
-      // whole screen is shared, so students would see roster, chat and hands.
-      setHudNotice(
-        'You are sharing your entire screen, so students can see this controls window. Move it to another monitor, or share a window or tab instead.'
-      );
-    }
+    // No floating window: the controls render in this tab (InlineShareDock).
+    // The monitor case explains itself in the dock; nothing else to say here.
     setScreenOn(true);
     setChatOpen(false);
     setRosterOpen(false);
@@ -2845,7 +2775,7 @@ function RoomInner({
           camOn={camOn}
         />
 
-        <div className="stage-float-chrome">
+        <div className="stage-float-chrome" data-float-bound="bottom">
           <Controls
             {...controlsProps}
             variant="float"
@@ -2859,7 +2789,7 @@ function RoomInner({
 
         <FloatingPanel
           title="Chat"
-          storageKey={`student_chat_${code.toUpperCase()}`}
+          storageKey="student_chat"
           open={chatOpen}
           onClose={() => setChatOpen(false)}
           width={320}
@@ -2902,7 +2832,20 @@ function RoomInner({
       <RoomAudioRenderer />
 
       {/* Top bar */}
-      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/[0.06] bg-surface-1/80 px-3 py-2.5 backdrop-blur-xl sm:px-4">
+      {/* Above every floating panel (z-60 > floats 34–55) and marked as the top
+          bound, so panels are clamped below it and never cover Admit. */}
+      <header
+        data-float-bound="top"
+        className="relative z-[60] flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-b border-white/[0.06] bg-surface-1/95 px-3 py-2 backdrop-blur-xl sm:px-4 sm:py-2.5"
+      >
+        {isTeacher && waitingCount > 0 && (
+          <WaitingAdmitBar
+            waiting={state?.waiting ?? []}
+            onAdmit={(id) => void admitStudents([id])}
+            onAdmitAll={() => void admitStudents(undefined, true)}
+            onOpenRoster={screenOn ? undefined : () => setRosterOpen(true)}
+          />
+        )}
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone={isTeacher ? 'brand' : 'neutral'}>
@@ -2915,10 +2858,10 @@ function RoomInner({
               <Badge tone="neutral">Stage · Screen</Badge>
             )}
           </div>
-          <h1 className="mt-0.5 truncate font-display text-lg font-semibold tracking-tight sm:text-xl">
+          <h1 className="mt-0.5 truncate font-display text-base font-semibold tracking-tight sm:text-xl [@media(max-height:480px)]:text-sm">
             {state?.name || 'Classroom'}
           </h1>
-          <p className="truncate text-2xs text-slate-400 sm:text-xs">
+          <p className="truncate text-2xs text-slate-400 sm:text-xs [@media(max-height:480px)]:hidden">
             Code <span className="font-mono text-brand-300">{code}</span>
             {isTeacher ? (
               <>
@@ -2938,17 +2881,6 @@ function RoomInner({
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-          {isTeacher && waitingCount > 0 && !screenOn && (
-            <Button
-              variant="warning"
-              size="sm"
-              onClick={() => setRosterOpen(true)}
-              aria-label={`${waitingCount} waiting — open roster to admit`}
-            >
-              <IconUsers size={14} />
-              {waitingCount} waiting · Admit
-            </Button>
-          )}
           {isTeacher && (
             <>
               <Button
@@ -2968,12 +2900,6 @@ function RoomInner({
                 {inviteCopied === 'code' ? 'Copied!' : 'Copy code'}
               </Button>
             </>
-          )}
-          {isTeacher && screenOn && !shareMount && (
-            <Button variant="primary" size="sm" onClick={() => reopenShareControls()}>
-              <IconScreen size={14} />
-              Open share controls
-            </Button>
           )}
         </div>
       </header>
@@ -3060,7 +2986,7 @@ function RoomInner({
 
         <FloatingPanel
           title="Roster"
-          storageKey={`teacher_roster_${code.toUpperCase()}`}
+          storageKey="teacher_roster"
           open={rosterOpen && !screenOn}
           onClose={() => setRosterOpen(false)}
           width={320}
@@ -3075,6 +3001,40 @@ function RoomInner({
           }
         >
           <div className="flex h-full min-h-0 flex-col space-y-3 overflow-hidden">
+            {/* Waiting students first, so Admit is the first thing in the roster. */}
+            {waitingCount > 0 && (
+              <div className="shrink-0 rounded-xl border border-amber-400/30 bg-amber-500/10 p-2.5" data-no-drag>
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-2xs font-semibold uppercase tracking-wider text-amber-200">
+                    Waiting ({waitingCount})
+                  </h3>
+                  {waitingCount > 1 && (
+                    <Button size="sm" variant="warning" onClick={() => void admitStudents(undefined, true)}>
+                      Admit all
+                    </Button>
+                  )}
+                </div>
+                <ul className="mt-2 max-h-40 space-y-1.5 overflow-y-auto text-sm">
+                  {state!.waiting!.map((p) => (
+                    <li
+                      key={p.id}
+                      className="flex items-center justify-between gap-2 rounded-lg bg-black/15 px-2 py-1.5"
+                    >
+                      <div className="flex min-w-0 items-center gap-2">
+                        <Avatar name={p.displayName} size="sm" />
+                        <div className="min-w-0">
+                          <span className="block truncate">{p.displayName}</span>
+                          <RosterMeta info={p} />
+                        </div>
+                      </div>
+                      <Button size="sm" variant="warning" onClick={() => void admitStudents([p.id])}>
+                        Admit
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <div className="flex shrink-0 flex-wrap gap-2" data-no-drag>
               <Button size="sm" variant="warning" onClick={() => muteAllStudents(true)}>
                 Mute all
@@ -3180,60 +3140,12 @@ function RoomInner({
                   );
                 })}
             </ul>
-            {waitingCount > 0 && (
-              <div className="shrink-0 border-t border-white/5 pt-3" data-no-drag>
-                <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-2xs font-semibold uppercase tracking-wider text-slate-400">
-                    Waiting ({waitingCount})
-                  </h3>
-                  {waitingCount > 1 && (
-                    <button
-                      type="button"
-                      className="text-xs font-semibold text-brand-300 hover:underline"
-                      onClick={() => void admitStudents(undefined, true)}
-                    >
-                      Admit all
-                    </button>
-                  )}
-                </div>
-                <ul className="mt-2 max-h-32 space-y-1.5 overflow-y-auto text-sm">
-                  {state!.waiting!.map((p) => (
-                    <li
-                      key={p.id}
-                      className="flex items-center justify-between gap-2 rounded-lg bg-black/15 px-2 py-1.5"
-                    >
-                      <div className="flex min-w-0 items-center gap-2">
-                        <Avatar name={p.displayName} size="sm" />
-                        <div className="min-w-0">
-                          <span className="block truncate">{p.displayName}</span>
-                          <RosterMeta info={p} />
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        className="shrink-0 text-xs font-semibold text-brand-300 hover:underline"
-                        onClick={async () => {
-                          await roomFetch(code, '/admit', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ participantIds: [p.id] }),
-                          });
-                          refresh();
-                        }}
-                      >
-                        Admit
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
           </div>
         </FloatingPanel>
 
         <FloatingPanel
           title="Chat"
-          storageKey={`teacher_chat_${code.toUpperCase()}`}
+          storageKey="teacher_chat"
           open={chatOpen && !screenOn}
           onClose={() => setChatOpen(false)}
           width={320}
@@ -3271,49 +3183,60 @@ function RoomInner({
         onDockSpace={onDockSpace}
       />
 
-      {/* Controls render only inside the pop-out. Nothing is painted here. */}
-      {isTeacher && shareMount && (
-        <TeacherShareHud
-          host={shareMount}
-          hostWindow={shareWindow}
-          admitted={state?.admitted ?? []}
-          waiting={(state?.waiting ?? []).map((w) => ({
-            id: w.id,
-            displayName: rosterLabel(w),
-            role: 'STUDENT',
-          }))}
-          waitingCount={waitingCount}
-          onAdmit={(id) => void admitStudents([id])}
-          onAdmitAll={() => void admitStudents(undefined, true)}
-          teacherMicOn={micOn && !effectiveMuted}
-          onToggleTeacherMic={() => setMicOn((v) => !v)}
-          onStopSharing={() => void toggleScreen()}
-          onMuteStudent={(id, muted) => void muteStudent(id, muted)}
-          onMuteAll={(muted) => void muteAllStudents(muted)}
-          onLowerHand={(id) => void lowerHand(id)}
-          chatUnread={chatUnread}
-          onChatOpenChange={setHudChatOpen}
-          chat={
-            <ChatView
-              thread={chatThread}
-              isTeacher
-              myParticipantId={myParticipantId}
-              students={chatStudents}
-            />
+      {/* Share controls: in the floating window for window/tab captures; in
+          this tab (draggable dock) for entire-screen captures or when no
+          window could be opened. Never both. */}
+      {isTeacher && screenOn && (
+        <ShareHudSlot
+          floating={!!shareMount}
+          popOut={
+            shareControlsPlacement(shareSurface) === 'inline' ? undefined : () => reopenShareControls()
           }
-          annotate={annotate}
-          annotateOn={annotateOn}
-          onAnnotateOnChange={setAnnotateOn}
-          annotateMode={annotateMode}
-          onAnnotateModeChange={setAnnotateMode}
-          annotateColor={annotateColor}
-          onAnnotateColorChange={setAnnotateColor}
-          notice={hudNotice || undefined}
-        />
+          hint={shareControlsPlacement(shareSurface) === 'inline' ? MONITOR_SHARE_HINT : undefined}
+        >
+          <TeacherShareHud
+            host={shareMount}
+            hostWindow={shareWindow}
+            inline={!shareMount}
+            admitted={state?.admitted ?? []}
+            waiting={(state?.waiting ?? []).map((w) => ({
+              id: w.id,
+              displayName: rosterLabel(w),
+              role: 'STUDENT',
+            }))}
+            waitingCount={waitingCount}
+            onAdmit={(id) => void admitStudents([id])}
+            onAdmitAll={() => void admitStudents(undefined, true)}
+            teacherMicOn={micOn && !effectiveMuted}
+            onToggleTeacherMic={() => setMicOn((v) => !v)}
+            onStopSharing={() => void toggleScreen()}
+            onMuteStudent={(id, muted) => void muteStudent(id, muted)}
+            onMuteAll={(muted) => void muteAllStudents(muted)}
+            onLowerHand={(id) => void lowerHand(id)}
+            chatUnread={chatUnread}
+            onChatOpenChange={setHudChatOpen}
+            chat={
+              <ChatView
+                thread={chatThread}
+                isTeacher
+                myParticipantId={myParticipantId}
+                students={chatStudents}
+              />
+            }
+            annotate={annotate}
+            annotateOn={annotateOn}
+            onAnnotateOnChange={setAnnotateOn}
+            annotateMode={annotateMode}
+            onAnnotateModeChange={setAnnotateMode}
+            annotateColor={annotateColor}
+            onAnnotateColorChange={setAnnotateColor}
+            notice={shareMount ? hudNotice || undefined : undefined}
+          />
+        </ShareHudSlot>
       )}
 
       {/* Bottom dock — never covers content */}
-      <footer className="shrink-0 border-t border-white/[0.06] bg-surface-1/90 px-3 py-2.5 backdrop-blur-xl sm:px-4">
+      <footer data-float-bound="bottom" className="shrink-0 border-t border-white/[0.06] bg-surface-1/90 px-3 py-2.5 backdrop-blur-xl sm:px-4">
         <Controls
           {...controlsProps}
           onPrepareScreenShare={() => {
@@ -3332,6 +3255,72 @@ function RoomInner({
         />
       </footer>
     </div>
+  );
+}
+
+/**
+ * Waiting students, pinned first in the teacher header (always visible, above
+ * every floating panel, also while sharing). Admits directly; "Roster" opens
+ * the full list.
+ */
+function WaitingAdmitBar({
+  waiting,
+  onAdmit,
+  onAdmitAll,
+  onOpenRoster,
+}: {
+  waiting: Array<{ id: string; displayName: string } & RosterInfo>;
+  onAdmit: (id: string) => void;
+  onAdmitAll: () => void;
+  onOpenRoster?: () => void;
+}) {
+  const first = waiting[0];
+  if (!first) return null;
+  const n = waiting.length;
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="order-first flex w-full min-w-0 items-center gap-1.5 rounded-xl border border-amber-400/40 bg-amber-500/15 px-2 py-1 text-xs text-amber-50"
+    >
+      <IconUsers size={14} className="shrink-0 text-amber-300" />
+      <span className="min-w-0 flex-1 truncate font-semibold">
+        {n === 1 ? `${first.displayName} is waiting` : `${n} students waiting`}
+      </span>
+      <Button variant="warning" size="sm" onClick={() => onAdmit(first.id)} title={`Admit ${rosterLabel(first)}`}>
+        {n === 1 ? 'Admit' : `Admit ${first.displayName.split(' ')[0]}`}
+      </Button>
+      {n > 1 && (
+        <Button variant="warning" size="sm" onClick={onAdmitAll}>
+          Admit all ({n})
+        </Button>
+      )}
+      {onOpenRoster && (
+        <Button variant="ghost" size="sm" onClick={onOpenRoster} aria-label="Open roster">
+          Roster
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/** Floating window → the HUD portals itself; otherwise wrap it in the in-page dock. */
+function ShareHudSlot({
+  floating,
+  popOut,
+  hint,
+  children,
+}: {
+  floating: boolean;
+  popOut?: () => void;
+  hint?: string;
+  children: ReactNode;
+}) {
+  if (floating) return <>{children}</>;
+  return (
+    <InlineShareDock onPopOut={popOut} hint={hint}>
+      {children}
+    </InlineShareDock>
   );
 }
 

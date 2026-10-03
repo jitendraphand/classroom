@@ -248,13 +248,23 @@ body {
   }
 
   /* Student stage: teacher camera and the student's own preview, side by side. */
+  /* Floating panes are position: fixed so viewport coordinates from the drag
+     hook (useFloatDrag) map 1:1 and a stage with overflow:hidden cannot clip
+     them. Only the header ([data-drag-handle]) drags; bodies scroll normally. */
   .student-media-float {
-    @apply absolute z-[35] w-max max-w-[calc(100vw-16px)] overflow-hidden rounded-2xl border border-white/20 bg-black/80 shadow-lift backdrop-blur-md;
+    @apply fixed z-[35] w-max max-w-[calc(100vw-16px)] overflow-hidden rounded-2xl border border-white/20 bg-black/80 shadow-lift backdrop-blur-md;
+  }
+  [data-drag-handle] {
     touch-action: none;
     cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
   }
-  .student-media-float:active {
+  [data-drag-handle]:active {
     cursor: grabbing;
+  }
+  [data-drag-handle] button {
+    cursor: pointer;
   }
   .student-media-float[data-minimized='1'] {
     width: auto;
@@ -294,25 +304,17 @@ body {
   /* Pane width/height are set inline for the selected slot count.
      Orientation lives here so 6 cannot flip into 3 columns. */
   .peers-float-pane {
-    @apply absolute z-[34] overflow-hidden rounded-2xl border border-white/20 bg-surface-1/95 shadow-lift backdrop-blur-xl;
-    touch-action: none;
-    cursor: grab;
+    @apply fixed z-[34] overflow-hidden rounded-2xl border border-white/20 bg-surface-1/95 shadow-lift backdrop-blur-xl;
   }
   .peers-float-pane[data-minimized='1'] {
     width: auto !important;
     min-width: 140px;
     height: auto !important;
   }
-  .peers-float-pane:active {
-    cursor: grabbing;
-  }
-  /* Docked beside the shared screen: fixed in the stage corner, not draggable. */
-  .peers-float-pane[data-docked='1'],
-  .peers-float-pane[data-docked='1'] .peers-float-header {
-    cursor: default;
-  }
+  /* Docked in the stage corner by default; dragging the header floats it,
+     double-click the header (or the Dock button) docks it again. */
   .peers-float-header {
-    @apply flex cursor-grab items-center justify-between gap-2 border-b border-white/10 bg-black/40 px-2 py-1.5;
+    @apply flex items-center justify-between gap-2 border-b border-white/10 bg-black/40 px-2 py-1.5;
   }
   .peers-float-grid {
     @apply grid gap-1.5 p-2;
@@ -336,19 +338,14 @@ body {
   }
 
   .float-panel {
-    @apply absolute z-[45] flex flex-col overflow-hidden rounded-2xl border border-white/15 bg-surface-1/95 shadow-lift backdrop-blur-xl;
-    touch-action: none;
-    cursor: grab;
+    @apply fixed z-[45] flex flex-col overflow-hidden rounded-2xl border border-white/15 bg-surface-1/95 shadow-lift backdrop-blur-xl;
     max-width: calc(100vw - 16px);
-  }
-  .float-panel:active {
-    cursor: grabbing;
   }
   .float-panel-minimized {
     @apply h-auto;
   }
   .float-panel-header {
-    @apply flex cursor-grab items-center justify-between gap-2 border-b border-white/10 bg-black/40 px-2.5 py-1.5;
+    @apply flex items-center justify-between gap-2 border-b border-white/10 bg-black/40 px-2.5 py-1.5;
   }
   .float-panel-body {
     @apply flex min-h-0 flex-1 flex-col overflow-hidden p-2.5;
@@ -451,4 +448,47 @@ body {
 .light-landing .landing-btn-secondary:hover {
   border-color: #cbd5e1;
   background: #f8fafc;
+}
+
+/* In-page share controls (entire-screen capture, or no pop-out window). */
+.share-inline-dock {
+  position: fixed;
+  z-index: 55;
+  max-width: calc(100vw - 16px);
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: #0d1219;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.share-inline-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #cbd5e1;
+  background: rgba(0, 0, 0, 0.4);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.share-inline-btn {
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+.share-inline-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.share-inline-hint {
+  margin: 0;
+  max-width: 640px;
+  padding: 4px 8px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.12);
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Avatar } from '@/components/ui/Avatar';
 import {
@@ -9,13 +9,23 @@ import {
   type AnnotateMode,
 } from './ScreenAnnotator';
 import { IconChat, IconHand, IconMic, IconMicOff, IconScreen, IconUsers } from '@/components/ui/Icons';
+import { useFloatDrag, type FloatPos } from './FloatingPanel';
 
 /**
- * Teacher share controls. They render only inside a separate window (Document
- * Picture-in-Picture where the browser has it, otherwise a same-origin popup).
- * They are never painted in the classroom page, so a tab or window capture
- * does not show them to students. Chromium also leaves the Picture-in-Picture
- * window out of the capture.
+ * Teacher share controls.
+ *
+ * Window or tab capture: the controls float in a separate always-on-top window
+ * (Document Picture-in-Picture where the browser has it, otherwise a
+ * same-origin popup). That window is not part of the captured surface, so
+ * students never see it.
+ *
+ * Entire-screen ("monitor") capture records every window on that screen,
+ * including an always-on-top PiP window and the popup; no getDisplayMedia hint
+ * or Region Capture can exclude another window from a monitor capture. So in
+ * that case the floating window is closed before the track is published and
+ * the same controls render inline in the classroom tab instead
+ * (`InlineShareDock`). Students only see them if the teacher puts the
+ * classroom tab itself on the shared screen.
  */
 
 export type RosterEntry = {
@@ -53,6 +63,8 @@ export type TeacherShareHudProps = {
   annotateColor: string;
   onAnnotateColorChange: (color: string) => void;
   notice?: string;
+  /** Render in the classroom page (monitor capture / no pop-out) instead of a portal. */
+  inline?: boolean;
 };
 
 type Panel = 'chat' | 'hands' | 'roster' | null;
@@ -284,6 +296,10 @@ background:var(--warn);color:#1a1206;font-size:9px;font-weight:800;display:inlin
 .tsh-chip-muted{color:#fcd34d;border-color:rgba(245,158,11,.4)}
 .tsh-chat{height:220px;min-height:160px}
 .tsh-admit{max-width:140px;overflow:hidden;text-overflow:ellipsis}
+.tsh-inline{width:auto;max-width:calc(100vw - 16px)}
+.tsh-inline .tsh-bar{flex-wrap:wrap;width:auto;min-width:0;position:static}
+.tsh-inline .tsh-panel{width:min(420px,calc(100vw - 16px));max-height:min(280px,45vh)}
+.tsh-inline .tsh-chat{height:min(220px,35vh)}
 `;
 
 export function TeacherShareHud(props: TeacherShareHudProps) {
@@ -312,6 +328,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     annotateColor: color,
     onAnnotateColorChange: setColor,
     notice,
+    inline = false,
   } = props;
 
   const [panel, setPanel] = useState<Panel>(null);
@@ -370,7 +387,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     setPanel((cur) => (cur === next ? null : next));
   };
 
-  if (!host) return null;
+  if (!host && !inline) return null;
 
   const waitingLabel =
     waitingCount === 1
@@ -380,7 +397,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
         : '';
 
   const tree = (
-    <div ref={rootRef} className="tsh" role="region" aria-label="Share controls">
+    <div ref={rootRef} className={inline ? 'tsh tsh-inline' : 'tsh'} role="region" aria-label="Share controls">
       <style>{HUD_CSS}</style>
       <div className="tsh-sr" aria-live="polite">
         {waitingLabel}
@@ -434,8 +451,20 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
           <button
             type="button"
             className="tsh-btn"
+            onClick={annotate.undo}
+            disabled={!annotate.strokes.length}
+            title="Undo your last stroke"
+          >
+            Undo
+          </button>
+        )}
+        {annotateOn && (
+          <button
+            type="button"
+            className="tsh-btn"
             onClick={annotate.clear}
             disabled={!annotate.strokes.length}
+            title="Clear all drawings for everyone"
           >
             Clear
           </button>
@@ -610,5 +639,51 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     </div>
   );
 
+  if (inline || !host) return tree;
   return createPortal(tree, host);
+}
+
+/**
+ * In-page home for the share controls when no floating window may be used
+ * (entire-screen capture) or none could be opened (pop-up blocked, teacher
+ * closed it). Draggable by its grip, remembered across shares, and kept on
+ * screen on resize / rotation.
+ */
+export function InlineShareDock({
+  children,
+  hint,
+  onPopOut,
+}: {
+  children: ReactNode;
+  hint?: string;
+  /** Re-open the floating window (only offered for window/tab captures). */
+  onPopOut?: () => void;
+}) {
+  const paneRef = useRef<HTMLDivElement | null>(null);
+  const defaultPos = useCallback(
+    (): FloatPos => ({ x: Math.max(8, (window.innerWidth - 640) / 2), y: window.innerHeight - 190 }),
+    []
+  );
+  const { pos, handleProps } = useFloatDrag({ id: 'share_controls', paneRef, defaultPos });
+  return (
+    <div
+      ref={paneRef}
+      className="share-inline-dock"
+      style={pos ? { left: pos.x, top: pos.y } : { left: 8, bottom: 96 }}
+      role="region"
+      aria-label="Share controls (in this tab)"
+    >
+      <div className="share-inline-head" {...handleProps} title="Drag to move">
+        <span aria-hidden className="text-slate-500">⠿</span>
+        <span className="flex-1 truncate">Share controls</span>
+        {onPopOut && (
+          <button type="button" className="share-inline-btn" onClick={onPopOut}>
+            Pop out
+          </button>
+        )}
+      </div>
+      {children}
+      {hint ? <p className="share-inline-hint">{hint}</p> : null}
+    </div>
+  );
 }

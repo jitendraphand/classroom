@@ -11,6 +11,7 @@ import {
 import { useRoomContext } from '@livekit/components-react';
 import { RoomEvent } from 'livekit-client';
 import { roomFetch } from '@/lib/classroomClient';
+import { fitSnapshot, mergeSnapshot, quantize, strokeHit } from '@/lib/annotateGeometry';
 
 /**
  * Screen-share annotation layer.
@@ -66,6 +67,7 @@ type AnnotateMsg =
   | { v: 1; type: 'end'; id: string; from: string }
   | { v: 1; type: 'erase'; ids: string[]; from: string }
   | { v: 1; type: 'clear'; from: string }
+  | { v: 1; type: 'undo'; id: string; from: string }
   | { v: 1; type: 'snapshot'; strokes: AnnotateStroke[]; from: string };
 
 export const ANNOTATE_COLORS = ['#ef4444', '#22c55e', '#f59e0b', '#3b82f6', '#ffffff'];
@@ -127,6 +129,19 @@ function measureContent(
   };
 }
 
+/**
+ * Durable copy for late joiners. Trimmed to the server's size cap first: an
+ * oversized body used to be rejected (413) silently, so after a few scribbles
+ * nobody who joined late or reconnected saw any annotations.
+ */
+function putSnapshot(code: string, strokes: AnnotateStroke[]) {
+  return roomFetch(code, '/annotate', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ strokes: fitSnapshot(strokes) }),
+  }).catch(() => undefined);
+}
+
 export type ScreenAnnotateApi = {
   strokes: AnnotateStroke[];
   /** Begin a stroke at a normalised point. */
@@ -139,6 +154,8 @@ export type ScreenAnnotateApi = {
   eraseAt: (p: AnnotatePoint) => void;
   /** Wipe the layer for everyone. */
   clear: () => void;
+  /** Remove the teacher's most recent stroke for everyone. */
+  undo: () => void;
 };
 
 /**
@@ -168,11 +185,12 @@ export function useScreenAnnotate(opts: {
   const pointBuf = useRef<{ id: string; pts: AnnotatePoint[] } | null>(null);
   const pointTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadedRef = useRef(false);
-  /** Bumps on every local or remote edit so a slow Redis read cannot wipe newer strokes. */
-  const revision = useRef(0);
+  /** Ids of strokes this client drew, newest last (for undo). */
+  const ownIds = useRef<string[]>([]);
+  /** Ids erased/undone/cleared this session, so a slow snapshot read cannot resurrect them. */
+  const erasedRef = useRef<Set<string>>(new Set());
 
   const commit = useCallback((next: AnnotateStroke[]) => {
-    revision.current += 1;
     const capped = next.length > MAX_STROKES ? next.slice(next.length - MAX_STROKES) : next;
     strokesRef.current = capped;
     setStrokes(capped);
@@ -209,7 +227,6 @@ export function useScreenAnnotate(opts: {
 
   // Late joiners / reconnects pull the durable snapshot.
   const loadSnapshot = useCallback(async () => {
-    const seen = revision.current;
     try {
       const res = await roomFetch(code, '/annotate');
       if (!res.ok) return;
@@ -220,8 +237,10 @@ export function useScreenAnnotate(opts: {
         : raw && typeof raw === 'object' && Array.isArray(raw.strokes)
           ? raw.strokes
           : null;
-      if (!list || seen !== revision.current) return;
-      commit(list as AnnotateStroke[]);
+      if (!list) return;
+      // Merge rather than replace: live packets that arrived while this read
+      // was in flight are kept, and so is everything drawn before we joined.
+      commit(mergeSnapshot(list as AnnotateStroke[], strokesRef.current, erasedRef.current));
     } catch {
       /* ignore */
     } finally {
@@ -232,6 +251,10 @@ export function useScreenAnnotate(opts: {
   useEffect(() => {
     if (!active) return;
     void loadSnapshot();
+    // The teacher re-saves the snapshot when we connect; read it once more so a
+    // join that raced the first read still catches up (merge makes it idempotent).
+    const t = window.setTimeout(() => void loadSnapshot(), 2500);
+    return () => window.clearTimeout(t);
   }, [active, loadSnapshot]);
 
   useEffect(() => {
@@ -292,8 +315,13 @@ export function useScreenAnnotate(opts: {
           // arrived ahead of this message.
         } else if (msg.type === 'erase') {
           const drop = new Set(msg.ids);
+          for (const id of drop) erasedRef.current.add(id);
           commit(strokesRef.current.filter((s) => !drop.has(s.id)));
+        } else if (msg.type === 'undo') {
+          erasedRef.current.add(msg.id);
+          commit(strokesRef.current.filter((s) => s.id !== msg.id));
         } else if (msg.type === 'clear') {
+          for (const st of strokesRef.current) erasedRef.current.add(st.id);
           commit([]);
         }
       } catch {
@@ -312,11 +340,7 @@ export function useScreenAnnotate(opts: {
         clearTimeout(saveTimer.current);
         saveTimer.current = null;
       }
-      void roomFetch(code, '/annotate', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ strokes: next }),
-      }).catch(() => undefined);
+      void putSnapshot(code, next);
     },
     [code]
   );
@@ -326,11 +350,7 @@ export function useScreenAnnotate(opts: {
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => {
         saveTimer.current = null;
-        void roomFetch(code, '/annotate', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ strokes: next }),
-        }).catch(() => undefined);
+        void putSnapshot(code, next);
       }, PERSIST_DEBOUNCE_MS);
     },
     [code]
@@ -367,7 +387,7 @@ export function useScreenAnnotate(opts: {
     (p: AnnotatePoint, tool: AnnotateTool, color: string) => {
       if (!active || !canDraw) return;
       flushPoints();
-      const point: AnnotatePoint = [clamp01(p[0]), clamp01(p[1])];
+      const point: AnnotatePoint = quantize(p);
       const stroke: AnnotateStroke = {
         id: uid(),
         tool,
@@ -376,6 +396,7 @@ export function useScreenAnnotate(opts: {
         points: [point],
       };
       draftRef.current = stroke;
+      ownIds.current.push(stroke.id);
       commit([...strokesRef.current, stroke]);
       void publish({ v: 1, type: 'begin', stroke, from: sender() });
     },
@@ -387,7 +408,10 @@ export function useScreenAnnotate(opts: {
       const draft = draftRef.current;
       if (!draft || !active || !canDraw) return;
       if (draft.points.length >= MAX_POINTS_PER_STROKE) return;
-      const point: AnnotatePoint = [clamp01(p[0]), clamp01(p[1])];
+      const point: AnnotatePoint = quantize(p);
+      const last = draft.points[draft.points.length - 1];
+      // Identical consecutive points only bloat packets and the snapshot.
+      if (last && last[0] === point[0] && last[1] === point[1]) return;
       // Replace with a fresh object so React sees the new point.
       const updated: AnnotateStroke = { ...draft, points: [...draft.points, point] };
       draftRef.current = updated;
@@ -428,18 +452,16 @@ export function useScreenAnnotate(opts: {
     (p: AnnotatePoint) => {
       if (!active || !canDraw) return;
       const point: AnnotatePoint = [clamp01(p[0]), clamp01(p[1])];
-      // Hit-test in normalised space. A generous radius scaled by stroke width
-      // keeps the eraser usable at any pen size.
+      // Hit-test every segment (not just the vertices) in normalised space. A
+      // generous radius scaled by stroke width keeps the eraser usable at any size.
       const hit: string[] = [];
       const kept = strokesRef.current.filter((s) => {
-        const tol = Math.max(0.012, s.width / 900);
-        const near = s.points.some(
-          (q) => Math.abs(q[0] - point[0]) <= tol && Math.abs(q[1] - point[1]) <= tol
-        );
+        const near = s.id !== draftRef.current?.id && strokeHit(s, point);
         if (near) hit.push(s.id);
         return !near;
       });
       if (!hit.length) return;
+      for (const id of hit) erasedRef.current.add(id);
       commit(kept);
       persist(kept);
       void publish({ v: 1, type: 'erase', ids: hit, from: sender() });
@@ -451,11 +473,34 @@ export function useScreenAnnotate(opts: {
     if (!active) return;
     draftRef.current = null;
     discardPoints();
+    for (const st of strokesRef.current) erasedRef.current.add(st.id);
+    ownIds.current = [];
     commit([]);
     void publish({ v: 1, type: 'clear', from: sender() });
     // Drop the durable copy too, otherwise the next late joiner resurrects it.
     writeSnapshot([]);
   }, [active, publish, commit, discardPoints, sender, writeSnapshot]);
+
+  const undo = useCallback(() => {
+    if (!active || !canDraw) return;
+    // Pop own strokes that still exist (one may already have been erased).
+    let id: string | undefined;
+    while ((id = ownIds.current.pop())) {
+      const target = id;
+      if (strokesRef.current.some((s) => s.id === target)) break;
+    }
+    if (!id) return;
+    if (draftRef.current?.id === id) {
+      draftRef.current = null;
+      discardPoints();
+    }
+    const target = id;
+    erasedRef.current.add(target);
+    const kept = strokesRef.current.filter((s) => s.id !== target);
+    commit(kept);
+    persist(kept);
+    void publish({ v: 1, type: 'undo', id: target, from: sender() });
+  }, [active, canDraw, commit, persist, publish, sender, discardPoints]);
 
   // A student who joins mid-share never saw the live packets. Push the current
   // layer immediately; fall back to Redis when it will not fit in one packet.
@@ -476,8 +521,11 @@ export function useScreenAnnotate(opts: {
         } catch {
           bytes = MAX_PACKET_BYTES + 1;
         }
+        // The newcomer's data listener may not be attached yet (it starts when
+        // its stage poll sees the share), so always refresh the durable copy
+        // too; the packet is just the fast path.
         if (bytes <= MAX_PACKET_BYTES) await publish(msg);
-        else writeSnapshot(strokes);
+        writeSnapshot(strokes);
       })();
     };
     room.on(RoomEvent.ParticipantConnected, send);
@@ -492,14 +540,16 @@ export function useScreenAnnotate(opts: {
       draftRef.current = null;
       discardPoints();
       loadedRef.current = false;
+      ownIds.current = [];
+      erasedRef.current = new Set();
       commit([]);
       if (saveTimer.current) clearTimeout(saveTimer.current);
     }
   }, [active, commit, discardPoints]);
 
   return useMemo(
-    () => ({ strokes, begin, extend, end, eraseAt, clear }),
-    [strokes, begin, extend, end, eraseAt, clear]
+    () => ({ strokes, begin, extend, end, eraseAt, clear, undo }),
+    [strokes, begin, extend, end, eraseAt, clear, undo]
   );
 }
 
@@ -543,7 +593,8 @@ export function ScreenAnnotator({
   className,
 }: Props) {
   const [rect, setRect] = useState({ x: 0, y: 0, w: 0, h: 0 });
-  const drawingRef = useRef(false);
+  /** The one pointer currently drawing; a second finger or a palm is ignored. */
+  const drawingRef = useRef<number | null>(null);
 
   // The <video> is attached by LiveKit after this layer mounts. Watch the frame
   // until the element exists and reports videoWidth, then track its box.
@@ -622,7 +673,7 @@ export function ScreenAnnotator({
   }, [frameRef, videoRef]);
 
   const toLocal = useCallback(
-    (e: React.PointerEvent) => {
+    (e: { clientX: number; clientY: number }) => {
       const frame = frameRef.current;
       if (!frame) return null as AnnotatePoint | null;
       const box = frame.getBoundingClientRect();
@@ -638,11 +689,16 @@ export function ScreenAnnotator({
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
       if (!canDraw) return;
+      // Only the primary button draws (right-click opened a stroke before), and
+      // only one pointer at a time: a second touch used to replace the draft so
+      // the first finger's moves were appended to the wrong stroke.
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      if (drawingRef.current !== null) return;
       const p = toLocal(e);
       if (!p) return;
       e.preventDefault();
       e.stopPropagation();
-      drawingRef.current = true;
+      drawingRef.current = e.pointerId;
       (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
       if (tool === 'eraser') onErase?.(p);
       else onBegin?.(p);
@@ -652,25 +708,47 @@ export function ScreenAnnotator({
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent) => {
-      if (!canDraw || !drawingRef.current) return;
-      const p = toLocal(e);
-      if (!p) return;
+      if (!canDraw || drawingRef.current !== e.pointerId) return;
       e.preventDefault();
-      if (tool === 'eraser') onErase?.(p);
-      else onExtend?.(p);
+      // Coalesced events keep fast strokes smooth (one move event can carry several samples).
+      const native = e.nativeEvent as PointerEvent;
+      const samples: Array<{ clientX: number; clientY: number }> =
+        typeof native.getCoalescedEvents === 'function' ? native.getCoalescedEvents() : [];
+      const list = samples.length ? samples : [e];
+      for (const ev of list) {
+        const p = toLocal(ev);
+        if (!p) continue;
+        if (tool === 'eraser') onErase?.(p);
+        else onExtend?.(p);
+      }
     },
     [canDraw, toLocal, tool, onErase, onExtend]
   );
 
   const onPointerUp = useCallback(
     (e: React.PointerEvent) => {
-      if (!canDraw || !drawingRef.current) return;
-      drawingRef.current = false;
-      (e.currentTarget as Element).releasePointerCapture?.(e.pointerId);
+      if (drawingRef.current !== e.pointerId) return;
+      drawingRef.current = null;
+      try {
+        (e.currentTarget as Element).releasePointerCapture?.(e.pointerId);
+      } catch {
+        /* already released */
+      }
       if (tool !== 'eraser') onEnd?.();
     },
-    [canDraw, tool, onEnd]
+    [tool, onEnd]
   );
+
+  // Turning drawing off mid-stroke (or a tool switch) must still finish the stroke.
+  const endRef = useRef(onEnd);
+  endRef.current = onEnd;
+  useEffect(() => {
+    if (canDraw) return;
+    if (drawingRef.current !== null) {
+      drawingRef.current = null;
+      endRef.current?.();
+    }
+  }, [canDraw]);
 
   if (!rect.w || !rect.h) return null;
 
@@ -700,6 +778,9 @@ export function ScreenAnnotator({
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
+        // Capture can be lost without a pointerup (window blur, PiP focus, OS
+        // gesture); treat it as the end of the stroke instead of drawing forever.
+        onLostPointerCapture={onPointerUp}
       >
         {strokes.map((s) => {
           if (s.points.length === 0) return null;

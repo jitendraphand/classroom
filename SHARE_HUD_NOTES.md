@@ -86,3 +86,23 @@ If the browser blocks the window, sharing continues and the page shows
 2. Pick a surface; the slim **Share** bar opens in a small always-on-top window (Chromium) or a pop-up.
 3. Students see only the shared screen (+ annotations when the teacher draws).
 4. Closing the bar window (✕) does **not** stop sharing — use **Open share controls** or **Stop**.
+
+## Entire-screen sharing (Oct 2026)
+
+A monitor ("Entire screen") capture records every window on that screen, including the
+always-on-top Document Picture-in-Picture controls and the `share-controls.html` pop-up.
+No `getDisplayMedia` hint (`selfBrowserSurface`, `monitorTypeSurfaces`, `surfaceSwitching`)
+and no Region/Element Capture can exclude another window from a monitor capture.
+
+Rule (`shareControlsPlacement()` in `src/lib/floatGeometry.ts`):
+
+- `displaySurface === 'monitor'`: the PiP/pop-up opened in the click is closed **before the
+  track is published**, and the same controls render inside the classroom tab
+  (`InlineShareDock`, draggable). A hint tells the teacher that sharing a window or tab
+  brings the floating controls back.
+- `window` / `browser` / unknown: floating PiP (or pop-up) as before. It is not part of
+  the captured surface.
+- The live track is re-checked every 1.5 s, so switching to the entire screen mid-share
+  ("Share this instead") closes the floating window too. "Pop out" is never offered
+  during a monitor capture.
+- `selfBrowserSurface: 'exclude'`: the classroom tab itself is not offered in the picker.
