@@ -14,31 +14,59 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 
 /**
- * Keeps the teacher's microphone live while the app is in the background
- * (e.g. while sharing another app's screen). Since Android 11 an app may only
- * record audio in the background from a foreground service of type
- * "microphone"; Android 14+ also needs FOREGROUND_SERVICE_MICROPHONE and the
- * service must be started while the app is visible with RECORD_AUDIO granted,
- * which is when the teacher turns the microphone on.
+ * Keeps the teacher's microphone and camera live while the app is in the
+ * background (e.g. while sharing another app's screen). Since Android 11 an
+ * app may only record audio / use the camera in the background from a
+ * foreground service of type "microphone" / "camera"; Android 14+ also needs
+ * FOREGROUND_SERVICE_MICROPHONE / _CAMERA and the service must be started
+ * while the app is visible with the runtime permission granted, which is when
+ * the teacher turns the microphone or camera on.
+ *
+ * Started with [EXTRA_MIC] / [EXTRA_CAMERA]; types are re-declared on every
+ * start so turning one off drops it. Stopped when neither is on.
  */
 class ClassAudioService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val mic = intent?.getBooleanExtra(EXTRA_MIC, false) ?: false
+        val camera = intent?.getBooleanExtra(EXTRA_CAMERA, false) ?: false
+        if (!mic && !camera) {
+            stopForegroundCompat()
+            stopSelf()
+            return START_NOT_STICKY
+        }
         val notification = Notifications.inClass(this)
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                startForeground(Notifications.AUDIO_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+                var type = 0
+                if (mic) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                if (camera) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+                startForeground(Notifications.AUDIO_ID, notification, type)
             } else {
                 startForeground(Notifications.AUDIO_ID, notification)
             }
         } catch (e: Exception) {
-            // Not allowed right now (e.g. started from the background): the mic
-            // still works while the app is on screen.
+            // Not allowed right now (e.g. started from the background): mic and
+            // camera still work while the app is on screen.
             android.util.Log.w("ClassAudioService", "startForeground failed", e)
             stopSelf()
         }
         return START_NOT_STICKY
+    }
+
+    private fun stopForegroundCompat() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
+    }
+
+    companion object {
+        const val EXTRA_MIC = "mic"
+        const val EXTRA_CAMERA = "camera"
     }
 }
 

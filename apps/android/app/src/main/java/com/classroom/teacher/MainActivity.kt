@@ -3,17 +3,24 @@ package com.classroom.teacher
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.NotificationManager
+import android.content.ComponentCallbacks
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.graphics.Point
 import android.media.projection.MediaProjectionManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
+import android.view.ContextThemeWrapper
+import android.view.WindowManager
 import android.view.View
 import android.view.ViewGroup
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
@@ -30,8 +37,17 @@ import io.livekit.android.LiveKit
 import io.livekit.android.events.DisconnectReason
 import io.livekit.android.events.RoomEvent
 import io.livekit.android.events.collect
+import io.livekit.android.renderer.TextureViewRenderer
 import io.livekit.android.room.Room
-import io.livekit.android.room.track.screencapture.ScreenCaptureParams
+import io.livekit.android.room.participant.VideoTrackPublishOptions
+import io.livekit.android.room.track.CameraPosition
+import io.livekit.android.room.track.CustomVideoPreset
+import io.livekit.android.room.track.LocalScreencastVideoTrack
+import io.livekit.android.room.track.LocalVideoTrack
+import io.livekit.android.room.track.LocalVideoTrackOptions
+import io.livekit.android.room.track.Track
+import io.livekit.android.room.track.VideoCaptureParameter
+import io.livekit.android.room.track.VideoEncoding
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -68,6 +84,42 @@ class MainActivity : AppCompatActivity() {
     private var leaving = false
     private var grades: List<GradeChoice> = emptyList()
 
+    // Camera
+    private var cameraOn = false
+    private var cameraTrack: LocalVideoTrack? = null
+    private var cameraPosition = CameraPosition.FRONT
+    private var previewRenderer: TextureViewRenderer? = null
+
+    // Screen share (published by hand so frames pass through the mask processor)
+    private var screenTrack: LocalScreencastVideoTrack? = null
+    private val maskProcessor = ScreenMaskProcessor()
+
+    // Floating toolbar
+    private var toolbar: FloatingToolbar? = null
+    private var toolbarWanted = true
+    private var overlayExplained = false
+    private var pendingShareAfterOverlay = false
+    private var appVisible = false
+    private var toolbarExpanded = false
+    private var waitingList: List<Pair<String, String>> = emptyList()
+    private var handsRaised = 0
+    private var focusAlerts = 0
+    private var recentChat: List<String> = emptyList()
+    private var chatIds: List<String> = emptyList()
+    private var lastSeenChatId: String? = null
+    private var unreadChat = 0
+
+    /** Display rotations / size changes reach the application even while this activity is in the background. */
+    private val displayCallbacks = object : ComponentCallbacks {
+        override fun onConfigurationChanged(newConfig: Configuration) {
+            updateDisplaySize()
+            toolbar?.keepOnScreen()
+        }
+
+        @Deprecated("Deprecated in Java")
+        override fun onLowMemory() = Unit
+    }
+
     private val notificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) {
@@ -81,6 +133,12 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         if (granted) toggleMic() else showError("Microphone permission is required to speak.")
+    }
+
+    private val cameraPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) toggleCamera() else showError("Camera permission is required to show your video.")
     }
 
     private val captureLauncher = registerForActivityResult(
@@ -122,6 +180,9 @@ class MainActivity : AppCompatActivity() {
         binding.shareButton.setOnClickListener { requestScreenShare() }
         binding.stopShareButton.setOnClickListener { lifecycleScope.launch { stopScreenShare() } }
         binding.micButton.setOnClickListener { ensureMicThenToggle() }
+        binding.cameraButton.setOnClickListener { ensureCameraThenToggle() }
+        binding.switchCameraButton.setOnClickListener { switchCamera() }
+        binding.overlayButton.setOnClickListener { onOverlayButton() }
         binding.muteAllButton.setOnClickListener { muteStudents(true) }
         binding.unmuteAllButton.setOnClickListener { muteStudents(false) }
         binding.sendButton.setOnClickListener { sendChat() }
@@ -134,6 +195,9 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) = Unit
         }
         ShareStopReceiver.onStopRequested = { lifecycleScope.launch { stopScreenShare() } }
+        application.registerComponentCallbacks(displayCallbacks)
+        updateDisplaySize()
+        renderOverlayButton()
 
         // Resume a saved session (the server may have replaced it meanwhile).
         val savedCookie = prefs.getString(KEY_COOKIE, null)
@@ -153,16 +217,42 @@ class MainActivity : AppCompatActivity() {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         applyResponsiveLayout()
+        updateDisplaySize()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        appVisible = true
+        updateToolbar()
+    }
+
+    override fun onStop() {
+        appVisible = false
+        updateToolbar()
+        super.onStop()
     }
 
     override fun onResume() {
         super.onResume()
         getSystemService(NotificationManager::class.java).cancel(Notifications.WAITING_ID)
+        markChatSeen()
+        renderOverlayButton()
+        if (pendingShareAfterOverlay) {
+            // Back from the "Display over other apps" settings page.
+            pendingShareAfterOverlay = false
+            if (room != null && !sharing) proceedToCapture()
+        }
+        updateToolbar()
     }
 
     override fun onDestroy() {
         pollJob?.cancel()
         ShareStopReceiver.onStopRequested = null
+        application.unregisterComponentCallbacks(displayCallbacks)
+        toolbar?.hide()
+        toolbar = null
+        detachPreview()
+        releaseLocalVideo(unpublish = false)
         room?.disconnect()
         room = null
         stopService(Intent(this, ClassAudioService::class.java))
@@ -396,6 +486,7 @@ class MainActivity : AppCompatActivity() {
         binding.classTitle.text = if (label.isNotBlank()) "$label · $code" else "Class $code"
         binding.shareButton.isEnabled = false
         binding.micButton.isEnabled = false
+        binding.cameraButton.isEnabled = false
         binding.classStatus.text = "Connecting…"
         renderShareButtons()
         lifecycleScope.launch {
@@ -413,6 +504,8 @@ class MainActivity : AppCompatActivity() {
                 binding.classStatus.text = "In class. Students join from the school app. Sharing keeps going when you switch apps."
                 binding.shareButton.isEnabled = true
                 binding.micButton.isEnabled = true
+                binding.cameraButton.isEnabled = true
+                updateToolbar()
                 if (needsNotificationPermission()) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                 startPolling()
             } catch (e: SessionEndedException) {
@@ -445,9 +538,11 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             room = null
             sharing = false
+            releaseLocalVideo(unpublish = false)
             setMic(false)
             pollJob?.cancel()
             renderShareButtons()
+            updateToolbar()
             when (reason) {
                 // Same account opened the class elsewhere (web tab / other phone).
                 DisconnectReason.DUPLICATE_IDENTITY -> showHandoff(
@@ -536,7 +631,40 @@ class MainActivity : AppCompatActivity() {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
             return
         }
+        proceedToCapture()
+    }
+
+    /** Offers the floating toolbar once per run before the first share, then starts the capture consent. */
+    private fun proceedToCapture() {
+        if (toolbarWanted && !Settings.canDrawOverlays(this) && !overlayExplained) {
+            overlayExplained = true
+            AlertDialog.Builder(this)
+                .setTitle("Show class controls over other apps?")
+                .setMessage(
+                    "While you share your screen, a small floating button can show new chat messages, raised hands " +
+                        "and waiting students, and lets you admit, mute, reply or stop sharing without coming back here.\n\n" +
+                        "Android needs the \"Display over other apps\" permission for this. The button is blacked out " +
+                        "of what students see.\n\nWithout it, sharing still works: use the notification or come back to this app.",
+                )
+                .setPositiveButton("Allow") { _, _ ->
+                    pendingShareAfterOverlay = true
+                    openOverlaySettings()
+                }
+                .setNegativeButton("Not now") { _, _ -> launchCapture() }
+                .setOnCancelListener { launchCapture() }
+                .show()
+            return
+        }
         launchCapture()
+    }
+
+    private fun openOverlaySettings() {
+        try {
+            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+        } catch (e: Exception) {
+            pendingShareAfterOverlay = false
+            showError("Could not open the \"Display over other apps\" setting on this device.")
+        }
     }
 
     private fun needsNotificationPermission(): Boolean =
@@ -549,35 +677,69 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * The consent result is used exactly once (Android 14+ rejects reuse);
-     * LiveKit starts its mediaProjection foreground service with our
-     * notification before creating the projection.
+     * The consent result is used exactly once (Android 14+ rejects reuse).
+     * Same steps as LiveKit's setScreenShareEnabled (mediaProjection
+     * foreground service first, then capture, then publish), done by hand so
+     * every frame passes through [maskProcessor], which blacks out the
+     * floating toolbar before encoding. The capture keeps the display's aspect
+     * ratio (long side ≤ 1920) so toolbar coordinates map 1:1.
      */
     private suspend fun publishScreen(data: Intent) {
         val connected = room ?: return
         clearError()
+        var track: LocalScreencastVideoTrack? = null
         try {
-            val ok = connected.localParticipant.setScreenShareEnabled(
-                true,
-                ScreenCaptureParams(
-                    mediaProjectionPermissionResultData = data,
-                    notificationId = Notifications.SHARE_ID,
-                    notification = Notifications.screenShare(this),
-                    onStop = { lifecycleScope.launch { onShareStoppedBySystem() } },
+            updateDisplaySize()
+            val (dw, dh) = maskProcessor.displaySize
+            val (cw, ch) = MaskMath.captureSize(dw, dh)
+            track = connected.localParticipant.createScreencastTrack(
+                "screen",
+                data,
+                LocalVideoTrackOptions(true, null, CameraPosition.FRONT, VideoCaptureParameter(cw, ch, 15, true)),
+                maskProcessor,
+            ) { lifecycleScope.launch { onShareStoppedBySystem() } }
+            track.startForegroundService(Notifications.SHARE_ID, Notifications.screenShare(this))
+            track.startCapture()
+            val ok = connected.localParticipant.publishVideoTrack(
+                track,
+                VideoTrackPublishOptions(
+                    name = "screen",
+                    videoEncoding = VideoEncoding(1_500_000, 15),
+                    simulcast = false,
+                    source = Track.Source.SCREEN_SHARE,
                 ),
             )
             if (!ok) throw ApiException("Screen share did not start (state: ${connected.state.name.lowercase()})")
+            screenTrack = track
             sharing = true
             renderShareButtons()
+            updateToolbar()
             binding.classStatus.text = "Sharing this device's screen with the class"
             withContext(Dispatchers.IO) { api?.stage(code, "screen") }
         } catch (e: SessionEndedException) {
             sessionEnded(e)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
+            if (screenTrack == null && track != null) disposeScreenTrack(track, connected, unpublish = true)
             sharing = false
             renderShareButtons()
+            updateToolbar()
             showError(e.message ?: "Could not share the screen")
         }
+    }
+
+    private fun disposeScreenTrack(track: LocalScreencastVideoTrack, r: Room?, unpublish: Boolean) {
+        if (unpublish) {
+            try {
+                r?.localParticipant?.unpublishTrack(track, true)
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "unpublish screen", e)
+            }
+        }
+        try { track.stopCapture() } catch (_: Exception) {}
+        try { track.stop() } catch (_: Exception) {}
+        try { track.dispose() } catch (_: Exception) {}
     }
 
     /** The user stopped the capture from the system UI (status-bar chip / cast tile). */
@@ -588,14 +750,14 @@ class MainActivity : AppCompatActivity() {
 
     private suspend fun stopScreenShare() {
         clearError()
-        try {
-            room?.localParticipant?.setScreenShareEnabled(false)
-        } catch (e: Exception) {
-            showError(e.message ?: "Could not stop sharing")
+        screenTrack?.let {
+            screenTrack = null
+            disposeScreenTrack(it, room, unpublish = true)
         }
         val was = sharing
         sharing = false
         renderShareButtons()
+        updateToolbar()
         if (room != null) binding.classStatus.text = "Screen share stopped"
         if (was) {
             try {
@@ -630,16 +792,331 @@ class MainActivity : AppCompatActivity() {
     private fun setMic(on: Boolean) {
         micOn = on
         binding.micButton.text = if (on) "Turn microphone off" else "Turn microphone on"
+        updateMediaService()
+        renderToolbar()
+    }
+
+    /** One foreground service (types microphone | camera) keeps whatever is on running in the background. */
+    private fun updateMediaService() {
         val svc = Intent(this, ClassAudioService::class.java)
-        if (on) {
+            .putExtra(ClassAudioService.EXTRA_MIC, micOn)
+            .putExtra(ClassAudioService.EXTRA_CAMERA, cameraOn)
+        if (micOn || cameraOn) {
             try {
                 ContextCompat.startForegroundService(this, svc)
             } catch (e: Exception) {
-                android.util.Log.w(TAG, "mic service", e)
+                android.util.Log.w(TAG, "media service", e)
             }
         } else {
             stopService(svc)
         }
+    }
+
+    // ---- Camera -----------------------------------------------------------
+
+    private fun hasPermission(p: String) = ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
+
+    private fun ensureCameraThenToggle() {
+        if (!cameraOn && !hasPermission(Manifest.permission.CAMERA)) {
+            cameraPermission.launch(Manifest.permission.CAMERA)
+            return
+        }
+        toggleCamera()
+    }
+
+    private fun toggleCamera() {
+        lifecycleScope.launch { if (cameraOn) stopCamera() else startCamera() }
+    }
+
+    /**
+     * Teacher camera, published like the web teacher's (source CAMERA, name
+     * "camera"): 720p30 capture, top layer 1.5 Mbps / 30 fps, simulcast layers
+     * 180p (140 kbps, 15 fps) and 360p (500 kbps, 24 fps) as in TEACHER_CAMERA.
+     */
+    private suspend fun startCamera() {
+        val connected = room ?: return
+        if (!isConnected() || cameraTrack != null) return
+        binding.cameraButton.isEnabled = false
+        var track: LocalVideoTrack? = null
+        try {
+            track = connected.localParticipant.createVideoTrack(
+                "camera",
+                LocalVideoTrackOptions(false, null, cameraPosition, VideoCaptureParameter(1280, 720, 30, true)),
+                null,
+            )
+            track.startCapture()
+            val ok = connected.localParticipant.publishVideoTrack(
+                track,
+                VideoTrackPublishOptions(
+                    name = "camera",
+                    videoEncoding = VideoEncoding(1_500_000, 30),
+                    simulcast = true,
+                    source = Track.Source.CAMERA,
+                    simulcastLayers = listOf(
+                        CustomVideoPreset(VideoCaptureParameter(320, 180, 15, true), VideoEncoding(140_000, 15)),
+                        CustomVideoPreset(VideoCaptureParameter(640, 360, 24, true), VideoEncoding(500_000, 24)),
+                    ),
+                ),
+            )
+            if (!ok) throw ApiException("The camera did not start (state: ${connected.state.name.lowercase()})")
+            cameraTrack = track
+            cameraOn = true
+            attachPreview(connected, track)
+            updateMediaService()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (cameraTrack == null && track != null) disposeCamera(track, connected, unpublish = true)
+            showError(e.message ?: "Could not start the camera")
+        } finally {
+            binding.cameraButton.isEnabled = room != null
+            renderCamera()
+        }
+    }
+
+    private fun stopCamera() {
+        val track = cameraTrack
+        cameraTrack = null
+        cameraOn = false
+        detachPreview(track)
+        if (track != null) disposeCamera(track, room, unpublish = true)
+        updateMediaService()
+        renderCamera()
+    }
+
+    private fun disposeCamera(track: LocalVideoTrack, r: Room?, unpublish: Boolean) {
+        if (unpublish) {
+            try {
+                r?.localParticipant?.unpublishTrack(track, true)
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "unpublish camera", e)
+            }
+        }
+        try { track.stopCapture() } catch (_: Exception) {}
+        try { track.stop() } catch (_: Exception) {}
+        try { track.dispose() } catch (_: Exception) {}
+    }
+
+    private fun switchCamera() {
+        val track = cameraTrack ?: return
+        val next = if (cameraPosition == CameraPosition.FRONT) CameraPosition.BACK else CameraPosition.FRONT
+        try {
+            track.switchCamera(null, next)
+            cameraPosition = next
+            previewRenderer?.setMirror(next == CameraPosition.FRONT)
+        } catch (e: Exception) {
+            showError(e.message ?: "Could not switch camera")
+        }
+    }
+
+    private fun attachPreview(r: Room, track: LocalVideoTrack) {
+        detachPreview()
+        try {
+            val view = TextureViewRenderer(this)
+            r.initVideoRenderer(view)
+            view.setMirror(cameraPosition == CameraPosition.FRONT)
+            binding.cameraPreview.addView(
+                view,
+                FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
+            )
+            binding.cameraPreview.visibility = View.VISIBLE
+            track.addRenderer(view)
+            previewRenderer = view
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "camera preview", e)
+        }
+    }
+
+    private fun detachPreview(track: LocalVideoTrack? = cameraTrack) {
+        val view = previewRenderer ?: return
+        previewRenderer = null
+        try { track?.removeRenderer(view) } catch (_: Exception) {}
+        try { view.release() } catch (_: Exception) {}
+        binding.cameraPreview.removeAllViews()
+        binding.cameraPreview.visibility = View.GONE
+    }
+
+    private fun renderCamera() {
+        binding.cameraButton.text = if (cameraOn) "Turn camera off" else "Turn camera on"
+        binding.switchCameraButton.isEnabled = cameraOn
+        renderToolbar()
+    }
+
+    /** Drops camera and screen tracks (unpublish = false once the room is already gone). */
+    private fun releaseLocalVideo(unpublish: Boolean) {
+        val r = room
+        cameraTrack?.let {
+            detachPreview(it)
+            cameraTrack = null
+            disposeCamera(it, r, unpublish)
+        }
+        cameraOn = false
+        screenTrack?.let {
+            screenTrack = null
+            disposeScreenTrack(it, r, unpublish)
+        }
+        if (::binding.isInitialized) renderCamera()
+        updateMediaService()
+    }
+
+    // ---- Floating toolbar -------------------------------------------------
+
+    private fun updateDisplaySize() {
+        val size = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val b = getSystemService(WindowManager::class.java).maximumWindowMetrics.bounds
+            b.width() to b.height()
+        } else {
+            val p = Point()
+            @Suppress("DEPRECATION")
+            getSystemService(WindowManager::class.java).defaultDisplay.getRealSize(p)
+            p.x to p.y
+        }
+        maskProcessor.displaySize = size
+    }
+
+    private fun onOverlayButton() {
+        if (!Settings.canDrawOverlays(this)) {
+            AlertDialog.Builder(this)
+                .setTitle("Floating class controls")
+                .setMessage(
+                    "Shows a small button over other apps while you share or teach, with new chat, raised hands and " +
+                        "waiting students, and quick controls. It is blacked out of what students see.\n\n" +
+                        "Turn on \"Allow display over other apps\" for Classroom Teacher on the next screen.",
+                )
+                .setPositiveButton("Open setting") { _, _ -> openOverlaySettings() }
+                .setNegativeButton("Cancel", null)
+                .show()
+            return
+        }
+        toolbarWanted = !toolbarWanted
+        renderOverlayButton()
+        updateToolbar()
+    }
+
+    private fun renderOverlayButton() {
+        binding.overlayButton.text = when {
+            !Settings.canDrawOverlays(this) -> "Floating toolbar: allow…"
+            toolbarWanted -> "Floating toolbar: on (while sharing or away)"
+            else -> "Floating toolbar: off"
+        }
+    }
+
+    private val toolbarListener = object : FloatingToolbar.Listener {
+        override fun onToggleMic() {
+            if (!hasPermission(Manifest.permission.RECORD_AUDIO)) return openAppWith("Allow the microphone here first.")
+            toggleMic()
+        }
+
+        override fun onToggleCamera() {
+            if (!hasPermission(Manifest.permission.CAMERA)) return openAppWith("Allow the camera here first.")
+            toggleCamera()
+        }
+
+        override fun onAdmitAll() = admitAll()
+
+        override fun onAdmit(participantId: String) {
+            lifecycleScope.launch {
+                try {
+                    withContext(Dispatchers.IO) { api?.admit(code, participantId) }
+                    refreshState()
+                } catch (e: SessionEndedException) {
+                    sessionEnded(e)
+                } catch (e: Exception) {
+                    showError(e.message ?: "Could not admit")
+                }
+            }
+        }
+
+        override fun onMuteAll() = muteStudents(true)
+
+        override fun onSendChat(text: String) {
+            lifecycleScope.launch {
+                try {
+                    withContext(Dispatchers.IO) { api?.sendBroadcast(code, text) }
+                    refreshChat()
+                    markChatSeen()
+                } catch (e: SessionEndedException) {
+                    sessionEnded(e)
+                } catch (e: Exception) {
+                    showError(e.message ?: "Could not send")
+                }
+            }
+        }
+
+        override fun onStopShare() {
+            lifecycleScope.launch { stopScreenShare() }
+        }
+
+        override fun onOpenApp() = openAppWith(null)
+
+        override fun onMaskToggle(on: Boolean) {
+            maskProcessor.enabled = on
+            renderToolbar()
+        }
+
+        override fun onExpandedChanged(expanded: Boolean) {
+            toolbarExpanded = expanded
+            if (expanded) markChatSeen()
+        }
+
+        override fun onRectChanged(rect: IntRect?) {
+            updateDisplaySize()
+            maskProcessor.maskRect = rect
+        }
+    }
+
+    private fun openAppWith(message: String?) {
+        message?.let { showError(it) }
+        try {
+            startActivity(
+                Intent(this, MainActivity::class.java).addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP,
+                ),
+            )
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "open app", e)
+        }
+    }
+
+    /** Shown while sharing, or in class while the app is in the background; gone otherwise. */
+    private fun updateToolbar() {
+        val inClass = room != null
+        val want = toolbarWanted && Settings.canDrawOverlays(this) && inClass && (sharing || !appVisible)
+        if (!want) {
+            toolbar?.hide()
+            maskProcessor.maskRect = null
+            return
+        }
+        val bar = toolbar ?: FloatingToolbar(
+            ContextThemeWrapper(applicationContext, R.style.Theme_ClassroomTeacher),
+            toolbarListener,
+        ).also { toolbar = it }
+        if (!bar.isShowing) bar.show()
+        renderToolbar()
+    }
+
+    private fun renderToolbar() {
+        val bar = toolbar ?: return
+        if (!bar.isShowing) return
+        bar.render(
+            ToolbarState(
+                sharing = sharing,
+                micOn = micOn,
+                cameraOn = cameraOn,
+                waiting = waitingList,
+                hands = handsRaised,
+                focusAlerts = focusAlerts,
+                unreadChat = unreadChat,
+                recentChat = recentChat,
+                maskOn = maskProcessor.enabled,
+            ),
+        )
+    }
+
+    private fun markChatSeen() {
+        lastSeenChatId = chatIds.lastOrNull()
+        unreadChat = 0
+        renderToolbar()
     }
 
     private fun muteStudents(muted: Boolean) {
@@ -719,6 +1196,7 @@ class MainActivity : AppCompatActivity() {
         pollJob?.cancel()
         val r = room ?: return
         leaving = true
+        releaseLocalVideo(unpublish = true)
         room = null
         roomJob?.cancel()
         try {
@@ -728,6 +1206,11 @@ class MainActivity : AppCompatActivity() {
         setMic(false)
         sharing = false
         renderShareButtons()
+        updateToolbar()
+        waitingList = emptyList()
+        chatIds = emptyList()
+        lastSeenChatId = null
+        unreadChat = 0
     }
 
     private fun startPolling() {
@@ -766,7 +1249,25 @@ class MainActivity : AppCompatActivity() {
             loadHome()
             return false
         }
-        renderWaiting(state.optJSONArray("waiting") ?: JSONArray())
+        val waiting = state.optJSONArray("waiting") ?: JSONArray()
+        renderWaiting(waiting)
+        waitingList = (0 until waiting.length()).map {
+            val w = waiting.getJSONObject(it)
+            w.optString("id") to w.optString("displayName", "Student")
+        }
+        val admitted = state.optJSONArray("admitted") ?: JSONArray()
+        var hands = 0
+        var away = 0
+        for (i in 0 until admitted.length()) {
+            val a = admitted.getJSONObject(i)
+            if (a.optString("role") != "STUDENT") continue
+            if (a.optBoolean("handRaised")) hands++
+            val f = a.optString("focus")
+            if (f == "left" || f == "away") away++
+        }
+        handsRaised = hands
+        focusAlerts = away
+        renderToolbar()
         return true
     }
 
@@ -798,6 +1299,24 @@ class MainActivity : AppCompatActivity() {
             }
         }
         binding.chatLog.text = lines.trimEnd().ifBlank { "No messages yet." }
+        val ids = ArrayList<String>()
+        val recent = ArrayList<String>()
+        for (i in 0 until messages.length()) {
+            val m = messages.getJSONObject(i)
+            ids.add(m.optString("id").ifBlank { "$i:${m.optString("createdAt")}:${m.optString("body").hashCode()}" })
+            if (i >= messages.length() - 4) recent.add("${m.optString("senderName", "Someone")}: ${m.optString("body")}")
+        }
+        chatIds = ids
+        recentChat = recent
+        if (lastSeenChatId == null && unreadChat == 0 && ids.isNotEmpty() && appVisible) lastSeenChatId = ids.last()
+        if (appVisible && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) || toolbarExpanded) {
+            markChatSeen()
+        } else {
+            val seen = lastSeenChatId
+            val idx = if (seen == null) -1 else ids.lastIndexOf(seen)
+            unreadChat = if (idx >= 0) ids.size - 1 - idx else if (seen == null) ids.size else minOf(ids.size, 9)
+            renderToolbar()
+        }
     }
 
     private fun note(text: String) = TextView(this).apply {

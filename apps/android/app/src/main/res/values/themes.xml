@@ -6,5 +6,15 @@
         <item name="android:statusBarColor">#0F172A</item>
         <item name="android:navigationBarColor">#0F172A</item>
         <item name="android:windowBackground">#0F172A</item>
+        <item name="materialButtonStyle">@style/ClassButton</item>
+    </style>
+
+    <style name="ClassButton" parent="Widget.Material3.Button">
+        <item name="backgroundTint">@color/btn_bg</item>
+        <item name="android:textColor">@color/btn_text</item>
+    </style>
+
+    <style name="ClassButton.Danger">
+        <item name="backgroundTint">@color/btn_danger_bg</item>
     </style>
 </resources>
