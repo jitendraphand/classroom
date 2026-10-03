@@ -484,6 +484,39 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * The SFU link can drop without a Disconnected event reaching us while the
+     * SDK retries (slow device, network change). Show it, and after a lasting
+     * DISCONNECTED state rejoin with a fresh token.
+     */
+    private var disconnectedPolls = 0
+
+    private fun renderConnection() {
+        val r = room ?: return
+        when (r.state) {
+            Room.State.CONNECTED -> {
+                disconnectedPolls = 0
+                if (binding.classStatus.text.startsWith("Reconnecting")) {
+                    binding.classStatus.text = if (sharing) "Sharing this device's screen with the class" else "In class."
+                }
+            }
+            Room.State.RECONNECTING, Room.State.CONNECTING -> binding.classStatus.text = "Reconnecting to the class…"
+            Room.State.DISCONNECTED -> {
+                binding.classStatus.text = "Reconnecting to the class…"
+                if (++disconnectedPolls >= 3) {
+                    disconnectedPolls = 0
+                    enterClass(code)
+                }
+            }
+        }
+    }
+
+    private fun isConnected(): Boolean {
+        if (room?.state == Room.State.CONNECTED) return true
+        showError("Not connected to the class yet. Wait a moment and try again.")
+        return false
+    }
+
     private fun showHandoff(title: String, text: String) {
         showOnly(binding.handoffGroup)
         binding.handoffTitle.text = title
@@ -497,6 +530,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun requestScreenShare() {
         if (room == null) return showError("Join the class before sharing.")
+        if (!isConnected()) return
         if (needsNotificationPermission()) {
             pendingCapture = true
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -532,7 +566,7 @@ class MainActivity : AppCompatActivity() {
                     onStop = { lifecycleScope.launch { onShareStoppedBySystem() } },
                 ),
             )
-            if (!ok) throw ApiException("Screen share did not start")
+            if (!ok) throw ApiException("Screen share did not start (state: ${connected.state.name.lowercase()})")
             sharing = true
             renderShareButtons()
             binding.classStatus.text = "Sharing this device's screen with the class"
@@ -581,6 +615,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun toggleMic() {
         val connected = room ?: return
+        if (!isConnected()) return
         val next = !micOn
         lifecycleScope.launch {
             try {
@@ -701,6 +736,7 @@ class MainActivity : AppCompatActivity() {
             while (isActive) {
                 try {
                     if (!refreshState()) return@launch
+                    renderConnection()
                     refreshChat()
                 } catch (e: CancellationException) {
                     throw e
