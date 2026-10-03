@@ -69,6 +69,16 @@ import { PageLoading } from '@/components/ui/Skeleton';
 import { IconDoor, IconHand, IconHandDown, IconMic, IconMicOff, IconPin, IconScreen, IconUserPlus, IconUsers, IconVideo } from '@/components/ui/Icons';
 import { pickTiles, sortRoster } from '@/lib/classSlots';
 import { cn } from '@/lib/cn';
+import {
+  closeAllSideWindows,
+  closeSideWindow,
+  closeSideWindowObject,
+  openSideWindow,
+  sideWindow,
+  sideWindows,
+  SideWindowPortal,
+  useSideWindows,
+} from './shareSideWindows';
 import { MIC_LOCKED_NO_TEACHER } from '@/lib/teacherPresenceLogic';
 import { roomFetch, rememberClassroomRole, getClassroomRole, claimTeacherTab } from '@/lib/classroomClient';
 import { forwardActivityFrom, setLiveSession } from '@/lib/liveSession';
@@ -629,6 +639,38 @@ function peerFloatLayout(
 }
 
 
+/** Student videos in their own window (during a share): 2 → 2×1, 4 → 2×2, 6 → 3×2. */
+const PEER_WIN_TILE_W = 192;
+function peerWindowLayout(slots: 2 | 4 | 6, innerW?: number, innerH?: number) {
+  const cols = slots === 6 ? 3 : 2;
+  const rows = slots === 2 ? 1 : 2;
+  const header = 34;
+  const pad = 16;
+  const gap = 6;
+  let tileW = PEER_WIN_TILE_W;
+  if (innerW && innerH) {
+    const byW = (innerW - pad - gap * (cols - 1)) / cols;
+    const byH = (((innerH - header - pad - gap * (rows - 1)) / rows) * 16) / 9;
+    tileW = Math.max(96, Math.floor(Math.min(byW, byH)));
+  }
+  const tileH = Math.max(54, Math.floor((tileW * 9) / 16));
+  return {
+    cols,
+    rows,
+    tileW,
+    tileH,
+    gap,
+    paneW: pad + cols * tileW + gap * (cols - 1),
+    paneH: header + pad + rows * tileH + gap * (rows - 1),
+  };
+}
+
+/** Outer size to open the student videos window at (window chrome estimated). */
+export function peerWindowOuterSize(slots: 2 | 4 | 6) {
+  const l = peerWindowLayout(slots);
+  return { w: l.paneW + 16, h: l.paneH + 72 };
+}
+
 function TeacherCameraFloat({
   teacherIdentities,
   roomCode,
@@ -892,7 +934,13 @@ function TeacherPeersFloat({
   focusAlerts = {},
   pinnedIdentities = [],
   onTogglePin,
+  portalWindow = null,
 }: {
+  /**
+   * While sharing: render the panel inside this separate window (beside the
+   * share toolbar) instead of the classroom tab. Same tiles, pins, rotation.
+   */
+  portalWindow?: Window | null;
   /** LiveKit identity → "Left fullscreen" / "Switched away". */
   focusAlerts?: Record<string, string>;
   /** Students the teacher pinned (oldest first): they keep a tile, bypassing rotation. */
@@ -947,7 +995,8 @@ function TeacherPeersFloat({
   useEffect(() => {
     writeFloatPref('class_panel.floating', floating ? '1' : '0');
   }, [floating]);
-  const docked = !!dock && !floating;
+  const portal = !!portalWindow && !portalWindow.closed;
+  const docked = !!dock && !floating && !portal;
   const sharingDock = docked && sharing;
   // Minimized state during a share. Starts collapsed at every share; the
   // teacher's saved (non-share) minimized preference is untouched.
@@ -955,7 +1004,7 @@ function TeacherPeersFloat({
   useEffect(() => {
     if (sharingDock) setShareMinimized(true);
   }, [sharingDock]);
-  const isMin = sharingDock ? shareMinimized : minimized;
+  const isMin = portal ? false : sharingDock ? shareMinimized : minimized;
   const narrowDock = !!dock && dock.width < PEER_DOCK_NARROW_W;
   const [rotationTick, setRotationTick] = useState(0);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
@@ -969,9 +1018,43 @@ function TeacherPeersFloat({
   const dockAvailW = dock
     ? Math.max(0, (narrowDock ? dock.width : dock.width * PEER_DOCK_MAX_W) - 2 * PEER_DOCK_MARGIN)
     : undefined;
+  const [portalSize, setPortalSize] = useState<{ w: number; h: number } | null>(null);
+  useEffect(() => {
+    if (!portalWindow || portalWindow.closed) {
+      setPortalSize(null);
+      return;
+    }
+    const pw = portalWindow;
+    const read = () => {
+      if (!pw.closed) setPortalSize({ w: pw.innerWidth, h: pw.innerHeight });
+    };
+    read();
+    pw.addEventListener('resize', read);
+    pw.addEventListener('load', read);
+    return () => {
+      pw.removeEventListener('resize', read);
+      pw.removeEventListener('load', read);
+    };
+  }, [portalWindow]);
+  // Fit the videos window to the chosen 2/4/6 layout (pop-ups opened by this
+  // page may be resized by it).
+  useEffect(() => {
+    if (!portalWindow || portalWindow.closed) return;
+    const l = peerWindowLayout(slotCount);
+    try {
+      const extraW = portalWindow.innerWidth > 0 ? Math.max(0, portalWindow.outerWidth - portalWindow.innerWidth) : 16;
+      const extraH = portalWindow.innerHeight > 0 ? Math.max(0, portalWindow.outerHeight - portalWindow.innerHeight) : 72;
+      portalWindow.resizeTo(l.paneW + extraW, l.paneH + extraH);
+    } catch {
+      /* ignore */
+    }
+  }, [portalWindow, slotCount]);
   const layout = useMemo(
-    () => peerFloatLayout(slotCount, viewport.w, viewport.h, dockAvailH, dockAvailW),
-    [slotCount, viewport.w, viewport.h, dockAvailH, dockAvailW]
+    () =>
+      portal
+        ? peerWindowLayout(slotCount, portalSize?.w, portalSize?.h)
+        : peerFloatLayout(slotCount, viewport.w, viewport.h, dockAvailH, dockAvailW),
+    [portal, portalSize?.w, portalSize?.h, slotCount, viewport.w, viewport.h, dockAvailH, dockAvailW]
   );
   sizeRef.current = isMin
     ? { w: 168, h: 36 }
@@ -1242,18 +1325,20 @@ function TeacherPeersFloat({
       ).length
     : 0;
 
-  const style: CSSProperties = docked && dock
-    ? { left: dock.left + PEER_DOCK_MARGIN, top: dock.top + PEER_DOCK_MARGIN }
-    : pos
-      ? { left: pos.x, top: pos.y }
-      : { left: 12, top: PEER_TOP_RESERVE };
-  if (!isMin) {
+  const style: CSSProperties = portal
+    ? { position: 'relative', left: 0, top: 0, width: '100%', height: '100%', borderRadius: 0, border: 0 }
+    : docked && dock
+      ? { left: dock.left + PEER_DOCK_MARGIN, top: dock.top + PEER_DOCK_MARGIN }
+      : pos
+        ? { left: pos.x, top: pos.y }
+        : { left: 12, top: PEER_TOP_RESERVE };
+  if (!isMin && !portal) {
     // Size is the selected slot layout, even when some tiles are blank.
     style.width = layout.paneW;
     style.height = layout.paneH;
   }
 
-  return (
+  const pane = (
     <div
       ref={paneRef}
       className="peers-float-pane"
@@ -1262,11 +1347,11 @@ function TeacherPeersFloat({
       data-minimized={isMin ? '1' : '0'}
       data-docked={docked ? '1' : '0'}
       style={style}
-      aria-label="Class videos — drag the top bar to move"
+      aria-label={portal ? 'Student videos' : 'Class videos — drag the top bar to move'}
     >
       <div
         className="peers-float-header"
-        {...handleProps}
+        {...(portal ? {} : handleProps)}
         onDoubleClick={(e) => {
           if ((e.target as HTMLElement).closest('button')) return;
           if (floating && dock) dock_();
@@ -1278,7 +1363,7 @@ function TeacherPeersFloat({
           {isMin && <span className="ml-1 text-slate-400">{peerIds.length + 1} videos</span>}
         </span>
         <div className="flex items-center gap-1" data-no-drag>
-          {dock && (
+          {dock && !portal && (
             <button
               type="button"
               className="rounded px-1.5 py-0.5 text-[10px] font-bold text-slate-300 hover:bg-white/10"
@@ -1310,6 +1395,7 @@ function TeacherPeersFloat({
                 {n}
               </button>
             ))}
+          {!portal && (
           <button
             type="button"
             className="rounded px-1.5 py-0.5 text-[10px] font-bold text-slate-300 hover:bg-white/10"
@@ -1319,6 +1405,7 @@ function TeacherPeersFloat({
           >
             {isMin ? '▢' : '—'}
           </button>
+          )}
         </div>
       </div>
       {!isMin && (
@@ -1327,6 +1414,7 @@ function TeacherPeersFloat({
           data-slots={slotCount}
           style={{
             gridTemplateRows: `repeat(${layout.rows}, ${layout.tileH}px)`,
+            ...(portal ? { gridTemplateColumns: `repeat(${layout.cols}, max-content)` } : {}),
           }}
         >
           {cells.map((identity, i) => {
@@ -1399,6 +1487,14 @@ function TeacherPeersFloat({
       )}
     </div>
   );
+  if (portal && portalWindow) {
+    return (
+      <SideWindowPortal win={portalWindow} title="Student videos">
+        {pane}
+      </SideWindowPortal>
+    );
+  }
+  return pane;
 }
 
 function PeerCamTile({
@@ -2263,6 +2359,7 @@ function RoomInner({
     shareSurfaceRef.current = '';
     setShareSurface('');
     maskWindowRef.current = null;
+    closeAllSideWindows();
     maskRef.current?.stop();
     maskRef.current = null;
     try {
@@ -2469,6 +2566,10 @@ function RoomInner({
       shareSurfaceRef.current = kind;
       setShareSurface(kind);
       // Switched to the entire screen without a mask running: close the window.
+      if (shareControlsPlacement(kind) === 'inline' && !maskRef.current) {
+        // Side windows are ordinary windows: an unmasked entire-screen capture records them.
+        closeAllSideWindows();
+      }
       if (shareControlsPlacement(kind) === 'inline' && shareWindowRef.current && !maskRef.current) {
         attachShareSurface(null);
         setMaskFallback('unsupported');
@@ -2597,11 +2698,19 @@ function RoomInner({
         else {
           maskWindowRef.current = early.window;
           mask = startMaskPipeline(media, {
-            getWindow: () => maskWindowRef.current,
+            // The toolbar plus any chat / roster / video side windows.
+            getWindows: () => [maskWindowRef.current, ...sideWindows()],
             screens,
-            onUnsafe: () => {
-              // Frame already blacked out; drop the window for good.
+            onUnsafe: (win) => {
+              // Frame already blacked out. A side window whose position can no
+              // longer be read is closed on its own; the toolbar takes
+              // everything with it.
+              if (closeSideWindowObject(win)) {
+                setHudNotice('A side window could not be hidden from the share, so it was closed.');
+                return;
+              }
               maskWindowRef.current = null;
+              closeAllSideWindows();
               attachShareSurface(null);
               setMaskFallback('unsafe');
             },
@@ -2766,6 +2875,42 @@ function RoomInner({
       body: JSON.stringify(all ? { all: true } : { participantIds: ids }),
     });
     refresh();
+  }
+
+  // Separate chat / roster / student-video windows beside the share toolbar:
+  // only while the toolbar floats, and only when they are either not captured
+  // (window / tab share) or painted black by the running whole-screen mask.
+  useSideWindows();
+  const sideWindowsAllowed =
+    isTeacher && screenOn && !!shareMount && (shareControlsPlacement(shareSurface) === 'floating' || maskActive);
+  const videosWin = sideWindowsAllowed ? sideWindow('videos') : null;
+  useEffect(() => {
+    if (!sideWindowsAllowed) closeSideWindow('videos');
+  }, [sideWindowsAllowed]);
+  function toggleVideosWindow() {
+    if (sideWindow('videos')) {
+      closeSideWindow('videos');
+      return;
+    }
+    let slots: 2 | 4 | 6 = 4;
+    try {
+      const v = sessionStorage.getItem(`peers_slots_${code.toUpperCase()}`);
+      if (v === '2' || v === '6') slots = Number(v) as 2 | 6;
+    } catch {
+      /* ignore */
+    }
+    const r = openSideWindow('videos', {
+      anchor: shareWindowRef.current,
+      requireTrustedPosition: !!maskRef.current,
+      size: peerWindowOuterSize(slots),
+    });
+    if (!r.ok) {
+      setHudNotice(
+        r.reason === 'blocked'
+          ? 'Pop-ups are blocked for this site. Allow pop-ups to see student videos beside the toolbar.'
+          : 'The student videos window cannot be hidden from an entire-screen share on this system, so it stays closed. Share a window or tab to use it.'
+      );
+    }
   }
 
   // Waiting room toggle (per class session, saved on the server). Off admits
@@ -3485,6 +3630,7 @@ function RoomInner({
         onDockSpace={onDockSpace}
         focusAlerts={focusByIdentity}
         pinnedIdentities={pinnedIdentities}
+        portalWindow={videosWin}
         onTogglePin={(identity, on) => {
           const id = participantIdByIdentity.get(identity);
           if (id) void togglePin(id, on);
@@ -3540,6 +3686,12 @@ function RoomInner({
             onAdmitAll={() => void admitStudents(undefined, true)}
             teacherMicOn={micOn && !effectiveMuted}
             onToggleTeacherMic={() => setMicOn((v) => !v)}
+            teacherCamOn={camOn}
+            onToggleTeacherCam={() => setCamOn((v) => !v)}
+            sideWindowsAllowed={sideWindowsAllowed}
+            sideWindowsNeedTrust={maskActive}
+            videosOpen={!!videosWin}
+            onToggleVideos={sideWindowsAllowed ? toggleVideosWindow : undefined}
             onStopSharing={() => void toggleScreen()}
             onMuteStudent={(id, muted) => void muteStudent(id, muted)}
             onMuteAll={(muted) => void muteAllStudents(muted)}

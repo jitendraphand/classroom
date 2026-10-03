@@ -2,7 +2,7 @@
 
 /**
  * Whole-screen share blackout: the always-on-top Picture-in-Picture share
- * controls are painted solid black in every frame before it is published, so
+ * controls (and the chat / roster / video side windows) are painted solid black in every frame before it is published, so
  * students never see them even though a monitor capture records every window.
  *
  * Insertable streams (Chrome/Edge): MediaStreamTrackProcessor → per-frame
@@ -75,11 +75,14 @@ export type MaskPipeline = {
 export function startMaskPipeline(
   raw: MediaStreamTrack,
   opts: {
-    /** The floating controls window to hide, read on every frame (null → nothing to mask). */
-    getWindow: () => Window | null;
+    /**
+     * Every floating window to hide (the toolbar PiP plus any chat / roster /
+     * video side windows), read on every frame. Empty → nothing to mask.
+     */
+    getWindows: () => Array<Window | null | undefined>;
     screens: ScreenGeom[];
-    /** Geometry became unusable: the frame was blacked out; close the floating window. */
-    onUnsafe: () => void;
+    /** A window's geometry became unusable: the frame was blacked out; close that window. */
+    onUnsafe: (win: Window) => void;
   }
 ): MaskPipeline | null {
   const c = ctors();
@@ -99,7 +102,7 @@ export function startMaskPipeline(
     firstFrame = resolve;
     setTimeout(resolve, 3000);
   });
-  let unsafeSent = false;
+  const unsafeSent = new WeakSet<Window>();
 
   const transform = new TransformStream<VideoFrame, VideoFrame>({
     transform(frame, controller) {
@@ -115,25 +118,30 @@ export function startMaskPipeline(
       } catch {
         /* ignore: stays 'monitor' (mask) */
       }
-      const win = opts.getWindow();
+      const wins = opts.getWindows().filter((w): w is Window => !!w && !w.closed);
       // Window/tab capture (after "Share this instead") or no floating window: pass through.
-      if (surface === 'window' || surface === 'browser' || !win || win.closed) {
+      if (surface === 'window' || surface === 'browser' || wins.length === 0) {
         trail.clear();
         controller.enqueue(frame);
         return;
       }
-      const plan = planMask(readWindowRect(win), opts.screens, { width, height });
       let rects: Rect[] = [];
       let blackout = false;
-      if (plan.kind === 'unsafe') {
-        blackout = true;
-        if (!unsafeSent) {
-          unsafeSent = true;
-          queueMicrotask(opts.onUnsafe);
+      const now: Rect[] = [];
+      for (const win of wins) {
+        if (win.closed) continue; // closed since the filter: no longer on screen
+        const plan = planMask(readWindowRect(win), opts.screens, { width, height });
+        if (plan.kind === 'unsafe') {
+          blackout = true;
+          if (!unsafeSent.has(win)) {
+            unsafeSent.add(win);
+            queueMicrotask(() => opts.onUnsafe(win));
+          }
+        } else {
+          now.push(...plan.rects);
         }
-      } else {
-        rects = trail.push(performance.now(), plan.rects);
       }
+      if (!blackout) rects = trail.push(performance.now(), now);
       if (!blackout && rects.length === 0) {
         controller.enqueue(frame);
         return;
