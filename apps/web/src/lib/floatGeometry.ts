@@ -49,7 +49,7 @@ export function parseStoredPos(raw: string | null): FloatPos | null {
  * every window on that screen, including the always-on-top Picture-in-Picture
  * controls and the pop-up fallback, so those are only used for window/tab
  * captures; a monitor capture gets the controls inside the classroom tab.
- * Unknown surface (browser does not report it) keeps the floating window.
+ * Unknown surface is treated as a monitor (fail closed).
  */
 export function showLocalSharePreview(displaySurface: string | undefined | null): boolean {
   // Only a window or tab capture is safe to play back on the teacher's own
@@ -59,5 +59,7 @@ export function showLocalSharePreview(displaySurface: string | undefined | null)
 }
 
 export function shareControlsPlacement(displaySurface: string | undefined | null): 'floating' | 'inline' {
-  return displaySurface === 'monitor' ? 'inline' : 'floating';
+  // Unknown counts as a monitor: fail closed (callers normally resolve it
+  // first with surfaceFromTrack, which also reads the track label).
+  return displaySurface === 'window' || displaySurface === 'browser' ? 'floating' : 'inline';
 }

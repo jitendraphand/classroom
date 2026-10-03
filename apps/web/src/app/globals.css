@@ -284,8 +284,9 @@ body {
     @apply rounded-md border border-white/15 bg-black/50 px-1.5 py-0.5 text-[10px] font-semibold text-white hover:bg-white/15;
     cursor: pointer;
   }
+  /* Teacher video above the student's own preview (stacked, not side by side). */
   .student-media-row {
-    @apply flex items-stretch gap-1.5 p-1.5 pt-0;
+    @apply flex flex-col items-stretch gap-1.5 p-1.5 pt-0;
   }
   .student-media-tile {
     @apply relative shrink-0 overflow-hidden rounded-xl bg-black;

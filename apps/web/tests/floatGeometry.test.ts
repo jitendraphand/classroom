@@ -42,8 +42,9 @@ test('entire-screen capture keeps the share controls in the page', () => {
   assert.equal(shareControlsPlacement('monitor'), 'inline');
   assert.equal(shareControlsPlacement('window'), 'floating');
   assert.equal(shareControlsPlacement('browser'), 'floating');
-  assert.equal(shareControlsPlacement(''), 'floating');
-  assert.equal(shareControlsPlacement(undefined), 'floating');
+  // Unknown surface fails closed.
+  assert.equal(shareControlsPlacement(''), 'inline');
+  assert.equal(shareControlsPlacement(undefined), 'inline');
 });
 
 test('teacher stage previews only window/tab shares (no recursive tunnel)', () => {

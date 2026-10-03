@@ -8,6 +8,10 @@ import {
   unionRect,
   validWindowRect,
   windowRectOnFrame,
+  untrustedOrigin,
+  isDesktopLinuxUA,
+  windowPositionsTrusted,
+  surfaceFromTrack,
 } from '../src/lib/screenMask';
 
 const fhd = { width: 1920, height: 1080 };
@@ -74,4 +78,39 @@ test('trail keeps recent rects so a fast drag stays covered', () => {
   assert.deepEqual(trail.push(500, [b]), [b], "old rects expire");
   assert.deepEqual(unionRect([a, b]), { x: 0, y: 0, w: 110, h: 10 });
   assert.equal(unionRect([]), null);
+});
+
+const LINUX = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36';
+const WIN = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36';
+
+test('Wayland signature: windows reported at 0,0 are not trusted (fail closed)', () => {
+  assert.equal(untrustedOrigin({ x: 0, y: 0 }), true);
+  assert.equal(untrustedOrigin({ x: 0, y: 40 }), false);
+  // Ubuntu Wayland: PiP and classroom window both 0,0.
+  assert.equal(windowPositionsTrusted({ pip: { x: 0, y: 0 }, opener: { x: 0, y: 0 }, ua: LINUX }), false);
+  // Linux with the classroom window at 0,0 even if the PiP claims a spot.
+  assert.equal(windowPositionsTrusted({ pip: { x: 1500, y: 900 }, opener: { x: 0, y: 0 }, ua: LINUX }), false);
+  // Linux X11: real positions.
+  assert.equal(windowPositionsTrusted({ pip: { x: 1500, y: 900 }, opener: { x: 70, y: 32 }, ua: LINUX }), true);
+  // Windows with a maximised classroom window at 0,0 is fine.
+  assert.equal(windowPositionsTrusted({ pip: { x: 1500, y: 900 }, opener: { x: 0, y: 0 }, ua: WIN }), true);
+  assert.equal(isDesktopLinuxUA('Mozilla/5.0 (Linux; Android 14) Chrome/129 Mobile'), false);
+  assert.equal(isDesktopLinuxUA('Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) Chrome/129'), false);
+});
+
+test('per-frame: a window at 0,0 makes the frame unsafe (blacked out, PiP closed)', () => {
+  const screens = [{ left: 0, top: 0, width: 1920, height: 1080 }];
+  assert.equal(planMask({ x: 0, y: 0, w: 860, h: 300 }, screens, fhd).kind, 'unsafe');
+  // Expanded panel: the full outer rect is masked.
+  const plan = planMask({ x: 1000, y: 500, w: 860, h: 400 }, screens, fhd, 16);
+  assert.deepEqual(plan, { kind: 'rects', rects: [{ x: 984, y: 484, w: 892, h: 432 }] });
+});
+
+test('surface: displaySurface, else the track label, else monitor', () => {
+  assert.equal(surfaceFromTrack('window', 'screen:0:0'), 'window');
+  assert.equal(surfaceFromTrack(undefined, 'window:12345:0'), 'window');
+  assert.equal(surfaceFromTrack(undefined, 'web-contents-media-stream://1:2'), 'browser');
+  assert.equal(surfaceFromTrack(undefined, 'screen:0:0'), 'monitor');
+  assert.equal(surfaceFromTrack('', ''), 'monitor');
+  assert.equal(surfaceFromTrack(undefined, undefined), 'monitor');
 });

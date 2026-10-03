@@ -42,7 +42,7 @@ import { useStudentFocus } from './useStudentFocus';
 import { countFocusAlerts, focusLabel, isFocusAlert, needsCover } from '@/lib/focusStatus';
 import { FloatingPanel, useFloatDrag, readFloatPref, writeFloatPref, type FloatPos } from './FloatingPanel';
 import { shareControlsPlacement, showLocalSharePreview } from '@/lib/floatGeometry';
-import { candidateScreens } from '@/lib/screenMask';
+import { candidateScreens, surfaceFromTrack, windowPositionsTrusted } from '@/lib/screenMask';
 import {
   maskPipelineSupported,
   resolveScreenGeometry,
@@ -482,9 +482,13 @@ function screenShareErrorMessage(err: unknown): string {
 function displaySurfaceOf(track: MediaStreamTrack | null | undefined): string {
   if (!track) return '';
   try {
-    return String((track.getSettings() as MediaTrackSettings & { displaySurface?: string }).displaySurface ?? '');
+    // Missing displaySurface → track label → otherwise 'monitor' (fail closed).
+    return surfaceFromTrack(
+      (track.getSettings() as MediaTrackSettings & { displaySurface?: string }).displaySurface,
+      track.label
+    );
   } catch {
-    return '';
+    return 'monitor';
   }
 }
 
@@ -492,10 +496,12 @@ const MONITOR_SHARE_HINT =
   'You are sharing your entire screen, so the controls stay in this tab (this browser cannot hide a floating window from the capture). Use Chrome or Edge, or share a window or a tab, to get floating controls.';
 const MONITOR_SCREENS_HINT =
   'Several monitors: the floating controls need the "Window management" permission to be hidden from students, so they stay in this tab for now. Allow it, then start the share again.';
+const MONITOR_POSITION_HINT =
+  'You are sharing your entire screen and this system does not tell the browser where windows are (Linux on Wayland), so the floating controls cannot be hidden from students. They stay in this tab. Share a window or a tab to get floating controls.';
 const MONITOR_UNSAFE_HINT =
   'The floating controls were closed because their position on the shared screen could not be tracked. They are here in this tab instead.';
 
-type MaskFallback = '' | 'unsupported' | 'screens' | 'unsafe';
+type MaskFallback = '' | 'unsupported' | 'screens' | 'unsafe' | 'position';
 
 function isSharePermissionError(err: unknown): boolean {
   const name = err && typeof err === 'object' && 'name' in err ? String((err as { name: unknown }).name) : '';
@@ -2474,7 +2480,21 @@ function RoomInner({
       if (early) {
         const { width: fw, height: fh } = media.getSettings();
         const screens = maskPipelineSupported() ? await resolveScreenGeometry() : null;
+        let pipPos = { x: 0, y: 0 };
+        try {
+          pipPos = { x: early.window.screenX, y: early.window.screenY };
+        } catch {
+          /* unreadable → stays 0,0 → untrusted */
+        }
         if (!maskPipelineSupported()) fallback = 'unsupported';
+        else if (
+          !windowPositionsTrusted({
+            pip: pipPos,
+            opener: { x: window.screenX, y: window.screenY },
+            ua: navigator.userAgent || '',
+          })
+        )
+          fallback = 'position';
         else if (!screens) fallback = 'screens';
         else if (!fw || !fh || !candidateScreens(screens, { width: fw, height: fh }).length) fallback = 'unsafe';
         else {
@@ -3333,7 +3353,9 @@ function RoomInner({
                 ? MONITOR_SCREENS_HINT
                 : maskFallback === 'unsafe'
                   ? MONITOR_UNSAFE_HINT
-                  : MONITOR_SHARE_HINT
+                  : maskFallback === 'position'
+                    ? MONITOR_POSITION_HINT
+                    : MONITOR_SHARE_HINT
               : undefined
           }
           action={

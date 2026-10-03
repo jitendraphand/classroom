@@ -65,6 +65,51 @@ export function validWindowRect(win: Partial<Rect> | null | undefined): win is R
   );
 }
 
+/**
+ * A window reported at exactly (0,0). Wayland (GNOME/KDE on Ubuntu 22.04+)
+ * hides window positions from apps, so Chrome reports 0,0 for every window
+ * there; a mask drawn from that lands in the corner while the real window
+ * stays visible. A real PiP is never placed at the very corner, so (0,0) is
+ * treated as "position unknown" and the caller fails closed.
+ */
+export function untrustedOrigin(win: Pick<Rect, 'x' | 'y'>): boolean {
+  return win.x === 0 && win.y === 0;
+}
+
+/** Desktop Linux (not Android / ChromeOS), where Wayland may hide window positions. */
+export function isDesktopLinuxUA(ua: string): boolean {
+  return /Linux/i.test(ua) && !/Android|CrOS/i.test(ua);
+}
+
+/**
+ * Can window positions be trusted for masking at all? Checked once before the
+ * floating controls are kept over a whole-screen share. False → close them.
+ */
+export function windowPositionsTrusted(opts: {
+  pip: Pick<Rect, 'x' | 'y'>;
+  opener: Pick<Rect, 'x' | 'y'>;
+  ua: string;
+}): boolean {
+  if (untrustedOrigin(opts.pip)) return false;
+  // Wayland reports 0,0 for the classroom window too.
+  if (isDesktopLinuxUA(opts.ua) && untrustedOrigin(opts.opener)) return false;
+  return true;
+}
+
+/**
+ * What a capture track shows. `displaySurface` when the browser reports it;
+ * otherwise Chrome's track label ("window:…", "web-contents-media-stream://…"
+ * for a tab, "screen:…" for a monitor); anything else counts as a monitor so
+ * the floating controls fail closed.
+ */
+export function surfaceFromTrack(displaySurface: string | undefined | null, label: string | undefined | null): string {
+  if (displaySurface) return displaySurface;
+  const l = (label || '').toLowerCase();
+  if (l.startsWith('window:')) return 'window';
+  if (l.startsWith('web-contents-media-stream') || l.startsWith('tab:')) return 'browser';
+  return 'monitor';
+}
+
 export type MaskPlan =
   /** Paint these frame rects black (possibly none: window not on the captured screen). */
   | { kind: 'rects'; rects: Rect[] }
@@ -77,7 +122,7 @@ export type MaskPlan =
  * an ambiguous setup over-masks rather than leaks.
  */
 export function planMask(win: Partial<Rect> | null, screens: ScreenGeom[], frame: FrameSize, marginDip = MASK_MARGIN_DIP): MaskPlan {
-  if (!validWindowRect(win)) return { kind: 'unsafe' };
+  if (!validWindowRect(win) || untrustedOrigin(win)) return { kind: 'unsafe' };
   const candidates = candidateScreens(screens, frame);
   if (!candidates.length) return { kind: 'unsafe' };
   const rects: Rect[] = [];

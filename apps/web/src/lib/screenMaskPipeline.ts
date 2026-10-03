@@ -10,7 +10,7 @@
  * capture's own frames, not timers, so it keeps running while the classroom
  * tab is in the background.
  */
-import { planMask, RectTrail, type Rect, type ScreenGeom } from './screenMask';
+import { planMask, RectTrail, surfaceFromTrack, type Rect, type ScreenGeom } from './screenMask';
 
 type ProcessorCtor = new (init: { track: MediaStreamTrack }) => { readable: ReadableStream<VideoFrame> };
 type GeneratorCtor = new (init: { kind: 'video' }) => MediaStreamTrack & { writable: WritableStream<VideoFrame> };
@@ -106,15 +106,18 @@ export function startMaskPipeline(
       firstFrame();
       const width = frame.displayWidth;
       const height = frame.displayHeight;
-      let surface = '';
+      let surface = 'monitor';
       try {
-        surface = String((raw.getSettings() as MediaTrackSettings & { displaySurface?: string }).displaySurface ?? '');
+        surface = surfaceFromTrack(
+          (raw.getSettings() as MediaTrackSettings & { displaySurface?: string }).displaySurface,
+          raw.label
+        );
       } catch {
-        /* ignore */
+        /* ignore: stays 'monitor' (mask) */
       }
       const win = opts.getWindow();
       // Window/tab capture (after "Share this instead") or no floating window: pass through.
-      if ((surface && surface !== 'monitor') || !win || win.closed) {
+      if (surface === 'window' || surface === 'browser' || !win || win.closed) {
         trail.clear();
         controller.enqueue(frame);
         return;
