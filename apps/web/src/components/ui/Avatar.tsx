@@ -28,10 +28,11 @@ export function Avatar({
   className,
 }: {
   name: string;
-  size?: 'sm' | 'md' | 'lg' | 'xl';
+  size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl';
   className?: string;
 }) {
   const sizes = {
+    xs: 'h-5 w-5 text-[8px]',
     sm: 'h-7 w-7 text-2xs',
     md: 'h-9 w-9 text-xs',
     lg: 'h-12 w-12 text-sm',

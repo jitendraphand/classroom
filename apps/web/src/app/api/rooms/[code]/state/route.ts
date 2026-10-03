@@ -209,6 +209,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     name: room.name,
     status: room.status,
     maxVisibleVideos: clampMaxVisible(room.maxVisibleVideos),
+    waitingRoomOn: room.waitingRoomOn,
     teacherName: room.teacher.name,
     isTeacher,
     actingAsStudent: forceStudent || (access.mode === 'student' && !!access.teacherOwns),

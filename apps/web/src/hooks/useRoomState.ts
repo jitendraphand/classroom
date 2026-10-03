@@ -21,6 +21,8 @@ export type RoomState = {
   ended?: boolean;
   public?: boolean;
   maxVisibleVideos: number;
+  /** Waiting room for this class session (teacher toggle; default on). */
+  waitingRoomOn?: boolean;
   isTeacher: boolean;
   teacherName: string;
   actingAsStudent?: boolean;

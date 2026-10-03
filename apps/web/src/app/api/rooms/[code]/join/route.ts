@@ -6,6 +6,8 @@ import { arriveAtSession, studentMayEnterRoom } from '@/lib/studentService';
 import { generateIdentity, generateSessionToken } from '@/lib/codes';
 import { jsonError, jsonOk } from '@/lib/response';
 import { ensureRedis, keys } from '@/lib/redis';
+import { admitWaiting } from '@/lib/admission';
+import { shouldAutoAdmit } from '@/lib/admissionLogic';
 
 const schema = z.object({
   // Ignored for school-app students (their name comes from the signed token).
@@ -63,6 +65,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
 
     const redis = await ensureRedis();
     await redis.sadd(keys.waiting(code), participant.id);
+    // Waiting room switched off by the teacher: straight into the class.
+    let status: string = participant.status;
+    if (shouldAutoAdmit(room, participant)) {
+      await admitWaiting(room, { ids: [participant.id] });
+      status = 'ADMITTED';
+    }
 
     await setStudentCookie(sessionToken);
     // Prefer student identity for this tab even if a teacher cookie exists
@@ -71,7 +79,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     return jsonOk({
       participantId: participant.id,
       displayName: participant.displayName,
-      status: participant.status,
+      status,
       roomCode: room.code,
       roomName: room.name,
       waitingUrl: `/join/${room.code}?waiting=1&as=student`,

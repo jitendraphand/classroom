@@ -2,9 +2,7 @@ import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { getTeacherSession } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
-import { ensureRedis, keys } from '@/lib/redis';
-import { rotateVisibleSample } from '@/lib/sample';
-import { markAdmitted } from '@/lib/attendanceService';
+import { admitWaiting } from '@/lib/admission';
 
 const schema = z.object({
   participantIds: z.array(z.string()).optional(),
@@ -22,46 +20,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
 
   try {
     const body = schema.parse(await req.json());
-    const where = body.all
-      ? { roomId: room.id, role: 'STUDENT' as const, status: 'WAITING' as const }
-      : {
-          roomId: room.id,
-          role: 'STUDENT' as const,
-          status: 'WAITING' as const,
-          id: { in: body.participantIds || [] },
-        };
+    const count = await admitWaiting(room, { ids: body.participantIds, all: body.all });
 
-    const toAdmit = await prisma.participant.findMany({ where, select: { id: true } });
-    const updated = await prisma.participant.updateMany({
-      where: { ...where, id: { in: toAdmit.map((p) => p.id) } },
-      data: { status: 'ADMITTED' },
-    });
-    await markAdmitted(toAdmit.map((p) => p.id)).catch((e) => console.error('attendance admit', e));
-
-    if (room.status === 'WAITING') {
-      await prisma.room.update({ where: { id: room.id }, data: { status: 'LIVE' } });
-    }
-
-    const admitted = await prisma.participant.findMany({
-      where: { roomId: room.id, role: 'STUDENT', status: 'ADMITTED' },
-      select: { id: true },
-    });
-
-    const redis = await ensureRedis();
-    const pipe = redis.multi();
-    pipe.del(keys.waiting(code));
-    const stillWaiting = await prisma.participant.findMany({
-      where: { roomId: room.id, role: 'STUDENT', status: 'WAITING' },
-      select: { id: true },
-    });
-    if (stillWaiting.length) pipe.sadd(keys.waiting(code), ...stillWaiting.map((p) => p.id));
-    pipe.del(keys.admitted(code));
-    if (admitted.length) pipe.sadd(keys.admitted(code), ...admitted.map((p) => p.id));
-    await pipe.exec();
-
-    await rotateVisibleSample(code);
-
-    return jsonOk({ admitted: updated.count, roomStatus: 'LIVE' });
+    return jsonOk({ admitted: count, roomStatus: 'LIVE' });
   } catch (e) {
     if (e instanceof z.ZodError) return jsonError(e.errors[0]?.message || 'Invalid input');
     console.error(e);

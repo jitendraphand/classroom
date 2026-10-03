@@ -71,7 +71,7 @@ async function openRoomForSession(
     { name: opts.name || sessionTitle(cs), maxVisibleVideos: opts.maxVisibleVideos }
   );
   if (room.classSessionId !== cs.id) {
-    room = await prisma.room.update({ where: { id: room.id }, data: { classSessionId: cs.id } });
+    room = await prisma.room.update({ where: { id: room.id }, data: { classSessionId: cs.id, waitingRoomOn: true } });
   }
   const classSession = await prisma.classSession.update({
     where: { id: cs.id },

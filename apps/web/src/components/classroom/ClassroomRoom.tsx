@@ -66,7 +66,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageLoading } from '@/components/ui/Skeleton';
-import { IconHand, IconPin, IconScreen, IconUsers, IconVideo } from '@/components/ui/Icons';
+import { IconDoor, IconHand, IconHandDown, IconMic, IconMicOff, IconPin, IconScreen, IconUserPlus, IconUsers, IconVideo } from '@/components/ui/Icons';
 import { pickTiles, sortRoster } from '@/lib/classSlots';
 import { cn } from '@/lib/cn';
 import { MIC_LOCKED_NO_TEACHER } from '@/lib/teacherPresenceLogic';
@@ -227,6 +227,9 @@ function ParticipantGrid({
   const hasScreen = screenShares.length > 0;
 
   if (!hasScreen && cameras.length === 0) {
+    // Teacher: the stage stays empty until a share; the teacher's own camera
+    // preview lives only in the docked Class panel (no duplicate tile here).
+    if (isTeacher) return <div className="stage-empty min-h-0 flex-1" aria-hidden />;
     return (
       <div className="flex min-h-0 flex-col gap-3">
         <EmptyState
@@ -286,7 +289,6 @@ function ParticipantGrid({
       >
         {cameras.map((t) => {
           const speaking = t.participant.isSpeaking;
-          const showSampleChip = isTeacher && !isTeacherParticipant(t.participant, teacherSet);
           return (
             <div
               key={`${t.participant.identity}-${t.source}`}
@@ -307,12 +309,12 @@ function ParticipantGrid({
                 <span className="truncate text-xs font-medium">
                   {t.participant.name || t.participant.identity}
                 </span>
-                {showSampleChip && <span className="chip-sample shrink-0">In sample</span>}
+
               </div>
             </div>
           );
         })}
-        <div className={hasScreen ? 'max-h-36' : undefined}>{localPreview}</div>
+        {!isTeacher && <div className={hasScreen ? 'max-h-36' : undefined}>{localPreview}</div>}
       </div>
       )}
     </div>
@@ -1272,8 +1274,8 @@ function TeacherPeersFloat({
         title={docked ? 'Drag to float this panel' : 'Drag to move · double-click to dock'}
       >
         <span className="text-2xs font-semibold text-slate-200">
-          <span aria-hidden className="mr-1 text-slate-500">⠿</span>
-          Class{isMin ? ` · ${peerIds.length + 1}` : ''}
+          <span aria-hidden className="text-slate-500">⠿</span>
+          {isMin && <span className="ml-1 text-slate-400">{peerIds.length + 1} videos</span>}
         </span>
         <div className="flex items-center gap-1" data-no-drag>
           {dock && (
@@ -2766,6 +2768,29 @@ function RoomInner({
     refresh();
   }
 
+  // Waiting room toggle (per class session, saved on the server). Off admits
+  // everyone waiting and lets new students straight in (still muted).
+  const [waitingRoomOverride, setWaitingRoomOverride] = useState<boolean | null>(null);
+  const waitingRoomOn = waitingRoomOverride ?? state?.waitingRoomOn ?? true;
+  useEffect(() => {
+    if (waitingRoomOverride !== null && state?.waitingRoomOn === waitingRoomOverride) setWaitingRoomOverride(null);
+  }, [waitingRoomOverride, state?.waitingRoomOn]);
+  async function setWaitingRoom(on: boolean) {
+    setWaitingRoomOverride(on);
+    const res = await roomFetch(code, '/settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ waitingRoomOn: on }),
+    }).catch(() => null);
+    if (!res?.ok) {
+      setWaitingRoomOverride(null);
+      setHudNotice('Could not change the waiting room.');
+    } else {
+      setHudNotice(on ? 'Waiting room on: you admit each student.' : 'Waiting room off: students enter directly (muted).');
+    }
+    refresh();
+  }
+
   function setStudentCameraCap(studentSlots: number) {
     const maxVisibleVideos = Math.min(6, Math.max(1, studentSlots));
     setSampleCap(maxVisibleVideos);
@@ -2813,6 +2838,13 @@ function RoomInner({
 
   const studentCount = state?.admitted?.filter((a) => a.role === 'STUDENT').length ?? 0;
   const waitingCount = state?.waiting?.length ?? 0;
+  // Roster panel: students only (the teacher is not listed), raised hands
+  // first by raise time, then pinned, then by name.
+  const rosterStudents = sortRoster(
+    (state?.admitted ?? [])
+      .filter((p) => p.role === 'STUDENT')
+      .map((p) => ({ ...p, handRaised: !!(p.handRaised || (state?.raisedHands ?? []).includes(p.id)) }))
+  );
   const focusAlertCount = countFocusAlerts((state?.admitted ?? []).filter((a) => a.role === 'STUDENT'));
   /** LiveKit identity → fullscreen alert label, for the Class panel tiles. */
   const focusByIdentity = useMemo(() => {
@@ -3141,7 +3173,7 @@ function RoomInner({
             {isTeacher ? (
               <>
                 {' · '}
-                {visibles.length}/{Math.min(sampleCap ?? state?.maxVisibleVideos ?? 6, 6)} in sample
+                {visibles.length}/{Math.min(sampleCap ?? state?.maxVisibleVideos ?? 6, 6)} videos shown
                 {' · '}
                 {studentCount} student{studentCount === 1 ? '' : 's'}
                 {waitingCount > 0 ? ` · ${waitingCount} waiting` : ''}
@@ -3281,147 +3313,134 @@ function RoomInner({
           <div className="flex h-full min-h-0 flex-col space-y-3 overflow-hidden">
             {/* Waiting students first, so Admit is the first thing in the roster. */}
             {waitingCount > 0 && (
-              <div className="shrink-0 rounded-xl border border-amber-400/30 bg-amber-500/10 p-2.5" data-no-drag>
-                <div className="flex items-center justify-between gap-2">
+              <div className="shrink-0 rounded-xl border border-amber-400/30 bg-amber-500/10 p-1.5" data-no-drag>
+                <div className="flex items-center justify-between gap-2 px-1">
                   <h3 className="text-2xs font-semibold uppercase tracking-wider text-amber-200">
                     Waiting ({waitingCount})
                   </h3>
                   {waitingCount > 1 && (
-                    <Button size="sm" variant="warning" onClick={() => void admitStudents(undefined, true)}>
-                      Admit all
-                    </Button>
+                    <button
+                      type="button"
+                      className="roster-admit-all"
+                      onClick={() => void admitStudents(undefined, true)}
+                      aria-label={`Admit all ${waitingCount} waiting students`}
+                      title="Admit everyone waiting"
+                    >
+                      <IconUserPlus size={12} />
+                      All
+                    </button>
                   )}
                 </div>
-                <ul className="mt-2 max-h-40 space-y-1.5 overflow-y-auto text-sm">
+                <ul className="mt-1 max-h-40 space-y-0.5 overflow-y-auto">
                   {state!.waiting!.map((p) => (
-                    <li
-                      key={p.id}
-                      className="flex items-center justify-between gap-2 rounded-lg bg-black/15 px-2 py-1.5"
-                    >
-                      <div className="flex min-w-0 items-center gap-2">
-                        <Avatar name={p.displayName} size="sm" />
-                        <div className="min-w-0">
-                          <span className="block truncate">{p.displayName}</span>
-                          <RosterMeta info={p} />
-                        </div>
-                      </div>
-                      <Button size="sm" variant="warning" onClick={() => void admitStudents([p.id])}>
-                        Admit
-                      </Button>
+                    <li key={p.id} className="roster-row" title={rosterLabel(p)}>
+                      <Avatar name={p.displayName} size="xs" />
+                      <span className="roster-name">{p.displayName}</span>
+                      {p.gradeDivision && <span className="roster-meta">{p.gradeDivision}</span>}
+                      {p.late && <span className="roster-chip roster-chip-red">Late</span>}
+                      <span className="roster-actions">
+                        <RosterIconButton
+                          label={`Admit ${p.displayName}`}
+                          tone="warn"
+                          onClick={() => void admitStudents([p.id])}
+                        >
+                          <IconUserPlus size={14} />
+                        </RosterIconButton>
+                      </span>
                     </li>
                   ))}
                 </ul>
               </div>
             )}
-            <div className="flex shrink-0 flex-wrap gap-2" data-no-drag>
+            <div className="flex shrink-0 flex-wrap items-center gap-2" data-no-drag>
               <Button size="sm" variant="warning" onClick={() => muteAllStudents(true)}>
                 Mute all
               </Button>
               <Button size="sm" variant="secondary" onClick={() => muteAllStudents(false)}>
                 Unmute all
               </Button>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={waitingRoomOn}
+                className={cn('waiting-toggle ml-auto', waitingRoomOn ? 'is-on' : 'is-off')}
+                onClick={() => void setWaitingRoom(!waitingRoomOn)}
+                aria-label={waitingRoomOn ? 'Waiting room on. Turn off to let students in directly' : 'Waiting room off. Turn on to admit students yourself'}
+                title={
+                  waitingRoomOn
+                    ? 'Waiting room on: you admit each student. Click to turn off (admits everyone waiting).'
+                    : 'Waiting room off: students enter directly, muted. Click to turn on.'
+                }
+              >
+                <IconDoor size={13} />
+                <span>{waitingRoomOn ? 'Waiting room' : 'Direct entry'}</span>
+              </button>
             </div>
-            <ul className="min-h-0 flex-1 space-y-2 overflow-y-auto text-sm" data-no-drag>
-              {(state?.admitted?.length || 0) === 0 && (
+            <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto" data-no-drag>
+              {rosterStudents.length === 0 && (
                 <EmptyState
                   icon={<IconUsers size={22} />}
-                  title="No one here yet"
-                  description="Admitted participants will show up in this roster."
+                  title="No students yet"
+                  description="Admitted students will show up in this roster."
                   className="py-6"
                 />
               )}
-              {sortRoster(
-                (state?.admitted ?? []).map((p) => ({
-                  ...p,
-                  handRaised:
-                    p.role === 'STUDENT' && (p.handRaised || (state?.raisedHands ?? []).includes(p.id)),
-                }))
-              )
-                .map((p) => {
-                  const raised =
-                    p.role === 'STUDENT' &&
-                    (p.handRaised || (state?.raisedHands ?? []).includes(p.id));
-                  return (
-                    <li
-                      key={p.id}
-                      className={cn(
-                        'rounded-xl border bg-black/20 px-3 py-2.5',
-                        raised ? 'border-amber-400/40 bg-amber-500/10' : 'border-white/[0.05]'
+              {rosterStudents.map((p) => {
+                const raised = !!p.handRaised;
+                const focus = focusLabel(p.focus, p.focusIphone);
+                return (
+                  <li
+                    key={p.id}
+                    className={cn('roster-row', raised && 'roster-row-raised')}
+                    title={rosterLabel(p)}
+                  >
+                    {raised && (
+                      <span className="roster-hand" title="Hand raised" aria-label="Hand raised">
+                        <IconHand size={13} />
+                      </span>
+                    )}
+                    <Avatar name={p.displayName} size="xs" />
+                    <span className="roster-name">{p.displayName}</span>
+                    {p.gradeDivision && <span className="roster-meta">{p.gradeDivision}</span>}
+                    {focus && (
+                      <span
+                        className={cn('roster-chip', isFocusAlert(p.focus) ? 'roster-chip-warn' : '')}
+                        title={focus}
+                      >
+                        {focus}
+                      </span>
+                    )}
+                    {p.late && <span className="roster-chip roster-chip-red">Late</span>}
+                    <span className="roster-actions">
+                      <RosterIconButton
+                        label={p.mutedByTeacher ? `Unmute ${p.displayName}` : `Mute ${p.displayName}`}
+                        tone={p.mutedByTeacher ? 'warn' : 'plain'}
+                        pressed={!!p.mutedByTeacher}
+                        onClick={() => muteStudent(p.id, !p.mutedByTeacher)}
+                      >
+                        {p.mutedByTeacher ? <IconMicOff size={14} /> : <IconMic size={14} />}
+                      </RosterIconButton>
+                      <RosterIconButton
+                        label={p.pinned ? `Unpin ${p.displayName}'s video` : `Pin ${p.displayName}'s video`}
+                        tone={p.pinned ? 'on' : 'plain'}
+                        pressed={!!p.pinned}
+                        onClick={() => void togglePin(p.id, !p.pinned)}
+                      >
+                        <IconPin size={13} />
+                      </RosterIconButton>
+                      {raised && (
+                        <RosterIconButton
+                          label={`Lower ${p.displayName}'s hand`}
+                          tone="warn"
+                          onClick={() => void lowerHand(p.id)}
+                        >
+                          <IconHandDown size={14} />
+                        </RosterIconButton>
                       )}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex min-w-0 items-center gap-2.5">
-                          <Avatar name={p.displayName} size="sm" />
-                          <div className="min-w-0">
-                            <p className="flex items-center gap-1.5 truncate font-medium text-slate-100">
-                              {raised && (
-                                <span
-                                  className="inline-flex shrink-0 text-amber-300"
-                                  title="Hand raised"
-                                  aria-label="Hand raised"
-                                >
-                                  <IconHand size={14} />
-                                </span>
-                              )}
-                              <span className="truncate">
-                                {p.displayName}
-                                {p.role === 'TEACHER' ? ' · Teacher' : ''}
-                              </span>
-                            </p>
-                            {p.role === 'STUDENT' && <RosterMeta info={p} />}
-                            {p.role === 'STUDENT' && <FocusChip focus={p.focus} iphone={p.focusIphone} />}
-                            {p.mutedByTeacher && p.role === 'STUDENT' && (
-                              <span className="chip-muted mt-0.5">Muted by teacher</span>
-                            )}
-                            {raised && (
-                              <span className="mt-0.5 inline-flex items-center gap-1 text-2xs font-semibold text-amber-300">
-                                ✋ Hand raised
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        {p.role === 'STUDENT' && (
-                          <span className={p.isVisible ? 'chip-sample' : 'chip-local'}>
-                            {p.pinned ? 'Pinned' : p.isVisible ? 'In sample' : 'Local'}
-                          </span>
-                        )}
-                      </div>
-                      {p.role === 'STUDENT' && (
-                        <div className="mt-2 flex flex-wrap gap-3">
-                          <button
-                            type="button"
-                            className="text-xs font-medium text-brand-300 hover:underline"
-                            onClick={() => muteStudent(p.id, !p.mutedByTeacher)}
-                          >
-                            {p.mutedByTeacher ? 'Unmute student' : 'Mute student'}
-                          </button>
-                          {raised && (
-                            <button
-                              type="button"
-                              className="text-xs font-medium text-amber-300 hover:underline"
-                              onClick={() => void lowerHand(p.id)}
-                            >
-                              Lower hand
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            className={cn(
-                              'inline-flex items-center gap-1 text-xs font-medium hover:underline',
-                              p.pinned ? 'text-amber-300' : 'text-slate-300'
-                            )}
-                            aria-pressed={!!p.pinned}
-                            onClick={() => void togglePin(p.id, !p.pinned)}
-                            title={p.pinned ? 'Back to rotation' : 'Keep this student in the class videos'}
-                          >
-                            <IconPin size={12} />
-                            {p.pinned ? 'Unpin video' : 'Pin video'}
-                          </button>
-                        </div>
-                      )}
-                    </li>
-                  );
-                })}
+                    </span>
+                  </li>
+                );
+              })}
             </ul>
           </div>
         </FloatingPanel>
@@ -3990,5 +4009,33 @@ function RosterMeta({ info }: { info: RosterInfo }) {
       )}
       {info.late && <span className="rounded bg-red-500/15 px-1 font-semibold text-red-200">Late</span>}
     </span>
+  );
+}
+
+/** Small square icon button for roster rows, with tooltip and aria-label. */
+function RosterIconButton({
+  label,
+  onClick,
+  children,
+  tone = 'plain',
+  pressed,
+}: {
+  label: string;
+  onClick: () => void;
+  children: ReactNode;
+  tone?: 'plain' | 'warn' | 'on';
+  pressed?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      className={cn('roster-icon-btn', tone !== 'plain' && `roster-icon-btn-${tone}`)}
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      aria-pressed={pressed}
+    >
+      {children}
+    </button>
   );
 }

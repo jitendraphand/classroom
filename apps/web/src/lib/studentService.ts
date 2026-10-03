@@ -10,6 +10,8 @@ import { occurrencesForRange } from './scheduleService';
 import { addDays, forAudience, formatHHMM, localDateOf, type Occurrence } from './schedule';
 import { appTimeZone, earlyWindowMinutes } from './schoolConfig';
 import { decideRoute, routeSignature, type SessionState } from './studentRouting';
+import { admitWaiting } from './admission';
+import { shouldAutoAdmit } from './admissionLogic';
 import type { JoinClaims } from './schoolJwt';
 
 type StudentStore = {
@@ -96,6 +98,12 @@ export async function ensureStudentParticipant(student: Student, room: Room, cs:
     await redis.sadd(keys.waiting(room.code), participant.id);
   } else if (participant.displayName !== student.name) {
     participant = await prisma.participant.update({ where: { id: participant.id }, data: { displayName: student.name } });
+  }
+  // Waiting room switched off by the teacher: admit on arrival (still muted,
+  // still only this class).
+  if (shouldAutoAdmit(room, participant)) {
+    await admitWaiting(room, { ids: [participant.id] });
+    participant = { ...participant, status: 'ADMITTED' };
   }
   await setStudentCookie(participant.sessionToken);
   await setActAsStudent();

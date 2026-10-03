@@ -8,7 +8,7 @@ import {
   useScreenAnnotate,
   type AnnotateMode,
 } from './ScreenAnnotator';
-import { IconChat, IconHand, IconMic, IconMicOff, IconPin, IconScreen, IconUsers } from '@/components/ui/Icons';
+import { IconChat, IconHand, IconHandDown, IconMic, IconMicOff, IconPin, IconScreen, IconUserPlus, IconUsers } from '@/components/ui/Icons';
 import { sortRoster } from '@/lib/classSlots';
 import { useFloatDrag, type FloatPos } from './FloatingPanel';
 import { focusLabel } from '@/lib/focusStatus';
@@ -46,6 +46,7 @@ export type RosterEntry = {
   pinned?: boolean;
   focus?: import('@/lib/focusStatus').FocusStatus;
   focusIphone?: boolean;
+  gradeDivision?: string | null;
 };
 
 export type TeacherShareHudProps = {
@@ -314,7 +315,7 @@ background:var(--warn);color:#1a1206;font-size:9px;font-weight:800;display:inlin
 .tsh-panel-title{font-weight:650;font-size:11px;flex:1}
 .tsh-scroll{flex:1 1 auto;min-height:0;overflow:auto;padding:6px 8px}
 .tsh-empty{color:var(--dim);font-size:11px;text-align:center;padding:12px 8px;margin:0}
-.tsh-person{display:flex;align-items:center;gap:6px;padding:5px;border-radius:8px;background:rgba(255,255,255,.04);margin-bottom:4px}
+.tsh-person{display:flex;align-items:center;gap:4px;padding:3px 5px;border-radius:8px;background:rgba(255,255,255,.04);margin-bottom:4px}
 .tsh-person-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;font-size:11px}
 .tsh-person-sub{font-size:10px;color:var(--dim);font-weight:500}
 .tsh-chip{font-size:9px;font-weight:700;padding:1px 4px;border-radius:999px;border:1px solid var(--line);color:var(--dim)}
@@ -322,6 +323,11 @@ background:var(--warn);color:#1a1206;font-size:9px;font-weight:800;display:inlin
 .tsh-hand{display:inline-flex;vertical-align:-2px;margin-right:4px;color:#fcd34d}
 .tsh-pin{display:inline-grid;place-items:center;padding:4px 6px}
 .tsh-pin.is-on{background:#f59e0b;color:#111;border-color:#f59e0b}
+.tsh-icon{display:inline-grid;place-items:center;width:24px;height:24px;padding:0;flex-shrink:0}
+.tsh-icon.is-on{background:#f59e0b;color:#111;border-color:#f59e0b}
+.tsh-icon.is-warn{color:#fcd34d;border-color:rgba(245,158,11,.4)}
+.tsh-person.is-raised{background:rgba(245,158,11,.12)}
+.tsh-person .tsh-chip{max-width:84px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0}
 .tsh-chat{height:220px;min-height:160px}
 .tsh-admit{max-width:140px;overflow:hidden;text-overflow:ellipsis}
 .tsh-pill{gap:2px;padding:3px 4px}
@@ -711,11 +717,17 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                   )}
                 </div>
                 {waiting.map((w) => (
-                  <div className="tsh-person" key={w.id}>
-                    <Avatar name={w.displayName} size="sm" />
+                  <div className="tsh-person" key={w.id} title={w.displayName}>
+                    <Avatar name={w.displayName} size="xs" />
                     <span className="tsh-person-name">{w.displayName}</span>
-                    <button type="button" className="tsh-btn" onClick={() => onAdmit?.(w.id)}>
-                      Admit
+                    <button
+                      type="button"
+                      className="tsh-btn tsh-icon is-warn"
+                      onClick={() => onAdmit?.(w.id)}
+                      aria-label={`Admit ${w.displayName}`}
+                      title={`Admit ${w.displayName}`}
+                    >
+                      <IconUserPlus size={13} />
                     </button>
                   </div>
                 ))}
@@ -732,43 +744,55 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
             {students.length === 0 ? (
               <p className="tsh-empty">No students yet.</p>
             ) : (
-              students.map((s) => (
-                <div className="tsh-person" key={s.id}>
-                  <Avatar name={s.displayName} size="sm" />
-                  <span className="tsh-person-name">
+              students.map((s) => {
+                const focus = focusLabel(s.focus, s.focusIphone);
+                return (
+                  <div className={s.handRaised ? 'tsh-person is-raised' : 'tsh-person'} key={s.id} title={s.displayName}>
                     {s.handRaised && (
                       <span className="tsh-hand" title="Hand raised" aria-label="Hand raised">
                         <IconHand size={12} />
                       </span>
                     )}
-                    {s.displayName}
-                    <span className="tsh-person-sub" style={{ display: 'block' }}>
-                      {s.mutedByTeacher ? 'muted by you' : s.isVisible ? 'in sample' : 'local only'}
-                      {focusLabel(s.focus, s.focusIphone) ? ` · ${focusLabel(s.focus, s.focusIphone)}` : ''}
-                    </span>
-                  </span>
-                  {s.mutedByTeacher ? <span className="tsh-chip tsh-chip-muted">muted</span> : null}
-                  {onTogglePin && (
+                    <Avatar name={s.displayName} size="xs" />
+                    <span className="tsh-person-name">{s.displayName}</span>
+                    {s.gradeDivision ? <span className="tsh-person-sub">{s.gradeDivision}</span> : null}
+                    {focus ? <span className="tsh-chip tsh-chip-muted" title={focus}>{focus}</span> : null}
                     <button
                       type="button"
-                      className={s.pinned ? 'tsh-btn tsh-pin is-on' : 'tsh-btn tsh-pin'}
-                      aria-pressed={!!s.pinned}
-                      aria-label={s.pinned ? `Unpin ${s.displayName}` : `Pin ${s.displayName}`}
-                      title={s.pinned ? 'Unpin (back to rotation)' : 'Pin: keep in the class videos'}
-                      onClick={() => onTogglePin(s.id, !s.pinned)}
+                      className={s.mutedByTeacher ? 'tsh-btn tsh-icon is-warn' : 'tsh-btn tsh-icon'}
+                      aria-pressed={!!s.mutedByTeacher}
+                      aria-label={s.mutedByTeacher ? `Unmute ${s.displayName}` : `Mute ${s.displayName}`}
+                      title={s.mutedByTeacher ? `Unmute ${s.displayName}` : `Mute ${s.displayName}`}
+                      onClick={() => onMuteStudent(s.id, !s.mutedByTeacher)}
                     >
-                      <IconPin size={12} />
+                      {s.mutedByTeacher ? <IconMicOff size={13} /> : <IconMic size={13} />}
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    className="tsh-btn"
-                    onClick={() => onMuteStudent(s.id, !s.mutedByTeacher)}
-                  >
-                    {s.mutedByTeacher ? 'Unmute' : 'Mute'}
-                  </button>
-                </div>
-              ))
+                    {onTogglePin && (
+                      <button
+                        type="button"
+                        className={s.pinned ? 'tsh-btn tsh-icon is-on' : 'tsh-btn tsh-icon'}
+                        aria-pressed={!!s.pinned}
+                        aria-label={s.pinned ? `Unpin ${s.displayName}'s video` : `Pin ${s.displayName}'s video`}
+                        title={s.pinned ? `Unpin ${s.displayName}'s video` : `Pin ${s.displayName}'s video`}
+                        onClick={() => onTogglePin(s.id, !s.pinned)}
+                      >
+                        <IconPin size={12} />
+                      </button>
+                    )}
+                    {s.handRaised && (
+                      <button
+                        type="button"
+                        className="tsh-btn tsh-icon is-warn"
+                        aria-label={`Lower ${s.displayName}'s hand`}
+                        title={`Lower ${s.displayName}'s hand`}
+                        onClick={() => onLowerHand(s.id)}
+                      >
+                        <IconHandDown size={13} />
+                      </button>
+                    )}
+                  </div>
+                );
+              })
             )}
           </div>
         </div>

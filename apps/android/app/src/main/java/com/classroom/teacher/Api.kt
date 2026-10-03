@@ -186,6 +186,11 @@ class ClassroomApi(rawBase: String) {
     }
 
     /** How many student cameras the server lets publish at once (1–6). */
+    /** Waiting room on/off for the running class session (off admits everyone waiting). */
+    fun setWaitingRoom(code: String, on: Boolean) {
+        call("PATCH", "/api/rooms/${code.uppercase()}/settings", JSONObject().put("waitingRoomOn", on))
+    }
+
     fun setVideoCap(code: String, max: Int) {
         call("PATCH", "/api/rooms/${code.uppercase()}/settings", JSONObject().put("maxVisibleVideos", max))
     }

@@ -125,6 +125,8 @@ export async function startOrReopenTeacherRoom(
         // New LiveKit room name for the new session: tokens minted for the last
         // class (same permanent code) no longer name this room.
         sessionId: newSessionId(),
+        // Every class starts with the waiting room on.
+        waitingRoomOn: true,
         name: opts.name?.trim() || room.name,
         maxVisibleVideos: clampMaxVisible(opts.maxVisibleVideos ?? room.maxVisibleVideos),
       },

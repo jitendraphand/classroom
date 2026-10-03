@@ -334,6 +334,55 @@ body {
     @apply relative shrink-0 overflow-hidden rounded-lg bg-black;
   }
   /* Pin toggle on a student tile: shown on hover / focus, always while pinned. */
+  /* Compact one-line roster rows (teacher Roster panel). */
+  .roster-row {
+    @apply flex min-h-[30px] items-center gap-1.5 rounded-lg border border-transparent px-1.5 py-1 text-xs hover:bg-white/[0.04];
+  }
+  .roster-row-raised {
+    @apply border-amber-400/30 bg-amber-500/10;
+  }
+  .roster-name {
+    @apply min-w-0 truncate font-medium text-slate-100;
+  }
+  .roster-meta {
+    @apply shrink-0 text-[10px] text-slate-400;
+  }
+  .roster-hand {
+    @apply inline-flex shrink-0 text-amber-300;
+  }
+  .roster-chip {
+    @apply max-w-[88px] shrink-0 truncate rounded bg-white/10 px-1 text-[10px] font-semibold leading-4 text-slate-300;
+  }
+  .roster-chip-warn {
+    @apply bg-amber-500/20 text-amber-200;
+  }
+  .roster-chip-red {
+    @apply bg-red-500/15 text-red-200;
+  }
+  .roster-actions {
+    @apply ml-auto flex shrink-0 items-center gap-0.5;
+  }
+  .roster-icon-btn {
+    @apply inline-grid h-6 w-6 place-items-center rounded-md text-slate-300 transition hover:bg-white/10 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-400;
+  }
+  .roster-icon-btn-warn {
+    @apply bg-amber-500/15 text-amber-200 hover:bg-amber-500/25;
+  }
+  .roster-icon-btn-on {
+    @apply bg-amber-500 text-ink-950 hover:bg-amber-400 hover:text-ink-950;
+  }
+  .waiting-toggle {
+    @apply inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold transition;
+  }
+  .waiting-toggle.is-on {
+    @apply border-amber-400/40 bg-amber-500/15 text-amber-100 hover:bg-amber-500/25;
+  }
+  .waiting-toggle.is-off {
+    @apply border-emerald-400/40 bg-emerald-500/15 text-emerald-100 hover:bg-emerald-500/25;
+  }
+  .roster-admit-all {
+    @apply inline-flex items-center gap-1 rounded-md bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-100 hover:bg-amber-500/30;
+  }
   .peer-pin-btn {
     @apply absolute right-1 top-1 grid h-6 w-6 place-items-center rounded-full bg-black/60 text-slate-200 opacity-0 transition hover:bg-black/80 focus-visible:opacity-100;
   }

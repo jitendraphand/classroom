@@ -38,6 +38,7 @@ class ClassPanel(context: Context, private val listener: Listener) : LinearLayou
         fun onMuteStudent(participantId: String, muted: Boolean)
         fun onPinStudent(participantId: String, pinned: Boolean)
         fun onLowerHand(participantId: String)
+        fun onWaitingRoom(on: Boolean)
     }
 
     var kind: Kind = Kind.ROSTER
@@ -142,8 +143,28 @@ class ClassPanel(context: Context, private val listener: Listener) : LinearLayou
         if (atBottom) chatScroll.post { chatScroll.fullScroll(View.FOCUS_DOWN) }
     }
 
-    fun renderRoster(waiting: List<Pair<String, String>>, students: List<StudentInfo>, pinsFull: Boolean) {
+    fun renderRoster(waiting: List<Pair<String, String>>, students: List<StudentInfo>, pinsFull: Boolean, waitingRoomOn: Boolean = true) {
         rosterList.removeAllViews()
+        // Waiting room switch (per class session, saved on the server).
+        val lobby = LinearLayout(context).apply {
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, context.dpx(6), 0, context.dpx(2))
+        }
+        lobby.addView(
+            nameBlock(
+                "Waiting room",
+                if (waitingRoomOn) "On: you admit each student" else "Off: students enter directly (muted)",
+                null,
+            ),
+            LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        lobby.addView(android.widget.Switch(context).apply {
+            isChecked = waitingRoomOn
+            contentDescription = "Waiting room"
+            setOnCheckedChangeListener { _, on -> listener.onWaitingRoom(on) }
+        })
+        rosterList.addView(lobby)
         if (waiting.isNotEmpty()) {
             val head = LinearLayout(context).apply {
                 orientation = HORIZONTAL

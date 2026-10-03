@@ -138,6 +138,7 @@ class MainActivity : AppCompatActivity() {
     private var rotationOrder: List<String> = emptyList()
     private var rotationJob: Job? = null
     private var toastJob: Job? = null
+    private var waitingRoomOn = true
 
     /** Display rotations / size changes reach the application even while this activity is in the background. */
     private val displayCallbacks = object : ComponentCallbacks {
@@ -1126,12 +1127,17 @@ class MainActivity : AppCompatActivity() {
         }
         override fun onPinStudent(participantId: String, pinned: Boolean) = pinStudent(participantId, pinned)
         override fun onLowerHand(participantId: String) = studentAction("Could not lower the hand") { it.lowerHand(code, participantId) }
+        override fun onWaitingRoom(on: Boolean) {
+            waitingRoomOn = on
+            showToast(if (on) "Waiting room on: you admit each student." else "Waiting room off: students enter directly, muted.")
+            studentAction("Could not change the waiting room") { it.setWaitingRoom(code, on) }
+        }
     }
 
     private fun renderRosterPanel() {
         val p = panel ?: return
         if (panelKind != ClassPanel.Kind.ROSTER) return
-        p.renderRoster(waitingList, students, pinsFull = students.count { it.pinned } >= maxVisible)
+        p.renderRoster(waitingList, students, pinsFull = students.count { it.pinned } >= maxVisible, waitingRoomOn = waitingRoomOn)
     }
 
     /** Run a teacher action against the API, then refresh the class state. */
@@ -1575,6 +1581,7 @@ class MainActivity : AppCompatActivity() {
         handsRaised = students.count { it.handRaised }
         focusAlerts = students.count { it.focusAlert }
         maxVisible = state.optInt("maxVisibleVideos", ClassLogic.STUDENT_TILES).coerceIn(1, 6)
+        waitingRoomOn = state.optBoolean("waitingRoomOn", true)
         val vis = state.optJSONArray("visibleIdentities") ?: JSONArray()
         visibleIdentities = (0 until vis.length()).map { vis.optString(it) }
         // Students muted by the teacher drop their sticky speaker slot.
