@@ -66,7 +66,8 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageLoading } from '@/components/ui/Skeleton';
-import { IconHand, IconScreen, IconUsers, IconVideo } from '@/components/ui/Icons';
+import { IconHand, IconPin, IconScreen, IconUsers, IconVideo } from '@/components/ui/Icons';
+import { pickTiles, sortRoster } from '@/lib/classSlots';
 import { cn } from '@/lib/cn';
 import { MIC_LOCKED_NO_TEACHER } from '@/lib/teacherPresenceLogic';
 import { roomFetch, rememberClassroomRole, getClassroomRole, claimTeacherTab } from '@/lib/classroomClient';
@@ -887,9 +888,15 @@ function TeacherPeersFloat({
   sharing = false,
   onDockSpace,
   focusAlerts = {},
+  pinnedIdentities = [],
+  onTogglePin,
 }: {
   /** LiveKit identity → "Left fullscreen" / "Switched away". */
   focusAlerts?: Record<string, string>;
+  /** Students the teacher pinned (oldest first): they keep a tile, bypassing rotation. */
+  pinnedIdentities?: string[];
+  /** Pin / unpin a student from their tile. */
+  onTogglePin?: (identity: string, pinned: boolean) => void;
   roomCode: string;
   teacherIdentities: string[];
   visibleIdentities: string[];
@@ -1160,23 +1167,15 @@ function TeacherPeersFloat({
       (id) => !tSet.has(id) && !id.startsWith('teacher_') && hasLiveCamera(id)
     );
     const sticky = Array.from(stickySpeakersRef.current).filter((id) => pool.includes(id));
-
-    // Speak-reserved slot first (active unmuted speaker), then other stickies
-    const slots: string[] = [];
-    if (speakingId && pool.includes(speakingId) && !slots.includes(speakingId)) {
-      slots.push(speakingId);
-    }
-    const studentSlotsForSticky = Math.max(0, slotCount - 1);
-    for (const id of sticky) {
-      if (slots.length >= studentSlotsForSticky) break;
-      if (!slots.includes(id)) slots.push(id);
-    }
-
-    // First tile is the teacher. Remaining tiles cycle every rotation tick.
+    const pins = pinnedIdentities.filter((id) => pool.includes(id));
     const studentSlots = Math.max(0, slotCount - 1);
-    const rest = pool.filter((id) => !slots.includes(id) && !sticky.includes(id));
+
+    // Rotation runs among everyone who is not pinned / speaking. Pinned
+    // students (teacher), then the active speaker, then sticky speakers take
+    // tiles first (see pickTiles in lib/classSlots).
+    const rest = pool.filter((id) => !pins.includes(id) && id !== speakingId && !sticky.includes(id));
     const prevMosaic = mosaicPoolRef.current.filter((id) => rest.includes(id));
-    const needSlots = Math.max(0, studentSlots - slots.length);
+    const needSlots = Math.max(0, studentSlots - pins.length - sticky.length);
     const membershipChanged =
       prevMosaic.length !== rest.length || prevMosaic.some((id) => !rest.includes(id));
     let mosaic = prevMosaic;
@@ -1199,13 +1198,16 @@ function TeacherPeersFloat({
       mosaicPoolRef.current = mosaic;
     }
 
-    for (const id of mosaic) {
-      if (slots.length >= studentSlots) break;
-      slots.push(id);
-    }
     // Never backfill with students who are not publishing a sample camera.
     // The grid still paints `slotCount` cells; the rest stay blank.
-    return slots.slice(0, Math.max(0, slotCount - 1));
+    return pickTiles({
+      pool: [...pins, ...(speakingId ? [speakingId] : []), ...sticky, ...mosaic].filter((id) => pool.includes(id)),
+      teacherPins: pins,
+      speakingId,
+      sticky,
+      rotation: mosaic,
+      studentSlots,
+    });
   }, [
     visibleIdentities,
     teacherIdentities,
@@ -1215,6 +1217,7 @@ function TeacherPeersFloat({
     slotCount,
     tick,
     stickyVersion,
+    pinnedIdentities,
   ]);
 
   const cells: Array<string | null> = ['__self__'];
@@ -1382,6 +1385,8 @@ function TeacherPeersFloat({
                 mediaTrack={mediaTrack}
                 speaking={speaking}
                 pinned={stickySpeakersRef.current.has(identity) || speakingId === identity}
+                teacherPinned={pinnedIdentities.includes(identity)}
+                onTogglePin={onTogglePin ? (on) => onTogglePin(identity, on) : undefined}
                 tileW={layout.tileW}
                 tileH={layout.tileH}
                 alert={focusAlerts[identity]}
@@ -1403,9 +1408,14 @@ function PeerCamTile({
   tileH,
   mirror = false,
   alert,
+  teacherPinned = false,
+  onTogglePin,
 }: {
   /** Student left fullscreen / switched away. */
   alert?: string;
+  /** The teacher pinned this student (stays in the panel, no rotation). */
+  teacherPinned?: boolean;
+  onTogglePin?: (pinned: boolean) => void;
   name: string;
   mediaTrack: MediaStreamTrack | null;
   speaking: boolean;
@@ -1451,9 +1461,28 @@ function PeerCamTile({
         </div>
       )}
       <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-1 bg-gradient-to-t from-black/75 to-transparent px-1.5 pb-1 pt-4">
-        <span className="truncate text-[10px] font-medium text-white">{name}</span>
+        <span className="flex min-w-0 items-center gap-1 truncate text-[10px] font-medium text-white">
+          {teacherPinned && (
+            <span className="shrink-0 text-amber-300" aria-label="Pinned" title="Pinned: stays in the panel">
+              <IconPin size={10} />
+            </span>
+          )}
+          <span className="truncate">{name}</span>
+        </span>
         {pinned && <span className="shrink-0 text-[9px] text-brand-300">Speaking</span>}
       </div>
+      {onTogglePin && (
+        <button
+          type="button"
+          className={cn('peer-pin-btn', teacherPinned && 'is-pinned')}
+          onClick={() => onTogglePin(!teacherPinned)}
+          aria-pressed={teacherPinned}
+          aria-label={teacherPinned ? `Unpin ${name}` : `Pin ${name} (keep in the panel)`}
+          title={teacherPinned ? 'Unpin (back to rotation)' : 'Pin: keep this student in the panel'}
+        >
+          <IconPin size={12} />
+        </button>
+      )}
       {alert && (
         <span
           className="absolute left-1 top-1 rounded-full bg-amber-500 px-1.5 py-0.5 text-[9px] font-bold text-black shadow"
@@ -2846,6 +2875,38 @@ function RoomInner({
     };
   }, [isTeacher]);
 
+  /** Teacher pins / unpins a student's video (roster, class panel tile, share HUD). */
+  async function togglePin(participantId: string, pinned: boolean) {
+    try {
+      const res = await roomFetch(code, '/pin-student', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ participantId, pinned }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setHudNotice((data as { error?: string }).error || `Could not change the pin (${res.status})`);
+        return;
+      }
+      refresh();
+    } catch {
+      setHudNotice('Could not change the pin');
+    }
+  }
+  const pinnedIdentities = useMemo(
+    () =>
+      (state?.admitted ?? [])
+        .filter((p) => p.role === 'STUDENT' && p.pinned)
+        .sort((a, b) => (a.pinnedAt ?? 0) - (b.pinnedAt ?? 0))
+        .map((p) => p.livekitIdentity),
+    [state?.admitted]
+  );
+  const participantIdByIdentity = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of state?.admitted ?? []) m.set(p.livekitIdentity, p.id);
+    return m;
+  }, [state?.admitted]);
+
   /** Teacher lowers a student's raised hand. Shared by the roster and the HUD. */
   async function lowerHand(participantId: string) {
     try {
@@ -3269,22 +3330,13 @@ function RoomInner({
                   className="py-6"
                 />
               )}
-              {[...(state?.admitted ?? [])]
-                .sort((a, b) => {
-                  const ah =
-                    a.role === 'STUDENT' &&
-                    (a.handRaised || (state?.raisedHands ?? []).includes(a.id))
-                      ? 1
-                      : 0;
-                  const bh =
-                    b.role === 'STUDENT' &&
-                    (b.handRaised || (state?.raisedHands ?? []).includes(b.id))
-                      ? 1
-                      : 0;
-                  if (ah !== bh) return bh - ah;
-                  if (a.role !== b.role) return a.role === 'TEACHER' ? -1 : 1;
-                  return a.displayName.localeCompare(b.displayName);
-                })
+              {sortRoster(
+                (state?.admitted ?? []).map((p) => ({
+                  ...p,
+                  handRaised:
+                    p.role === 'STUDENT' && (p.handRaised || (state?.raisedHands ?? []).includes(p.id)),
+                }))
+              )
                 .map((p) => {
                   const raised =
                     p.role === 'STUDENT' &&
@@ -3330,7 +3382,7 @@ function RoomInner({
                         </div>
                         {p.role === 'STUDENT' && (
                           <span className={p.isVisible ? 'chip-sample' : 'chip-local'}>
-                            {p.isVisible ? 'In sample' : 'Local'}
+                            {p.pinned ? 'Pinned' : p.isVisible ? 'In sample' : 'Local'}
                           </span>
                         )}
                       </div>
@@ -3352,6 +3404,19 @@ function RoomInner({
                               Lower hand
                             </button>
                           )}
+                          <button
+                            type="button"
+                            className={cn(
+                              'inline-flex items-center gap-1 text-xs font-medium hover:underline',
+                              p.pinned ? 'text-amber-300' : 'text-slate-300'
+                            )}
+                            aria-pressed={!!p.pinned}
+                            onClick={() => void togglePin(p.id, !p.pinned)}
+                            title={p.pinned ? 'Back to rotation' : 'Keep this student in the class videos'}
+                          >
+                            <IconPin size={12} />
+                            {p.pinned ? 'Unpin video' : 'Pin video'}
+                          </button>
                         </div>
                       )}
                     </li>
@@ -3400,6 +3465,11 @@ function RoomInner({
         sharing={shareLayout}
         onDockSpace={onDockSpace}
         focusAlerts={focusByIdentity}
+        pinnedIdentities={pinnedIdentities}
+        onTogglePin={(identity, on) => {
+          const id = participantIdByIdentity.get(identity);
+          if (id) void togglePin(id, on);
+        }}
       />
 
       {/* Share controls: in the floating window for window/tab captures; in
@@ -3455,6 +3525,7 @@ function RoomInner({
             onMuteStudent={(id, muted) => void muteStudent(id, muted)}
             onMuteAll={(muted) => void muteAllStudents(muted)}
             onLowerHand={(id) => void lowerHand(id)}
+            onTogglePin={(id, on) => void togglePin(id, on)}
             chatUnread={chatUnread}
             onChatOpenChange={setHudChatOpen}
             chat={

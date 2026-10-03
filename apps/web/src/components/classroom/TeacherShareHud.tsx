@@ -8,7 +8,8 @@ import {
   useScreenAnnotate,
   type AnnotateMode,
 } from './ScreenAnnotator';
-import { IconChat, IconHand, IconMic, IconMicOff, IconScreen, IconUsers } from '@/components/ui/Icons';
+import { IconChat, IconHand, IconMic, IconMicOff, IconPin, IconScreen, IconUsers } from '@/components/ui/Icons';
+import { sortRoster } from '@/lib/classSlots';
 import { useFloatDrag, type FloatPos } from './FloatingPanel';
 import { focusLabel } from '@/lib/focusStatus';
 
@@ -41,6 +42,8 @@ export type RosterEntry = {
   mutedByTeacher?: boolean;
   isVisible?: boolean;
   handRaised?: boolean;
+  handRaisedAt?: number | null;
+  pinned?: boolean;
   focus?: import('@/lib/focusStatus').FocusStatus;
   focusIphone?: boolean;
 };
@@ -60,6 +63,8 @@ export type TeacherShareHudProps = {
   onMuteStudent: (participantId: string, muted: boolean) => void;
   onMuteAll: (muted: boolean) => void;
   onLowerHand: (participantId: string) => void;
+  /** Pin / unpin a student's video in the class panel. */
+  onTogglePin?: (participantId: string, pinned: boolean) => void;
   chatUnread: number;
   chat?: ReactNode;
   onChatOpenChange?: (open: boolean) => void;
@@ -314,6 +319,9 @@ background:var(--warn);color:#1a1206;font-size:9px;font-weight:800;display:inlin
 .tsh-person-sub{font-size:10px;color:var(--dim);font-weight:500}
 .tsh-chip{font-size:9px;font-weight:700;padding:1px 4px;border-radius:999px;border:1px solid var(--line);color:var(--dim)}
 .tsh-chip-muted{color:#fcd34d;border-color:rgba(245,158,11,.4)}
+.tsh-hand{display:inline-flex;vertical-align:-2px;margin-right:4px;color:#fcd34d}
+.tsh-pin{display:inline-grid;place-items:center;padding:4px 6px}
+.tsh-pin.is-on{background:#f59e0b;color:#111;border-color:#f59e0b}
 .tsh-chat{height:220px;min-height:160px}
 .tsh-admit{max-width:140px;overflow:hidden;text-overflow:ellipsis}
 .tsh-pill{gap:2px;padding:3px 4px}
@@ -344,6 +352,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     onMuteStudent,
     onMuteAll,
     onLowerHand,
+    onTogglePin,
     chatUnread,
     chat,
     onChatOpenChange,
@@ -416,7 +425,8 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     return () => ro?.disconnect();
   }, [hostWindow, panel, annotateOn, waitingCount, notice, mode, compact]);
 
-  const students = useMemo(() => admitted.filter((a) => a.role === 'STUDENT'), [admitted]);
+  // Raised hands first (earliest raise first), then by name.
+  const students = useMemo(() => sortRoster(admitted.filter((a) => a.role === 'STUDENT')), [admitted]);
   const hands = useMemo(() => students.filter((s) => s.handRaised), [students]);
 
   const togglePanel = (next: Exclude<Panel, null>) => {
@@ -726,6 +736,11 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                 <div className="tsh-person" key={s.id}>
                   <Avatar name={s.displayName} size="sm" />
                   <span className="tsh-person-name">
+                    {s.handRaised && (
+                      <span className="tsh-hand" title="Hand raised" aria-label="Hand raised">
+                        <IconHand size={12} />
+                      </span>
+                    )}
                     {s.displayName}
                     <span className="tsh-person-sub" style={{ display: 'block' }}>
                       {s.mutedByTeacher ? 'muted by you' : s.isVisible ? 'in sample' : 'local only'}
@@ -733,6 +748,18 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                     </span>
                   </span>
                   {s.mutedByTeacher ? <span className="tsh-chip tsh-chip-muted">muted</span> : null}
+                  {onTogglePin && (
+                    <button
+                      type="button"
+                      className={s.pinned ? 'tsh-btn tsh-pin is-on' : 'tsh-btn tsh-pin'}
+                      aria-pressed={!!s.pinned}
+                      aria-label={s.pinned ? `Unpin ${s.displayName}` : `Pin ${s.displayName}`}
+                      title={s.pinned ? 'Unpin (back to rotation)' : 'Pin: keep in the class videos'}
+                      onClick={() => onTogglePin(s.id, !s.pinned)}
+                    >
+                      <IconPin size={12} />
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="tsh-btn"

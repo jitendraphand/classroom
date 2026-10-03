@@ -333,6 +333,22 @@ body {
   .peers-float-tile {
     @apply relative shrink-0 overflow-hidden rounded-lg bg-black;
   }
+  /* Pin toggle on a student tile: shown on hover / focus, always while pinned. */
+  .peer-pin-btn {
+    @apply absolute right-1 top-1 grid h-6 w-6 place-items-center rounded-full bg-black/60 text-slate-200 opacity-0 transition hover:bg-black/80 focus-visible:opacity-100;
+  }
+  .peers-float-tile:hover .peer-pin-btn,
+  .peer-pin-btn.is-pinned {
+    @apply opacity-100;
+  }
+  .peer-pin-btn.is-pinned {
+    @apply bg-amber-500 text-black hover:bg-amber-400;
+  }
+  @media (hover: none) {
+    .peer-pin-btn {
+      @apply opacity-100;
+    }
+  }
 
   .stage-chat-drawer {
     @apply absolute inset-y-0 right-0 z-50 flex w-[min(100%,320px)] flex-col border-l border-white/10 bg-surface-1/95 p-3 shadow-lift backdrop-blur-xl;

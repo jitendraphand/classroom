@@ -140,3 +140,18 @@ export function IconHand(p: P) {
     </svg>
   );
 }
+
+/** Push pin (pinned student video). */
+export function IconPin(p: P) {
+  return (
+    <svg {...base(p)}>
+      <path
+        d="M9 4h6l-1 5 3.5 3.5V14H6.5v-1.5L10 9 9 4ZM12 14v6"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}

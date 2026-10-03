@@ -64,6 +64,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
   await redis.srem(keys.admitted(code), target.id);
   await redis.srem(keys.muted(code), target.id);
   await redis.srem(keys.hands(code), target.id);
+  await redis.hdel(keys.handsAt(code), target.id);
   await redis.srem(keys.visible(code), target.livekitIdentity);
 
   if (self && self.id === target.id) await clearStudentCookie();

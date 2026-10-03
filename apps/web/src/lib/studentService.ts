@@ -70,6 +70,13 @@ export async function ensureStudentParticipant(student: Student, room: Room, cs:
   });
   if (!participant) {
     const id = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+    // A student re-joining the same class on another device keeps the
+    // teacher's pin on their video.
+    const previous = await prisma.participant.findFirst({
+      where: { roomId: room.id, studentId: student.id, classSessionId: cs.id, pinnedAt: { not: null } },
+      orderBy: { createdAt: 'desc' },
+      select: { pinnedAt: true },
+    });
     participant = await prisma.participant.create({
       data: {
         roomId: room.id,
@@ -80,6 +87,9 @@ export async function ensureStudentParticipant(student: Student, room: Room, cs:
         sessionToken: generateSessionToken(),
         studentId: student.id,
         classSessionId: cs.id,
+        // Students join muted; the teacher unmutes one by one or with Allow unmute.
+        mutedByTeacher: true,
+        pinnedAt: previous?.pinnedAt ?? null,
       },
     });
     const redis = await ensureRedis();

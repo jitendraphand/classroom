@@ -65,6 +65,7 @@ export async function clearRoomRedis(code: string) {
     keys.muted(code),
     keys.rotation(code),
     keys.hands(code),
+    keys.handsAt(code),
     keys.focus(code),
     keys.stage(code),
     keys.annotate(code),

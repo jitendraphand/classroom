@@ -2,6 +2,7 @@ import type Redis from 'ioredis';
 import { ensureRedis, keys } from './redis';
 import { prisma } from './db';
 import { setParticipantCameraAllowed } from './livekit';
+import { allocateSample, type PinnedStudent } from './classSlots';
 
 /** Hard ceiling: server never selects/publishes more than this many student videos. */
 export const HARD_MAX_VISIBLE_STUDENT_VIDEOS = 6;
@@ -167,8 +168,11 @@ export async function rotateVisibleSample(roomCode: string, maxVisible?: number)
 
   const admitted = await prisma.participant.findMany({
     where: { roomId: room.id, role: 'STUDENT', status: 'ADMITTED' },
-    select: { livekitIdentity: true },
+    select: { livekitIdentity: true, pinnedAt: true },
   });
+  const teacherPins: PinnedStudent[] = admitted
+    .filter((p) => p.pinnedAt)
+    .map((p) => ({ identity: p.livekitIdentity, pinnedAt: p.pinnedAt!.getTime() }));
 
   const identities = admitted.map((p) => p.livekitIdentity);
   const identitySet = new Set(identities);
@@ -185,13 +189,9 @@ export async function rotateVisibleSample(roomCode: string, maxVisible?: number)
   // accumulate across a long class and monopolise every slot.
   await pruneStickyPins(redis, roomCode, pinned);
 
-  // Prefer keeping sticky speakers, then fill randomly among the rest.
-  const pinnedInRoom = identities.filter((id) => pinned.has(id));
-  const rest = identities.filter((id) => !pinned.has(id));
-  // If more pins than slots, keep a random subset of pins (still prefer speakers).
-  const keepPinned = shuffle(pinnedInRoom).slice(0, Math.min(n, pinnedInRoom.length));
-  const fill = shuffle(rest).slice(0, Math.max(0, n - keepPinned.length));
-  const sample = [...keepPinned, ...fill].slice(0, n);
+  // Teacher-pinned students first (oldest pin first), then sticky speakers
+  // (random subset if more than fit), then random rotation among the rest.
+  const sample = allocateSample({ identities, teacherPins, speakerPins: pinned, max: n, shuffle });
 
   const previous = await redis.smembers(keys.visible(roomCode));
 
@@ -297,19 +297,29 @@ export async function pinSpeaker(roomCode: string, identity: string) {
   }
 
   const pinned = await getPinnedSpeakers(roomCode);
+  const teacherPinned = new Set(
+    (
+      await prisma.participant.findMany({
+        where: { roomId: room.id, role: 'STUDENT', status: 'ADMITTED', pinnedAt: { not: null } },
+        select: { livekitIdentity: true },
+      })
+    ).map((p) => p.livekitIdentity)
+  );
   let next = [...visible];
 
   if (next.length >= max) {
-    // Never eject other sticky speakers if avoidable
-    const ejectable = next.filter((id) => id !== identity && !pinned.has(id));
-    const pool = ejectable.length ? ejectable : next.filter((id) => id !== identity);
-    if (pool.length) {
-      const victim = pool[Math.floor(Math.random() * pool.length)];
-      next = next.filter((id) => id !== victim);
-    } else if (next.length >= max) {
-      const victim = next[Math.floor(Math.random() * next.length)];
-      next = next.filter((id) => id !== victim);
+    // Never eject teacher-pinned students; avoid ejecting other sticky speakers.
+    const notTeacherPinned = next.filter((id) => id !== identity && !teacherPinned.has(id));
+    if (!notTeacherPinned.length) {
+      // Every slot is pinned by the teacher: the speaker waits (the teacher
+      // still hears them; their video joins when a pin is released).
+      await redis.hset(keys.pinnedSpeakers(roomCode), identity, String(Date.now()));
+      return { ok: true as const, alreadyVisible: false, visible: next, slotsPinned: true };
     }
+    const ejectable = notTeacherPinned.filter((id) => !pinned.has(id));
+    const pool = ejectable.length ? ejectable : notTeacherPinned;
+    const victim = pool[Math.floor(Math.random() * pool.length)];
+    next = next.filter((id) => id !== victim);
   }
 
   if (!next.includes(identity)) next.push(identity);
@@ -344,6 +354,37 @@ export async function unpinSpeakerByParticipant(roomCode: string, identity: stri
   if (!wasPinned) return { ok: true as const, wasPinned: false };
   await redis.hdel(keys.pinnedSpeakers(roomCode), identity);
   return { ok: true as const, wasPinned: true };
+}
+
+/**
+ * Teacher pins / unpins a student's video. Pinned students keep a visible slot
+ * (bypassing rotation) for the rest of this class session; pins count toward
+ * the room's video cap, so pinning beyond it is refused.
+ */
+export async function setStudentPinned(roomCode: string, participantId: string, pinnedOn: boolean) {
+  const room = await prisma.room.findUnique({ where: { code: roomCode } });
+  if (!room || room.status === 'ENDED') return { ok: false as const, reason: 'room_ended' as const };
+  const participant = await prisma.participant.findFirst({
+    where: { id: participantId, roomId: room.id, role: 'STUDENT', status: 'ADMITTED' },
+    select: { id: true, pinnedAt: true },
+  });
+  if (!participant) return { ok: false as const, reason: 'not_student' as const };
+  const max = clampMaxVisible(room.maxVisibleVideos ?? DEFAULT_MAX);
+  if (pinnedOn) {
+    if (participant.pinnedAt) return { ok: true as const, pinned: true, max };
+    const count = await prisma.participant.count({
+      where: { roomId: room.id, role: 'STUDENT', status: 'ADMITTED', pinnedAt: { not: null } },
+    });
+    if (count >= max) return { ok: false as const, reason: 'full' as const, max };
+    await prisma.participant.update({ where: { id: participant.id }, data: { pinnedAt: new Date() } });
+  } else {
+    if (!participant.pinnedAt) return { ok: true as const, pinned: false, max };
+    await prisma.participant.update({ where: { id: participant.id }, data: { pinnedAt: null } });
+  }
+  // Re-sample now so a new pin gets camera permission immediately (and an
+  // unpinned slot goes back into rotation).
+  await rotateVisibleSample(roomCode);
+  return { ok: true as const, pinned: pinnedOn, max };
 }
 
 export function sampleConfig() {

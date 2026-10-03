@@ -30,6 +30,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
           status: true,
           livekitIdentity: true,
           mutedByTeacher: true,
+          pinnedAt: true,
           createdAt: true,
           studentId: true,
           student: { select: { rollNumber: true, grade: true, division: true } },
@@ -129,7 +130,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   const { visible } = await getVisibleSample(code);
   const redis = await ensureRedis();
   const mutedIds = await redis.smembers(keys.muted(code));
-  const raisedHands = (await redis.smembers(keys.hands(code))).map(String);
+  const handSet = (await redis.smembers(keys.hands(code))).map(String);
+  const handTimes = isTeacher ? await redis.hgetall(keys.handsAt(code)) : {};
+  const handAt = (id: string) => (handTimes[id] ? Number(handTimes[id]) : null);
+  // Earliest raise first (hands without a time, raised before it was recorded, last).
+  const raisedHands = [...handSet].sort(
+    (a, b) => (handAt(a) ?? Number.MAX_SAFE_INTEGER) - (handAt(b) ?? Number.MAX_SAFE_INTEGER)
+  );
   const stageRaw = await redis.get(keys.stage(code));
   const stageMode =
     stageRaw === 'screen' ? 'screen' : 'idle';
@@ -230,6 +237,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       mutedByTeacher: p.mutedByTeacher || mutedIds.includes(p.id),
       isVisible: p.role === 'TEACHER' || visible.includes(p.livekitIdentity),
       handRaised: p.role === 'STUDENT' && raisedHands.includes(p.id),
+      ...(isTeacher && p.role === 'STUDENT'
+        ? {
+            handRaisedAt: raisedHands.includes(p.id) ? handAt(p.id) : null,
+            pinned: !!p.pinnedAt,
+            pinnedAt: p.pinnedAt ? p.pinnedAt.getTime() : null,
+          }
+        : {}),
       ...rosterInfo(p),
       ...focusOf(p),
     })),

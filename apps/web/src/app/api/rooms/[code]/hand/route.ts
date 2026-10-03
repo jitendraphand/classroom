@@ -22,6 +22,15 @@ const schema = z.object({
 
 export const dynamic = 'force-dynamic';
 
+/** Raise / lower, remembering when the hand went up (first raise wins) so the roster orders by it. */
+async function setHand(redis: Awaited<ReturnType<typeof ensureRedis>>, code: string, id: string, raised: boolean) {
+  if (raised) {
+    await redis.multi().sadd(keys.hands(code), id).hsetnx(keys.handsAt(code), id, String(Date.now())).exec();
+  } else {
+    await redis.multi().srem(keys.hands(code), id).hdel(keys.handsAt(code), id).exec();
+  }
+}
+
 export async function POST(req: Request, { params }: { params: Promise<{ code: string }> }) {
   const code = (await params).code.toUpperCase();
   const url = new URL(req.url);
@@ -50,8 +59,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
         select: { id: true },
       });
       if (!participant) return jsonError('Participant not found', 404);
-      if (body.raised) await redis.sadd(keys.hands(code), participant.id);
-      else await redis.srem(keys.hands(code), participant.id);
+      await setHand(redis, code, participant.id, body.raised);
       return jsonOk({ ok: true, raised: body.raised, participantId: participant.id });
     }
 
@@ -65,8 +73,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
       return jsonError('Not admitted', 403);
     }
 
-    if (body.raised) await redis.sadd(keys.hands(code), me.id);
-    else await redis.srem(keys.hands(code), me.id);
+    await setHand(redis, code, me.id, body.raised);
 
     return jsonOk({ ok: true, raised: body.raised, participantId: me.id });
   } catch (e) {

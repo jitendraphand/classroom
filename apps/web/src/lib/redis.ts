@@ -46,6 +46,8 @@ export const keys = {
   focus: (code: string) => `room:${code}:focus`,
   /** Set of participant ids with raised hands */
   hands: (code: string) => `room:${code}:hands`,
+  /** Hash participant id -> ms when the hand went up (roster order). Kept beside `hands`. */
+  handsAt: (code: string) => `room:${code}:hands-at`,
   /** JSON {s: sessionId, p: boolean}: is the teacher connected to the LiveKit room (webhook / probe) */
   teacherPresent: (code: string) => `room:${code}:teacher-present`,
 };

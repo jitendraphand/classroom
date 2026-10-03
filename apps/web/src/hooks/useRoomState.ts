@@ -48,6 +48,11 @@ export type RoomState = {
     mutedByTeacher: boolean;
     isVisible: boolean;
     handRaised?: boolean;
+    /** Teacher only: ms epoch the hand went up. */
+    handRaisedAt?: number | null;
+    /** Teacher only: teacher pinned this student's video. */
+    pinned?: boolean;
+    pinnedAt?: number | null;
   } & RosterInfo)[];
   /** Teacher only: the class session running in this room. */
   classSession?: { subject: string; audience: string; adHoc: boolean } | null;

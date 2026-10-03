@@ -56,6 +56,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
         status: 'WAITING',
         livekitIdentity: generateIdentity('student', id),
         sessionToken,
+        // Students join muted; the teacher unmutes one by one or with Allow unmute.
+        mutedByTeacher: true,
       },
     });
 
