@@ -63,6 +63,8 @@ export type TeacherShareHudProps = {
   annotateColor: string;
   onAnnotateColorChange: (color: string) => void;
   notice?: string;
+  /** Reason drawing is off (entire-screen share: no stage preview to draw on). */
+  annotateUnavailable?: string;
   /** Render in the classroom page (monitor capture / no pop-out) instead of a portal. */
   inline?: boolean;
 };
@@ -329,7 +331,13 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     onAnnotateColorChange: setColor,
     notice,
     inline = false,
+    annotateUnavailable,
   } = props;
+
+  // Turn drawing off if the share switched to the entire screen.
+  useEffect(() => {
+    if (annotateUnavailable && annotateOn) onAnnotateOnChange(false);
+  }, [annotateUnavailable, annotateOn, onAnnotateOnChange]);
 
   const [panel, setPanel] = useState<Panel>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -419,7 +427,8 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
           className="tsh-btn"
           aria-pressed={annotateOn}
           onClick={() => onAnnotateOnChange(!annotateOn)}
-          title="Draw on the shared screen"
+          disabled={!!annotateUnavailable}
+          title={annotateUnavailable || 'Draw on the shared screen'}
         >
           Annotate
         </button>

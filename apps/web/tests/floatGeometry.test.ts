@@ -5,6 +5,7 @@ import {
   isDrag,
   parseStoredPos,
   shareControlsPlacement,
+  showLocalSharePreview,
 } from '../src/lib/floatGeometry';
 
 const vp = { w: 800, h: 400 };
@@ -43,4 +44,12 @@ test('entire-screen capture keeps the share controls in the page', () => {
   assert.equal(shareControlsPlacement('browser'), 'floating');
   assert.equal(shareControlsPlacement(''), 'floating');
   assert.equal(shareControlsPlacement(undefined), 'floating');
+});
+
+test('teacher stage previews only window/tab shares (no recursive tunnel)', () => {
+  assert.equal(showLocalSharePreview('window'), true);
+  assert.equal(showLocalSharePreview('browser'), true);
+  assert.equal(showLocalSharePreview('monitor'), false);
+  assert.equal(showLocalSharePreview(''), false);
+  assert.equal(showLocalSharePreview(undefined), false);
 });

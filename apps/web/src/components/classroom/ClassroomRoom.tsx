@@ -38,7 +38,7 @@ import { Controls } from './Controls';
 import { LocalPreview } from './LocalPreview';
 import { ChatView, useChatThread } from './Chat';
 import { FloatingPanel, useFloatDrag, readFloatPref, writeFloatPref, type FloatPos } from './FloatingPanel';
-import { shareControlsPlacement } from '@/lib/floatGeometry';
+import { shareControlsPlacement, showLocalSharePreview } from '@/lib/floatGeometry';
 import { ScreenAnnotator, useScreenAnnotate, ANNOTATE_COLORS, type AnnotateMode } from './ScreenAnnotator';
 import {
   InlineShareDock,
@@ -136,7 +136,12 @@ function ParticipantGrid({
   annotateOn,
   annotateMode,
   annotateColor,
+  localShareSurface = '',
+  onStopShare,
 }: {
+  /** What this teacher tab is capturing; decides whether the local share may be previewed. */
+  localShareSurface?: string;
+  onStopShare?: () => void;
   visibleIdentities: string[];
   isTeacher: boolean;
   localPreview: ReactNode;
@@ -205,7 +210,10 @@ function ParticipantGrid({
             'h-full'
           )}
         >
-          {screenShares.map((t) => (
+          {screenShares.map((t) =>
+            t.participant.isLocal && !showLocalSharePreview(localShareSurface) ? (
+              <EntireScreenShareCard key={`${t.participant.identity}-${t.source}`} onStop={onStopShare} />
+            ) : (
             <TeacherShareTile
               key={`${t.participant.identity}-${t.source}`}
               trackRef={t}
@@ -215,7 +223,8 @@ function ParticipantGrid({
               annotateMode={annotateMode || 'pen'}
               annotateColor={annotateColor || ANNOTATE_COLORS[0]}
             />
-          ))}
+            )
+          )}
         </div>
       )}
 
@@ -264,6 +273,36 @@ function ParticipantGrid({
   );
 }
 
+
+/**
+ * Teacher's own stage during an entire-screen (or unknown-surface) share.
+ * Playing the local capture here would be captured again, recursively (the
+ * "infinite tunnel"), so the teacher gets a static card instead. Students,
+ * admin tiles and the observer render the remote track and are unaffected.
+ */
+function EntireScreenShareCard({ onStop }: { onStop?: () => void }) {
+  return (
+    <div className="video-tile relative flex h-full min-h-0 w-full items-center justify-center overflow-hidden bg-ink-950 p-4">
+      <div className="max-w-md rounded-2xl border border-white/10 bg-surface-1/90 p-5 text-center shadow-lift">
+        <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-brand-500/20 text-brand-300">
+          <IconScreen size={20} />
+        </div>
+        <p className="font-display text-base font-semibold">You&apos;re sharing your entire screen</p>
+        <p className="mt-1.5 text-xs leading-relaxed text-slate-400">
+          Students see your screen live. The preview is hidden here so it is not captured again
+          (an endless tunnel). Minimise this window or switch to what you want to show. Share a
+          window or a tab instead to see a live preview and draw on it.
+        </p>
+        {onStop && (
+          <Button className="mt-4" variant="danger" size="sm" onClick={onStop}>
+            <IconScreen size={14} />
+            Stop sharing
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function TeacherShareTile({
   trackRef,
@@ -2970,6 +3009,8 @@ function RoomInner({
                 annotateOn={annotateOn}
                 annotateMode={annotateMode}
                 annotateColor={annotateColor}
+                localShareSurface={shareSurface}
+                onStopShare={() => void toggleScreen()}
                 localPreview={
                   <LocalPreview
                     stream={localCamStream}
@@ -3230,6 +3271,11 @@ function RoomInner({
             onAnnotateModeChange={setAnnotateMode}
             annotateColor={annotateColor}
             onAnnotateColorChange={setAnnotateColor}
+            annotateUnavailable={
+              showLocalSharePreview(shareSurface)
+                ? undefined
+                : 'Drawing needs a window or tab share (an entire-screen share has no preview to draw on)'
+            }
             notice={shareMount ? hudNotice || undefined : undefined}
           />
         </ShareHudSlot>
