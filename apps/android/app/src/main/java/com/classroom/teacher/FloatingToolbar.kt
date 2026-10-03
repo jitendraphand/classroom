@@ -1,58 +1,62 @@
 package com.classroom.teacher
 
+import android.animation.ObjectAnimator
+import android.animation.PropertyValuesHolder
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.res.ColorStateList
+import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.provider.Settings
-import android.text.TextUtils
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.WindowManager
-import android.view.inputmethod.EditorInfo
-import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
 import com.google.android.material.button.MaterialButton
 import kotlin.math.abs
 
-/** What the floating toolbar shows; rebuilt from each room-state poll. */
+/** What the bubble shows; rebuilt from each room-state poll. */
 data class ToolbarState(
     val sharing: Boolean = false,
     val micOn: Boolean = false,
-    val cameraOn: Boolean = false,
-    val waiting: List<Pair<String, String>> = emptyList(),
+    val waiting: Int = 0,
     val hands: Int = 0,
-    val focusAlerts: Int = 0,
     val unreadChat: Int = 0,
-    val recentChat: List<String> = emptyList(),
+    val focusAlerts: Int = 0,
+    /** Black box over the bubble in the share (off for an Android 14 single-app share). */
     val maskOn: Boolean = true,
 )
 
 /**
- * "Display over other apps" toolbar for screen sharing: a small draggable pill
- * with badges (chat, hands, waiting, not-fullscreen) that expands into a panel
- * with the class controls. Its on-screen rectangle is reported on every
- * layout / drag so [ScreenMaskProcessor] can black it out of the share.
+ * "Display over other apps" bubble while the app is minimised (screen share
+ * or teaching from another app): a small draggable pill with badges for the
+ * waiting room, raised hands, new chat and not-fullscreen students, with a
+ * short pulse whenever one of them goes up.
+ *
+ * Tap: back to the app (and, while sharing, stop the share).
+ * Long-press: a mini menu (mic, open app and keep sharing, stop sharing).
+ *
+ * Its on-screen rect is reported on every layout / drag so
+ * [ScreenMaskProcessor] blacks it out of the share.
  */
 class FloatingToolbar(private val context: Context, private val listener: Listener) {
     interface Listener {
+        /** Tap: reopen the app; stop the share if one is running. */
+        fun onBubbleTap()
         fun onToggleMic()
-        fun onToggleCamera()
-        fun onAdmitAll()
-        fun onAdmit(participantId: String)
-        fun onMuteAll()
-        fun onSendChat(text: String)
-        fun onStopShare()
+        /** Mini menu: open the app but keep sharing. */
         fun onOpenApp()
+        fun onStopShare()
         fun onMaskToggle(on: Boolean)
-        fun onExpandedChanged(expanded: Boolean)
-        /** Screen rect of the toolbar window (display px), or null when it is gone. */
+        /** Screen rect of the bubble window (display px), or null when it is gone. */
         fun onRectChanged(rect: IntRect?)
     }
 
@@ -62,17 +66,15 @@ class FloatingToolbar(private val context: Context, private val listener: Listen
 
     private var root: LinearLayout? = null
     private var params: WindowManager.LayoutParams? = null
-    private var expanded = false
+    private var menuOpen = false
     private var state = ToolbarState()
 
-    private lateinit var pill: TextView
-    private lateinit var panel: LinearLayout
-    private lateinit var waitingBox: LinearLayout
-    private lateinit var chatBox: TextView
-    private lateinit var replyInput: EditText
+    private lateinit var pill: LinearLayout
+    private lateinit var icon: ImageView
+    private lateinit var badgeRow: LinearLayout
+    private lateinit var menu: LinearLayout
     private lateinit var micBtn: MaterialButton
-    private lateinit var camBtn: MaterialButton
-    private lateinit var stopShareBtn: MaterialButton
+    private lateinit var stopBtn: MaterialButton
     private lateinit var maskBtn: MaterialButton
 
     val isShowing: Boolean get() = root != null
@@ -97,7 +99,7 @@ class FloatingToolbar(private val context: Context, private val listener: Listen
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = dp(12)
+            x = context.resources.displayMetrics.widthPixels - dp(120)
             y = context.resources.displayMetrics.heightPixels / 3
         }
         try {
@@ -110,14 +112,14 @@ class FloatingToolbar(private val context: Context, private val listener: Listen
         params = p
         reportEstimate()
         view.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> reportRect() }
-        render(state)
+        render(state, pulse = false)
     }
 
     fun hide() {
         val v = root ?: return
         root = null
         params = null
-        expanded = false
+        menuOpen = false
         try {
             wm.removeView(v)
         } catch (_: Exception) {
@@ -125,42 +127,74 @@ class FloatingToolbar(private val context: Context, private val listener: Listen
         listener.onRectChanged(null)
     }
 
-    fun render(s: ToolbarState) {
+    fun render(s: ToolbarState, pulse: Boolean = true) {
+        val prev = state
         state = s
         if (root == null) return
-        val badges = buildList {
-            if (s.unreadChat > 0) add("💬${s.unreadChat}")
-            if (s.hands > 0) add("✋${s.hands}")
-            if (s.waiting.isNotEmpty()) add("⏳${s.waiting.size}")
-            if (s.focusAlerts > 0) add("⚠${s.focusAlerts}")
+        icon.setImageResource(if (s.sharing) R.drawable.ic_screen_share else R.drawable.ic_group)
+        icon.imageTintList = ColorStateList.valueOf(if (s.sharing) 0xFFFCA5A5.toInt() else Color.WHITE)
+        badgeRow.removeAllViews()
+        addBadge(R.drawable.ic_group, s.waiting, Palette.AMBER, "waiting")
+        addBadge(R.drawable.ic_hand, s.hands, Palette.AMBER, "raised hands")
+        addBadge(R.drawable.ic_chat, s.unreadChat, 0xFF3B82F6.toInt(), "new messages")
+        addBadge(R.drawable.ic_bubble, s.focusAlerts, 0xFFF97316.toInt(), "not in fullscreen")
+        badgeRow.visibility = if (badgeRow.childCount > 0) View.VISIBLE else View.GONE
+        val parts = buildList {
+            if (s.waiting > 0) add("${s.waiting} waiting")
+            if (s.hands > 0) add("${s.hands} hands raised")
+            if (s.unreadChat > 0) add("${s.unreadChat} new messages")
+            if (s.focusAlerts > 0) add("${s.focusAlerts} not in fullscreen")
         }
-        val dot = if (s.sharing) "● " else "○ "
-        pill.text = dot + if (badges.isEmpty()) "Class" else badges.joinToString("  ")
+        pill.contentDescription = (if (s.sharing) "Sharing. Tap to stop and return to the class" else "Tap to return to the class") +
+            (if (parts.isEmpty()) "" else ". " + parts.joinToString(", ")) + ". Long-press for more."
         micBtn.text = if (s.micOn) "Mic off" else "Mic on"
-        camBtn.text = if (s.cameraOn) "Camera off" else "Camera on"
-        stopShareBtn.visibility = if (s.sharing) View.VISIBLE else View.GONE
+        stopBtn.visibility = if (s.sharing) View.VISIBLE else View.GONE
         maskBtn.visibility = if (s.sharing) View.VISIBLE else View.GONE
-        maskBtn.text = if (s.maskOn) "Hide panel from share: on" else "Hide panel from share: off"
-        waitingBox.removeAllViews()
-        if (s.waiting.isNotEmpty()) {
-            waitingBox.addView(label("Waiting (${s.waiting.size})", bold = true))
-            for ((id, name) in s.waiting.take(6)) {
-                val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-                row.addView(label(name).apply { layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f) })
-                row.addView(smallButton("Admit") { listener.onAdmit(id) })
-                waitingBox.addView(row)
-            }
-            if (s.waiting.size > 1) waitingBox.addView(smallButton("Admit all (${s.waiting.size})") { listener.onAdmitAll() })
-        }
-        chatBox.text = s.recentChat.takeLast(4).joinToString("\n").ifBlank { "No messages yet." }
-        if (s.hands > 0 || s.focusAlerts > 0) {
-            val extra = buildList {
-                if (s.hands > 0) add("${s.hands} hand${if (s.hands == 1) "" else "s"} raised")
-                if (s.focusAlerts > 0) add("${s.focusAlerts} not in fullscreen")
-            }.joinToString(" · ")
-            waitingBox.addView(label(extra))
+        maskBtn.text = if (s.maskOn) "Hide bubble in share: on" else "Hide bubble in share: off"
+        if (pulse && (s.waiting > prev.waiting || s.hands > prev.hands || s.unreadChat > prev.unreadChat || s.focusAlerts > prev.focusAlerts)) {
+            pulse()
         }
         root?.post { reportRect() }
+    }
+
+    private fun addBadge(iconRes: Int, count: Int, color: Int, what: String) {
+        if (count <= 0) return
+        val b = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(6), dp(2), dp(7), dp(2))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(10).toFloat()
+                setColor(color)
+            }
+            contentDescription = "$count $what"
+        }
+        b.addView(ImageView(context).apply {
+            setImageResource(iconRes)
+            imageTintList = ColorStateList.valueOf(Color.BLACK)
+        }, LinearLayout.LayoutParams(dp(13), dp(13)).apply { marginEnd = dp(3) })
+        b.addView(TextView(context).apply {
+            text = if (count > 99) "99+" else count.toString()
+            setTextColor(Color.BLACK)
+            textSize = 12f
+            setTypeface(typeface, Typeface.BOLD)
+        })
+        badgeRow.addView(b, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            marginStart = dp(4)
+        })
+    }
+
+    private fun pulse() {
+        val v = pill
+        ObjectAnimator.ofPropertyValuesHolder(
+            v,
+            PropertyValuesHolder.ofFloat(View.SCALE_X, 1f, 1.18f, 1f),
+            PropertyValuesHolder.ofFloat(View.SCALE_Y, 1f, 1.18f, 1f),
+        ).apply {
+            duration = 420
+            repeatCount = 1
+            start()
+        }
     }
 
     /** After a rotation / resize, pull the window back inside the display. */
@@ -179,16 +213,14 @@ class FloatingToolbar(private val context: Context, private val listener: Listen
 
     /**
      * Conservative rect for a window that has not been laid out yet (just
-     * added, or the panel is opening), so no frame shows it unmasked.
+     * added, or the menu is opening), so no frame shows it unmasked. The pulse
+     * scales the pill by up to 18 %, which the margin covers.
      */
     private fun reportEstimate() {
         val p = params ?: return
-        val dm = context.resources.displayMetrics
-        val w = dp(320)
-        val h = if (expanded) (dm.heightPixels * 0.6).toInt() + dp(140) else dp(72)
-        val currentW = root?.width ?: 0
-        val currentH = root?.height ?: 0
-        listener.onRectChanged(IntRect(p.x, p.y, p.x + maxOf(w, currentW), p.y + maxOf(h, currentH)))
+        val w = dp(if (menuOpen) 220 else 200)
+        val h = if (menuOpen) dp(260) else dp(64)
+        listener.onRectChanged(IntRect(p.x, p.y, p.x + maxOf(w, root?.width ?: 0), p.y + maxOf(h, root?.height ?: 0)))
     }
 
     private fun reportRect() {
@@ -196,24 +228,16 @@ class FloatingToolbar(private val context: Context, private val listener: Listen
         if (v.width == 0 || v.height == 0) return
         val loc = IntArray(2)
         v.getLocationOnScreen(loc)
-        listener.onRectChanged(IntRect(loc[0], loc[1], loc[0] + v.width, loc[1] + v.height))
+        // Grow by the pulse overshoot (scale 1.18 around the pill centre).
+        val growX = (pill.width * 0.1f).toInt()
+        val growY = (pill.height * 0.1f).toInt()
+        listener.onRectChanged(IntRect(loc[0] - growX, loc[1] - growY, loc[0] + v.width + growX, loc[1] + v.height + growY))
     }
 
-    private fun setExpanded(on: Boolean) {
-        expanded = on
-        // Mask generously before the bigger window is first composited; the
-        // exact rect follows after layout.
+    private fun setMenu(on: Boolean) {
+        menuOpen = on
         if (on) reportEstimate()
-        panel.visibility = if (on) View.VISIBLE else View.GONE
-        val p = params ?: return
-        // The reply box needs keyboard focus only while the panel is open.
-        p.flags = if (on) {
-            p.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
-        } else {
-            p.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-        }
-        root?.let { wm.updateViewLayout(it, p) }
-        listener.onExpandedChanged(on)
+        menu.visibility = if (on) View.VISIBLE else View.GONE
         root?.post { reportRect() }
     }
 
@@ -221,111 +245,89 @@ class FloatingToolbar(private val context: Context, private val listener: Listen
     private fun build(): LinearLayout {
         val box = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            background = GradientDrawable().apply {
-                cornerRadius = dp(16).toFloat()
-                setColor(0xF20F172A.toInt())
-                setStroke(dp(1), 0xFF334155.toInt())
-            }
-            setPadding(dp(6), dp(6), dp(6), dp(6))
+            setPadding(dp(4), dp(4), dp(4), dp(4))
         }
-        pill = TextView(context).apply {
-            setTextColor(0xFFF8FAFC.toInt())
-            textSize = 15f
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-            minHeight = dp(40)
+        pill = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            contentDescription = "Class controls. Tap to open, drag to move."
+            minimumHeight = dp(52)
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(26).toFloat()
+                setColor(0xF20F172A.toInt())
+                setStroke(dp(2), 0xFF3B82F6.toInt())
+            }
+            elevation = dp(6).toFloat()
         }
-        box.addView(pill)
-        attachDrag(pill) { setExpanded(!expanded) }
+        icon = ImageView(context)
+        pill.addView(icon, LinearLayout.LayoutParams(dp(26), dp(26)))
+        badgeRow = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+        pill.addView(badgeRow)
+        box.addView(pill, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        attachGestures(pill)
 
-        panel = LinearLayout(context).apply {
+        menu = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
-            setPadding(dp(6), dp(4), dp(6), dp(6))
-        }
-        val content = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-        val scroll = MaxHeightScrollView(context, (context.resources.displayMetrics.heightPixels * 0.6).toInt()).apply {
-            addView(content)
-        }
-        panel.addView(scroll, LinearLayout.LayoutParams(dp(280), ViewGroup.LayoutParams.WRAP_CONTENT))
-
-        val row1 = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
-        micBtn = smallButton("Mic on") { listener.onToggleMic() }
-        camBtn = smallButton("Camera on") { listener.onToggleCamera() }
-        row1.addView(micBtn, weighted())
-        row1.addView(camBtn, weighted())
-        content.addView(row1)
-        content.addView(smallButton("Mute all students") { listener.onMuteAll() })
-
-        waitingBox = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(4), 0, dp(4)) }
-        content.addView(waitingBox)
-
-        content.addView(label("Chat", bold = true))
-        chatBox = label("").apply {
-            setBackgroundColor(0xFF111827.toInt())
-            setPadding(dp(8), dp(6), dp(8), dp(6))
-            maxLines = 8
-            ellipsize = TextUtils.TruncateAt.END
-        }
-        content.addView(chatBox)
-        val replyRow = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        replyInput = EditText(context).apply {
-            hint = "Reply to everyone"
-            setTextColor(0xFFF8FAFC.toInt())
-            setHintTextColor(0xFF64748B.toInt())
-            textSize = 14f
-            isSingleLine = true
-            imeOptions = EditorInfo.IME_ACTION_SEND
-            setOnEditorActionListener { _, action, _ ->
-                if (action == EditorInfo.IME_ACTION_SEND) { sendReply(); true } else false
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(16).toFloat()
+                setColor(0xF2111827.toInt())
+                setStroke(dp(1), Palette.BORDER)
             }
         }
-        replyRow.addView(replyInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        replyRow.addView(smallButton("Send") { sendReply() })
-        content.addView(replyRow)
-
-        stopShareBtn = smallButton("Stop sharing") { listener.onStopShare() }.apply {
-            backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFB91C1C.toInt())
+        micBtn = menuButton("Mic on") { listener.onToggleMic() }
+        menu.addView(micBtn)
+        menu.addView(menuButton("Open app (keep sharing)") { setMenu(false); listener.onOpenApp() })
+        stopBtn = menuButton("Stop sharing") { setMenu(false); listener.onStopShare() }.apply {
+            backgroundTintList = ColorStateList.valueOf(Palette.DANGER)
         }
-        content.addView(stopShareBtn)
-        maskBtn = smallButton("Hide panel from share: on") { listener.onMaskToggle(!state.maskOn) }
-        content.addView(maskBtn)
-        val row2 = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
-        row2.addView(smallButton("Open app") { listener.onOpenApp() }, weighted())
-        row2.addView(smallButton("Collapse") { setExpanded(false) }, weighted())
-        content.addView(row2)
-        box.addView(panel)
+        menu.addView(stopBtn)
+        maskBtn = menuButton("Hide bubble in share: on") { listener.onMaskToggle(!state.maskOn) }.apply {
+            backgroundTintList = ColorStateList.valueOf(Palette.SURFACE_2)
+        }
+        menu.addView(maskBtn)
+        menu.addView(menuButton("Close menu") { setMenu(false) }.apply {
+            backgroundTintList = ColorStateList.valueOf(Palette.SURFACE_2)
+        })
+        box.addView(menu, LinearLayout.LayoutParams(dp(212), ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
         return box
     }
 
-    private fun sendReply() {
-        val text = replyInput.text.toString().trim()
-        if (text.isEmpty()) return
-        listener.onSendChat(text)
-        replyInput.setText("")
-    }
-
-    /** Drag the window by [handle]; a tap without movement runs [onTap]. */
+    /** Drag anywhere; a tap without movement runs onBubbleTap; a long press opens the menu. */
     @SuppressLint("ClickableViewAccessibility")
-    private fun attachDrag(handle: View, onTap: () -> Unit) {
+    private fun attachGestures(handle: View) {
         val slop = ViewConfiguration.get(context).scaledTouchSlop
+        val longPressMs = ViewConfiguration.getLongPressTimeout().toLong()
         var downX = 0f
         var downY = 0f
         var startX = 0
         var startY = 0
         var dragging = false
+        var longPressed = false
+        val longPress = Runnable {
+            if (!dragging) {
+                longPressed = true
+                handle.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+                setMenu(!menuOpen)
+            }
+        }
         handle.setOnTouchListener { _, e ->
             val p = params ?: return@setOnTouchListener false
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    downX = e.rawX; downY = e.rawY; startX = p.x; startY = p.y; dragging = false
+                    downX = e.rawX; downY = e.rawY; startX = p.x; startY = p.y
+                    dragging = false; longPressed = false
+                    handle.postDelayed(longPress, longPressMs)
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = e.rawX - downX
                     val dy = e.rawY - downY
-                    if (!dragging && (abs(dx) > slop || abs(dy) > slop)) dragging = true
+                    if (!dragging && (abs(dx) > slop || abs(dy) > slop)) {
+                        dragging = true
+                        handle.removeCallbacks(longPress)
+                    }
                     if (dragging) {
                         val dm = context.resources.displayMetrics
                         val v = root
@@ -337,36 +339,34 @@ class FloatingToolbar(private val context: Context, private val listener: Listen
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (!dragging) onTap() else root?.post { reportRect() }
+                    handle.removeCallbacks(longPress)
+                    when {
+                        dragging -> root?.post { reportRect() }
+                        longPressed -> Unit
+                        menuOpen -> setMenu(false)
+                        else -> {
+                            handle.performClick()
+                            listener.onBubbleTap()
+                        }
+                    }
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    handle.removeCallbacks(longPress)
                     true
                 }
                 else -> false
             }
         }
+        // TalkBack: double-tap = tap, and a long-press action for the menu.
+        handle.setOnLongClickListener { setMenu(!menuOpen); true }
     }
 
-    private fun weighted() = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-
-    private fun label(text: String, bold: Boolean = false) = TextView(context).apply {
-        this.text = text
-        setTextColor(0xFFE2E8F0.toInt())
-        textSize = 13f
-        if (bold) setTypeface(typeface, android.graphics.Typeface.BOLD)
-        setPadding(dp(2), dp(4), dp(2), dp(2))
-    }
-
-    private fun smallButton(text: String, onClick: () -> Unit) = MaterialButton(context).apply {
+    private fun menuButton(text: String, onClick: () -> Unit) = MaterialButton(context).apply {
         this.text = text
         isAllCaps = false
-        textSize = 13f
-        minHeight = dp(40)
+        textSize = 14f
+        minHeight = dp(44)
         setOnClickListener { onClick() }
-    }
-
-    /** ScrollView that stops growing at [maxHeightPx] (the panel must fit small screens). */
-    private class MaxHeightScrollView(context: Context, private val maxHeightPx: Int) : ScrollView(context) {
-        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-            super.onMeasure(widthMeasureSpec, View.MeasureSpec.makeMeasureSpec(maxHeightPx, View.MeasureSpec.AT_MOST))
-        }
     }
 }

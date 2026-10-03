@@ -2,8 +2,9 @@
 <resources>
     <string name="app_name">Classroom</string>
     <string name="share_notification_title">Sharing your screen</string>
-    <string name="share_notification_text">Students can see this device. Sharing continues if you leave this screen.</string>
+    <string name="share_notification_text">Students can see this device. Tap to stop sharing and return to the class.</string>
     <string name="share_notification_stop">Stop sharing</string>
+    <string name="share_notification_return">Stop &amp; return to class</string>
     <string name="waiting_notification_title">Student waiting to join</string>
     <string name="audio_notification_title">In class</string>
     <string name="audio_notification_text">Your microphone stays on while you use other apps.</string>

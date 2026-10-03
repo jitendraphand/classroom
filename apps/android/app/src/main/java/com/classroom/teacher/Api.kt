@@ -171,6 +171,25 @@ class ClassroomApi(rawBase: String) {
         call("POST", "/api/rooms/${code.uppercase()}/mute", JSONObject().put("all", true).put("muted", muted))
     }
 
+    /** Mute / unmute one student (server-side mic lock). */
+    fun muteOne(code: String, participantId: String, muted: Boolean) {
+        call("POST", "/api/rooms/${code.uppercase()}/mute", JSONObject().put("participantId", participantId).put("muted", muted))
+    }
+
+    /** Pin / unpin a student's video (persisted for this class session; counts toward the video cap). */
+    fun pinStudent(code: String, participantId: String, pinned: Boolean) {
+        call("POST", "/api/rooms/${code.uppercase()}/pin-student", JSONObject().put("participantId", participantId).put("pinned", pinned))
+    }
+
+    fun lowerHand(code: String, participantId: String) {
+        call("POST", "/api/rooms/${code.uppercase()}/hand", JSONObject().put("participantId", participantId).put("raised", false))
+    }
+
+    /** How many student cameras the server lets publish at once (1–6). */
+    fun setVideoCap(code: String, max: Int) {
+        call("PATCH", "/api/rooms/${code.uppercase()}/settings", JSONObject().put("maxVisibleVideos", max))
+    }
+
     fun messages(code: String): JSONObject = call("GET", "/api/rooms/${code.uppercase()}/messages", null)
 
     fun sendBroadcast(code: String, text: String) {

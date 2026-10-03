@@ -32,6 +32,11 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.appcompat.widget.PopupMenu
+import io.livekit.android.room.participant.Participant
+import io.livekit.android.room.track.RemoteTrackPublication
+import io.livekit.android.room.track.VideoQuality
+import io.livekit.android.room.track.VideoTrack
 import com.classroom.teacher.databinding.ActivityMainBinding
 import io.livekit.android.LiveKit
 import io.livekit.android.events.DisconnectReason
@@ -88,7 +93,6 @@ class MainActivity : AppCompatActivity() {
     private var cameraOn = false
     private var cameraTrack: LocalVideoTrack? = null
     private var cameraPosition = CameraPosition.FRONT
-    private var previewRenderer: TextureViewRenderer? = null
 
     // Screen share (published by hand so frames pass through the mask processor)
     private var screenTrack: LocalScreencastVideoTrack? = null
@@ -100,7 +104,6 @@ class MainActivity : AppCompatActivity() {
     private var overlayExplained = false
     private var pendingShareAfterOverlay = false
     private var appVisible = false
-    private var toolbarExpanded = false
     private var waitingList: List<Pair<String, String>> = emptyList()
     private var handsRaised = 0
     private var focusAlerts = 0
@@ -108,6 +111,33 @@ class MainActivity : AppCompatActivity() {
     private var chatIds: List<String> = emptyList()
     private var lastSeenChatId: String? = null
     private var unreadChat = 0
+
+    // In-class screen: icon rail, video column, chat / roster panel
+    private lateinit var railShare: RailButton
+    private lateinit var railMic: RailButton
+    private lateinit var railCamera: RailButton
+    private lateinit var railSwitch: RailButton
+    private lateinit var railChat: RailButton
+    private lateinit var railRoster: RailButton
+    private lateinit var railMuteAll: RailButton
+    private lateinit var railAllowUnmute: RailButton
+    private lateinit var railBubble: RailButton
+    private lateinit var railLeave: RailButton
+    private lateinit var railEnd: RailButton
+    private lateinit var tileGrid: TileGrid
+    private val tiles = ArrayList<VideoTile>()
+    private var panel: ClassPanel? = null
+    private var panelKind: ClassPanel.Kind? = null
+    private var chatText = ""
+    private var students: List<StudentInfo> = emptyList()
+    private var visibleIdentities: List<String> = emptyList()
+    private var maxVisible = ClassLogic.STUDENT_TILES
+    /** Unmuted students who spoke: keep their tile until they mute (as on the web). */
+    private val stickySpeakers = LinkedHashSet<String>()
+    private var speakingId: String? = null
+    private var rotationOrder: List<String> = emptyList()
+    private var rotationJob: Job? = null
+    private var toastJob: Job? = null
 
     /** Display rotations / size changes reach the application even while this activity is in the background. */
     private val displayCallbacks = object : ComponentCallbacks {
@@ -158,13 +188,20 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
         // targetSdk 35 draws edge to edge on Android 15: keep content clear of
         // the status / navigation bars and display cutouts.
+        val insetTypes = WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout() or WindowInsetsCompat.Type.ime()
         ViewCompat.setOnApplyWindowInsetsListener(binding.scroll) { v, insets ->
-            val bars = insets.getInsets(
-                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout() or WindowInsetsCompat.Type.ime(),
-            )
+            val bars = insets.getInsets(insetTypes)
             v.updatePadding(left = bars.left, top = bars.top, right = bars.right, bottom = bars.bottom)
             WindowInsetsCompat.CONSUMED
         }
+        // The class screen keeps every edge clear of bars, cutouts (landscape
+        // notch on the rail side) and the keyboard (chat input in the panel).
+        ViewCompat.setOnApplyWindowInsetsListener(binding.classScreen) { v, insets ->
+            val bars = insets.getInsets(insetTypes)
+            v.updatePadding(left = bars.left, top = bars.top, right = bars.right, bottom = bars.bottom)
+            WindowInsetsCompat.CONSUMED
+        }
+        buildClassScreen()
         applyResponsiveLayout()
 
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
@@ -177,17 +214,8 @@ class MainActivity : AppCompatActivity() {
         binding.rejoinButton.setOnClickListener { binding.rejoinButton.tag?.toString()?.let { enterClass(it) } }
         binding.adhocButton.setOnClickListener { startAdHoc() }
         binding.admitAllButton.setOnClickListener { admitAll() }
-        binding.shareButton.setOnClickListener { requestScreenShare() }
-        binding.stopShareButton.setOnClickListener { lifecycleScope.launch { stopScreenShare() } }
-        binding.micButton.setOnClickListener { ensureMicThenToggle() }
-        binding.cameraButton.setOnClickListener { ensureCameraThenToggle() }
-        binding.switchCameraButton.setOnClickListener { switchCamera() }
-        binding.overlayButton.setOnClickListener { onOverlayButton() }
-        binding.muteAllButton.setOnClickListener { muteStudents(true) }
-        binding.unmuteAllButton.setOnClickListener { muteStudents(false) }
-        binding.sendButton.setOnClickListener { sendChat() }
-        binding.endButton.setOnClickListener { confirmEnd() }
-        binding.leaveButton.setOnClickListener { lifecycleScope.launch { leaveClass() } }
+        binding.waitingBanner.setOnClickListener { openPanel(ClassPanel.Kind.ROSTER) }
+        binding.sheetHost.setOnClickListener { closePanel() }
         binding.useHereButton.setOnClickListener { enterClass(code) }
         binding.handoffHomeButton.setOnClickListener { loadHome() }
         binding.gradeSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
@@ -197,7 +225,8 @@ class MainActivity : AppCompatActivity() {
         ShareStopReceiver.onStopRequested = { lifecycleScope.launch { stopScreenShare() } }
         application.registerComponentCallbacks(displayCallbacks)
         updateDisplaySize()
-        renderOverlayButton()
+        renderRail()
+        if (intent?.getBooleanExtra(EXTRA_STOP_SHARE, false) == true) intent.removeExtra(EXTRA_STOP_SHARE)
 
         // Resume a saved session (the server may have replaced it meanwhile).
         val savedCookie = prefs.getString(KEY_COOKIE, null)
@@ -220,6 +249,15 @@ class MainActivity : AppCompatActivity() {
         updateDisplaySize()
     }
 
+    /** Notification "back to class" while sharing: open the app and stop the share. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_STOP_SHARE, false)) {
+            intent.removeExtra(EXTRA_STOP_SHARE)
+            if (sharing) lifecycleScope.launch { stopScreenShare() }
+        }
+    }
+
     override fun onStart() {
         super.onStart()
         appVisible = true
@@ -235,8 +273,8 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         getSystemService(NotificationManager::class.java).cancel(Notifications.WAITING_ID)
-        markChatSeen()
-        renderOverlayButton()
+        if (panelKind == ClassPanel.Kind.CHAT) markChatSeen()
+        renderRail()
         if (pendingShareAfterOverlay) {
             // Back from the "Display over other apps" settings page.
             pendingShareAfterOverlay = false
@@ -251,8 +289,9 @@ class MainActivity : AppCompatActivity() {
         application.unregisterComponentCallbacks(displayCallbacks)
         toolbar?.hide()
         toolbar = null
-        detachPreview()
+        rotationJob?.cancel()
         releaseLocalVideo(unpublish = false)
+        tiles.forEach { it.releaseRenderer() }
         room?.disconnect()
         room = null
         stopService(Intent(this, ClassAudioService::class.java))
@@ -276,19 +315,7 @@ class MainActivity : AppCompatActivity() {
         binding.content.layoutParams = binding.content.layoutParams.apply {
             width = if (widthDp > maxDp) (maxDp * density).toInt() else ViewGroup.LayoutParams.MATCH_PARENT
         }
-        val wide = widthDp >= 720
-        binding.classColumns.orientation = if (wide) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
-        val gap = (16 * density).toInt()
-        binding.controlsColumn.layoutParams = LinearLayout.LayoutParams(
-            if (wide) 0 else ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            if (wide) 1f else 0f,
-        )
-        binding.chatColumn.layoutParams = LinearLayout.LayoutParams(
-            if (wide) 0 else ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            if (wide) 1f else 0f,
-        ).apply { if (wide) marginStart = gap }
+        applyClassLayout()
         // Short landscape phones: drop the subtitle to keep the controls visible.
         binding.appSubtitle.visibility = if (cfg.screenHeightDp < 480) View.GONE else View.VISIBLE
     }
@@ -482,13 +509,15 @@ class MainActivity : AppCompatActivity() {
         pollJob?.cancel()
         code = roomCode.uppercase()
         classLabel = label
-        showOnly(binding.classGroup)
+        showOnly(binding.classScreen)
         binding.classTitle.text = if (label.isNotBlank()) "$label · $code" else "Class $code"
-        binding.shareButton.isEnabled = false
-        binding.micButton.isEnabled = false
-        binding.cameraButton.isEnabled = false
         binding.classStatus.text = "Connecting…"
-        renderShareButtons()
+        students = emptyList()
+        visibleIdentities = emptyList()
+        stickySpeakers.clear()
+        speakingId = null
+        renderRail()
+        renderVideos()
         lifecycleScope.launch {
             try {
                 disconnectRoom()
@@ -501,11 +530,20 @@ class MainActivity : AppCompatActivity() {
                 leaving = false
                 listen(connected)
                 connected.connect(url, token)
-                binding.classStatus.text = "In class. Students join from the school app. Sharing keeps going when you switch apps."
-                binding.shareButton.isEnabled = true
-                binding.micButton.isEnabled = true
-                binding.cameraButton.isEnabled = true
+                binding.classStatus.text = "In class · students join muted"
+                renderRail()
+                renderVideos()
+                startRotation()
                 updateToolbar()
+                // The video column shows three students: let the server sample
+                // (who may publish camera) match, so pins count toward it.
+                launch(Dispatchers.IO) {
+                    try {
+                        client.setVideoCap(code, ClassLogic.STUDENT_TILES)
+                    } catch (e: Exception) {
+                        android.util.Log.w(TAG, "video cap", e)
+                    }
+                }
                 if (needsNotificationPermission()) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                 startPolling()
             } catch (e: SessionEndedException) {
@@ -528,7 +566,17 @@ class MainActivity : AppCompatActivity() {
         roomJob?.cancel()
         roomJob = lifecycleScope.launch {
             connected.events.collect { event ->
-                if (event is RoomEvent.Disconnected && connected === room) onDisconnected(event.reason)
+                if (connected !== room) return@collect
+                when (event) {
+                    is RoomEvent.Disconnected -> onDisconnected(event.reason)
+                    is RoomEvent.ActiveSpeakersChanged -> onSpeakers(event.speakers)
+                    is RoomEvent.TrackPublished, is RoomEvent.TrackUnpublished,
+                    is RoomEvent.TrackSubscribed, is RoomEvent.TrackUnsubscribed,
+                    is RoomEvent.TrackMuted, is RoomEvent.TrackUnmuted,
+                    is RoomEvent.ParticipantConnected, is RoomEvent.ParticipantDisconnected,
+                    -> renderVideos()
+                    else -> Unit
+                }
             }
         }
     }
@@ -541,7 +589,7 @@ class MainActivity : AppCompatActivity() {
             releaseLocalVideo(unpublish = false)
             setMic(false)
             pollJob?.cancel()
-            renderShareButtons()
+            renderRail()
             updateToolbar()
             when (reason) {
                 // Same account opened the class elsewhere (web tab / other phone).
@@ -592,7 +640,7 @@ class MainActivity : AppCompatActivity() {
             Room.State.CONNECTED -> {
                 disconnectedPolls = 0
                 if (binding.classStatus.text.startsWith("Reconnecting")) {
-                    binding.classStatus.text = if (sharing) "Sharing this device's screen with the class" else "In class."
+                    binding.classStatus.text = if (sharing) "Sharing this device's screen with the class" else "In class · students join muted"
                 }
             }
             Room.State.RECONNECTING, Room.State.CONNECTING -> binding.classStatus.text = "Reconnecting to the class…"
@@ -618,11 +666,6 @@ class MainActivity : AppCompatActivity() {
         binding.handoffText.text = text
     }
 
-    private fun renderShareButtons() {
-        binding.shareButton.visibility = if (sharing) View.GONE else View.VISIBLE
-        binding.stopShareButton.visibility = if (sharing) View.VISIBLE else View.GONE
-    }
-
     private fun requestScreenShare() {
         if (room == null) return showError("Join the class before sharing.")
         if (!isConnected()) return
@@ -641,10 +684,12 @@ class MainActivity : AppCompatActivity() {
             AlertDialog.Builder(this)
                 .setTitle("Show class controls over other apps?")
                 .setMessage(
-                    "While you share your screen, a small floating button can show new chat messages, raised hands " +
-                        "and waiting students, and lets you admit, mute, reply or stop sharing without coming back here.\n\n" +
-                        "Android needs the \"Display over other apps\" permission for this. The button is blacked out " +
-                        "of what students see.\n\nWithout it, sharing still works: use the notification or come back to this app.",
+                    "When you share, this app steps aside and leaves a small floating bubble on screen. It lights up " +
+                        "for students waiting, raised hands and new messages. Tap it to stop sharing and come straight back " +
+                        "to the class (long-press for more).\n\n" +
+                        "Android needs the \"Display over other apps\" permission for this. The bubble is blacked out " +
+                        "of what students see.\n\nWithout it, sharing still works: tap the \"Screen share\" notification " +
+                        "to stop and come back.",
                 )
                 .setPositiveButton("Allow") { _, _ ->
                     pendingShareAfterOverlay = true
@@ -712,9 +757,21 @@ class MainActivity : AppCompatActivity() {
             if (!ok) throw ApiException("Screen share did not start (state: ${connected.state.name.lowercase()})")
             screenTrack = track
             sharing = true
-            renderShareButtons()
+            renderRail()
             updateToolbar()
             binding.classStatus.text = "Sharing this device's screen with the class"
+            // Step aside so the teacher lands on what they want to show; the
+            // bubble (or the notification) brings them back and stops the share.
+            val bubble = toolbarWanted && Settings.canDrawOverlays(this)
+            if (!bubble) {
+                showError(
+                    if (!Settings.canDrawOverlays(this)) "Sharing. The floating bubble needs the \"Display over other apps\" permission, so to come back tap the \"Sharing your screen\" notification: it stops the share and opens the class."
+                    else "Sharing. To come back, tap the \"Sharing your screen\" notification: it stops the share and opens the class.",
+                )
+            }
+            // Give the teacher time to read the hint when there is no bubble.
+            delay(if (bubble) 350 else 3000)
+            if (sharing) moveTaskToBack(true)
             withContext(Dispatchers.IO) { api?.stage(code, "screen") }
         } catch (e: SessionEndedException) {
             sessionEnded(e)
@@ -723,7 +780,7 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             if (screenTrack == null && track != null) disposeScreenTrack(track, connected, unpublish = true)
             sharing = false
-            renderShareButtons()
+            renderRail()
             updateToolbar()
             showError(e.message ?: "Could not share the screen")
         }
@@ -756,7 +813,7 @@ class MainActivity : AppCompatActivity() {
         }
         val was = sharing
         sharing = false
-        renderShareButtons()
+        renderRail()
         updateToolbar()
         if (room != null) binding.classStatus.text = "Screen share stopped"
         if (was) {
@@ -791,8 +848,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun setMic(on: Boolean) {
         micOn = on
-        binding.micButton.text = if (on) "Turn microphone off" else "Turn microphone on"
         updateMediaService()
+        renderRail()
         renderToolbar()
     }
 
@@ -836,7 +893,7 @@ class MainActivity : AppCompatActivity() {
     private suspend fun startCamera() {
         val connected = room ?: return
         if (!isConnected() || cameraTrack != null) return
-        binding.cameraButton.isEnabled = false
+        railCamera.isEnabled = false
         var track: LocalVideoTrack? = null
         try {
             track = connected.localParticipant.createVideoTrack(
@@ -861,7 +918,7 @@ class MainActivity : AppCompatActivity() {
             if (!ok) throw ApiException("The camera did not start (state: ${connected.state.name.lowercase()})")
             cameraTrack = track
             cameraOn = true
-            attachPreview(connected, track)
+            renderVideos()
             updateMediaService()
         } catch (e: CancellationException) {
             throw e
@@ -869,7 +926,7 @@ class MainActivity : AppCompatActivity() {
             if (cameraTrack == null && track != null) disposeCamera(track, connected, unpublish = true)
             showError(e.message ?: "Could not start the camera")
         } finally {
-            binding.cameraButton.isEnabled = room != null
+            railCamera.isEnabled = true
             renderCamera()
         }
     }
@@ -878,7 +935,7 @@ class MainActivity : AppCompatActivity() {
         val track = cameraTrack
         cameraTrack = null
         cameraOn = false
-        detachPreview(track)
+        renderVideos() // detaches the self tile before the track is disposed
         if (track != null) disposeCamera(track, room, unpublish = true)
         updateMediaService()
         renderCamera()
@@ -903,42 +960,14 @@ class MainActivity : AppCompatActivity() {
         try {
             track.switchCamera(null, next)
             cameraPosition = next
-            previewRenderer?.setMirror(next == CameraPosition.FRONT)
+            renderVideos()
         } catch (e: Exception) {
             showError(e.message ?: "Could not switch camera")
         }
     }
 
-    private fun attachPreview(r: Room, track: LocalVideoTrack) {
-        detachPreview()
-        try {
-            val view = TextureViewRenderer(this)
-            r.initVideoRenderer(view)
-            view.setMirror(cameraPosition == CameraPosition.FRONT)
-            binding.cameraPreview.addView(
-                view,
-                FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
-            )
-            binding.cameraPreview.visibility = View.VISIBLE
-            track.addRenderer(view)
-            previewRenderer = view
-        } catch (e: Exception) {
-            android.util.Log.w(TAG, "camera preview", e)
-        }
-    }
-
-    private fun detachPreview(track: LocalVideoTrack? = cameraTrack) {
-        val view = previewRenderer ?: return
-        previewRenderer = null
-        try { track?.removeRenderer(view) } catch (_: Exception) {}
-        try { view.release() } catch (_: Exception) {}
-        binding.cameraPreview.removeAllViews()
-        binding.cameraPreview.visibility = View.GONE
-    }
-
     private fun renderCamera() {
-        binding.cameraButton.text = if (cameraOn) "Turn camera off" else "Turn camera on"
-        binding.switchCameraButton.isEnabled = cameraOn
+        renderRail()
         renderToolbar()
     }
 
@@ -946,8 +975,8 @@ class MainActivity : AppCompatActivity() {
     private fun releaseLocalVideo(unpublish: Boolean) {
         val r = room
         cameraTrack?.let {
-            detachPreview(it)
             cameraTrack = null
+            if (::tileGrid.isInitialized) renderVideos()
             disposeCamera(it, r, unpublish)
         }
         cameraOn = false
@@ -957,6 +986,334 @@ class MainActivity : AppCompatActivity() {
         }
         if (::binding.isInitialized) renderCamera()
         updateMediaService()
+    }
+
+    // ---- Class screen: rail, video column, panels --------------------------
+
+    private fun buildClassScreen() {
+        val rail = binding.rail
+        fun add(icon: Int, label: String, gapBefore: Int = 6, onClick: () -> Unit) = RailButton(this).also { b ->
+            b.setIcon(icon)
+            b.label = label
+            b.setOnClickListener { onClick() }
+            rail.addView(b, LinearLayout.LayoutParams(dp(52), dp(52)).apply { topMargin = dp(gapBefore) })
+        }
+        railShare = add(R.drawable.ic_screen_share, "Share screen", 0) {
+            if (sharing) lifecycleScope.launch { stopScreenShare() } else requestScreenShare()
+        }
+        railMic = add(R.drawable.ic_mic_off, "Turn microphone on") { ensureMicThenToggle() }
+        railCamera = add(R.drawable.ic_videocam_off, "Turn camera on") { ensureCameraThenToggle() }
+        railSwitch = add(R.drawable.ic_cameraswitch, "Switch camera") { switchCamera() }
+        railChat = add(R.drawable.ic_chat, "Chat", 14) { togglePanel(ClassPanel.Kind.CHAT) }
+        railRoster = add(R.drawable.ic_group, "Students and waiting room") { togglePanel(ClassPanel.Kind.ROSTER) }
+        railMuteAll = add(R.drawable.ic_volume_off, "Mute all students", 14) { muteStudents(true) }
+        railAllowUnmute = add(R.drawable.ic_record_voice_over, "Allow all students to unmute") { muteStudents(false) }
+        railBubble = add(R.drawable.ic_bubble, "Floating bubble") { onOverlayButton() }
+        railLeave = add(R.drawable.ic_logout, "Leave (class keeps running)", 14) { lifecycleScope.launch { leaveClass() } }
+        railEnd = add(R.drawable.ic_call_end, "End class for everyone") { confirmEnd() }
+        railEnd.setStyle(RailButton.Style.DANGER)
+
+        tileGrid = TileGrid(this)
+        repeat(1 + ClassLogic.STUDENT_TILES) { i ->
+            val tile = VideoTile(this)
+            if (i > 0) {
+                tile.isClickable = true
+                tile.setOnClickListener { v -> tileMenu(v as VideoTile) }
+                tile.setOnLongClickListener { v -> tileMenu(v as VideoTile); true }
+            }
+            tiles.add(tile)
+            tileGrid.addView(tile)
+        }
+        binding.videoArea.addView(tileGrid, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+    }
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    /** Panels sit beside the videos when there is room (landscape / ≥ 720dp wide), else as a bottom sheet. */
+    private fun panelOnSide(): Boolean {
+        val cfg = resources.configuration
+        return cfg.screenWidthDp >= 720 || (cfg.orientation == Configuration.ORIENTATION_LANDSCAPE && cfg.screenWidthDp >= 560)
+    }
+
+    /**
+     * Portrait: rail on the left, the four tiles as a 2x2 block filling the
+     * rest, chat / roster as a bottom sheet. Landscape: rail on the left, the
+     * tiles in a row (or 2x2 when tall enough), panels in a right column.
+     * Short screens get a tighter rail; tablets get bigger tiles for free.
+     */
+    private fun applyClassLayout() {
+        if (!::tileGrid.isInitialized) return
+        val cfg = resources.configuration
+        val short = cfg.screenHeightDp < 420
+        val size = dp(if (short) 44 else 52)
+        for (i in 0 until binding.rail.childCount) {
+            val v = binding.rail.getChildAt(i)
+            v.layoutParams = (v.layoutParams as LinearLayout.LayoutParams).apply {
+                width = size
+                height = size
+                if (topMargin > 0) topMargin = dp(if (short) 4 else if (topMargin >= dp(14)) 14 else 6)
+            }
+        }
+        binding.classStatus.visibility = if (short) View.GONE else View.VISIBLE
+        tileGrid.aspect = if (cfg.orientation == Configuration.ORIENTATION_LANDSCAPE) 16f / 9f else 4f / 3f
+        tileGrid.requestLayout()
+        binding.sidePanelHost.layoutParams = binding.sidePanelHost.layoutParams.apply {
+            width = (minOf(420, maxOf(300, (cfg.screenWidthDp * 0.36f).toInt())) * resources.displayMetrics.density).toInt()
+        }
+        panelKind?.let { placePanel() }
+    }
+
+    private fun ensurePanel(): ClassPanel = panel ?: ClassPanel(this, panelListener).also { panel = it }
+
+    private fun togglePanel(kind: ClassPanel.Kind) {
+        if (panelKind == kind) closePanel() else openPanel(kind)
+    }
+
+    private fun openPanel(kind: ClassPanel.Kind) {
+        val p = ensurePanel()
+        p.show(kind)
+        panelKind = kind
+        placePanel()
+        if (kind == ClassPanel.Kind.CHAT) {
+            p.renderChat(chatText)
+            markChatSeen()
+        } else {
+            renderRosterPanel()
+        }
+        renderRail()
+    }
+
+    private fun closePanel() {
+        val p = panel
+        panelKind = null
+        if (p != null) (p.parent as? ViewGroup)?.removeView(p)
+        if (::binding.isInitialized) {
+            binding.sidePanelHost.visibility = View.GONE
+            binding.sheetHost.visibility = View.GONE
+        }
+        if (::railChat.isInitialized) renderRail()
+    }
+
+    private fun placePanel() {
+        val p = panel ?: return
+        (p.parent as? ViewGroup)?.removeView(p)
+        if (panelOnSide()) {
+            binding.sheetHost.visibility = View.GONE
+            binding.sidePanelHost.visibility = View.VISIBLE
+            binding.sidePanelHost.addView(p, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        } else {
+            binding.sidePanelHost.visibility = View.GONE
+            binding.sheetHost.visibility = View.VISIBLE
+            val h = (resources.displayMetrics.heightPixels * 0.62f).toInt()
+            binding.sheetHost.addView(
+                p,
+                FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, h, android.view.Gravity.BOTTOM).apply {
+                    leftMargin = dp(8)
+                    rightMargin = dp(8)
+                    bottomMargin = dp(8)
+                },
+            )
+        }
+    }
+
+    private val panelListener = object : ClassPanel.Listener {
+        override fun onClosePanel() = closePanel()
+        override fun onSendChat(text: String) = sendChat(text)
+        override fun onAdmit(participantId: String) = admitOne(participantId)
+        override fun onAdmitAll() = admitAll()
+        override fun onMuteStudent(participantId: String, muted: Boolean) = studentAction("Could not change the microphone") {
+            it.muteOne(code, participantId, muted)
+        }
+        override fun onPinStudent(participantId: String, pinned: Boolean) = pinStudent(participantId, pinned)
+        override fun onLowerHand(participantId: String) = studentAction("Could not lower the hand") { it.lowerHand(code, participantId) }
+    }
+
+    private fun renderRosterPanel() {
+        val p = panel ?: return
+        if (panelKind != ClassPanel.Kind.ROSTER) return
+        p.renderRoster(waitingList, students, pinsFull = students.count { it.pinned } >= maxVisible)
+    }
+
+    /** Run a teacher action against the API, then refresh the class state. */
+    private fun studentAction(errorText: String, block: (ClassroomApi) -> Unit) {
+        val client = api ?: return
+        lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) { block(client) }
+                refreshState()
+            } catch (e: SessionEndedException) {
+                sessionEnded(e)
+            } catch (e: Exception) {
+                showError(e.message ?: errorText)
+            }
+        }
+    }
+
+    private fun admitOne(participantId: String) = studentAction("Could not admit") { it.admit(code, participantId) }
+
+    private fun pinStudent(participantId: String, pinned: Boolean) {
+        if (pinned && students.count { it.pinned } >= maxVisible) {
+            showError("All $maxVisible video places are pinned. Unpin someone first.")
+            return
+        }
+        studentAction("Could not change the pin") { it.pinStudent(code, participantId, pinned) }
+    }
+
+    private fun tileMenu(tile: VideoTile) {
+        val identity = tile.identity ?: return
+        val s = students.firstOrNull { it.identity == identity } ?: return
+        PopupMenu(this, tile).apply {
+            menu.add(0, 1, 0, if (s.pinned) "Unpin ${s.name}" else "Pin ${s.name} (keep in view)")
+            menu.add(0, 2, 1, if (s.muted) "Unmute ${s.name}" else "Mute ${s.name}")
+            if (s.handRaised) menu.add(0, 3, 2, "Lower hand")
+            setOnMenuItemClickListener { item ->
+                when (item.itemId) {
+                    1 -> pinStudent(s.id, !s.pinned)
+                    2 -> panelListener.onMuteStudent(s.id, !s.muted)
+                    3 -> panelListener.onLowerHand(s.id)
+                }
+                true
+            }
+            show()
+        }
+    }
+
+    /** Icons and on/off states of the rail; badges for chat and the roster. */
+    private fun renderRail() {
+        if (!::railShare.isInitialized) return
+        val connected = room != null && room?.state == Room.State.CONNECTED
+        railShare.setIcon(if (sharing) R.drawable.ic_stop_screen_share else R.drawable.ic_screen_share)
+        railShare.label = if (sharing) "Stop sharing" else "Share screen"
+        railShare.setStyle(if (sharing) RailButton.Style.DANGER else RailButton.Style.NEUTRAL)
+        railShare.isEnabled = connected || sharing
+        railMic.setIcon(if (micOn) R.drawable.ic_mic else R.drawable.ic_mic_off)
+        railMic.label = if (micOn) "Microphone on. Tap to mute" else "Microphone off. Tap to speak"
+        railMic.setStyle(if (micOn) RailButton.Style.ON else RailButton.Style.OFF_WARN)
+        railMic.isEnabled = connected
+        railCamera.setIcon(if (cameraOn) R.drawable.ic_videocam else R.drawable.ic_videocam_off)
+        railCamera.label = if (cameraOn) "Camera on. Tap to turn off" else "Camera off. Tap to turn on"
+        railCamera.setStyle(if (cameraOn) RailButton.Style.ON else RailButton.Style.OFF_WARN)
+        railCamera.isEnabled = connected
+        railSwitch.label = if (cameraPosition == CameraPosition.FRONT) "Switch to back camera" else "Switch to front camera"
+        railSwitch.isEnabled = cameraOn
+        railChat.setStyle(if (panelKind == ClassPanel.Kind.CHAT) RailButton.Style.ACTIVE else RailButton.Style.NEUTRAL)
+        railChat.setBadge(unreadChat, 0xFF3B82F6.toInt())
+        railRoster.setStyle(if (panelKind == ClassPanel.Kind.ROSTER) RailButton.Style.ACTIVE else RailButton.Style.NEUTRAL)
+        railRoster.setBadge(waitingList.size + handsRaised)
+        railMuteAll.isEnabled = room != null
+        railAllowUnmute.isEnabled = room != null
+        val canOverlay = Settings.canDrawOverlays(this)
+        railBubble.label = when {
+            !canOverlay -> "Floating bubble: needs permission"
+            toolbarWanted -> "Floating bubble on. Tap to turn off"
+            else -> "Floating bubble off. Tap to turn on"
+        }
+        railBubble.setStyle(if (canOverlay && toolbarWanted) RailButton.Style.ACTIVE else RailButton.Style.NEUTRAL)
+        railBubble.setBadge(if (canOverlay) 0 else 1, Palette.DANGER)
+    }
+
+    private fun onSpeakers(speakers: List<Participant>) {
+        val local = room?.localParticipant
+        speakingId = null
+        for (p in speakers) {
+            if (p === local) continue
+            val id = p.identity?.value ?: continue
+            if (id.startsWith("teacher")) continue
+            if (p.isMicrophoneEnabled) {
+                stickySpeakers.add(id)
+                if (speakingId == null) speakingId = id
+            } else {
+                stickySpeakers.remove(id)
+            }
+        }
+        renderVideos()
+    }
+
+    /** Rolling rotation among students who are not pinned or speaking (8 s, as on the web). */
+    private fun startRotation() {
+        rotationJob?.cancel()
+        rotationJob = lifecycleScope.launch {
+            while (isActive) {
+                delay(8000)
+                rotationOrder = ClassLogic.rotate(rotationOrder)
+                renderVideos()
+            }
+        }
+    }
+
+    /**
+     * Fill the video column: the teacher's own camera, then three students
+     * (pinned → speaking → sticky speakers → rotation). Only the shown
+     * students' cameras are subscribed, at the low simulcast layer; students
+     * never see each other's video (server permissions).
+     */
+    private fun renderVideos() {
+        if (!::tileGrid.isInitialized) return
+        val r = room
+        val self = tiles[0]
+        self.bind(
+            r,
+            null,
+            "You",
+            if (cameraOn) cameraTrack else null,
+            mirror = cameraPosition == CameraPosition.FRONT,
+            emptyText = if (cameraOn) null else "Camera off",
+        )
+        val byIdentity = HashMap<String, io.livekit.android.room.participant.RemoteParticipant>()
+        r?.remoteParticipants?.values?.forEach { p -> p.identity?.value?.let { byIdentity[it] = p } }
+        // Drop sticky speakers who left or muted themselves.
+        stickySpeakers.retainAll { id -> byIdentity[id]?.isMicrophoneEnabled == true }
+        fun cameraPub(id: String) = byIdentity[id]?.getTrackPublication(Track.Source.CAMERA) as? RemoteTrackPublication
+        val visibleSet = visibleIdentities.toSet()
+        val pool = byIdentity.keys.filter { id ->
+            !id.startsWith("teacher") && (visibleSet.isEmpty() || id in visibleSet) && cameraPub(id)?.muted == false
+        }
+        // Keep a stable rotation order; new publishers join at the end.
+        rotationOrder = rotationOrder.filter { it in pool } + pool.filter { it !in rotationOrder }.shuffled()
+        val pins = ClassLogic.pinOrder(students)
+        val shown = ClassLogic.pickTiles(pool, pins, speakingId, stickySpeakers, rotationOrder, ClassLogic.STUDENT_TILES)
+        // Subscribe only to the shown cameras, at the lowest layer.
+        for ((id, _) in byIdentity) {
+            val pub = cameraPub(id) ?: continue
+            val want = id in shown
+            try {
+                if (pub.subscribed != want) pub.setSubscribed(want)
+                if (want) pub.setVideoQuality(VideoQuality.LOW)
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "subscribe $id", e)
+            }
+        }
+        val studentCount = students.size
+        for (i in 1 until tiles.size) {
+            val id = shown.getOrNull(i - 1)
+            val tile = tiles[i]
+            if (id == null) {
+                val text = when {
+                    studentCount == 0 -> "No students yet"
+                    i - 1 < minOf(studentCount, maxVisible) -> "Camera off"
+                    else -> ""
+                }
+                tile.bind(r, null, "", null, emptyText = text)
+                continue
+            }
+            val info = students.firstOrNull { it.identity == id }
+            val p = byIdentity[id]
+            val chip = when {
+                info?.handRaised == true -> "✋ Hand up"
+                info?.focus == "away" -> "Switched away"
+                info?.focus == "left" -> "Not fullscreen"
+                else -> null
+            }
+            tile.bind(
+                r,
+                id,
+                info?.name ?: p?.name ?: "Student",
+                cameraPub(id)?.track as? VideoTrack,
+                pinned = info?.pinned == true,
+                speaking = id == speakingId || p?.isSpeaking == true,
+                chip = chip,
+            )
+        }
     }
 
     // ---- Floating toolbar -------------------------------------------------
@@ -989,74 +1346,32 @@ class MainActivity : AppCompatActivity() {
             return
         }
         toolbarWanted = !toolbarWanted
-        renderOverlayButton()
+        renderRail()
+        showError(if (toolbarWanted) "Floating bubble on: shown while you share or use other apps." else "Floating bubble off.")
         updateToolbar()
     }
 
-    private fun renderOverlayButton() {
-        binding.overlayButton.text = when {
-            !Settings.canDrawOverlays(this) -> "Floating toolbar: allow…"
-            toolbarWanted -> "Floating toolbar: on (while sharing or away)"
-            else -> "Floating toolbar: off"
-        }
-    }
-
     private val toolbarListener = object : FloatingToolbar.Listener {
+        override fun onBubbleTap() {
+            // Back to the class; while sharing this also stops the share.
+            if (sharing) lifecycleScope.launch { stopScreenShare() }
+            openAppWith(null)
+        }
+
         override fun onToggleMic() {
             if (!hasPermission(Manifest.permission.RECORD_AUDIO)) return openAppWith("Allow the microphone here first.")
             toggleMic()
         }
 
-        override fun onToggleCamera() {
-            if (!hasPermission(Manifest.permission.CAMERA)) return openAppWith("Allow the camera here first.")
-            toggleCamera()
-        }
-
-        override fun onAdmitAll() = admitAll()
-
-        override fun onAdmit(participantId: String) {
-            lifecycleScope.launch {
-                try {
-                    withContext(Dispatchers.IO) { api?.admit(code, participantId) }
-                    refreshState()
-                } catch (e: SessionEndedException) {
-                    sessionEnded(e)
-                } catch (e: Exception) {
-                    showError(e.message ?: "Could not admit")
-                }
-            }
-        }
-
-        override fun onMuteAll() = muteStudents(true)
-
-        override fun onSendChat(text: String) {
-            lifecycleScope.launch {
-                try {
-                    withContext(Dispatchers.IO) { api?.sendBroadcast(code, text) }
-                    refreshChat()
-                    markChatSeen()
-                } catch (e: SessionEndedException) {
-                    sessionEnded(e)
-                } catch (e: Exception) {
-                    showError(e.message ?: "Could not send")
-                }
-            }
-        }
+        override fun onOpenApp() = openAppWith(null)
 
         override fun onStopShare() {
             lifecycleScope.launch { stopScreenShare() }
         }
 
-        override fun onOpenApp() = openAppWith(null)
-
         override fun onMaskToggle(on: Boolean) {
             maskProcessor.enabled = on
             renderToolbar()
-        }
-
-        override fun onExpandedChanged(expanded: Boolean) {
-            toolbarExpanded = expanded
-            if (expanded) markChatSeen()
         }
 
         override fun onRectChanged(rect: IntRect?) {
@@ -1102,12 +1417,10 @@ class MainActivity : AppCompatActivity() {
             ToolbarState(
                 sharing = sharing,
                 micOn = micOn,
-                cameraOn = cameraOn,
-                waiting = waitingList,
+                waiting = waitingList.size,
                 hands = handsRaised,
-                focusAlerts = focusAlerts,
                 unreadChat = unreadChat,
-                recentChat = recentChat,
+                focusAlerts = focusAlerts,
                 maskOn = maskProcessor.enabled,
             ),
         )
@@ -1117,6 +1430,7 @@ class MainActivity : AppCompatActivity() {
         lastSeenChatId = chatIds.lastOrNull()
         unreadChat = 0
         renderToolbar()
+        if (::railChat.isInitialized) renderRail()
     }
 
     private fun muteStudents(muted: Boolean) {
@@ -1145,14 +1459,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun sendChat() {
-        val text = binding.chatInput.text.toString().trim()
-        if (text.isEmpty()) return
+    private fun sendChat(text: String) {
         lifecycleScope.launch {
             try {
                 withContext(Dispatchers.IO) { api?.sendBroadcast(code, text) }
-                binding.chatInput.setText("")
                 refreshChat()
+                markChatSeen()
             } catch (e: SessionEndedException) {
                 sessionEnded(e)
             } catch (e: Exception) {
@@ -1164,6 +1476,7 @@ class MainActivity : AppCompatActivity() {
     private fun confirmEnd() {
         AlertDialog.Builder(this)
             .setTitle("End class for everyone?")
+            .setMessage("Students are disconnected and the class closes. To step out but keep the class running, use Leave.")
             .setPositiveButton("End class") { _, _ -> lifecycleScope.launch { endClass() } }
             .setNegativeButton("Cancel", null)
             .show()
@@ -1205,9 +1518,12 @@ class MainActivity : AppCompatActivity() {
         }
         setMic(false)
         sharing = false
-        renderShareButtons()
+        renderRail()
         updateToolbar()
         waitingList = emptyList()
+        students = emptyList()
+        rotationJob?.cancel()
+        closePanel()
         chatIds = emptyList()
         lastSeenChatId = null
         unreadChat = 0
@@ -1255,19 +1571,18 @@ class MainActivity : AppCompatActivity() {
             val w = waiting.getJSONObject(it)
             w.optString("id") to w.optString("displayName", "Student")
         }
-        val admitted = state.optJSONArray("admitted") ?: JSONArray()
-        var hands = 0
-        var away = 0
-        for (i in 0 until admitted.length()) {
-            val a = admitted.getJSONObject(i)
-            if (a.optString("role") != "STUDENT") continue
-            if (a.optBoolean("handRaised")) hands++
-            val f = a.optString("focus")
-            if (f == "left" || f == "away") away++
-        }
-        handsRaised = hands
-        focusAlerts = away
+        students = ClassLogic.parseStudents(state.optJSONArray("admitted"))
+        handsRaised = students.count { it.handRaised }
+        focusAlerts = students.count { it.focusAlert }
+        maxVisible = state.optInt("maxVisibleVideos", ClassLogic.STUDENT_TILES).coerceIn(1, 6)
+        val vis = state.optJSONArray("visibleIdentities") ?: JSONArray()
+        visibleIdentities = (0 until vis.length()).map { vis.optString(it) }
+        // Students muted by the teacher drop their sticky speaker slot.
+        students.filter { it.muted }.forEach { stickySpeakers.remove(it.identity) }
         renderToolbar()
+        renderRail()
+        renderVideos()
+        renderRosterPanel()
         return true
     }
 
@@ -1278,9 +1593,10 @@ class MainActivity : AppCompatActivity() {
             notifyWaiting(if (n == 1) "$first is waiting to join" else "$n students are waiting to join")
         }
         knownWaiting = n
-        binding.waitingCard.visibility = if (n > 0) View.VISIBLE else View.GONE
-        binding.waitingText.text = if (n == 1) "$first is waiting to join" else "$n students are waiting to join"
-        binding.admitAllButton.text = if (n == 1) "Admit" else "Admit all ($n)"
+        binding.waitingBanner.visibility = if (n > 0) View.VISIBLE else View.GONE
+        binding.waitingText.text = if (n == 1) "$first is waiting" else "$n students waiting"
+        binding.admitAllButton.text = if (n == 1) "Admit" else "Admit all"
+        binding.waitingBanner.contentDescription = "${binding.waitingText.text}. Tap to see the waiting room."
     }
 
     @SuppressLint("MissingPermission")
@@ -1298,7 +1614,8 @@ class MainActivity : AppCompatActivity() {
                 append(m.optString("senderName", "Someone")).append(": ").append(m.optString("body")).append('\n')
             }
         }
-        binding.chatLog.text = lines.trimEnd().ifBlank { "No messages yet." }
+        chatText = lines.trimEnd()
+        panel?.renderChat(chatText)
         val ids = ArrayList<String>()
         val recent = ArrayList<String>()
         for (i in 0 until messages.length()) {
@@ -1308,14 +1625,14 @@ class MainActivity : AppCompatActivity() {
         }
         chatIds = ids
         recentChat = recent
-        if (lastSeenChatId == null && unreadChat == 0 && ids.isNotEmpty() && appVisible) lastSeenChatId = ids.last()
-        if (appVisible && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) || toolbarExpanded) {
+        if (appVisible && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && panelKind == ClassPanel.Kind.CHAT) {
             markChatSeen()
         } else {
             val seen = lastSeenChatId
             val idx = if (seen == null) -1 else ids.lastIndexOf(seen)
             unreadChat = if (idx >= 0) ids.size - 1 - idx else if (seen == null) ids.size else minOf(ids.size, 9)
             renderToolbar()
+            renderRail()
         }
     }
 
@@ -1327,13 +1644,30 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showOnly(group: View) {
-        listOf(binding.loginGroup, binding.homeGroup, binding.classGroup, binding.handoffGroup)
+        listOf(binding.loginGroup, binding.homeGroup, binding.handoffGroup)
             .forEach { it.visibility = if (it === group) View.VISIBLE else View.GONE }
+        val inClass = group === binding.classScreen
+        binding.classScreen.visibility = if (inClass) View.VISIBLE else View.GONE
+        binding.scroll.visibility = if (inClass) View.GONE else View.VISIBLE
+        if (!inClass) closePanel()
         clearError()
     }
 
     private fun showError(message: String) {
         binding.errorText.text = message
+        if (binding.classScreen.visibility == View.VISIBLE && message.isNotBlank()) showToast(message)
+    }
+
+    /** Short message over the class screen (errors, confirmations). */
+    private fun showToast(message: String) {
+        val t = binding.classToast
+        t.text = message
+        t.visibility = View.VISIBLE
+        toastJob?.cancel()
+        toastJob = lifecycleScope.launch {
+            delay(4500)
+            t.visibility = View.GONE
+        }
     }
 
     private fun clearError() {
@@ -1347,5 +1681,6 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_EMAIL = "email"
         private const val KEY_NAME = "name"
         private const val KEY_COOKIE = "session"
+        const val EXTRA_STOP_SHARE = "stop_share"
     }
 }

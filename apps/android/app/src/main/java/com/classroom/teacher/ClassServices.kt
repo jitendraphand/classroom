@@ -101,10 +101,12 @@ object Notifications {
         m.createNotificationChannel(NotificationChannel(WAITING_CHANNEL, "Waiting students", NotificationManager.IMPORTANCE_HIGH))
     }
 
-    private fun openApp(context: Context): PendingIntent = PendingIntent.getActivity(
+    private fun openApp(context: Context, stopShare: Boolean = false): PendingIntent = PendingIntent.getActivity(
         context,
-        0,
-        Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+        if (stopShare) 2 else 0,
+        Intent(context, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            .putExtra(MainActivity.EXTRA_STOP_SHARE, stopShare),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 
@@ -121,8 +123,11 @@ object Notifications {
             .setContentTitle(context.getString(R.string.share_notification_title))
             .setContentText(context.getString(R.string.share_notification_text))
             .setSmallIcon(R.drawable.ic_stat_share)
-            .setContentIntent(openApp(context))
+            // Tapping the notification = back to the class and stop sharing
+            // (the fallback when the floating bubble cannot be shown).
+            .setContentIntent(openApp(context, stopShare = true))
             .setOngoing(true)
+            .addAction(0, context.getString(R.string.share_notification_return), openApp(context, stopShare = true))
             .addAction(0, context.getString(R.string.share_notification_stop), stop)
             .build()
     }
