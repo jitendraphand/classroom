@@ -10,6 +10,7 @@ import {
 } from './ScreenAnnotator';
 import { IconChat, IconHand, IconMic, IconMicOff, IconScreen, IconUsers } from '@/components/ui/Icons';
 import { useFloatDrag, type FloatPos } from './FloatingPanel';
+import { focusLabel } from '@/lib/focusStatus';
 
 /**
  * Teacher share controls.
@@ -40,6 +41,8 @@ export type RosterEntry = {
   mutedByTeacher?: boolean;
   isVisible?: boolean;
   handRaised?: boolean;
+  focus?: import('@/lib/focusStatus').FocusStatus;
+  focusIphone?: boolean;
 };
 
 export type TeacherShareHudProps = {
@@ -68,6 +71,8 @@ export type TeacherShareHudProps = {
   annotateColor: string;
   onAnnotateColorChange: (color: string) => void;
   notice?: string;
+  /** Students who left fullscreen or switched away. */
+  focusAlertCount?: number;
   /** Small pill with badges; expands to the full toolbar. */
   compact?: boolean;
   onCompactChange?: (compact: boolean) => void;
@@ -315,6 +320,7 @@ background:var(--warn);color:#1a1206;font-size:9px;font-weight:800;display:inlin
 .tsh-pill-main{gap:5px;padding:0 6px}
 .tsh-dot{width:8px;height:8px;border-radius:999px;background:#ef4444;box-shadow:0 0 0 3px rgba(239,68,68,.25);flex:0 0 auto}
 .tsh-badge{display:inline-flex;align-items:center;gap:2px;height:18px;padding:0 5px;border-radius:999px;background:var(--warn);color:#1a1206;font-size:10px;font-weight:800}
+.tsh-badge-dim{background:rgba(245,158,11,.25);color:#fde68a}
 .tsh-badge-blue{background:var(--accent);color:#04122b}
 .tsh-expand{color:var(--dim);font-size:10px}
 .tsh-inline{width:auto;max-width:calc(100vw - 16px)}
@@ -353,6 +359,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     annotateUnavailable,
     compact = false,
     onCompactChange,
+    focusAlertCount = 0,
   } = props;
 
   // Turn drawing off if the share switched to the entire screen.
@@ -454,6 +461,11 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
               <span className="tsh-badge" title="Raised hand">
                 <IconHand size={12} />
                 {hands.length}
+              </span>
+            )}
+            {focusAlertCount > 0 && (
+              <span className="tsh-badge tsh-badge-dim" title="Not in fullscreen / switched away">
+                ⛶{focusAlertCount}
               </span>
             )}
             {waitingCount > 0 && (
@@ -717,6 +729,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                     {s.displayName}
                     <span className="tsh-person-sub" style={{ display: 'block' }}>
                       {s.mutedByTeacher ? 'muted by you' : s.isVisible ? 'in sample' : 'local only'}
+                      {focusLabel(s.focus, s.focusIphone) ? ` · ${focusLabel(s.focus, s.focusIphone)}` : ''}
                     </span>
                   </span>
                   {s.mutedByTeacher ? <span className="tsh-chip tsh-chip-muted">muted</span> : null}

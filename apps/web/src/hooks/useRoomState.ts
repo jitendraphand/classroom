@@ -35,6 +35,8 @@ export type RoomState = {
   } | null;
   waiting?: ({ id: string; displayName: string } & RosterInfo)[];
   admitted: ({
+    focus?: import('@/lib/focusStatus').FocusStatus;
+    focusIphone?: boolean;
     id: string;
     displayName: string;
     role: string;

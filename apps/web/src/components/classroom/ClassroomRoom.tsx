@@ -9,6 +9,7 @@ import {
   useRoomContext,
 } from '@livekit/components-react';
 import '@livekit/components-styles';
+import type { TrackReference } from '@livekit/components-react';
 import {
   Track,
   LocalVideoTrack,
@@ -37,6 +38,8 @@ import { useRoomState, type RosterInfo } from '@/hooks/useRoomState';
 import { Controls } from './Controls';
 import { LocalPreview } from './LocalPreview';
 import { ChatView, useChatThread } from './Chat';
+import { useStudentFocus } from './useStudentFocus';
+import { countFocusAlerts, focusLabel, isFocusAlert, needsCover } from '@/lib/focusStatus';
 import { FloatingPanel, useFloatDrag, readFloatPref, writeFloatPref, type FloatPos } from './FloatingPanel';
 import { shareControlsPlacement, showLocalSharePreview } from '@/lib/floatGeometry';
 import { candidateScreens } from '@/lib/screenMask';
@@ -842,7 +845,10 @@ function TeacherPeersFloat({
   dock = null,
   sharing = false,
   onDockSpace,
+  focusAlerts = {},
 }: {
+  /** LiveKit identity → "Left fullscreen" / "Switched away". */
+  focusAlerts?: Record<string, string>;
   roomCode: string;
   teacherIdentities: string[];
   visibleIdentities: string[];
@@ -1320,6 +1326,7 @@ function TeacherPeersFloat({
                 pinned={stickySpeakersRef.current.has(identity) || speakingId === identity}
                 tileW={layout.tileW}
                 tileH={layout.tileH}
+                alert={focusAlerts[identity]}
               />
             );
           })}
@@ -1337,7 +1344,10 @@ function PeerCamTile({
   tileW,
   tileH,
   mirror = false,
+  alert,
 }: {
+  /** Student left fullscreen / switched away. */
+  alert?: string;
   name: string;
   mediaTrack: MediaStreamTrack | null;
   speaking: boolean;
@@ -1386,8 +1396,39 @@ function PeerCamTile({
         <span className="truncate text-[10px] font-medium text-white">{name}</span>
         {pinned && <span className="shrink-0 text-[9px] text-brand-300">Speaking</span>}
       </div>
+      {alert && (
+        <span
+          className="absolute left-1 top-1 rounded-full bg-amber-500 px-1.5 py-0.5 text-[9px] font-bold text-black shadow"
+          title={alert}
+        >
+          {alert}
+        </span>
+      )}
     </div>
   );
+}
+
+/** Focus mode (iPhone): the teacher camera fills the stage when nothing is shared. */
+function TeacherCameraStage({ teacherIdentities }: { teacherIdentities: string[] }) {
+  const tracks = useTracks([{ source: Track.Source.Camera, withPlaceholder: false }], { onlySubscribed: true });
+  const teacherSet = new Set(teacherIdentities);
+  // Never a classmate: only a remote teacher's camera.
+  const cam = tracks.find(
+    (t) =>
+      !!t.publication?.track &&
+      !t.participant.isLocal &&
+      isTeacherParticipant(t.participant, teacherSet) &&
+      !t.publication.isMuted
+  );
+  if (!cam) {
+    return (
+      <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-ink-950 px-6 text-center text-slate-400">
+        <IconVideo size={32} />
+        <p className="text-sm">Teacher camera off</p>
+      </div>
+    );
+  }
+  return <VideoTrack trackRef={cam as TrackReference} className="h-full w-full bg-black object-contain" />;
 }
 
 function useHasTeacherScreen(teacherIdentities: string[]) {
@@ -1881,7 +1922,7 @@ function RoomInner({
   const [hudChatOpen, setHudChatOpen] = useState(false);
   const [rosterOpen, setRosterOpen] = useState(false);
   /** Student left fullscreen (Esc, swipe, app switch): prompt, never kick. */
-  const [fsPrompt, setFsPrompt] = useState(false);
+  const focus = useStudentFocus(code, !isTeacher);
   const [camError, setCamError] = useState<string | null>(null);
   const [hudOpen, setHudOpen] = useState(false);
   const [hudNotice, setHudNotice] = useState('');
@@ -2065,71 +2106,6 @@ function RoomInner({
   // dropped), so the opacity branch below was unreachable and the "tap to show
   // controls" behaviour never fired. Controls are always visible on the
   // student stage, which is the intended behaviour.
-
-  // Student fullscreen: request it on join. Leaving fullscreen (Esc, a swipe,
-  // a browser prompt) only shows a "Return to full screen" prompt. It never
-  // marks the student LEFT or disconnects them; only an explicit Leave (or the
-  // connection dropping) does that.
-  useEffect(() => {
-    if (isTeacher) return;
-    const root = document.documentElement;
-    let entered = false;
-    let cancelled = false;
-
-    const requestFs = async () => {
-      if (cancelled || !root.requestFullscreen) return;
-      try {
-        if (!document.fullscreenElement) {
-          await root.requestFullscreen();
-        }
-        if (document.fullscreenElement) {
-          entered = true;
-          setFsPrompt(false);
-        }
-      } catch {
-        // Browser blocked / needs gesture / unsupported — carry on windowed.
-      }
-    };
-
-    void requestFs();
-
-    const onGesture = () => {
-      if (!entered && !document.fullscreenElement) void requestFs();
-    };
-
-    const onFsChange = () => {
-      if (cancelled) return;
-      if (document.fullscreenElement) {
-        entered = true;
-        setFsPrompt(false);
-        return;
-      }
-      if (entered) setFsPrompt(true);
-    };
-
-    document.addEventListener('fullscreenchange', onFsChange);
-    document.addEventListener('pointerdown', onGesture, { once: true });
-    document.addEventListener('keydown', onGesture, { once: true });
-    return () => {
-      cancelled = true;
-      document.removeEventListener('fullscreenchange', onFsChange);
-      document.removeEventListener('pointerdown', onGesture);
-      document.removeEventListener('keydown', onGesture);
-    };
-  }, [isTeacher]);
-
-  const returnToFullscreen = useCallback(() => {
-    const root = document.documentElement;
-    if (!root.requestFullscreen) {
-      setFsPrompt(false);
-      return;
-    }
-    root
-      .requestFullscreen()
-      .then(() => setFsPrompt(false))
-      // Could not re-enter (browser policy): do not trap the student behind the prompt.
-      .catch(() => setFsPrompt(false));
-  }, []);
 
   // While connected to the LiveKit room, idle logout is suspended (H-2): a
   // teacher presenting elsewhere or a student who is only watching must not
@@ -2722,6 +2698,17 @@ function RoomInner({
 
   const studentCount = state?.admitted?.filter((a) => a.role === 'STUDENT').length ?? 0;
   const waitingCount = state?.waiting?.length ?? 0;
+  const focusAlertCount = countFocusAlerts((state?.admitted ?? []).filter((a) => a.role === 'STUDENT'));
+  /** LiveKit identity → fullscreen alert label, for the Class panel tiles. */
+  const focusByIdentity = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const a of state?.admitted ?? []) {
+      if (a.role !== 'STUDENT' || !isFocusAlert(a.focus)) continue;
+      const label = focusLabel(a.focus, a.focusIphone);
+      if (label) m[a.livekitIdentity] = label;
+    }
+    return m;
+  }, [state?.admitted]);
 
   // Teacher layout: the Class panel docks to the stage's corner and the stage
   // makes room for it (left column when expanded, top band when minimized or
@@ -2823,6 +2810,7 @@ function RoomInner({
     const teacherGone = teacherLive === false;
     const teacherHere = teacherIdentities.length > 0 && !teacherGone;
     const showTeacherScreen = effectiveStage === 'screen' && !teacherGone;
+    const covered = needsCover(focus.status);
     const badge =
       showTeacherScreen
         ? 'Teacher screen'
@@ -2848,40 +2836,45 @@ function RoomInner({
         />
         <RoomAudioRenderer />
 
-        <div className="stage-fullscreen-badge">{badge}</div>
+        {!focus.focusMode && <div className="stage-fullscreen-badge">{badge}</div>}
 
         {camError && camOn && (
           <CameraErrorBanner message={camError} onDismiss={() => setCamError(null)} />
         )}
 
-        {fsPrompt && (
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="fs-prompt-title"
-            className="fixed inset-0 z-[80] flex items-center justify-center bg-black/80 px-6 backdrop-blur-sm"
+        {/* Left fullscreen or switched away: cover the class (audio keeps
+            playing; teacher video and screen are not rendered underneath). */}
+        {covered && (
+          <button
+            type="button"
+            onClick={() => void focus.returnToFullscreen()}
+            className="fixed inset-0 z-[90] flex flex-col items-center justify-center gap-3 bg-black px-6 text-center text-white"
+            aria-label="Tap to return to fullscreen"
           >
-            <div className="max-w-sm rounded-2xl border border-white/10 bg-surface-1 p-6 text-center shadow-lift">
-              <p id="fs-prompt-title" className="font-display text-lg font-semibold">
-                You left full screen
-              </p>
-              <p className="mt-2 text-sm text-slate-400">
-                You are still in the class. Return to full screen to keep watching.
-              </p>
-              <Button className="mt-5" onClick={returnToFullscreen}>
-                Return to full screen
-              </Button>
-            </div>
+            <IconScreen size={36} className="text-brand-300" />
+            <span className="font-display text-xl font-semibold">Tap to return to fullscreen</span>
+            <span className="max-w-sm text-sm text-slate-400">
+              You are still in the class and can hear it. Your teacher can see that you left fullscreen.
+            </span>
+          </button>
+        )}
+
+        {/* Focus mode (no Fullscreen API, e.g. iPhone): a hint only, never blocks taps or audio. */}
+        {focus.focusMode && focus.portrait && (
+          <div className="pointer-events-none fixed inset-x-3 top-3 z-[70] rounded-xl border border-white/15 bg-black/70 px-3 py-2 text-center text-xs font-semibold text-white backdrop-blur">
+            Rotate your phone to landscape for a bigger view
           </div>
         )}
 
         <div className="absolute inset-0 z-10">
-          {showTeacherScreen ? (
+          {covered ? null : showTeacherScreen ? (
             <TeacherScreenStage
               teacherIdentities={teacherIdentities}
               code={code}
               active={showTeacherScreen}
             />
+          ) : focus.focusMode && teacherHere ? (
+            <TeacherCameraStage teacherIdentities={teacherIdentities} />
           ) : (
             <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-ink-950 px-6 text-center text-slate-400">
               <IconVideo size={32} />
@@ -2894,13 +2887,16 @@ function RoomInner({
           )}
         </div>
 
-        <TeacherCameraFloat
-          teacherIdentities={teacherIdentities}
-          roomCode={code}
-          selfName={displayName}
-          selfStream={localCamStream}
-          camOn={camOn}
-        />
+        {/* Focus mode shows only the teacher's share/camera; the float would clutter it. */}
+        {!covered && !focus.focusMode && (
+          <TeacherCameraFloat
+            teacherIdentities={teacherIdentities}
+            roomCode={code}
+            selfName={displayName}
+            selfStream={localCamStream}
+            camOn={camOn}
+          />
+        )}
 
         <div className="stage-float-chrome" data-float-bound="bottom">
           <Controls
@@ -2983,6 +2979,11 @@ function RoomInner({
             </Badge>
             {isTeacher && stageMode === 'screen' && (
               <Badge tone="neutral">Stage · Screen</Badge>
+            )}
+            {isTeacher && focusAlertCount > 0 && (
+              <Badge tone="warning" className="whitespace-nowrap">
+                {focusAlertCount} not in fullscreen
+              </Badge>
             )}
           </div>
           <h1 className="mt-0.5 truncate font-display text-base font-semibold tracking-tight sm:text-xl [@media(max-height:480px)]:text-sm">
@@ -3229,6 +3230,7 @@ function RoomInner({
                               </span>
                             </p>
                             {p.role === 'STUDENT' && <RosterMeta info={p} />}
+                            {p.role === 'STUDENT' && <FocusChip focus={p.focus} iphone={p.focusIphone} />}
                             {p.mutedByTeacher && p.role === 'STUDENT' && (
                               <span className="chip-muted mt-0.5">Muted by teacher</span>
                             )}
@@ -3310,6 +3312,7 @@ function RoomInner({
         dock={dockArea}
         sharing={shareLayout}
         onDockSpace={onDockSpace}
+        focusAlerts={focusByIdentity}
       />
 
       {/* Share controls: in the floating window for window/tab captures; in
@@ -3342,6 +3345,7 @@ function RoomInner({
           }
         >
           <TeacherShareHud
+            focusAlertCount={focusAlertCount}
             host={shareMount}
             hostWindow={shareWindow}
             inline={!shareMount}
@@ -3678,6 +3682,22 @@ function rosterLabel(p: { displayName: string } & RosterInfo): string {
   if (p.viaSchoolApp && !p.onTimetable) bits.push('not on timetable');
   if (!p.viaSchoolApp) bits.push('guest');
   return bits.join(' · ');
+}
+
+/** Fullscreen / focus status under a student's name (teacher roster). */
+function FocusChip({ focus, iphone }: { focus?: import('@/lib/focusStatus').FocusStatus; iphone?: boolean }) {
+  const label = focusLabel(focus, iphone);
+  if (!label) return null;
+  return (
+    <span
+      className={cn(
+        'mt-0.5 inline-flex rounded px-1 text-2xs font-semibold',
+        isFocusAlert(focus) ? 'bg-amber-500/20 text-amber-200' : 'bg-white/10 text-slate-300'
+      )}
+    >
+      {label}
+    </span>
+  );
 }
 
 /** Roll number, grade-division and timetable / late markers under a student's name (teacher roster). */

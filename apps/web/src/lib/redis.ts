@@ -42,6 +42,8 @@ export const keys = {
   pinRate: (code: string, identity: string) => `room:${code}:pin-rate:${identity}`,
   /** Short-lived mutex so only one client rotates the visible sample */
   rotateLock: (code: string) => `room:${code}:rotate-lock`,
+  /** Hash participant id → JSON focus status (fullscreen / left / away / unsupported) */
+  focus: (code: string) => `room:${code}:focus`,
   /** Set of participant ids with raised hands */
   hands: (code: string) => `room:${code}:hands`,
   /** JSON {s: sessionId, p: boolean}: is the teacher connected to the LiveKit room (webhook / probe) */

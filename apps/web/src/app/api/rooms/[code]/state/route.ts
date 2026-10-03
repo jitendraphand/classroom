@@ -5,6 +5,7 @@ import { clampMaxVisible, ensureSampleFresh, getVisibleSample } from '@/lib/samp
 import { ensureRedis, keys } from '@/lib/redis';
 import { audienceIncludes, formatAudience } from '@/lib/grades';
 import { manualStudentJoinAllowed } from '@/lib/schoolConfig';
+import { decodeFocus } from '@/lib/focusStatus';
 
 export const dynamic = 'force-dynamic';
 
@@ -128,6 +129,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   const stageRaw = await redis.get(keys.stage(code));
   const stageMode =
     stageRaw === 'screen' ? 'screen' : 'idle';
+  // Students' fullscreen / focus status, teacher only.
+  const focusRaw: Record<string, string> = isTeacher ? await redis.hgetall(keys.focus(code)) : {};
+  const focusOf = (p: (typeof room.participants)[number]) => {
+    if (!isTeacher || p.role !== 'STUDENT') return {};
+    const f = decodeFocus(focusRaw[p.id]);
+    return f ? { focus: f.focus, focusIphone: f.iphone } : {};
+  };
 
   const waiting = room.participants.filter((p) => p.status === 'WAITING' && p.role === 'STUDENT');
 
@@ -218,6 +226,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       isVisible: p.role === 'TEACHER' || visible.includes(p.livekitIdentity),
       handRaised: p.role === 'STUDENT' && raisedHands.includes(p.id),
       ...rosterInfo(p),
+      ...focusOf(p),
     })),
     visibleIdentities: visible,
     visibleCount: visible.length,
