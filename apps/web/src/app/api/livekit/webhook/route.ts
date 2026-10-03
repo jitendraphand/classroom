@@ -3,8 +3,11 @@ import { prisma } from '@/lib/db';
 import { jsonError, jsonOk } from '@/lib/response';
 import {
   applyStudentMicLock,
+  cancelTeacherAbsence,
+  deferTeacherAbsence,
   isTeacherPresent,
   listRoomParticipants,
+  recordTeacherGrace,
   recordTeacherPresence,
 } from '@/lib/teacherPresence';
 import { handlePresenceEvent } from '@/lib/teacherPresenceLogic';
@@ -95,6 +98,10 @@ export async function POST(req: Request) {
         isTeacherPresent: (room) => isTeacherPresent(room.code, room),
         recordPresence: (room, present) => recordTeacherPresence(room, present, 'webhook'),
         applyStudentMicLock,
+        // 15 s grace before force-muting students when the teacher drops.
+        deferAbsence: deferTeacherAbsence,
+        cancelAbsence: cancelTeacherAbsence,
+        recordGrace: recordTeacherGrace,
       }
     );
     await recordAttendance(event);

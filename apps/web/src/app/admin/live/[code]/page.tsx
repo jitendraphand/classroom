@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
 import { api } from '@/lib/clientFetch';
 import { formatElapsed, type LiveClass } from '@/lib/liveClassesLogic';
+import { useSessionEnded } from '@/hooks/useSessionEnded';
 
 type Student = { id: string; name: string; gradeDivision: string; rollNumber: string | null };
 
@@ -38,6 +39,8 @@ function Observer({ code }: { code: string }) {
   const [error, setError] = useState('');
   const [conn, setConn] = useState<{ token: string; serverUrl: string } | null>(null);
   const now = useNow();
+  // Admin signed in elsewhere: leave the class (LiveKitRoom unmounts = disconnect).
+  const sessionEnded = useSessionEnded();
 
   const load = useCallback(async () => {
     const { ok, status, data } = await api<{ class: LiveClass; students: Student[] }>(
@@ -113,7 +116,7 @@ function Observer({ code }: { code: string }) {
       )}
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
         <div className="relative aspect-video w-full overflow-hidden rounded-2xl border border-white/10 bg-ink-950">
-          {conn ? (
+          {conn && !sessionEnded ? (
             <LiveKitRoom
               token={conn.token}
               serverUrl={conn.serverUrl}

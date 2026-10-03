@@ -8,6 +8,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { IconUsers, IconVideo } from '@/components/ui/Icons';
 import { api } from '@/lib/clientFetch';
 import { formatElapsed, type LiveClass } from '@/lib/liveClassesLogic';
+import { useSessionEnded } from '@/hooks/useSessionEnded';
 
 /** How often the list (counts, new/ended classes) is refreshed. */
 const POLL_MS = 5_000;
@@ -114,9 +115,11 @@ function LiveClassTile({ c, now }: { c: LiveClass; now: number }) {
   const [conn, setConn] = useState<{ token: string; serverUrl: string } | null>(null);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  // Admin signed in elsewhere: stop the preview for good (no reconnect loop).
+  const sessionEnded = useSessionEnded();
 
   useEffect(() => {
-    if (!inView) {
+    if (!inView || sessionEnded) {
       setConn(null);
       return;
     }
@@ -133,12 +136,12 @@ function LiveClassTile({ c, now }: { c: LiveClass; now: number }) {
     return () => {
       cancelled = true;
     };
-  }, [inView, c.code, c.sessionId, attempt]);
+  }, [inView, c.code, c.sessionId, attempt, sessionEnded]);
 
   const reconnectLater = useCallback(() => {
     setConn(null);
-    setTimeout(() => setAttempt((n) => n + 1), 4_000);
-  }, []);
+    if (!sessionEnded) setTimeout(() => setAttempt((n) => n + 1), 4_000);
+  }, [sessionEnded]);
 
   const elapsed = formatElapsed(now - new Date(c.startedAt).getTime());
   const students = `${c.studentCount} student${c.studentCount === 1 ? '' : 's'}`;
@@ -151,7 +154,7 @@ function LiveClassTile({ c, now }: { c: LiveClass; now: number }) {
       aria-label={`Join ${c.title} (${c.gradeDivision}, ${c.teacherName}) as observer`}
     >
       <div className="pointer-events-none relative aspect-video w-full bg-ink-950">
-        {conn ? (
+        {conn && !sessionEnded ? (
           <LiveKitRoom
             token={conn.token}
             serverUrl={conn.serverUrl}

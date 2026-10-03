@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { Inter, Outfit } from 'next/font/google';
 import { SessionIdleGuard } from '@/components/auth/SessionIdleGuard';
+import { StaffSessionGuard } from '@/components/auth/StaffSessionGuard';
 import './globals.css';
 
 const display = Outfit({
@@ -33,6 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className={`${display.variable} ${sans.variable} font-sans antialiased min-h-screen`}>
         <SessionIdleGuard />
         {children}
+        <StaffSessionGuard />
       </body>
     </html>
   );

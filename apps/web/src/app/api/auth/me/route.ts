@@ -1,4 +1,4 @@
-import { getAdminSession, getTeacherSession, getStudentParticipant } from '@/lib/auth';
+import { endedSessionReason, getAdminSession, getTeacherSession, getStudentParticipant } from '@/lib/auth';
 import { jsonOk } from '@/lib/response';
 
 export const dynamic = 'force-dynamic';
@@ -23,5 +23,5 @@ export async function GET() {
     });
   }
 
-  return jsonOk({ role: null });
+  return jsonOk({ role: null, reason: (await endedSessionReason()) ?? null });
 }

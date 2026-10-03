@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { PageLoading } from '@/components/ui/Skeleton';
 import { api } from '@/lib/clientFetch';
 import { cn } from '@/lib/cn';
+import { loginHref } from '@/lib/sessionClient';
 
 export const ADMIN_NAV = [
   { href: '/admin', label: 'Teachers' },
@@ -26,7 +27,7 @@ export function AdminShell({ children, title }: { children: ReactNode; title: st
 
   useEffect(() => {
     api<{ role: string; email: string; mustChangePassword?: boolean }>('/api/auth/me').then(({ data }) => {
-      if (data.role !== 'admin') router.replace('/login');
+      if (data.role !== 'admin') router.replace(loginHref((data as { reason?: unknown }).reason, window.location.pathname));
       else if (data.mustChangePassword) router.replace('/account/password');
       else setMe({ email: data.email });
     });

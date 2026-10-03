@@ -7,6 +7,7 @@ import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { PageLoading } from '@/components/ui/Skeleton';
 import { api } from '@/lib/clientFetch';
+import { loginHref } from '@/lib/sessionClient';
 
 type Me = { role: 'admin' | 'teacher' | null; name?: string; email?: string; mustChangePassword?: boolean };
 
@@ -21,7 +22,7 @@ export default function ChangePasswordPage() {
 
   useEffect(() => {
     api<Me>('/api/auth/me').then(({ data }) => {
-      if (data.role !== 'admin' && data.role !== 'teacher') router.replace('/login');
+      if (data.role !== 'admin' && data.role !== 'teacher') router.replace(loginHref((data as { reason?: unknown }).reason, window.location.pathname));
       else setMe(data);
     });
   }, [router]);

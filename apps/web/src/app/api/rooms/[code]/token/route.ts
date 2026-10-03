@@ -1,10 +1,11 @@
 import { prisma } from '@/lib/db';
-import { resolveRoomAccess } from '@/lib/auth';
+import { endedSessionReason, resolveRoomAccess } from '@/lib/auth';
 import { createParticipantToken, getPublicLiveKitUrl, livekitRoomName } from '@/lib/livekit';
 import { jsonError, jsonOk } from '@/lib/response';
 import { ensureSampleFresh } from '@/lib/sample';
 import { ensureRedis, keys } from '@/lib/redis';
 import { isTeacherPresent } from '@/lib/teacherPresence';
+import { clearStage } from '@/lib/sessionKick';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,7 +32,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
         ? access.student
         : null;
 
-  if (!participant) return jsonError('Unauthorized', 401);
+  // A replaced/revoked teacher session gets no media token, so a stale or
+  // reloaded tab on the old device can never kick the active device.
+  if (!participant) return jsonError('Unauthorized', 401, { reason: await endedSessionReason() });
 
   // The owning teacher pressed Leave earlier and is coming back from the lobby
   // (or Back button) while the class is still open: re-admit instead of 403.
@@ -65,6 +68,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     // webhook cannot keep the class locked. Checks until the webhook confirms
     // the join fall back to asking LiveKit directly.
     await redis.del(keys.teacherPresent(code)).catch(() => undefined);
+    // A teacher token means a fresh connection (page load / device switch):
+    // nothing is being shared from it yet, so a stage left at "screen" by the
+    // previous device or tab is stale. (A network blip resumes without a new token.)
+    await clearStage(code);
   }
   const micLocked = !isTeacher && !teacherPresent;
 

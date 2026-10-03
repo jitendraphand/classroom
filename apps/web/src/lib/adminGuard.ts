@@ -1,4 +1,4 @@
-import { getAdminSession, type AdminSession } from './auth';
+import { endedSessionReason, getAdminSession, type AdminSession } from './auth';
 import { jsonError } from './response';
 
 /**
@@ -10,6 +10,6 @@ export async function requireAdminApi(): Promise<
   { admin: AdminSession; res?: undefined } | { admin?: undefined; res: Response }
 > {
   const admin = await getAdminSession();
-  if (!admin) return { res: jsonError('Admin sign-in required', 401) };
+  if (!admin) return { res: jsonError('Admin sign-in required', 401, { reason: await endedSessionReason() }) };
   return { admin };
 }

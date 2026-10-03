@@ -120,11 +120,20 @@ export type PresenceDeps = {
   isTeacherPresent: (room: RoomRef) => Promise<boolean>;
   recordPresence: (room: RoomRef, present: boolean) => Promise<void>;
   applyStudentMicLock: (room: RoomRef, present: boolean, onlyIdentities?: string[]) => Promise<void>;
+  /**
+   * Grace period (optional; without it a teacher leaving locks at once). When
+   * the teacher's last connection leaves, `deferAbsence` runs `confirm` after
+   * the grace delay; a teacher joining calls `cancelAbsence`. `recordGrace`
+   * keeps a short-lived "present" record meanwhile so new joiners are not locked.
+   */
+  deferAbsence?: (room: RoomRef, confirm: () => Promise<void>) => void;
+  cancelAbsence?: (room: RoomRef) => void;
+  recordGrace?: (room: RoomRef) => Promise<void>;
 };
 
 export type PresenceOutcome =
   | { handled: false; reason: string }
-  | { handled: true; code: string; teacherPresent: boolean; applied: 'all' | 'one' | 'none' };
+  | { handled: true; code: string; teacherPresent: boolean; applied: 'all' | 'one' | 'none' | 'deferred' };
 
 /**
  * React to one verified LiveKit webhook event.
@@ -168,6 +177,25 @@ export async function handlePresenceEvent(event: WebhookLike, deps: PresenceDeps
     });
   } catch {
     present = !!action.joined;
+  }
+  if (present) {
+    deps.cancelAbsence?.(ref);
+  } else if (!action.joined && deps.deferAbsence) {
+    // The teacher's connection just dropped (device switch, reload, blip):
+    // give them the grace period to come back before locking student mics.
+    await deps.recordGrace?.(ref);
+    deps.deferAbsence(ref, async () => {
+      let still: boolean;
+      try {
+        still = !teacherPresentAmong(await deps.listParticipants(ref));
+      } catch {
+        still = true;
+      }
+      if (!still) return; // back in time: the join event already applied "present"
+      await deps.recordPresence(ref, false);
+      await deps.applyStudentMicLock(ref, false);
+    });
+    return { handled: true, code: ref.code, teacherPresent: true, applied: 'deferred' };
   }
   await deps.recordPresence(ref, present);
   await deps.applyStudentMicLock(ref, present);

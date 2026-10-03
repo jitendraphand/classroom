@@ -1,6 +1,7 @@
 import { prisma } from './db';
 import { ensureRedis, keys } from './redis';
 import { livekitRoomName, roomService, setParticipantPublishPermissions } from './livekit';
+import { TEACHER_ABSENCE_GRACE_MS, createGraceTimers } from './graceTimer';
 import { teacherPresentAmong, type PresenceParticipant, type RoomRef } from './teacherPresenceLogic';
 
 /**
@@ -23,6 +24,12 @@ type PresenceRecord = { s: string; p: boolean };
 /** Webhook-written records last a class day; a probe result only a few seconds. */
 const WEBHOOK_TTL_S = 12 * 60 * 60;
 const PROBE_TTL_S = 5;
+/**
+ * During the teacher-absence grace period the record says "present" for a bit
+ * longer than the grace delay. If the confirm timer is lost (process restart)
+ * the record simply expires and the next check asks LiveKit: fails safe.
+ */
+const GRACE_TTL_S = Math.ceil(TEACHER_ABSENCE_GRACE_MS / 1000) + 5;
 
 async function readRecord(room: RoomRef): Promise<boolean | null> {
   try {
@@ -39,7 +46,7 @@ async function readRecord(room: RoomRef): Promise<boolean | null> {
 export async function recordTeacherPresence(
   room: RoomRef,
   present: boolean,
-  source: 'webhook' | 'probe' = 'webhook'
+  source: 'webhook' | 'probe' | 'grace' = 'webhook'
 ): Promise<void> {
   const redis = await ensureRedis();
   const rec: PresenceRecord = { s: room.sessionId, p: present };
@@ -47,8 +54,24 @@ export async function recordTeacherPresence(
     keys.teacherPresent(room.code),
     JSON.stringify(rec),
     'EX',
-    source === 'webhook' ? WEBHOOK_TTL_S : PROBE_TTL_S
+    source === 'webhook' ? WEBHOOK_TTL_S : source === 'grace' ? GRACE_TTL_S : PROBE_TTL_S
   );
+}
+
+/** One web process: per-room "teacher left" timers (keyed by LiveKit room). */
+const absenceTimers = createGraceTimers({ delayMs: TEACHER_ABSENCE_GRACE_MS });
+const timerKey = (room: RoomRef) => `${room.code}:${room.sessionId}`;
+
+export function deferTeacherAbsence(room: RoomRef, confirm: () => Promise<void>) {
+  absenceTimers.schedule(timerKey(room), confirm);
+}
+
+export function cancelTeacherAbsence(room: RoomRef) {
+  absenceTimers.cancel(timerKey(room));
+}
+
+export async function recordTeacherGrace(room: RoomRef) {
+  await recordTeacherPresence(room, true, 'grace');
 }
 
 /** Participants the SFU currently has in this class's LiveKit room ([] if the room does not exist yet). */

@@ -3,13 +3,14 @@ import { prisma } from '@/lib/db';
 import {
   clearAdminCookie,
   clearTeacherCookie,
-  createAdminToken,
-  createTeacherToken,
   setAdminCookie,
   setTeacherCookie,
+  startAdminSession,
+  startTeacherSession,
   verifyPassword,
 } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
+import { kickReplacedAdmin, kickReplacedTeacher } from '@/lib/sessionKick';
 import { clearLoginFailures, clientIp, loginBlockedFor, recordLoginFailure } from '@/lib/rateLimit';
 
 const schema = z.object({
@@ -49,7 +50,9 @@ export async function POST(req: Request) {
       }
       await clearLoginFailures(email);
       await clearTeacherCookie();
-      await setAdminCookie(await createAdminToken(admin));
+      await setAdminCookie(await startAdminSession(admin.id));
+      // The previous device's open class viewers stop now, not at their next poll.
+      await kickReplacedAdmin(admin.id);
       return jsonOk({
         role: 'admin',
         id: admin.id,
@@ -74,7 +77,9 @@ export async function POST(req: Request) {
     }
     await clearLoginFailures(email);
     await clearAdminCookie();
-    await setTeacherCookie(await createTeacherToken(teacher));
+    await setTeacherCookie(await startTeacherSession(teacher.id));
+    // A previous device still in class is disconnected now, not at its next poll.
+    await kickReplacedTeacher(teacher.id);
     return jsonOk({
       role: 'teacher',
       id: teacher.id,

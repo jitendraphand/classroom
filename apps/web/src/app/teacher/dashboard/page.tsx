@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/Input';
 import { PageLoading } from '@/components/ui/Skeleton';
 import { claimTeacherTab } from '@/lib/classroomClient';
 import { api } from '@/lib/clientFetch';
+import { loginHref } from '@/lib/sessionClient';
 
 type Me = { role: string; name?: string; email?: string; permanentCode?: string; mustChangePassword?: boolean };
 type ClassItem = {
@@ -74,7 +75,7 @@ export default function TeacherDashboard() {
 
   useEffect(() => {
     api<Me>('/api/auth/me').then(({ data }) => {
-      if (data.role !== 'teacher') router.replace('/login');
+      if (data.role !== 'teacher') router.replace(loginHref((data as { reason?: unknown }).reason, window.location.pathname));
       else if (data.mustChangePassword) router.replace('/account/password');
       else setMe(data);
     });
@@ -199,7 +200,7 @@ export default function TeacherDashboard() {
         <div className="mb-6 flex flex-col gap-3 rounded-2xl border border-emerald-400/25 bg-emerald-500/10 p-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <Badge tone="success" pulse>
-              Class open
+              Class live
             </Badge>
             <p className="mt-2 font-semibold text-white">
               {schedule.active.subject}
@@ -208,7 +209,10 @@ export default function TeacherDashboard() {
                 : ''}
             </p>
           </div>
-          <Button onClick={() => void go(schedule.active!.code)}>Return to classroom</Button>
+          <div className="flex flex-col items-start gap-1 sm:items-end">
+            <Button onClick={() => void go(schedule.active!.code)}>Rejoin live class</Button>
+            <p className="text-xs text-slate-400">Open on another device? Rejoining moves the class here.</p>
+          </div>
         </div>
       )}
 

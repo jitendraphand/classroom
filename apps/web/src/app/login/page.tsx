@@ -1,11 +1,12 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { BackLink } from '@/components/layout/AppHeader';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Card } from '@/components/ui/Card';
+import { endedSessionCopy, isEndedReason, safeNextPath } from '@/lib/sessionClient';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -13,6 +14,16 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [notice, setNotice] = useState<{ title: string; body: string } | null>(null);
+  const [next, setNext] = useState<string | null>(null);
+
+  // Read on the client (no useSearchParams, so the page stays static).
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const reason = q.get('reason');
+    if (isEndedReason(reason)) setNotice(endedSessionCopy(reason));
+    setNext(safeNextPath(q.get('next')));
+  }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -30,6 +41,7 @@ export default function LoginPage() {
       return;
     }
     if (data.mustChangePassword) router.push('/account/password');
+    else if (next && (data.role === 'admin') === next.startsWith('/admin')) router.push(next);
     else router.push(data.role === 'admin' ? '/admin' : '/teacher/dashboard');
   }
 
@@ -39,6 +51,15 @@ export default function LoginPage() {
       <Card>
         <h1 className="font-display text-2xl font-semibold tracking-tight">Staff login</h1>
         <p className="mt-2 text-sm text-slate-400">Teachers and the school administrator sign in here.</p>
+        {notice && (
+          <div className="mt-4 rounded-xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-sm" role="status">
+            <p className="font-semibold text-amber-100">{notice.title}</p>
+            <p className="mt-1 text-amber-100/80">{notice.body}</p>
+          </div>
+        )}
+        <p className="mt-2 text-xs text-slate-500">
+          Signing in here signs this account out on any other device.
+        </p>
         <form onSubmit={onSubmit} className="mt-6 space-y-4">
           <Input
             label="Email"

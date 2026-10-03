@@ -1,5 +1,5 @@
 import { prisma } from '@/lib/db';
-import { resolveRoomAccess } from '@/lib/auth';
+import { endedSessionReason, resolveRoomAccess } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
 import { clampMaxVisible, ensureSampleFresh, getVisibleSample } from '@/lib/sample';
 import { ensureRedis, keys } from '@/lib/redis';
@@ -62,6 +62,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   const isStudent = access.mode === 'student';
 
   if (!isTeacher && !isStudent) {
+    // A teacher/admin whose session was replaced or revoked (e.g. the class tab
+    // left open on the old device): say why instead of the public join info.
+    const reason = await endedSessionReason();
+    if (reason) return jsonError('Your session has ended', 401, { reason });
     // Public minimal info for join page — include teacher-session hint
     return jsonOk({
       code: room.code,

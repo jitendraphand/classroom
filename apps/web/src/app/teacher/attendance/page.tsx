@@ -6,13 +6,14 @@ import { AppHeader, BackLink } from '@/components/layout/AppHeader';
 import { ReportView } from '@/components/reports/ReportView';
 import { PageLoading } from '@/components/ui/Skeleton';
 import { api } from '@/lib/clientFetch';
+import { loginHref } from '@/lib/sessionClient';
 
 export default function TeacherAttendancePage() {
   const router = useRouter();
   const [ready, setReady] = useState(false);
   useEffect(() => {
     api<{ role: string; mustChangePassword?: boolean }>('/api/auth/me').then(({ data }) => {
-      if (data.role !== 'teacher') router.replace('/login');
+      if (data.role !== 'teacher') router.replace(loginHref((data as { reason?: unknown }).reason, window.location.pathname));
       else if (data.mustChangePassword) router.replace('/account/password');
       else setReady(true);
     });

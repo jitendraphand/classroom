@@ -19,6 +19,8 @@ model Admin {
   mustChangePassword Boolean  @default(true)
   /// Bumped on password change/reset; session JWTs carry it so old sessions die.
   sessionVersion     Int      @default(0)
+  /// The one signed-in session (set on login, cleared on logout). A token with another id was replaced by a newer login.
+  activeSessionId    String?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 }
@@ -36,6 +38,8 @@ model Teacher {
   mustChangePassword Boolean             @default(false)
   /// Bumped on password change/reset/disable; session JWTs carry it.
   sessionVersion     Int                 @default(0)
+  /// The one signed-in session (set on login, cleared on logout). A token with another id was replaced by a newer login.
+  activeSessionId    String?
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
   rooms              Room[]

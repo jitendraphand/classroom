@@ -17,6 +17,7 @@ import {
   LocalAudioTrack,
   RoomEvent,
   ConnectionState,
+  DisconnectReason,
   AudioPresets,
   VideoPreset,
   type LocalTrackPublication,
@@ -34,6 +35,8 @@ import {
   type ReactNode,
 } from 'react';
 import { useRouter } from 'next/navigation';
+import { TEACHER_ABSENCE_GRACE_MS } from '@/lib/graceTimer';
+import { SESSION_CHECK_EVENT, SESSION_ENDED_EVENT, isEndedReason, loginHref } from '@/lib/sessionClient';
 import { useRoomState, type RosterInfo } from '@/hooks/useRoomState';
 import { Controls } from './Controls';
 import { LocalPreview } from './LocalPreview';
@@ -97,14 +100,44 @@ function useTeacherLive(teacherIdentities: string[]): boolean | null {
   useEffect(() => {
     if (!room) return;
     const set = new Set(key ? key.split(',') : []);
+    // Grace period: a teacher who was here and drops (device switch, reload,
+    // blip) still counts as present for TEACHER_ABSENCE_GRACE_MS, matching the
+    // server, so students see no "teacher left" flicker or mic lock.
+    let shown: boolean | null = null;
+    let grace: number | null = null;
+    const show = (v: boolean | null) => {
+      shown = v;
+      setLive(v);
+    };
+    const clearGrace = () => {
+      if (grace !== null) window.clearTimeout(grace);
+      grace = null;
+    };
+    const teacherHere = () =>
+      Array.from(room.remoteParticipants.values()).some((p) => isTeacherParticipant(p, set));
     const update = () => {
       if (room.state !== ConnectionState.Connected) {
-        if (room.state === ConnectionState.Disconnected) setLive(null);
+        if (room.state === ConnectionState.Disconnected) {
+          clearGrace();
+          show(null);
+        }
         return;
       }
-      setLive(
-        Array.from(room.remoteParticipants.values()).some((p) => isTeacherParticipant(p, set))
-      );
+      if (teacherHere()) {
+        clearGrace();
+        show(true);
+        return;
+      }
+      if (shown !== true) {
+        show(false);
+        return;
+      }
+      if (grace === null) {
+        grace = window.setTimeout(() => {
+          grace = null;
+          if (room.state === ConnectionState.Connected && !teacherHere()) show(false);
+        }, TEACHER_ABSENCE_GRACE_MS);
+      }
     };
     update();
     room.on(RoomEvent.ParticipantConnected, update);
@@ -116,6 +149,7 @@ function useTeacherLive(teacherIdentities: string[]): boolean | null {
       room.off(RoomEvent.ParticipantDisconnected, update);
       room.off(RoomEvent.ConnectionStateChanged, update);
       room.off(RoomEvent.Reconnected, update);
+      clearGrace();
     };
   }, [room, key]);
   return live;
@@ -3529,6 +3563,41 @@ export function ClassroomRoom({ code }: { code: string }) {
   const [isTeacher, setIsTeacher] = useState(false);
   const [displayName, setDisplayName] = useState('You');
   const [canPublishVideo, setCanPublishVideo] = useState(false);
+  /**
+   * This tab lost the class to another connection:
+   * - 'device': LiveKit DUPLICATE_IDENTITY (same account opened the class on
+   *   another device or tab). No auto-reconnect, or the two would keep
+   *   kicking each other; "Use this device instead" takes it back on purpose.
+   * - 'session': this browser's staff session was replaced or revoked.
+   * Rendering the notice unmounts LiveKitRoom, which disconnects it.
+   */
+  const [handoff, setHandoff] = useState<null | 'device' | 'session'>(null);
+  const [takingBack, setTakingBack] = useState(false);
+
+  useEffect(() => {
+    const onEnded = () => {
+      setHandoff('session');
+      setTokenData(null);
+    };
+    window.addEventListener(SESSION_ENDED_EVENT, onEnded);
+    return () => window.removeEventListener(SESSION_ENDED_EVENT, onEnded);
+  }, []);
+
+  const onDisconnected = useCallback(
+    (reason?: DisconnectReason) => {
+      if (reason === DisconnectReason.DUPLICATE_IDENTITY) {
+        setHandoff((h) => h ?? 'device');
+        setTokenData(null);
+        window.dispatchEvent(new Event(SESSION_CHECK_EVENT));
+      } else if (reason === DisconnectReason.PARTICIPANT_REMOVED && isTeacher) {
+        // Only a newer sign-in removes the teacher from the SFU (sessionKick).
+        setHandoff((h) => h ?? 'device');
+        setTokenData(null);
+        window.dispatchEvent(new Event(SESSION_CHECK_EVENT));
+      }
+    },
+    [isTeacher]
+  );
 
   const markEnded = useCallback(() => {
     setClassEnded(true);
@@ -3608,11 +3677,60 @@ export function ClassroomRoom({ code }: { code: string }) {
     load();
   }, [load]);
 
+  /** "Use this device instead": deliberately take the class back (kicks the other connection). */
+  const takeBack = useCallback(async () => {
+    setTakingBack(true);
+    const back = `/classroom/${code}`;
+    if (handoff === 'session') {
+      window.location.href = loginHref('signed_in_elsewhere', back);
+      return;
+    }
+    try {
+      const res = await fetch('/api/auth/status', { cache: 'no-store' });
+      const data = (await res.json().catch(() => ({}))) as { role?: string | null; reason?: unknown };
+      if (isEndedReason(data.reason) || (isTeacher && !data.role)) {
+        // Replaced session: a fresh sign-in is needed, then straight back here.
+        window.location.href = loginHref(isEndedReason(data.reason) ? data.reason : 'signed_in_elsewhere', back);
+        return;
+      }
+    } catch {
+      /* offline: the token request below reports it */
+    }
+    setHandoff(null);
+    setTakingBack(false);
+    void load();
+  }, [code, load, handoff, isTeacher]);
+
   // NOTE: room state is polled by useRoomState() inside RoomInner (2s), which
   // also surfaces the ENDED transition via onClassEnded(). A second /state
   // poller used to live here and doubled the load on the hottest endpoint in the
   // app for no behavioural gain — the props below are initial values that
   // effectiveCanPublish / effectiveMuted immediately override from `state`.
+
+  if (handoff) {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center gap-4 px-6">
+        <div className="max-w-md rounded-2xl border border-white/10 bg-surface-1 p-8 text-center shadow-lift">
+          <p className="font-display text-2xl font-semibold tracking-tight">
+            {handoff === 'session' ? 'You were signed in on another device' : 'Class continued on another device'}
+          </p>
+          <p className="mt-2 text-sm text-slate-400">
+            {handoff === 'session'
+              ? 'This device was disconnected from the class because your account signed in somewhere else.'
+              : 'This class was opened with your account on another device or tab, so this one was disconnected. The class itself carries on there.'}
+          </p>
+          <div className="mt-6 flex flex-wrap justify-center gap-3">
+            <Button onClick={() => void takeBack()} disabled={takingBack}>
+              {takingBack ? 'Checking…' : 'Use this device instead'}
+            </Button>
+            <Button variant="secondary" onClick={() => router.push(isTeacher ? '/teacher/dashboard' : '/')}>
+              {isTeacher ? 'Dashboard' : 'Home'}
+            </Button>
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   if (classEnded) {
     return (
@@ -3680,6 +3798,7 @@ export function ClassroomRoom({ code }: { code: string }) {
       connectOptions={{ peerConnectionTimeout: 20_000, autoSubscribe: isTeacher }}
       className="h-[100dvh] overflow-hidden"
       onError={(e) => console.error('LiveKit', e)}
+      onDisconnected={onDisconnected}
     >
       <RoomInner
         code={code}

@@ -2,7 +2,14 @@ import { cookies } from 'next/headers';
 import bcrypt from 'bcryptjs';
 import { prisma } from './db';
 import { cookieSecureFlag } from './url';
-import { signSession, verifySession, sessionStillValid } from './sessionTokens';
+import {
+  signSession,
+  verifySession,
+  sessionStatus,
+  newSessionId,
+  type SessionStatus,
+  type EndedSessionReason,
+} from './sessionTokens';
 
 /**
  * Cookie names. Over HTTPS the `__Host-` prefix is used: the browser then only
@@ -50,11 +57,86 @@ export async function createTeacherToken(teacher: {
   email: string;
   name: string;
   sessionVersion?: number;
+  activeSessionId?: string | null;
 }) {
   return signSession('teacher', teacher.id, teacher.sessionVersion ?? 0, {
     email: teacher.email,
     name: teacher.name,
+    sid: teacher.activeSessionId ?? undefined,
   });
+}
+
+/**
+ * Login: start this browser's session as the account's only one. Any other
+ * device's token now fails the sid check (reason 'signed_in_elsewhere').
+ */
+export async function startTeacherSession(teacherId: string) {
+  const updated = await prisma.teacher.update({
+    where: { id: teacherId },
+    data: { activeSessionId: newSessionId() },
+  });
+  return createTeacherToken(updated);
+}
+
+export async function startAdminSession(adminId: string) {
+  const updated = await prisma.admin.update({
+    where: { id: adminId },
+    data: { activeSessionId: newSessionId() },
+  });
+  return createAdminToken(updated);
+}
+
+/**
+ * Logout ends the session server-side, but only if this browser holds the
+ * active one (a replaced tab signing out must not end the newer session).
+ */
+export async function endCurrentSessions() {
+  const jar = await cookies();
+  const t = await verifySession(jar.get(teacherCookieName())?.value, 'teacher').catch(() => null);
+  if (t && typeof t.sid === 'string') {
+    await prisma.teacher
+      .updateMany({ where: { id: t.sub, activeSessionId: t.sid }, data: { activeSessionId: null } })
+      .catch(() => undefined);
+  }
+  const a = await verifySession(jar.get(adminCookieName())?.value, 'admin').catch(() => null);
+  if (a && typeof a.sid === 'string') {
+    await prisma.admin
+      .updateMany({ where: { id: a.sub, activeSessionId: a.sid }, data: { activeSessionId: null } })
+      .catch(() => undefined);
+  }
+}
+
+export type StaffSessionCheck = { role: 'teacher' | 'admin' | null; status: SessionStatus | null };
+
+/**
+ * Status of the staff cookie(s) on this browser: which role, and whether it is
+ * still the account's active session. Admin first (login clears the other cookie).
+ */
+export async function staffSessionCheck(): Promise<StaffSessionCheck> {
+  const jar = await cookies();
+  const adminToken = jar.get(adminCookieName())?.value;
+  if (adminToken) {
+    const claims = await verifySession(adminToken, 'admin').catch(() => null);
+    if (claims) {
+      const row = await prisma.admin.findUnique({ where: { id: claims.sub } }).catch(() => null);
+      return { role: 'admin', status: sessionStatus(claims, row) };
+    }
+  }
+  const teacherToken = jar.get(teacherCookieName())?.value;
+  if (teacherToken) {
+    const claims = await verifySession(teacherToken, 'teacher').catch(() => null);
+    if (claims) {
+      const row = await prisma.teacher.findUnique({ where: { id: claims.sub } }).catch(() => null);
+      return { role: 'teacher', status: sessionStatus(claims, row) };
+    }
+  }
+  return { role: null, status: null };
+}
+
+/** The ended-session reason to attach to a 401, or undefined (no staff session / plain sign-in needed). */
+export async function endedSessionReason(): Promise<EndedSessionReason | undefined> {
+  const { status } = await staffSessionCheck().catch(() => ({ status: null }));
+  return status && status !== 'ok' && status !== 'missing' ? status : undefined;
 }
 
 export async function setTeacherCookie(token: string) {
@@ -88,7 +170,7 @@ export async function getTeacherSession(
   if (!claims) return null;
   try {
     const teacher = await prisma.teacher.findUnique({ where: { id: claims.sub } });
-    if (!teacher || !sessionStillValid(claims, teacher)) return null;
+    if (sessionStatus(claims, teacher) !== 'ok' || !teacher) return null;
     if (teacher.mustChangePassword && !opts.allowPendingPasswordChange) return null;
     let permanentCode = teacher.permanentCode;
     if (!permanentCode) {
@@ -116,8 +198,12 @@ export async function requireTeacher() {
 
 // ---------------------------------------------------------------- admin
 
-export async function createAdminToken(admin: { id: string; sessionVersion: number }) {
-  return signSession('admin', admin.id, admin.sessionVersion);
+export async function createAdminToken(admin: {
+  id: string;
+  sessionVersion: number;
+  activeSessionId?: string | null;
+}) {
+  return signSession('admin', admin.id, admin.sessionVersion, { sid: admin.activeSessionId ?? undefined });
 }
 
 export async function setAdminCookie(token: string) {
@@ -139,7 +225,7 @@ export async function getAdminSession(
   if (!claims) return null;
   try {
     const admin = await prisma.admin.findUnique({ where: { id: claims.sub } });
-    if (!admin || !sessionStillValid(claims, admin)) return null;
+    if (sessionStatus(claims, admin) !== 'ok' || !admin) return null;
     if (admin.mustChangePassword && !opts.allowPendingPasswordChange) return null;
     return {
       id: admin.id,
