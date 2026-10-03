@@ -294,7 +294,12 @@ export function ChatView({
     if (!trimmed || sending || ended) return;
     const destination = isTeacher ? (to === 'all' ? 'all' : to) : 'teacher';
     const ok = await send(trimmed, destination);
-    if (ok) setText('');
+    if (ok) {
+      setText('');
+      // A private message is one-off: go back to Everyone so the next message
+      // is not sent privately by accident.
+      if (destination !== 'all' && destination !== 'teacher') setTo('all');
+    }
   }
 
   return (

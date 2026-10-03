@@ -10,6 +10,8 @@ type Props = {
   showMayBeVisible: boolean;
   /** When true (students), hide sample/local chips and publishing status. */
   hideSampleStatus?: boolean;
+  /** The teacher's own tile: teacher wording, no student "sample" chips. */
+  isTeacher?: boolean;
 };
 
 export function LocalPreview({
@@ -18,6 +20,7 @@ export function LocalPreview({
   inSample,
   showMayBeVisible,
   hideSampleStatus = false,
+  isTeacher = false,
 }: Props) {
   const ref = useRef<HTMLVideoElement>(null);
   const hasVideo = !!stream && stream.getVideoTracks().some((t) => t.enabled && t.readyState === 'live');
@@ -43,16 +46,23 @@ export function LocalPreview({
       <div className="absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 bg-gradient-to-t from-black/75 via-black/30 to-transparent p-3">
         <div className="min-w-0">
           <p className="truncate text-sm font-medium text-white">
-            {hideSampleStatus ? 'You' : `${label} (you)`}
+            {hideSampleStatus ? 'You' : isTeacher ? `${label} (you, teacher)` : `${label} (you)`}
           </p>
           {!hideSampleStatus && (
             <p className="text-2xs text-slate-300">
-              {inSample ? 'Publishing to teacher' : 'Local preview only'}
+              {isTeacher
+                ? inSample
+                  ? 'Visible to students'
+                  : 'Not visible to students'
+                : inSample
+                  ? 'Publishing to teacher'
+                  : 'Local preview only'}
             </p>
           )}
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1">
           {!hideSampleStatus &&
+            !isTeacher &&
             (inSample ? (
               <span className="chip-sample">In sample</span>
             ) : (

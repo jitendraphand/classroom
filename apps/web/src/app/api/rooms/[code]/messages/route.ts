@@ -92,12 +92,15 @@ const messageInclude = {
 
 export async function GET(req: Request, { params }: { params: Promise<{ code: string }> }) {
   const code = (await params).code.toUpperCase();
-  const ctx = await resolveAccess(req, code);
-  if (!ctx) return jsonError('Unauthorized', 401);
-
-  if (ctx.room.status === 'ENDED') {
+  // Ended rooms answer "ended" before the access check: students are marked
+  // LEFT when the class ends, and their last poll must not log a 401. Nothing
+  // about the room is revealed beyond the fact that it ended.
+  const status = await prisma.room.findUnique({ where: { code }, select: { status: true } });
+  if (status?.status === 'ENDED') {
     return jsonOk({ messages: [], ended: true }, { status: 200 });
   }
+  const ctx = await resolveAccess(req, code);
+  if (!ctx) return jsonError('Unauthorized', 401);
 
   // Waiting students can read nothing (or empty); stick to admitted + teacher
   if (!ctx.admitted) return jsonError('Not admitted', 403);

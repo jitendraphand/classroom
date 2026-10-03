@@ -29,15 +29,23 @@ export function OngoingClasses() {
   const [error, setError] = useState('');
   const now = useNow();
 
+  // Signed out / replaced (StaffSessionGuard shows why): stop polling.
+  const sessionEnded = useSessionEnded();
+  const [stopped, setStopped] = useState(false);
+
   const load = useCallback(async () => {
-    const { ok, data } = await api<{ classes: LiveClass[] }>('/api/admin/live');
+    const { ok, status, data } = await api<{ classes: LiveClass[] }>('/api/admin/live');
     if (ok) {
       setClasses(data.classes);
       setError('');
+    } else if (status === 401) {
+      setStopped(true);
+      setClasses([]);
     } else setError(data.error || 'Could not load ongoing classes');
   }, []);
 
   useEffect(() => {
+    if (sessionEnded || stopped) return;
     void load();
     const id = setInterval(() => {
       if (document.visibilityState === 'visible') void load();
@@ -48,7 +56,7 @@ export function OngoingClasses() {
       clearInterval(id);
       document.removeEventListener('visibilitychange', onVis);
     };
-  }, [load]);
+  }, [load, sessionEnded, stopped]);
 
   return (
     <section aria-labelledby="ongoing-heading" className="space-y-4">

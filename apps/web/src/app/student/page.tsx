@@ -19,7 +19,13 @@ type ClassInfo = {
   end: string | null;
 };
 type Route = {
-  student: { name: string; rollNumber: string | null; gradeDivision: string };
+  student: {
+    name: string;
+    rollNumber: string | null;
+    gradeDivision: string;
+    /** Grade/division not in the school's Grades & divisions list (see studentAudienceStatus). */
+    audienceStatus?: 'ok' | 'unknown_grade' | 'unknown_division';
+  };
   now: string;
   /** Routing fingerprint; /api/student/check returns the same value. */
   sig: string;
@@ -166,6 +172,21 @@ export default function StudentHome() {
         {s.gradeDivision}
         {s.rollNumber ? ` · Roll ${s.rollNumber}` : ''}
       </p>
+      {s.audienceStatus && s.audienceStatus !== 'ok' && (
+        <div
+          className="mt-4 rounded-xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-left text-sm text-amber-100"
+          role="alert"
+        >
+          <p className="font-semibold">
+            {s.audienceStatus === 'unknown_grade' ? 'Your grade' : 'Your division'} ({s.gradeDivision}) is not set up in
+            the classroom yet
+          </p>
+          <p className="mt-1 text-amber-100/80">
+            Classes for your grade and division can&apos;t be found until the school adds it. Please tell your teacher
+            or the school office. If the grade or division is wrong, it must be corrected in the school app.
+          </p>
+        </div>
+      )}
     </div>
   );
 

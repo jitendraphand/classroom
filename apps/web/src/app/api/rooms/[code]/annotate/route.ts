@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { prisma } from '@/lib/db';
-import { resolveRoomAccess } from '@/lib/auth';
+import { getAdminSession, resolveRoomAccess } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
 import { ensureRedis, keys } from '@/lib/redis';
 
@@ -36,7 +36,7 @@ type AccessResult =
   | { ok: true; room: { id: string; code: string; status: string }; isTeacher: boolean }
   | { ok: false; reason: 'ended' | 'unauthorized' | 'not_found' };
 
-/** Teacher owns the annotation layer; admitted students may only read it. */
+/** Teacher owns the annotation layer; admitted students and the admin observer may only read it. */
 async function canAccess(req: Request, code: string): Promise<AccessResult> {
   const room = await prisma.room.findUnique({ where: { code } });
   if (!room) return { ok: false, reason: 'not_found' };
@@ -56,6 +56,9 @@ async function canAccess(req: Request, code: string): Promise<AccessResult> {
   ) {
     return { ok: true, room, isTeacher: false };
   }
+  // The admin's hidden observer sees what students see, drawings included
+  // (read-only: PUT still requires the teacher).
+  if (await getAdminSession()) return { ok: true, room, isTeacher: false };
   return { ok: false, reason: 'unauthorized' };
 }
 

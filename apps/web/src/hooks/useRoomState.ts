@@ -9,6 +9,8 @@ export type RosterInfo = {
   gradeDivision?: string | null;
   late?: boolean;
   onTimetable?: boolean;
+  /** The running class is ad hoc (not from the timetable): no timetable wording. */
+  adHocClass?: boolean;
   viaSchoolApp?: boolean;
 };
 
@@ -27,6 +29,8 @@ export type RoomState = {
     displayName: string;
     role: string;
     status: string;
+    /** Signed in through the school app (has a /student home). */
+    viaSchoolApp?: boolean;
     livekitIdentity: string;
     mutedByTeacher: boolean;
     canPublishVideo: boolean;

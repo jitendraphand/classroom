@@ -6,7 +6,9 @@ import { Button } from '@/components/ui/Button';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { DivisionSelect, GradeSelect, useGradeOptions } from '@/components/admin/GradePickers';
 import { api } from '@/lib/clientFetch';
-import { displayDivision } from '@/lib/grades';
+import { displayDivision, normalizeDivision, normalizeGrade } from '@/lib/grades';
+
+type Unrecognised = { grade: string; division: string; count: number; gradeKnown: boolean };
 
 type Student = {
   id: string;
@@ -35,6 +37,30 @@ function StudentsPanel() {
   const [errors, setErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const gradeOptions = useGradeOptions();
+  // Grade/divisions students joined with that Grades & divisions does not know.
+  const [unrecognised, setUnrecognised] = useState<Unrecognised[]>([]);
+  const [notice, setNotice] = useState('');
+
+  const loadUnrecognised = useCallback(async () => {
+    const r = await api<{ unrecognised: Unrecognised[] }>('/api/admin/grades');
+    if (r.ok) setUnrecognised(r.data.unrecognised ?? []);
+  }, []);
+
+  useEffect(() => {
+    void loadUnrecognised();
+  }, [loadUnrecognised]);
+
+  const unknownKeys = new Set(unrecognised.map((u) => `${u.grade}|${u.division}`));
+  const isUnknown = (s: Student) => unknownKeys.has(`${normalizeGrade(s.grade)}|${normalizeDivision(s.division)}`);
+
+  async function recognise(u: Unrecognised) {
+    setBusy(true);
+    setNotice('');
+    const r = await api('/api/admin/grades/recognise', { body: { grade: u.grade, division: u.division } });
+    setBusy(false);
+    setNotice(r.ok ? `Added ${u.grade}-${displayDivision(u.division)} to Grades & divisions.` : r.data.error || 'Could not add it.');
+    void loadUnrecognised();
+  }
 
   const load = useCallback(async () => {
     const p = new URLSearchParams(Object.entries(filter).filter(([, v]) => v));
@@ -69,6 +95,37 @@ function StudentsPanel() {
 
   return (
     <div className="space-y-6">
+      {notice && (
+        <p className="rounded-xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-100" role="status">
+          {notice}
+        </p>
+      )}
+      {unrecognised.length > 0 && (
+        <Card className="border-amber-400/40">
+          <CardHeader
+            title="Students with an unrecognised grade or division"
+            subtitle="These came from the school app but are not in Grades & divisions, so no class can be scheduled for them (they are told so when they open the class). Add the real ones; fix typos in the school app."
+          />
+          <ul className="divide-y divide-white/5 text-sm" aria-label="Unrecognised grade/divisions">
+            {unrecognised.map((u) => (
+              <li key={`${u.grade}|${u.division}`} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                <span>
+                  <span className="font-medium text-amber-100">
+                    {u.grade}-{displayDivision(u.division)}
+                  </span>{' '}
+                  <span className="text-slate-400">
+                    · {u.count} student{u.count === 1 ? '' : 's'}
+                    {u.gradeKnown ? ' · unknown division' : ' · unknown grade'}
+                  </span>
+                </span>
+                <Button size="sm" variant="secondary" disabled={busy} onClick={() => void recognise(u)}>
+                  Add {u.gradeKnown ? 'division' : 'grade + division'}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
       <Card>
         <CardHeader
           title="Import roster (optional)"
@@ -146,6 +203,14 @@ function StudentsPanel() {
                   <td className="px-4 py-2 text-white">{s.name}</td>
                   <td className="px-4 py-2">
                     {s.grade}-{displayDivision(s.division)}
+                    {isUnknown(s) && (
+                      <span
+                        className="ml-2 rounded-md border border-amber-400/40 bg-amber-500/10 px-1.5 py-0.5 text-2xs font-semibold text-amber-200"
+                        title="Not in Grades & divisions: no class can be scheduled for this student"
+                      >
+                        Unrecognised
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-2">{s.rollNumber}</td>
                   <td className="px-4 py-2 text-slate-400">{s.source === 'import' ? 'Roster import' : 'School app'}</td>

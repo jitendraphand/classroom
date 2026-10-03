@@ -3,6 +3,8 @@ import { formatAudience } from '@/lib/grades';
 import { jsonError, jsonOk } from '@/lib/response';
 import { routeStudent } from '@/lib/studentService';
 import { appTimeZone } from '@/lib/schoolConfig';
+import { loadMaster } from '@/lib/gradeMaster';
+import { studentAudienceStatus } from '@/lib/gradeMasterLogic';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,12 +18,20 @@ export async function POST() {
   if (!student) return jsonError('Open the class from the school app.', 401, { reason: 'missing' });
   try {
     const route = await routeStudent(student);
+    // Grade/division the school app sent but Grades & divisions does not know:
+    // no class can be found, so say so instead of a plain "No class right now".
+    const audienceStatus = studentAudienceStatus(
+      await loadMaster().catch(() => []),
+      student.grade,
+      student.division
+    );
     await refreshPupilCookie(student).catch(() => undefined);
     return jsonOk({
       student: {
         name: student.name,
         rollNumber: student.rollNumber,
         gradeDivision: formatAudience(student.grade, [student.division], false),
+        audienceStatus,
       },
       timezone: appTimeZone(),
       now: new Date().toISOString(),

@@ -41,6 +41,7 @@ function Observer({ code }: { code: string }) {
   const now = useNow();
   // Admin signed in elsewhere: leave the class (LiveKitRoom unmounts = disconnect).
   const sessionEnded = useSessionEnded();
+  const [stopped, setStopped] = useState(false);
 
   const load = useCallback(async () => {
     const { ok, status, data } = await api<{ class: LiveClass; students: Student[] }>(
@@ -52,16 +53,21 @@ function Observer({ code }: { code: string }) {
     } else if (status === 404) {
       setEnded(true);
       setConn(null);
+    } else if (status === 401) {
+      // Signed out / replaced: stop polling; StaffSessionGuard explains why.
+      setStopped(true);
+      setConn(null);
     } else setError(data.error || 'Could not load the class');
   }, [code]);
 
   useEffect(() => {
+    if (sessionEnded || stopped) return;
     void load();
     const id = setInterval(() => {
       if (document.visibilityState === 'visible') void load();
     }, 5_000);
     return () => clearInterval(id);
-  }, [load]);
+  }, [load, sessionEnded, stopped]);
 
   useEffect(() => {
     let cancelled = false;
@@ -71,6 +77,7 @@ function Observer({ code }: { code: string }) {
       if (cancelled) return;
       if (ok) setConn({ token: data.token, serverUrl: data.serverUrl });
       else if (status === 404) setEnded(true);
+      else if (status === 401) setStopped(true);
       else setError(data.error || 'Could not join the class');
     });
     return () => {
@@ -136,7 +143,9 @@ function Observer({ code }: { code: string }) {
               />
             </LiveKitRoom>
           ) : (
-            <div className="flex h-full items-center justify-center text-sm text-slate-500">Joining…</div>
+            <div className="flex h-full items-center justify-center text-sm text-slate-500">
+              {sessionEnded || stopped ? 'Viewer stopped: you were signed out.' : 'Joining…'}
+            </div>
           )}
           {c && (
             <div className="pointer-events-none absolute left-3 top-3 rounded-lg bg-black/65 px-2 py-1 font-mono text-xs text-white">

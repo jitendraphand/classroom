@@ -223,3 +223,22 @@ export function teacherGradeChoices(
     .sort((a, b) => a.order - b.order || compareGrades(a.grade, b.grade))
     .map((c) => ({ grade: c.grade, label: c.label, whole: c.whole, divisions: c.divisions }));
 }
+
+/**
+ * Is a school-app student's grade/division known to the master list? Unknown
+ * entries are still saved (the school app is the source of truth), but no class
+ * can be scheduled for them, so the student and the admin are told.
+ * Empty master list → 'ok' (nothing configured yet). Inactive entries count as known.
+ */
+export type StudentAudienceStatus = 'ok' | 'unknown_grade' | 'unknown_division';
+
+export function studentAudienceStatus(
+  master: Pick<MasterGrade, 'name' | 'divisions'>[],
+  grade: string,
+  division: string
+): StudentAudienceStatus {
+  if (!master.length) return 'ok';
+  const g = master.find((x) => x.name === normalizeGrade(grade));
+  if (!g) return 'unknown_grade';
+  return g.divisions.some((d) => d.name === normalizeDivision(division)) ? 'ok' : 'unknown_division';
+}

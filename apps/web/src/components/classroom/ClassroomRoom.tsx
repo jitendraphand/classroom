@@ -38,6 +38,7 @@ import { useRouter } from 'next/navigation';
 import { TEACHER_ABSENCE_GRACE_MS } from '@/lib/graceTimer';
 import { SESSION_CHECK_EVENT, SESSION_ENDED_EVENT, isEndedReason, loginHref } from '@/lib/sessionClient';
 import { useRoomState, type RosterInfo } from '@/hooks/useRoomState';
+import { shortName } from '@/lib/displayNames';
 import { Controls } from './Controls';
 import { LocalPreview } from './LocalPreview';
 import { ChatView, useChatThread } from './Chat';
@@ -1219,6 +1220,23 @@ function TeacherPeersFloat({
   const cells: Array<string | null> = ['__self__'];
   for (let i = 0; i < slotCount - 1; i++) cells.push(peerIds[i] ?? null);
 
+  // After more tiles are requested (2→6) or the sample changes, newly sampled
+  // students take a few seconds to (re)publish and subscribe. Show
+  // "Connecting…" in the blank tiles meanwhile instead of flashing
+  // "Off camera"; only students actually in the room can fill them.
+  const visibleKey = visibleIdentities.join(',');
+  const [settling, setSettling] = useState(false);
+  useEffect(() => {
+    setSettling(true);
+    const t = window.setTimeout(() => setSettling(false), 12_000);
+    return () => window.clearTimeout(t);
+  }, [slotCount, visibleKey]);
+  const fillableStudents = room
+    ? Array.from(room.remoteParticipants.values()).filter(
+        (p) => !isTeacherParticipant(p, teacherSet) && !peerIds.includes(p.identity)
+      ).length
+    : 0;
+
   const style: CSSProperties = docked && dock
     ? { left: dock.left + PEER_DOCK_MARGIN, top: dock.top + PEER_DOCK_MARGIN }
     : pos
@@ -1341,7 +1359,7 @@ function TeacherPeersFloat({
                     fontWeight: 650,
                   }}
                 >
-                  Off camera
+                  {settling && i - 1 - peerIds.length < fillableStudents ? 'Connecting…' : 'Off camera'}
                 </div>
               );
             }
@@ -1961,6 +1979,20 @@ function RoomInner({
   const [chatOpen, setChatOpen] = useState(false);
   const [hudChatOpen, setHudChatOpen] = useState(false);
   const [rosterOpen, setRosterOpen] = useState(false);
+  // Roster and Chat share the right-hand side: opening one closes the other so
+  // they never stack on top of each other.
+  const toggleChat = useCallback(() => {
+    setChatOpen((v) => !v);
+    setRosterOpen(false);
+  }, []);
+  const toggleRoster = useCallback(() => {
+    setRosterOpen((v) => !v);
+    setChatOpen(false);
+  }, []);
+  const openRoster = useCallback(() => {
+    setRosterOpen(true);
+    setChatOpen(false);
+  }, []);
   /** Student left fullscreen (Esc, swipe, app switch): prompt, never kick. */
   const focus = useStudentFocus(code, !isTeacher);
   const [camError, setCamError] = useState<string | null>(null);
@@ -3020,7 +3052,7 @@ function RoomInner({
             waiting={state?.waiting ?? []}
             onAdmit={(id) => void admitStudents([id])}
             onAdmitAll={() => void admitStudents(undefined, true)}
-            onOpenRoster={screenOn ? undefined : () => setRosterOpen(true)}
+            onOpenRoster={screenOn ? undefined : openRoster}
           />
         )}
         <div className="min-w-0">
@@ -3161,6 +3193,7 @@ function RoomInner({
                     inSample={effectiveCanPublish}
                     showMayBeVisible={isTeacher}
                     hideSampleStatus={!isTeacher}
+                    isTeacher={isTeacher}
                   />
                 }
               />
@@ -3460,10 +3493,10 @@ function RoomInner({
           onRotateSample={rotateSample}
           onMuteAll={() => muteAllStudents(true)}
           onUnmuteAll={() => muteAllStudents(false)}
-          onToggleChat={screenOn ? undefined : () => setChatOpen((v) => !v)}
+          onToggleChat={screenOn ? undefined : toggleChat}
           chatOpen={chatOpen}
           chatUnread={chatUnread}
-          onToggleRoster={screenOn ? undefined : () => setRosterOpen((v) => !v)}
+          onToggleRoster={screenOn ? undefined : toggleRoster}
           rosterOpen={rosterOpen}
           rosterBadge={waitingCount}
         />
@@ -3515,7 +3548,7 @@ function WaitingAdmitBar({
         {n === 1 ? `${first.displayName} is waiting` : `${n} students waiting`}
       </span>
       <Button variant="warning" size="sm" onClick={() => onAdmit(first.id)} title={`Admit ${rosterLabel(first)}`}>
-        {n === 1 ? 'Admit' : `Admit ${first.displayName.split(' ')[0]}`}
+        {n === 1 ? 'Admit' : `Admit ${shortName(first.displayName)}`}
       </Button>
       {n > 1 && (
         <Button variant="warning" size="sm" onClick={onAdmitAll}>
@@ -3561,6 +3594,8 @@ export function ClassroomRoom({ code }: { code: string }) {
   const [error, setError] = useState('');
   const [classEnded, setClassEnded] = useState(false);
   const [isTeacher, setIsTeacher] = useState(false);
+  /** School-app student (home is /student); null until known. */
+  const [schoolStudent, setSchoolStudent] = useState<boolean | null>(null);
   const [displayName, setDisplayName] = useState('You');
   const [canPublishVideo, setCanPublishVideo] = useState(false);
   /**
@@ -3598,6 +3633,25 @@ export function ClassroomRoom({ code }: { code: string }) {
     },
     [isTeacher]
   );
+
+  /**
+   * "Home" from the class-ended screen: teachers → dashboard, school-app
+   * students → /student (their next class), guests → /. When the room had
+   * already ended on load we never saw `me`, so ask whether a school-app
+   * session exists.
+   */
+  const goHomeAfterEnd = useCallback(async () => {
+    if (isTeacher) return router.push('/teacher/dashboard');
+    let school = schoolStudent;
+    if (school === null) {
+      try {
+        school = (await fetch('/api/student/check', { cache: 'no-store' })).ok;
+      } catch {
+        school = false;
+      }
+    }
+    router.push(school ? '/student' : '/');
+  }, [isTeacher, schoolStudent, router]);
 
   const markEnded = useCallback(() => {
     setClassEnded(true);
@@ -3657,6 +3711,7 @@ export function ClassroomRoom({ code }: { code: string }) {
       setIsTeacher(false);
     }
 
+    setSchoolStudent(!!state.me?.viaSchoolApp);
     setDisplayName(state.me?.displayName || 'You');
     setCanPublishVideo(!!state.me?.canPublishVideo);
 
@@ -3740,8 +3795,8 @@ export function ClassroomRoom({ code }: { code: string }) {
           <p className="mt-2 text-sm text-slate-400">
             Your teacher has ended this class. You can leave this page.
           </p>
-          <Button className="mt-6" variant="secondary" onClick={() => router.push('/')}>
-            Home
+          <Button className="mt-6" variant="secondary" onClick={() => void goHomeAfterEnd()}>
+            {isTeacher ? 'Dashboard' : 'Home'}
           </Button>
         </div>
       </main>
@@ -3820,7 +3875,7 @@ function rosterLabel(p: { displayName: string } & RosterInfo): string {
   if (p.rollNumber) bits.push(`Roll ${p.rollNumber}`);
   if (p.gradeDivision) bits.push(p.gradeDivision);
   if (p.late) bits.push('late');
-  if (p.viaSchoolApp && !p.onTimetable) bits.push('not on timetable');
+  if (p.viaSchoolApp && !p.onTimetable) bits.push(p.adHocClass ? 'outside class audience' : 'not on timetable');
   if (!p.viaSchoolApp) bits.push('guest');
   return bits.join(' · ');
 }
@@ -3850,7 +3905,12 @@ function RosterMeta({ info }: { info: RosterInfo }) {
       {info.gradeDivision && <span>· {info.gradeDivision}</span>}
       {info.viaSchoolApp ? (
         info.onTimetable ? (
-          <span className="rounded bg-emerald-500/15 px-1 font-semibold text-emerald-200">On timetable</span>
+          // Ad-hoc classes are not on the timetable: matching students need no tag.
+          info.adHocClass ? null : (
+            <span className="rounded bg-emerald-500/15 px-1 font-semibold text-emerald-200">On timetable</span>
+          )
+        ) : info.adHocClass ? (
+          <span className="rounded bg-amber-500/15 px-1 font-semibold text-amber-100">Outside class audience</span>
         ) : (
           <span className="rounded bg-amber-500/15 px-1 font-semibold text-amber-100">Not on timetable</span>
         )

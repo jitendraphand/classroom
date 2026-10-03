@@ -169,6 +169,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       late: p.studentId ? lateByStudent.get(p.studentId) ?? false : false,
       onTimetable: !!st && !!classSession && audienceIncludes(classSession, st.grade, st.division),
       viaSchoolApp: !!p.studentId,
+      adHocClass: !!classSession?.adHoc,
     };
   };
   const admitted = room.participants.filter((p) => p.status === 'ADMITTED');
