@@ -76,3 +76,31 @@ export async function claimTeacherTab(code: string): Promise<void> {
     /* ignore */
   }
 }
+
+const SCHOOL_KEY = 'classroom_school_student';
+
+/**
+ * This tab belongs to a school-app student (came through the school link /
+ * /student). Home and Leave then go back to /student, not the guest page.
+ */
+export function markSchoolStudentTab(on = true) {
+  try {
+    if (on) sessionStorage.setItem(SCHOOL_KEY, '1');
+    else sessionStorage.removeItem(SCHOOL_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function isSchoolStudentTab(): boolean {
+  try {
+    return sessionStorage.getItem(SCHOOL_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+/** Pure: where a student goes after leaving / when the class ended. */
+export function studentHomePath(school: boolean): string {
+  return school ? '/student' : '/';
+}

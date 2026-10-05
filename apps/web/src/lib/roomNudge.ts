@@ -53,3 +53,17 @@ async function send(roomCode: string, audience: NudgeAudience) {
     console.warn('nudgeRoomState', e instanceof Error ? e.message : e);
   }
 }
+
+/**
+ * Tell specific students their teacher-mute flag right away (no coalescing,
+ * no refetch needed to update the mic button). The regular nudge still
+ * follows for everyone else.
+ */
+export function pushMuteState(roomCode: string, sessionId: string, identities: string[], muted: boolean) {
+  if (!identities.length) return;
+  void sendRoomData(
+    livekitRoomName(roomCode, sessionId),
+    { v: 1, type: 'mute', muted },
+    { topic: STATE_TOPIC, destinationIdentities: identities }
+  ).catch(() => undefined);
+}

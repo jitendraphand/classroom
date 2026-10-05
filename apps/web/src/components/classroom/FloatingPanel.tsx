@@ -29,8 +29,10 @@ const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayout
 
 /**
  * Viewport area floats may occupy: below the element marked
- * `data-float-bound="top"` (teacher header with the Admit control) and above
- * `data-float-bound="bottom"` (control bar), so a panel can never hide them.
+ * `data-float-bound="top"` (teacher header with the Admit control), above
+ * `data-float-bound="bottom"` (control bar) and left of
+ * `data-float-bound="right"` (phone landscape control rail), so a panel can
+ * never hide them.
  */
 export function floatInsets(): FloatInsets {
   const insets: FloatInsets = { top: 0, right: 0, bottom: 0, left: 0 };
@@ -42,6 +44,8 @@ export function floatInsets(): FloatInsets {
     const side = el.dataset.floatBound;
     if (side === 'top') insets.top = Math.max(insets.top, Math.min(vh / 2, r.bottom));
     if (side === 'bottom') insets.bottom = Math.max(insets.bottom, Math.min(vh / 2, vh - r.top));
+    // Phone landscape: the student control rail on the right edge.
+    if (side === 'right') insets.right = Math.max(insets.right, Math.min(window.innerWidth / 2, window.innerWidth - r.left));
   });
   return insets;
 }

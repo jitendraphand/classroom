@@ -113,6 +113,14 @@ export async function ensureStudentParticipant(student: Student, room: Room, cs:
   return participant;
 }
 
+/**
+ * Where a school-app student goes once the class is open: straight into the
+ * classroom when already admitted (waiting room off / readmitted), else the lobby.
+ */
+export function roomEntryUrl(code: string, status: string | null | undefined) {
+  return status === 'ADMITTED' ? `/classroom/${code}` : `/join/${code}?waiting=1&as=student`;
+}
+
 /** Arrive at a class session: attendance + waiting room if the teacher has opened it. */
 async function arrive(student: Student, cs: ClassSession) {
   await recordArrival(cs, student.id);
@@ -233,15 +241,15 @@ async function payloadFor(
 ): Promise<StudentRoutePayload> {
   if (decision.kind === 'adhoc') {
     const cs = adHoc.find((s) => s.id === decision.session.id)!;
-    const { room } = await arrive(student, cs);
+    const { room, participant } = await arrive(student, cs);
     const info = await sessionInfo(cs);
-    return room ? { kind: 'room', waitingUrl: `/join/${room.code}?waiting=1&as=student`, cls: info } : { kind: 'waiting_for_teacher', cls: info };
+    return room ? { kind: 'room', waitingUrl: roomEntryUrl(room.code, participant?.status), cls: info } : { kind: 'waiting_for_teacher', cls: info };
   }
   if (decision.kind === 'scheduled') {
     const cs = await upsertOccurrenceSession(decision.occurrence);
-    const { room } = await arrive(student, cs);
+    const { room, participant } = await arrive(student, cs);
     const info = await occInfo(decision.occurrence);
-    return room ? { kind: 'room', waitingUrl: `/join/${room.code}?waiting=1&as=student`, cls: info } : { kind: 'waiting_for_teacher', cls: info };
+    return room ? { kind: 'room', waitingUrl: roomEntryUrl(room.code, participant?.status), cls: info } : { kind: 'waiting_for_teacher', cls: info };
   }
   if (decision.kind === 'upcoming') {
     return { kind: 'upcoming', cls: await occInfo(decision.occurrence), opensAt: decision.opensAt.toISOString() };

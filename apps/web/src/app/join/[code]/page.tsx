@@ -9,7 +9,8 @@ import { BackLink } from '@/components/layout/AppHeader';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Card } from '@/components/ui/Card';
-import { rememberClassroomRole } from '@/lib/classroomClient';
+import { markSchoolStudentTab, rememberClassroomRole } from '@/lib/classroomClient';
+import { PageLoading } from '@/components/ui/Skeleton';
 import { SchoolAppOnly } from '@/components/join/SchoolAppOnly';
 
 type State = {
@@ -48,6 +49,7 @@ export default function JoinRoomPage() {
       return;
     }
     setRoomInfo(data);
+    if (data.me?.viaSchoolApp) markSchoolStudentTab();
     if (data.teacherSessionActive) {
       setTeacherSession({ name: data.teacherSessionName || null });
     }
@@ -132,6 +134,12 @@ export default function JoinRoomPage() {
     }
     setWaiting(true);
     poll();
+  }
+
+  // Until the first poll says who this is (or while an admitted student is
+  // being sent into the class), show a neutral state, not a nameless lobby.
+  if (waiting && !error && (!roomInfo || roomInfo.me?.status === 'ADMITTED')) {
+    return <PageLoading label={roomInfo ? 'Entering class…' : 'Joining class…'} />;
   }
 
   if (waiting) {

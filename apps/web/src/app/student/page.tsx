@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
 import { PageLoading } from '@/components/ui/Skeleton';
 import { SchoolAppOnly } from '@/components/join/SchoolAppOnly';
-import { rememberClassroomRole } from '@/lib/classroomClient';
+import { markSchoolStudentTab, rememberClassroomRole } from '@/lib/classroomClient';
 import { api } from '@/lib/clientFetch';
 import { nextPollDelay } from '@/lib/studentCheck';
 
@@ -85,6 +85,7 @@ export default function StudentHome() {
       return;
     }
     setError('');
+    markSchoolStudentTab();
     skew.current = new Date(data.now).getTime() - Date.now();
     setRoute(data);
     if (data.kind === 'room' && !redirecting.current) {

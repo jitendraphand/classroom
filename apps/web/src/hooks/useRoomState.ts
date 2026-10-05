@@ -67,6 +67,18 @@ export type RoomState = {
   stageMode?: 'idle' | 'screen';
 };
 
+/** `{v:1,type:'mute',muted}` from the server → muted flag; anything else → null. */
+export function decodeMutePush(decoder: TextDecoder | null, payload: Uint8Array): boolean | null {
+  if (!decoder) return null;
+  try {
+    const msg = JSON.parse(decoder.decode(payload)) as { v?: number; type?: string; muted?: unknown };
+    if (msg && msg.v === 1 && msg.type === 'mute' && typeof msg.muted === 'boolean') return msg.muted;
+  } catch {
+    /* not JSON */
+  }
+  return null;
+}
+
 export function useRoomState(code: string, intervalMs = 2000, room?: Room | null) {
   const [state, setState] = useState<RoomState | null>(null);
   const [error, setError] = useState('');
@@ -75,6 +87,7 @@ export function useRoomState(code: string, intervalMs = 2000, room?: Room | null
   const inflight = useRef(false);
   const again = useRef(false);
   const lastFetchAt = useRef(0);
+  const mutePush = useRef<{ muted: boolean; at: number } | null>(null);
 
   const refresh = useCallback(async () => {
     if (stopped.current) return;
@@ -83,7 +96,8 @@ export function useRoomState(code: string, intervalMs = 2000, room?: Room | null
       return;
     }
     inflight.current = true;
-    lastFetchAt.current = Date.now();
+    const startedAt = Date.now();
+    lastFetchAt.current = startedAt;
     try {
       const res = await roomFetch(code, '/state');
       const data = await res.json();
@@ -120,6 +134,9 @@ export function useRoomState(code: string, intervalMs = 2000, room?: Room | null
         setError('');
         return;
       }
+      // A snapshot requested before a mute push must not undo it.
+      const push = mutePush.current;
+      if (push && startedAt < push.at && data.me) data.me.mutedByTeacher = push.muted;
       setState(data);
       setError('');
     } catch {
@@ -165,9 +182,16 @@ export function useRoomState(code: string, intervalMs = 2000, room?: Room | null
   // Server push: refetch now (coalesced by the inflight/again guard above).
   useEffect(() => {
     if (!room) return;
-    const onData = (_p: Uint8Array, participant?: unknown, _k?: unknown, topic?: string) => {
+    const decoder = typeof TextDecoder !== 'undefined' ? new TextDecoder() : null;
+    const onData = (payload: Uint8Array, participant?: unknown, _k?: unknown, topic?: string) => {
       // Only the server sends this topic; a packet from a participant is ignored.
       if (topic !== STATE_TOPIC || participant) return;
+      const muted = decodeMutePush(decoder, payload);
+      // Teacher (un)muted me: flip the mic button now; the refetch confirms it.
+      if (muted !== null) {
+        mutePush.current = { muted, at: Date.now() };
+        setState((prev) => (prev?.me ? { ...prev, me: { ...prev.me, mutedByTeacher: muted } } : prev));
+      }
       if (!stopped.current) void refresh();
     };
     room.on(RoomEvent.DataReceived, onData);

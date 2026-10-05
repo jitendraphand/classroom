@@ -38,7 +38,9 @@ import { useRouter } from 'next/navigation';
 import { TEACHER_ABSENCE_GRACE_MS } from '@/lib/graceTimer';
 import { SESSION_CHECK_EVENT, SESSION_ENDED_EVENT, isEndedReason, loginHref } from '@/lib/sessionClient';
 import { useRoomState, type RosterInfo } from '@/hooks/useRoomState';
+import { phoneChatBox, usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { shortName } from '@/lib/displayNames';
+import { freezeSupported, shouldFreezeShare, snapshotTrack, startBackgroundStills, stillTrack, type FrozenStill } from '@/lib/shareFreeze';
 import { Controls } from './Controls';
 import { LocalPreview } from './LocalPreview';
 import { ChatView, useChatThread } from './Chat';
@@ -80,7 +82,15 @@ import {
   useSideWindows,
 } from './shareSideWindows';
 import { MIC_LOCKED_NO_TEACHER } from '@/lib/teacherPresenceLogic';
-import { roomFetch, rememberClassroomRole, getClassroomRole, claimTeacherTab } from '@/lib/classroomClient';
+import {
+  roomFetch,
+  rememberClassroomRole,
+  getClassroomRole,
+  claimTeacherTab,
+  isSchoolStudentTab,
+  markSchoolStudentTab,
+  studentHomePath,
+} from '@/lib/classroomClient';
 import { forwardActivityFrom, setLiveSession } from '@/lib/liveSession';
 import {
   cameraProfile,
@@ -193,8 +203,11 @@ function ParticipantGrid({
   annotateMode,
   annotateColor,
   localShareSurface = '',
+  localShareFrozen = false,
   onStopShare,
 }: {
+  /** Entire-screen share frozen for drawing: the local share is a still, safe to preview. */
+  localShareFrozen?: boolean;
   /** What this teacher tab is capturing; decides whether the local share may be previewed. */
   localShareSurface?: string;
   onStopShare?: () => void;
@@ -270,7 +283,7 @@ function ParticipantGrid({
           )}
         >
           {screenShares.map((t) =>
-            t.participant.isLocal && !showLocalSharePreview(localShareSurface) ? (
+            t.participant.isLocal && !showLocalSharePreview(localShareSurface) && !localShareFrozen ? (
               <EntireScreenShareCard key={`${t.participant.identity}-${t.source}`} onStop={onStopShare} />
             ) : (
             <TeacherShareTile
@@ -562,20 +575,39 @@ function isSharePermissionError(err: unknown): boolean {
  * attempted first; permission errors are not retried. Safari skips resolution
  * constraints because specifying them captures a tiny frame.
  */
+/**
+ * Display-media audio constraints. Processing is off (it is a video's audio,
+ * not a voice). `restrictOwnAudio` keeps this tab's own output (students'
+ * voices) out of a system-audio capture, so students do not hear an echo of
+ * themselves; `suppressLocalAudioPlayback: false` keeps a shared tab audible
+ * for the teacher. Browsers ignore members they do not know.
+ */
+const SCREEN_SHARE_AUDIO_CAPTURE = {
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false,
+  restrictOwnAudio: true,
+  suppressLocalAudioPlayback: false,
+} as MediaTrackConstraints;
+
 function captureScreen(): Promise<MediaStream> {
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
   const safari = /safari/i.test(ua) && !/chrome|chromium|crios|edg|android|fxios/i.test(ua);
-  const bare = () => navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+  // Safari has no display-media audio; asking for it can reject the call.
+  const bare = () =>
+    navigator.mediaDevices.getDisplayMedia({ video: true, audio: !safari ? SCREEN_SHARE_AUDIO_CAPTURE : false });
   if (safari) return bare();
 
   const withHints = {
     video: SCREEN_SHARE.capture,
-    audio: false as const,
+    // Tab audio (any Chromium OS) or system audio (entire screen, Windows /
+    // ChromeOS). The picker shows a "Share audio" checkbox; unticked = no track.
+    audio: SCREEN_SHARE_AUDIO_CAPTURE,
     // The classroom tab is never offered: sharing it would mirror the page
     // (and any in-page share controls) back to the students.
     selfBrowserSurface: 'exclude',
     surfaceSwitching: 'include',
-    systemAudio: 'exclude',
+    systemAudio: 'include',
     monitorTypeSurfaces: 'include',
   };
 
@@ -1729,6 +1761,9 @@ function enqueueLocalPublish(task: () => Promise<void>): Promise<void> {
   return run;
 }
 
+const viewportW = () => (typeof window === 'undefined' ? 1280 : window.innerWidth);
+const viewportH = () => (typeof window === 'undefined' ? 800 : window.innerHeight);
+
 function screenCaptureLive(pub?: LocalTrackPublication | null): boolean {
   const media = pub?.track?.mediaStreamTrack;
   return !!media && media.readyState !== 'ended';
@@ -2188,11 +2223,19 @@ function RoomInner({
   const maskWindowRef = useRef<Window | null>(null);
   /** The raw capture track (the published one is the masked copy when maskRef is set). */
   const rawShareRef = useRef<MediaStreamTrack | null>(null);
+  /** Entire-screen share frozen to a still while the teacher draws (see lib/shareFreeze). */
+  const freezeRef = useRef<{ still: FrozenStill; original: MediaStreamTrack; detach: () => void } | null>(null);
+  const freezeChain = useRef(Promise.resolve());
+  const [shareFrozen, setShareFrozen] = useState(false);
+  /** Published screen-share audio (tab / system audio), if the teacher ticked "Share audio". */
+  const screenAudioRef = useRef<{ track: LocalAudioTrack; owner: { unpublishTrack: (t: LocalAudioTrack, stop?: boolean) => Promise<unknown> } } | null>(null);
   const [maskActive, setMaskActive] = useState(false);
   const [maskFallback, setMaskFallback] = useState<MaskFallback>('');
   /** Share controls start as the compact pill on every share. */
   const [hudCompact, setHudCompact] = useState(true);
   const { state, refresh } = useRoomState(code, 2000, room);
+  /** Phone portrait / landscape: slim student controls and a smaller chat sheet. */
+  const phone = usePhoneLayout();
   /** Student-camera cap chosen from the float, shown before the next poll confirms it. */
   const [sampleCap, setSampleCap] = useState<number | null>(null);
   const capQueue = useRef(Promise.resolve());
@@ -2373,6 +2416,12 @@ function RoomInner({
    */
   const endShareSession = useCallback(() => {
     shareWantedRef.current = false;
+    // Share is ending anyway: drop a freeze-frame without swapping back.
+    const still = freezeRef.current;
+    freezeRef.current = null;
+    still?.still.stop();
+    still?.detach();
+    setShareFrozen(false);
     if (shareEndTimer.current) {
       window.clearTimeout(shareEndTimer.current);
       shareEndTimer.current = null;
@@ -2407,6 +2456,12 @@ function RoomInner({
       /* ignore */
     }
     rawShareRef.current = null;
+    const screenAudio = screenAudioRef.current;
+    screenAudioRef.current = null;
+    if (screenAudio) {
+      void screenAudio.owner.unpublishTrack(screenAudio.track, true).catch(() => undefined);
+      safeStop(screenAudio.track);
+    }
     setMaskActive(false);
     setMaskFallback('');
   }, []);
@@ -2591,6 +2646,103 @@ function RoomInner({
     });
   }, [attachShareSurface]);
 
+  // Entire-screen share + Annotate: publish a still of the current frame and
+  // let the teacher draw on it in this tab (lib/shareFreeze). Off: live again.
+  const wantFreeze = shouldFreezeShare({
+    annotateOn,
+    screenOn,
+    surface: shareSurface,
+    previewable: showLocalSharePreview(shareSurface),
+  });
+  const bgStillsRef = useRef<ReturnType<typeof startBackgroundStills> | null>(null);
+  const wholeScreenShare = screenOn && !!shareSurface && !showLocalSharePreview(shareSurface);
+  useEffect(() => {
+    if (!isTeacher || !localParticipant || !wholeScreenShare || !freezeSupported()) return;
+    const participant = localParticipant;
+    const stills = startBackgroundStills(() => {
+      if (freezeRef.current) return null;
+      return participant.getTrackPublication(Track.Source.ScreenShare)?.track?.mediaStreamTrack ?? null;
+    });
+    bgStillsRef.current = stills;
+    return () => {
+      stills.stop();
+      if (bgStillsRef.current === stills) bgStillsRef.current = null;
+    };
+  }, [isTeacher, localParticipant, wholeScreenShare]);
+
+  useEffect(() => {
+    if (!isTeacher || !localParticipant) return;
+    const participant = localParticipant;
+    freezeChain.current = freezeChain.current.then(async () => {
+      const pub = participant.getTrackPublication(Track.Source.ScreenShare);
+      const lt = pub?.track as LocalVideoTrack | undefined;
+      if (wantFreeze && !freezeRef.current) {
+        if (!lt || !shareWantedRef.current) return;
+        const original = lt.mediaStreamTrack;
+        // Tab visible: the live frame is this tab, so use the last still taken
+        // while it was hidden. Tab hidden (Annotate clicked in the floating
+        // controls): the live frame is the screen the teacher is looking at.
+        const cached = document.visibilityState === 'visible' ? bgStillsRef.current?.latest() : null;
+        const canvas = cached ?? (await snapshotTrack(original));
+        const still = canvas ? stillTrack(canvas) : null;
+        if (!still) {
+          setAnnotateOn(false);
+          setHudNotice('Could not freeze the screen for drawing. Share a window or tab to draw on it.');
+          return;
+        }
+        if (!shareWantedRef.current) {
+          still.stop();
+          return;
+        }
+        try {
+          await lt.replaceTrack(still.track, { userProvidedTrack: true });
+        } catch (e) {
+          console.warn('freeze share', e);
+          still.stop();
+          setAnnotateOn(false);
+          return;
+        }
+        // While frozen LiveKit watches the still, not the capture: if the
+        // teacher stops sharing from the browser bar, end the share here.
+        const raw = rawShareRef.current;
+        const onEnded = () => {
+          const f = freezeRef.current;
+          freezeRef.current = null;
+          f?.still.stop();
+          f?.detach();
+          setShareFrozen(false);
+          void participant.unpublishTrack(lt, false).catch(() => undefined);
+        };
+        original.addEventListener('ended', onEnded);
+        raw?.addEventListener('ended', onEnded);
+        freezeRef.current = {
+          still,
+          original,
+          detach: () => {
+            original.removeEventListener('ended', onEnded);
+            raw?.removeEventListener('ended', onEnded);
+          },
+        };
+        setShareFrozen(true);
+      } else if (!wantFreeze && freezeRef.current) {
+        const f = freezeRef.current;
+        freezeRef.current = null;
+        f.detach();
+        setShareFrozen(false);
+        if (lt && f.original.readyState === 'live') {
+          try {
+            await lt.replaceTrack(f.original, { userProvidedTrack: true });
+          } catch (e) {
+            console.warn('unfreeze share', e);
+          }
+        } else if (lt) {
+          void participant.unpublishTrack(lt, false).catch(() => undefined);
+        }
+        f.still.stop();
+      }
+    });
+  }, [wantFreeze, isTeacher, localParticipant]);
+
   // Chrome's "Share this instead" (surfaceSwitching) can move a running share
   // from a window/tab to the entire screen. Watch the live track: once it
   // reports 'monitor', close the floating window (it would now be captured)
@@ -2670,7 +2822,18 @@ function RoomInner({
     }
 
     const media = stream.getVideoTracks()[0];
+    // Keep the first audio track (tab / system audio); drop any extras.
+    const shareAudio = stream.getAudioTracks().find((t) => t.readyState === 'live') ?? null;
+    const dropShareAudio = () =>
+      stream.getAudioTracks().forEach((track) => {
+        try {
+          track.stop();
+        } catch {
+          /* ignore */
+        }
+      });
     stream.getAudioTracks().forEach((track) => {
+      if (track === shareAudio) return;
       try {
         track.stop();
       } catch {
@@ -2678,6 +2841,7 @@ function RoomInner({
       }
     });
     if (!media || media.readyState === 'ended') {
+      dropShareAudio();
       shareStartRef.current = false;
       try {
         media?.stop();
@@ -2801,6 +2965,7 @@ function RoomInner({
     } catch (e) {
       shareWantedRef.current = false;
       shareStartRef.current = false;
+      dropShareAudio();
       try {
         media.stop();
       } catch {
@@ -2819,6 +2984,33 @@ function RoomInner({
       setScreenOn(false);
       setHudNotice(screenShareErrorMessage(e));
       return;
+    }
+
+    // Screen audio rides as its own track (source screen_share_audio). Students
+    // subscribe to every teacher track and RoomAudioRenderer plays it; their
+    // own-mic rules are untouched. A failure here never stops the video share.
+    if (shareAudio && shareAudio.readyState === 'live') {
+      const audioTrack = new LocalAudioTrack(shareAudio, undefined, true);
+      try {
+        await enqueueLocalPublish(async () => {
+          await localParticipant.publishTrack(audioTrack, {
+            name: 'screen_audio',
+            source: Track.Source.ScreenShareAudio,
+            // Music / video sound: no DTX gaps, higher bitrate than speech.
+            audioPreset: AudioPresets.music,
+            dtx: false,
+            red: false,
+          });
+        });
+        if (shareWantedRef.current) {
+          screenAudioRef.current = { track: audioTrack, owner: localParticipant };
+        } else {
+          await localParticipant.unpublishTrack(audioTrack, true).catch(() => undefined);
+        }
+      } catch (err) {
+        console.warn('screen share audio', err);
+        safeStop(audioTrack);
+      }
     }
 
     const controls = await controlsReady.catch(() => null);
@@ -2859,7 +3051,9 @@ function RoomInner({
       body: '{}',
     });
     room?.disconnect();
-    router.push(isTeacher ? '/teacher/dashboard' : '/');
+    router.push(
+      isTeacher ? '/teacher/dashboard' : studentHomePath(!!state?.me?.viaSchoolApp || isSchoolStudentTab())
+    );
   }
 
   async function endClass() {
@@ -3263,10 +3457,18 @@ function RoomInner({
           />
         )}
 
-        <div className="stage-float-chrome" data-float-bound="bottom">
+        <div
+          className={cn(
+            'stage-float-chrome',
+            phone === 'landscape' && 'is-rail',
+            phone === 'portrait' && 'is-phone-portrait'
+          )}
+          data-float-bound={phone === 'landscape' ? 'right' : 'bottom'}
+        >
           <Controls
             {...controlsProps}
             variant="float"
+            layout={phone === 'landscape' ? 'rail' : phone === 'portrait' ? 'phone' : undefined}
             onToggleChat={() => {
               setChatOpen((v) => !v);
             }}
@@ -3276,16 +3478,23 @@ function RoomInner({
         </div>
 
         <FloatingPanel
+          key={phone ?? 'desk'}
           title="Chat"
-          storageKey="student_chat"
+          // Separate remembered spot per layout, so a desktop position never
+          // lands a full-size sheet on a phone.
+          storageKey={phone ? `student_chat_${phone}` : 'student_chat'}
           open={chatOpen}
           onClose={() => setChatOpen(false)}
-          width={320}
-          height={420}
-          defaultPos={() => ({
-            x: Math.max(8, window.innerWidth - 340),
-            y: Math.max(8, window.innerHeight - 520),
-          })}
+          width={phoneChatBox(phone, viewportW(), viewportH())?.width ?? 320}
+          height={phoneChatBox(phone, viewportW(), viewportH())?.height ?? 420}
+          defaultPos={() => {
+            const box = phoneChatBox(phone, window.innerWidth, window.innerHeight);
+            if (box) return { x: box.x, y: box.y };
+            return {
+              x: Math.max(8, window.innerWidth - 340),
+              y: Math.max(8, window.innerHeight - 520),
+            };
+          }}
           badge={
             chatUnread > 0 ? (
               <span className="rounded-full bg-brand-500 px-1.5 text-[9px] font-bold text-white">
@@ -3464,6 +3673,7 @@ function RoomInner({
                 annotateMode={annotateMode}
                 annotateColor={annotateColor}
                 localShareSurface={shareSurface}
+                localShareFrozen={shareFrozen}
                 onStopShare={() => void toggleScreen()}
                 localPreview={
                   <LocalPreview
@@ -3756,9 +3966,26 @@ function RoomInner({
             annotateColor={annotateColor}
             onAnnotateColorChange={setAnnotateColor}
             annotateUnavailable={
+              showLocalSharePreview(shareSurface) || freezeSupported()
+                ? undefined
+                : 'Drawing on an entire-screen share is not supported in this browser. Share a window or tab to draw.'
+            }
+            annotateTitle={
               showLocalSharePreview(shareSurface)
                 ? undefined
-                : 'Drawing needs a window or tab share (an entire-screen share has no preview to draw on)'
+                : 'Freeze the screen and draw on it in the classroom tab (students see the still picture with your drawing)'
+            }
+            onAnnotateIntent={
+              showLocalSharePreview(shareSurface)
+                ? undefined
+                : () => {
+                    // Drawing happens on the still in the classroom tab: bring it forward.
+                    try {
+                      window.focus();
+                    } catch {
+                      /* best effort */
+                    }
+                  }
             }
             notice={shareMount ? hudNotice || undefined : undefined}
           />
@@ -3925,15 +4152,16 @@ export function ClassroomRoom({ code }: { code: string }) {
    */
   const goHomeAfterEnd = useCallback(async () => {
     if (isTeacher) return router.push('/teacher/dashboard');
-    let school = schoolStudent;
-    if (school === null) {
+    let school = !!schoolStudent || isSchoolStudentTab();
+    if (!school) {
+      // Ended before we saw `me`, or an older tab: ask for a school session.
       try {
         school = (await fetch('/api/student/check', { cache: 'no-store' })).ok;
       } catch {
         school = false;
       }
     }
-    router.push(school ? '/student' : '/');
+    router.push(studentHomePath(school));
   }, [isTeacher, schoolStudent, router]);
 
   const markEnded = useCallback(() => {
@@ -3994,7 +4222,8 @@ export function ClassroomRoom({ code }: { code: string }) {
       setIsTeacher(false);
     }
 
-    setSchoolStudent(!!state.me?.viaSchoolApp);
+    if (state.me?.viaSchoolApp) markSchoolStudentTab();
+    setSchoolStudent(!!state.me?.viaSchoolApp || isSchoolStudentTab());
     setDisplayName(state.me?.displayName || 'You');
     setCanPublishVideo(!!state.me?.canPublishVideo);
 
@@ -4090,7 +4319,7 @@ export function ClassroomRoom({ code }: { code: string }) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-4 px-6">
         <p className="text-danger-fg">{error}</p>
-        <Button variant="secondary" onClick={() => router.push('/')}>
+        <Button variant="secondary" onClick={() => void goHomeAfterEnd()}>
           Home
         </Button>
       </main>

@@ -85,8 +85,12 @@ export type TeacherShareHudProps = {
   /** Small pill with badges; expands to the full toolbar. */
   compact?: boolean;
   onCompactChange?: (compact: boolean) => void;
-  /** Reason drawing is off (entire-screen share: no stage preview to draw on). */
+  /** Reason drawing is off (browser cannot freeze an entire-screen share). */
   annotateUnavailable?: string;
+  /** Tooltip for Annotate when it works differently (entire screen: freeze-frame). */
+  annotateTitle?: string;
+  /** Called in the Annotate click (user gesture), when turning drawing on. */
+  onAnnotateIntent?: () => void;
   /** Render in the classroom page (monitor capture / no pop-out) instead of a portal. */
   inline?: boolean;
   /**
@@ -340,6 +344,8 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     notice,
     inline = false,
     annotateUnavailable,
+    annotateTitle,
+    onAnnotateIntent,
     compact = false,
     onCompactChange,
     focusAlertCount = 0,
@@ -716,9 +722,12 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
           type="button"
           className="tsh-btn"
           aria-pressed={annotateOn}
-          onClick={() => onAnnotateOnChange(!annotateOn)}
+          onClick={() => {
+            if (!annotateOn) onAnnotateIntent?.();
+            onAnnotateOnChange(!annotateOn);
+          }}
           disabled={!!annotateUnavailable}
-          title={annotateUnavailable || 'Draw on the shared screen'}
+          title={annotateUnavailable || annotateTitle || 'Draw on the shared screen'}
         >
           Annotate
         </button>

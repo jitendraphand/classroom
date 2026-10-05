@@ -29,3 +29,13 @@ test('per-minute helper and nudge merge', () => {
   assert.equal(mergeAudience('teacher', 'all'), 'all');
   assert.equal(mergeAudience(undefined, 'teacher'), 'teacher');
 });
+
+test('mute push decoding', async () => {
+  const { decodeMutePush } = await import('../src/hooks/useRoomState');
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+  assert.equal(decodeMutePush(dec, enc.encode(JSON.stringify({ v: 1, type: 'mute', muted: false }))), false);
+  assert.equal(decodeMutePush(dec, enc.encode(JSON.stringify({ v: 1, type: 'mute', muted: true }))), true);
+  assert.equal(decodeMutePush(dec, enc.encode(JSON.stringify({ v: 1, type: 'state' }))), null);
+  assert.equal(decodeMutePush(dec, enc.encode('nope')), null);
+});

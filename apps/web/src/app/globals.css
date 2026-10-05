@@ -238,6 +238,33 @@ body {
     padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
   }
 
+  /* Phones: slim student controls (see usePhoneLayout). Portrait keeps the
+     bottom pill with less padding; landscape uses a small right-edge rail. */
+  .stage-float-chrome.is-phone-portrait {
+    @apply px-2 pt-2;
+    padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0px));
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.45), transparent);
+  }
+  .control-float.control-float-phone {
+    @apply gap-1 px-2 py-1.5;
+    padding-bottom: max(0.375rem, env(safe-area-inset-bottom, 0px));
+  }
+  .stage-float-chrome.is-rail {
+    inset: auto;
+    top: 0.5rem;
+    right: 0;
+    padding: 0 max(0.375rem, env(safe-area-inset-right, 0px)) 0 0;
+    background: none;
+  }
+  .control-rail {
+    @apply flex flex-col items-center rounded-2xl p-1 shadow-dock backdrop-blur-xl;
+    border: 1px solid var(--border);
+    background: color-mix(in srgb, var(--surface-2) 88%, transparent);
+  }
+  .control-status-pill {
+    @apply pointer-events-none fixed left-1/2 top-2 z-40 -translate-x-1/2 whitespace-nowrap rounded-full border border-amber-400/30 bg-black/70 px-2.5 py-1 text-[10px] font-semibold text-amber-200 backdrop-blur;
+  }
+
   .teacher-float-pane {
     @apply absolute z-[35] aspect-video w-[min(42vw,186px)] overflow-hidden rounded-2xl border border-white/20 bg-black shadow-lift;
     touch-action: none;
@@ -384,7 +411,7 @@ body {
     @apply inline-flex items-center gap-1 rounded-md bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-100 hover:bg-amber-500/30;
   }
   .peer-pin-btn {
-    @apply absolute right-1 top-1 grid h-6 w-6 place-items-center rounded-full bg-black/60 text-slate-200 opacity-0 transition hover:bg-black/80 focus-visible:opacity-100;
+    @apply absolute right-1 top-1 grid h-6 w-6 place-items-center rounded-full bg-black/60 text-slate-200 opacity-50 transition hover:bg-black/80 focus-visible:opacity-100;
   }
   .peers-float-tile:hover .peer-pin-btn,
   .peer-pin-btn.is-pinned {

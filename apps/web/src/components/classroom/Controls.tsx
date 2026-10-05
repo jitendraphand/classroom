@@ -40,6 +40,12 @@ type Props = {
   showScreenShare?: boolean;
   /** Dock sits in the bottom bar; float is a denser floating panel. */
   variant?: 'dock' | 'float';
+  /**
+   * Float only. 'rail': phone landscape, a slim vertical column of small
+   * buttons (status text moves to a small pill at the top). 'phone': portrait
+   * phone, tighter padding.
+   */
+  layout?: 'rail' | 'phone';
   /** Toggle chat floating panel (open ↔ close) */
   onToggleChat?: () => void;
   chatOpen?: boolean;
@@ -77,6 +83,7 @@ export function Controls({
   micLockReason,
   showScreenShare = true,
   variant = 'dock',
+  layout,
   onToggleChat,
   chatOpen = false,
   chatUnread = 0,
@@ -92,17 +99,29 @@ export function Controls({
   const lockReason = !isTeacher && micLockReason ? micLockReason : null;
   const micLocked = teacherMuted || !!lockReason;
   const isFloat = variant === 'float';
+  const rail = isFloat && layout === 'rail';
+  const btn = rail ? ('sm' as const) : undefined;
 
   return (
+    <>
     <div
       className={cn(
-        isFloat
-          ? 'control-float mx-auto w-auto max-w-[95vw]'
-          : 'control-dock mx-auto w-full max-w-5xl'
+        rail
+          ? 'control-rail'
+          : isFloat
+            ? cn('control-float mx-auto w-auto max-w-[95vw]', layout === 'phone' && 'control-float-phone')
+            : 'control-dock mx-auto w-full max-w-5xl'
       )}
     >
-      <div className={cn('flex flex-wrap items-center justify-center', isFloat ? 'gap-1.5' : 'gap-2')}>
+      <div
+        className={cn(
+          'flex items-center justify-center',
+          rail ? 'flex-col gap-1' : 'flex-wrap',
+          !rail && (isFloat ? 'gap-1.5' : 'gap-2')
+        )}
+      >
         <IconButton
+          size={btn}
           label={
             teacherMuted
               ? 'Muted by teacher'
@@ -124,6 +143,7 @@ export function Controls({
         </IconButton>
 
         <IconButton
+          size={btn}
           label={camOn ? 'Turn camera off' : 'Turn camera on'}
           active={camOn}
           danger={!camOn}
@@ -151,6 +171,7 @@ export function Controls({
 
         {!isTeacher && onToggleHand && (
           <IconButton
+            size={btn}
             label={handRaised ? 'Lower hand' : 'Raise hand'}
             active={!!handRaised}
             onClick={onToggleHand}
@@ -161,6 +182,7 @@ export function Controls({
 
         {onToggleChat && (
           <IconButton
+            size={btn}
             label={chatOpen ? 'Close chat' : 'Open chat'}
             active={chatOpen}
             onClick={onToggleChat}
@@ -214,7 +236,7 @@ export function Controls({
           </Button>
         )}
 
-        <IconButton label="Leave class" danger onClick={onLeave}>
+        <IconButton size={btn} label="Leave class" danger onClick={onLeave}>
           <IconLeave />
         </IconButton>
 
@@ -225,11 +247,21 @@ export function Controls({
         )}
       </div>
 
-      {micLocked && (
-        <p className="mt-2 w-full text-center text-2xs text-amber-200/90" role="status">
+      {micLocked && !rail && (
+        <p
+          className={cn('w-full text-center text-2xs text-amber-200/90', layout === 'phone' ? 'mt-1' : 'mt-2')}
+          role="status"
+        >
           {teacherMuted ? 'Muted by teacher — wait to be unmuted' : lockReason}
         </p>
       )}
     </div>
+    {micLocked && rail && (
+      // Outside the rail (its backdrop-filter would trap position: fixed).
+      <p className="control-status-pill" role="status">
+        {teacherMuted ? 'Muted by teacher' : lockReason}
+      </p>
+    )}
+    </>
   );
 }

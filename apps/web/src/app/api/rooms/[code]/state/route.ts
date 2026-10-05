@@ -200,6 +200,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
         displayName: me.displayName,
         role: me.role,
         status: me.status,
+        viaSchoolApp: !!me.studentId,
         livekitIdentity: me.livekitIdentity,
         mutedByTeacher: me.mutedByTeacher || mutedIds.includes(me.id),
         canPublishVideo,
