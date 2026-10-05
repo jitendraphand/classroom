@@ -54,6 +54,8 @@ type Props = {
   onToggleRoster?: () => void;
   rosterOpen?: boolean;
   rosterBadge?: number;
+  /** Teacher: raised hands, badged on the roster button while it is closed. */
+  handsCount?: number;
   /** Student raise-hand */
   handRaised?: boolean;
   onToggleHand?: () => void;
@@ -90,6 +92,7 @@ export function Controls({
   onToggleRoster,
   rosterOpen = false,
   rosterBadge = 0,
+  handsCount = 0,
   handRaised,
   onToggleHand,
   onPrepareScreenShare,
@@ -200,12 +203,27 @@ export function Controls({
 
         {isTeacher && onToggleRoster && (
           <IconButton
-            label={rosterOpen ? 'Close roster' : 'Open roster'}
+            label={
+              rosterOpen
+                ? 'Close roster'
+                : handsCount > 0
+                  ? `Open roster (${handsCount} raised ${handsCount === 1 ? 'hand' : 'hands'})`
+                  : 'Open roster'
+            }
             active={rosterOpen}
             onClick={onToggleRoster}
           >
             <span className="relative inline-flex">
               <IconUsers />
+              {!rosterOpen && handsCount > 0 && (
+                <span
+                  className="absolute -bottom-1.5 -left-2 flex h-4 min-w-4 items-center justify-center gap-px rounded-full bg-amber-400 px-0.5 text-[9px] font-bold text-ink-950"
+                  aria-hidden
+                >
+                  <IconHand size={9} />
+                  {handsCount > 9 ? '9+' : handsCount}
+                </span>
+              )}
               {!rosterOpen && rosterBadge > 0 && (
                 <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-0.5 text-[9px] font-bold text-white">
                   {rosterBadge > 9 ? '9+' : rosterBadge}

@@ -69,7 +69,15 @@ import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageLoading } from '@/components/ui/Skeleton';
 import { IconDoor, IconHand, IconHandDown, IconMic, IconMicOff, IconPin, IconScreen, IconUserPlus, IconUsers, IconVideo } from '@/components/ui/Icons';
-import { pickTiles, sortRoster } from '@/lib/classSlots';
+import {
+  panelSlotsForCap,
+  pickTiles,
+  sortRoster,
+  studentCapForSlots,
+  teacherTabTitle,
+  videosShown,
+  type PanelSlots,
+} from '@/lib/classSlots';
 import { cn } from '@/lib/cn';
 import {
   closeAllSideWindows,
@@ -205,7 +213,9 @@ function ParticipantGrid({
   localShareSurface = '',
   localShareFrozen = false,
   onStopShare,
+  entireShareInfo,
 }: {
+  entireShareInfo?: EntireShareInfo;
   /** Entire-screen share frozen for drawing: the local share is a still, safe to preview. */
   localShareFrozen?: boolean;
   /** What this teacher tab is capturing; decides whether the local share may be previewed. */
@@ -284,7 +294,11 @@ function ParticipantGrid({
         >
           {screenShares.map((t) =>
             t.participant.isLocal && !showLocalSharePreview(localShareSurface) && !localShareFrozen ? (
-              <EntireScreenShareCard key={`${t.participant.identity}-${t.source}`} onStop={onStopShare} />
+              <EntireScreenShareCard
+                key={`${t.participant.identity}-${t.source}`}
+                onStop={onStopShare}
+                info={entireShareInfo}
+              />
             ) : (
             <TeacherShareTile
               key={`${t.participant.identity}-${t.source}`}
@@ -351,7 +365,17 @@ function ParticipantGrid({
  * "infinite tunnel"), so the teacher gets a static card instead. Students,
  * admin tiles and the observer render the remote track and are unaffected.
  */
-function EntireScreenShareCard({ onStop }: { onStop?: () => void }) {
+export type EntireShareInfo = {
+  /** Share controls (Annotate, hands, chat) are docked in this tab, not floating on the screen. */
+  controlsInTab: boolean;
+  hands: number;
+  /** Freeze-draw available: turn Annotate on from the card. */
+  onAnnotate?: () => void;
+};
+
+function EntireScreenShareCard({ onStop, info }: { onStop?: () => void; info?: EntireShareInfo }) {
+  const controlsInTab = info?.controlsInTab ?? true;
+  const hands = info?.hands ?? 0;
   return (
     <div className="video-tile relative flex h-full min-h-0 w-full items-center justify-center overflow-hidden bg-ink-950 p-4">
       <div className="max-w-md rounded-2xl border border-white/10 bg-surface-1/90 p-5 text-center shadow-lift">
@@ -360,16 +384,36 @@ function EntireScreenShareCard({ onStop }: { onStop?: () => void }) {
         </div>
         <p className="font-display text-base font-semibold">You&apos;re sharing your entire screen</p>
         <p className="mt-1.5 text-xs leading-relaxed text-slate-400">
-          Students see your screen live. The preview is hidden here so it is not captured again
-          (an endless tunnel). Minimise this window or switch to what you want to show. Share a
-          window or a tab instead to see a live preview and draw on it.
+          Students see your screen live. Your own preview is hidden here so it is not captured again.
         </p>
-        {onStop && (
-          <Button className="mt-4" variant="danger" size="sm" onClick={onStop}>
-            <IconScreen size={14} />
-            Stop sharing
-          </Button>
+        <p className="mt-2 text-xs leading-relaxed text-slate-300">
+          <span className="font-semibold text-slate-100">To draw:</span> press Annotate. The screen freezes
+          for students and you draw on the still picture right here; turn Annotate off to go live again.
+        </p>
+        <p className="mt-2 text-xs leading-relaxed text-slate-400">
+          {controlsInTab
+            ? 'Annotate, raised hands and chat are in Share controls in this tab. Keep this tab where you can reach it (beside your slides or on a second monitor) instead of minimising it; the tab title shows new hands and messages.'
+            : 'Share controls float on your screen (hidden from students), so Annotate, raised hands and chat stay in reach while you present.'}
+        </p>
+        {hands > 0 && (
+          <p className="mt-2 inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-2xs font-semibold text-amber-200">
+            <IconHand size={12} />
+            {hands} raised {hands === 1 ? 'hand' : 'hands'}
+          </p>
         )}
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+          {info?.onAnnotate && (
+            <Button size="sm" variant="secondary" onClick={info.onAnnotate}>
+              Annotate (freeze &amp; draw)
+            </Button>
+          )}
+          {onStop && (
+            <Button variant="danger" size="sm" onClick={onStop}>
+              <IconScreen size={14} />
+              Stop sharing
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -554,13 +598,13 @@ function displaySurfaceOf(track: MediaStreamTrack | null | undefined): string {
 }
 
 const MONITOR_SHARE_HINT =
-  'You are sharing your entire screen, so the controls stay in this tab (this browser cannot hide a floating window from the capture). Use Chrome or Edge, or share a window or a tab, to get floating controls.';
+  'Entire screen: this browser cannot hide a floating window from the capture, so Share controls (Annotate, raised hands, chat) stay in this tab. Keep it beside what you present instead of minimising it. Chrome or Edge can float them.';
 const MONITOR_SCREENS_HINT =
-  'Several monitors: the floating controls need the "Window management" permission to be hidden from students, so they stay in this tab for now. Allow it, then start the share again.';
+  'Several monitors: Share controls can float on your screen once you allow "Window management" (so they can be hidden from students). Until then they stay in this tab — allow it, then start the share again.';
 const MONITOR_POSITION_HINT =
-  'You are sharing your entire screen and this system does not tell the browser where windows are (Linux on Wayland), so the floating controls cannot be hidden from students. They stay in this tab. Share a window or a tab to get floating controls.';
+  'Entire screen on a system that does not report window positions (Linux on Wayland): Share controls stay in this tab so students never see them. Keep this tab in reach to annotate and see hands.';
 const MONITOR_UNSAFE_HINT =
-  'The floating controls were closed because their position on the shared screen could not be tracked. They are here in this tab instead.';
+  'Share controls moved into this tab because their spot on the shared screen could not be tracked (students must never see them). Annotate, raised hands and chat are here; the tab title shows new hands and messages.';
 
 type MaskFallback = '' | 'unsupported' | 'screens' | 'unsafe' | 'position';
 
@@ -971,6 +1015,7 @@ function TeacherPeersFloat({
   selfName,
   selfStream,
   onSlotsChange,
+  slots: slotsProp,
   dock = null,
   sharing = false,
   onDockSpace,
@@ -997,6 +1042,8 @@ function TeacherPeersFloat({
   selfStream: MediaStream | null;
   /** Student-camera count that fills this window (tiles minus the teacher). */
   onSlotsChange?: (studentSlots: number) => void;
+  /** Panel size chosen by the room (synced with the server student cap). */
+  slots?: PanelSlots | null;
   /**
    * Stage rectangle (viewport px). The panel docks to the stage's top-left
    * corner (no dragging) and reports the room it needs via onDockSpace so the
@@ -1025,6 +1072,11 @@ function TeacherPeersFloat({
     }
     return 4;
   });
+  useEffect(() => {
+    if (slotsProp && slotsProp !== slotCount) setSlotCount(slotsProp);
+    // Only follow the room's value when it changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slotsProp]);
   const [minimized, setMinimized] = useState(() => {
     try {
       return sessionStorage.getItem(`peers_min_${roomCode.toUpperCase()}`) === '1';
@@ -1438,10 +1490,10 @@ function TeacherPeersFloat({
                 )}
                 onClick={() => {
                   setSlotCount(n);
-                  onSlotsChange?.(n - 1);
+                  onSlotsChange?.(studentCapForSlots(n));
                 }}
                 aria-label={`Show ${n} videos`}
-                title={`Show ${n} videos, including you`}
+                title={`Show ${n} videos: you + ${n - 1} student${n - 1 === 1 ? '' : 's'}`}
               >
                 {n}
               </button>
@@ -2239,12 +2291,26 @@ function RoomInner({
   /** Student-camera cap chosen from the float, shown before the next poll confirms it. */
   const [sampleCap, setSampleCap] = useState<number | null>(null);
   const capQueue = useRef(Promise.resolve());
+  /** Class panel size (2/4/6 tiles, teacher included); student cap = slots − 1. */
+  const [panelSlots, setPanelSlots] = useState<PanelSlots | null>(() => {
+    try {
+      const v = sessionStorage.getItem(`peers_slots_${code.toUpperCase()}`);
+      if (v === '2' || v === '4' || v === '6') return Number(v) as PanelSlots;
+    } catch {
+      /* ignore */
+    }
+    return null;
+  });
+  const panelCapSynced = useRef(false);
   const chatStopped = state?.status === 'ENDED' || !!state?.ended;
   const chatActive = (isTeacher ? chatOpen && !screenOn : chatOpen) || hudChatOpen;
   const myParticipantId = state?.me?.id ?? null;
   const chatStudents = (state?.admitted ?? [])
     .filter((a) => a.role === 'STUDENT')
     .map((a) => ({ id: a.id, displayName: a.displayName }));
+  /** Teacher chat recipient, shared by the dock panel and the share HUD; it
+   * stays on the chosen student after each send (Reply / hand chip set it). */
+  const [chatTo, setChatTo] = useState<'all' | string>('all');
   const chatThread = useChatThread({
     code,
     isTeacher,
@@ -3171,6 +3237,20 @@ function RoomInner({
     refresh();
   }
 
+  // One unit for the panel buttons and the header: on entry, size the panel
+  // from the room's student cap (dashboard value) unless this tab already
+  // chose one, then make the server cap match the panel (slots − 1) once.
+  const serverCap = state?.maxVisibleVideos;
+  useEffect(() => {
+    if (!isTeacher || !serverCap) return;
+    const slots = panelSlots ?? panelSlotsForCap(serverCap);
+    if (!panelSlots) setPanelSlots(slots);
+    if (panelCapSynced.current) return;
+    panelCapSynced.current = true;
+    if (serverCap !== studentCapForSlots(slots)) setStudentCameraCap(studentCapForSlots(slots));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTeacher, serverCap, panelSlots]);
+
   function setStudentCameraCap(studentSlots: number) {
     const maxVisibleVideos = Math.min(6, Math.max(1, studentSlots));
     setSampleCap(maxVisibleVideos);
@@ -3224,6 +3304,26 @@ function RoomInner({
     (state?.admitted ?? [])
       .filter((p) => p.role === 'STUDENT')
       .map((p) => ({ ...p, handRaised: !!(p.handRaised || (state?.raisedHands ?? []).includes(p.id)) }))
+  );
+  /** Raised hands, earliest first: shown in the chat panel so they stay in
+   * sight while the roster is closed. */
+  const raisedHands = rosterStudents
+    .filter((p) => p.handRaised)
+    .map((p) => ({ id: p.id, displayName: p.displayName }));
+  // Teacher: raised hands and unread chat in the tab title, so they show in
+  // the tab strip / taskbar while the teacher looks at the shared display.
+  const handsN = isTeacher ? raisedHands.length : 0;
+  const unreadN = isTeacher ? chatUnread : 0;
+  useEffect(() => {
+    if (!isTeacher || typeof document === 'undefined') return;
+    const base = document.title.replace(/^\([^)]*\)\s*/, '');
+    document.title = teacherTabTitle(base, handsN, unreadN);
+  }, [isTeacher, handsN, unreadN]);
+  useEffect(
+    () => () => {
+      if (typeof document !== 'undefined') document.title = document.title.replace(/^\([^)]*\)\s*/, '');
+    },
+    []
   );
   const focusAlertCount = countFocusAlerts((state?.admitted ?? []).filter((a) => a.role === 'STUDENT'));
   /** LiveKit identity → fullscreen alert label, for the Class panel tiles. */
@@ -3482,7 +3582,7 @@ function RoomInner({
           title="Chat"
           // Separate remembered spot per layout, so a desktop position never
           // lands a full-size sheet on a phone.
-          storageKey={phone ? `student_chat_${phone}` : 'student_chat'}
+          storageKey={phone ? `student_chat_${phone}_v2` : 'student_chat'}
           open={chatOpen}
           onClose={() => setChatOpen(false)}
           width={phoneChatBox(phone, viewportW(), viewportH())?.width ?? 320}
@@ -3508,6 +3608,7 @@ function RoomInner({
             isTeacher={false}
             myParticipantId={myParticipantId}
             students={chatStudents}
+            compact={!!phone}
           />
         </FloatingPanel>
       </div>
@@ -3568,7 +3669,14 @@ function RoomInner({
             {isTeacher ? (
               <>
                 {' · '}
-                {visibles.length}/{Math.min(sampleCap ?? state?.maxVisibleVideos ?? 6, 6)} videos shown
+                <span title="Tiles in the Class panel, including you (the 2 / 4 / 6 buttons use the same count)">
+                  {(() => {
+                    const slots =
+                      panelSlots ?? panelSlotsForCap(sampleCap ?? state?.maxVisibleVideos ?? 5);
+                    const v = videosShown(visibles.length, slots);
+                    return `${v.shown}/${v.total} videos shown`;
+                  })()}
+                </span>
                 {' · '}
                 {studentCount} student{studentCount === 1 ? '' : 's'}
                 {waitingCount > 0 ? ` · ${waitingCount} waiting` : ''}
@@ -3675,6 +3783,11 @@ function RoomInner({
                 localShareSurface={shareSurface}
                 localShareFrozen={shareFrozen}
                 onStopShare={() => void toggleScreen()}
+                entireShareInfo={{
+                  controlsInTab: !shareMount,
+                  hands: raisedHands.length,
+                  onAnnotate: freezeSupported() ? () => setAnnotateOn(true) : undefined,
+                }}
                 localPreview={
                   <LocalPreview
                     stream={localCamStream}
@@ -3853,9 +3966,22 @@ function RoomInner({
             y: Math.max(8, window.innerHeight - 540),
           })}
           badge={
-            chatUnread > 0 ? (
-              <span className="rounded-full bg-brand-500 px-1.5 text-[9px] font-bold text-white">
-                {chatUnread > 9 ? '9+' : chatUnread}
+            chatUnread > 0 || raisedHands.length > 0 ? (
+              <span className="inline-flex items-center gap-1">
+                {raisedHands.length > 0 && (
+                  <span
+                    className="inline-flex items-center gap-0.5 rounded-full bg-amber-500 px-1.5 text-[9px] font-bold text-white"
+                    title={`${raisedHands.length} raised ${raisedHands.length === 1 ? 'hand' : 'hands'}`}
+                  >
+                    <IconHand size={9} />
+                    {raisedHands.length}
+                  </span>
+                )}
+                {chatUnread > 0 && (
+                  <span className="rounded-full bg-brand-500 px-1.5 text-[9px] font-bold text-white">
+                    {chatUnread > 9 ? '9+' : chatUnread}
+                  </span>
+                )}
               </span>
             ) : null
           }
@@ -3865,6 +3991,10 @@ function RoomInner({
             isTeacher
             myParticipantId={myParticipantId}
             students={chatStudents}
+            to={chatTo}
+            onToChange={setChatTo}
+            raisedHands={raisedHands}
+            onLowerHand={(id) => void lowerHand(id)}
           />
         </FloatingPanel>
       </div>
@@ -3875,7 +4005,11 @@ function RoomInner({
         visibleIdentities={visibles}
         selfName={displayName}
         selfStream={localCamStream}
-        onSlotsChange={(slots) => void setStudentCameraCap(slots)}
+        slots={panelSlots}
+        onSlotsChange={(studentSlots) => {
+          setPanelSlots(panelSlotsForCap(studentSlots));
+          void setStudentCameraCap(studentSlots);
+        }}
         dock={dockArea}
         sharing={shareLayout}
         onDockSpace={onDockSpace}
@@ -3956,6 +4090,10 @@ function RoomInner({
                 isTeacher
                 myParticipantId={myParticipantId}
                 students={chatStudents}
+                to={chatTo}
+                onToChange={setChatTo}
+                raisedHands={raisedHands}
+                onLowerHand={(id) => void lowerHand(id)}
               />
             }
             annotate={annotate}
@@ -4009,6 +4147,7 @@ function RoomInner({
           onToggleRoster={screenOn ? undefined : toggleRoster}
           rosterOpen={rosterOpen}
           rosterBadge={waitingCount}
+          handsCount={raisedHands.length}
         />
       </footer>
     </div>

@@ -191,3 +191,18 @@ export function IconDoor(p: P) {
     </svg>
   );
 }
+
+/** Reply: a curved arrow pointing back. */
+export function IconReply(p: P) {
+  return (
+    <svg {...base(p)}>
+      <path
+        d="M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}

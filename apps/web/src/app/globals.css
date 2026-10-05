@@ -386,6 +386,29 @@ body {
   .roster-chip-red {
     @apply bg-red-500/15 text-red-200;
   }
+
+  /* Chat: raised hands strip (teacher) and per-message Reply. */
+  .chat-hands {
+    @apply flex items-start gap-1.5 rounded-lg border border-amber-400/30 bg-amber-500/10 px-1.5 py-1;
+  }
+  .chat-hands-label {
+    @apply inline-flex shrink-0 items-center gap-0.5 pt-0.5 text-[10px] font-bold text-amber-200;
+  }
+  .chat-hands-list {
+    @apply flex max-h-[46px] min-w-0 flex-1 flex-wrap gap-1 overflow-y-auto;
+  }
+  .chat-hand-chip {
+    @apply inline-flex max-w-full items-center overflow-hidden rounded-full bg-amber-500/20 text-[10px] font-semibold leading-5 text-amber-100;
+  }
+  .chat-hand-name {
+    @apply max-w-[110px] truncate px-1.5 hover:underline;
+  }
+  .chat-hand-lower {
+    @apply inline-flex h-5 w-5 items-center justify-center border-l border-amber-300/20 text-amber-200 hover:bg-amber-400/20;
+  }
+  .chat-reply-btn {
+    @apply inline-flex h-5 w-5 items-center justify-center rounded text-sky-300 hover:bg-sky-400/10 hover:text-sky-200;
+  }
   .roster-actions {
     @apply ml-auto flex shrink-0 items-center gap-0.5;
   }

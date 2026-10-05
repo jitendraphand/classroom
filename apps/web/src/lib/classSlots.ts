@@ -110,3 +110,39 @@ export function sortRoster<T extends RosterPerson>(people: T[]): T[] {
     return a.displayName.localeCompare(b.displayName);
   });
 }
+
+/**
+ * Teacher Class panel: the 2 / 4 / 6 buttons count TILES IN THE PANEL,
+ * INCLUDING THE TEACHER'S OWN TILE. So "6" = you + 5 student cameras, and the
+ * room's student cap (Room.maxVisibleVideos) is always `slots - 1`. The header
+ * "X/Y videos shown" uses the same unit (Y = slots, X = you + students
+ * actually on screen), so pressing 6 reads ".../6".
+ */
+export type PanelSlots = 2 | 4 | 6;
+
+/** Pure: the panel size for a room's student cap (dashboard value), rounded down. */
+export function panelSlotsForCap(studentCap: number): PanelSlots {
+  const tiles = Math.floor(Number.isFinite(studentCap) ? studentCap : 5) + 1;
+  if (tiles >= 6) return 6;
+  if (tiles >= 4) return 4;
+  return 2;
+}
+
+/** Pure: student cap that matches a panel size. */
+export function studentCapForSlots(slots: PanelSlots): number {
+  return slots - 1;
+}
+
+/** Pure: header numbers for "X/Y videos shown" (both include the teacher tile). */
+export function videosShown(visibleStudents: number, slots: PanelSlots): { shown: number; total: number } {
+  const students = Math.max(0, Math.min(visibleStudents, slots - 1));
+  return { shown: students + 1, total: slots };
+}
+
+/** Pure: teacher tab title with raised hands / unread chat, e.g. "(✋2 · 3 new) Classroom". */
+export function teacherTabTitle(base: string, hands: number, unread: number): string {
+  const parts: string[] = [];
+  if (hands > 0) parts.push(`✋${hands}`);
+  if (unread > 0) parts.push(`${unread > 9 ? '9+' : unread} new`);
+  return parts.length ? `(${parts.join(' · ')}) ${base}` : base;
+}

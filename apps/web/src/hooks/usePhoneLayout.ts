@@ -33,15 +33,30 @@ export function usePhoneLayout(): PhoneLayout {
   return layout;
 }
 
-/** Pure: student chat sheet box for a phone layout (never the whole stage). */
+/** Bottom room kept free for the portrait control pill (and its muted caption). */
+export const PORTRAIT_CONTROLS_RESERVE = 100;
+
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+/**
+ * Pure: student chat sheet box for a phone layout. Short on purpose so the
+ * shared screen and the teacher's drawing stay visible (target ≈ 20% of the
+ * screen; the desktop panel on tablets is ≈ 13%).
+ *  - Landscape: a narrow card in the bottom-left corner (the control rail is
+ *    on the right). ≈ 17% of 844×390 / 915×412.
+ *  - Portrait: a short full-width strip just above the control pill, i.e. in
+ *    the letterbox under a 16:9 share. ≈ 21% of 390×844 / 412×915.
+ */
 export function phoneChatBox(layout: PhoneLayout, vw: number, vh: number) {
   if (layout === 'landscape') {
-    // Side panel on the left; the control rail sits on the right.
-    return { width: Math.round(Math.min(vw * 0.46, 360)), height: Math.max(160, vh - 16), x: 8, y: 8 };
+    const width = Math.round(clamp(vw * 0.28, 200, 260));
+    const height = Math.round(clamp(vh * 0.62, 170, 280));
+    return { width, height, x: 8, y: Math.max(8, vh - height - 8) };
   }
   if (layout === 'portrait') {
-    const height = Math.round(vh * 0.5);
-    return { width: Math.max(200, vw - 16), height, x: 8, y: Math.max(8, vh - height - 120) };
+    const height = Math.round(clamp(vh * 0.22, 160, 210));
+    const width = Math.max(200, vw - 16);
+    return { width, height, x: 8, y: Math.max(8, vh - height - PORTRAIT_CONTROLS_RESERVE) };
   }
   return null;
 }
