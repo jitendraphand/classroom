@@ -35,7 +35,7 @@ Semantic chips on video/roster:
 - Teacher auth, create room, waiting-room admit
 - Selective student video sample + rotate + speaker pin
 - Mute / mute-all / unmute-all (teacher-only unmute)
-- Screen share with annotations, chat (student→teacher, teacher broadcast/DM)
+- Screen share, chat (student→teacher, teacher broadcast/DM)
 - Join-as-student without teacher session hijack (`act-as`)
 
 No recording, no new backend features, no LiveKit publish-rule changes.

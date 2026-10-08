@@ -19,7 +19,7 @@ const sans = Inter({
 export const metadata: Metadata = {
   title: 'Classroom — Live Online Teaching',
   description:
-    'Premium live classes with selective student video, screen share with annotations, and privacy-minded bandwidth controls.',
+    'Premium live classes with selective student video, screen share, and privacy-minded bandwidth controls.',
   icons: {
     icon: [
       { url: '/favicon.ico', sizes: '32x32' },

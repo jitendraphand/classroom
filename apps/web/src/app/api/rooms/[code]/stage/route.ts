@@ -28,11 +28,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     const redis = await ensureRedis();
     await redis.set(keys.stage(code), mode, 'EX', STAGE_TTL);
 
-    // Annotations belong to the share session. Leaving screen must wipe them.
-    if (mode !== 'screen') {
-      await redis.del(keys.annotate(code));
-    }
-
     nudgeRoomState(room.code, 'all');
     return jsonOk({ ok: true, stageMode: mode });
   } catch (e) {

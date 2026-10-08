@@ -73,13 +73,13 @@ Use two browsers (or normal + incognito). Start from a healthy stack (`GET /api/
 - [ ] Stop sharing restores grid
 - [ ] Student can share; teacher sees large tile
 
-## J. Screen share + annotate
+## J. Screen share
 - [ ] Teacher: one click Share screen starts share + slim Share bar
 - [ ] Teacher-only: students never see the Share bar
-- [ ] Annotate draws on shared screen; student sees strokes
+- [ ] Video mode: a playing video is smooth for students, share audio audible
 - [ ] Chat / roster / hands open from Share bar icons only while sharing
 - [ ] Mobile: if getDisplayMedia blocked, HUD shows a clear reason (not silent no-op)
-- [ ] Stop share clears annotations and returns stage to idle
+- [ ] Stop share returns stage to idle
 
 
 ## K. Chat

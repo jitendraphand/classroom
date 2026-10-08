@@ -93,8 +93,7 @@ export function StudentViewStage({
     <div className={cn('relative h-full w-full overflow-hidden bg-ink-950', className)}>
       {screen ? (
         <>
-          {/* Read-only annotation layer only in the full observer view. */}
-          <TeacherScreenStage teacherIdentities={[]} code={code} active={!compact} />
+          <TeacherScreenStage teacherIdentities={[]} />
           {!compact && camera && (
             <ObserverCameraFloat>
               <VideoTrack trackRef={camera} className="pointer-events-none h-full w-full object-cover" />

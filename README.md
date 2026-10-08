@@ -1,6 +1,6 @@
 # Classroom — Live Online Teaching (MVP)
 
-Privacy-minded live classes: teachers sign in, students join with a room code, waiting-room admit, **selective student video** (only a rotating sample publishes to LiveKit), screen share with annotations, **in-class chat** (student→teacher + teacher broadcast/DM), screen share, mute controls. **No recording.**
+Privacy-minded live classes: teachers sign in, students join with a room code, waiting-room admit, **selective student video** (only a rotating sample publishes to LiveKit), **in-class chat** (student→teacher + teacher broadcast/DM), screen share, mute controls. **No recording.**
 
 ## Architecture
 
@@ -25,7 +25,7 @@ flowchart LR
 | **web** | Next.js 14 App Router — teacher/student UI, auth, room APIs, sample rotation |
 | **livekit** | Open-source WebRTC SFU |
 | **postgres** | Teachers, rooms, participants, chat messages |
-| **redis** | Waiting/admitted sets, visible-sample identities, screen-annotate snapshots |
+| **redis** | Waiting/admitted sets, visible-sample identities, stage, hands |
 
 > **Networking:** `docker-compose.yml` uses `network_mode: host` on a single Linux VM so LiveKit WebRTC UDP/TCP bind on the host NICs and services talk over `127.0.0.1`. Ideal for local demos **and** bare public-IP VPS deploys (see [docs/DEPLOY-VPS.md](docs/DEPLOY-VPS.md)). Optional **Caddy** TLS uses the same host networking via Compose profile `tls` ([docs/DEPLOY-CADDY.md](docs/DEPLOY-CADDY.md)).
 
@@ -62,9 +62,8 @@ When the teacher shares their screen and needs to switch to another app, the
 **Share HUD** keeps every class control reachable. It auto-opens when the share
 starts and floats in its own window:
 
-- **Annotate** on top of the shared screen (pen / highlighter / eraser / clear).
-  Students see the strokes composited over the share, on the `screen` stage —
-  annotations draw on the shared screen (no separate whiteboard).
+- **Video mode**: tune the share for a playing video (smooth 30 fps, share
+  audio) instead of sharp slides/text.
 - **Chat** (teacher rules unchanged), **raised hands** with Lower, and
   **per-student mute** plus mute-all / unmute-all.
 
@@ -213,7 +212,7 @@ curl -s http://localhost:3000/api/health
    `node apps/web/scripts/make-join-link.mjs …` (see docs/SCHOOL_APP_INTEGRATION.md §6) → waiting room.
    (Or set `ALLOW_MANUAL_STUDENT_JOIN=true` for the old http://localhost:3000/join/{CODE} → name flow.)
 5. Teacher **N waiting · Admit** (or Roster → Admit / Admit all) → student enters class (floating teacher cam + float controls)
-6. Try **Chat**, mute / mute-all, screen share + annotate, **Rotate sample**, speak as a student to force pin into sample
+6. Try **Chat**, mute / mute-all, screen share (+ Video mode), **Rotate sample**, speak as a student to force pin into sample
 
 ### Stop
 
@@ -352,7 +351,6 @@ Targets: ~20 concurrent rooms × ~150 attendees. Selective publish is the main l
 
 ## Known limitations (MVP)
 
-- Screen-share annotations use **LiveKit reliable data messages** plus a Redis snapshot for late joiners.
 - Chat persists in Postgres while the room is LIVE/WAITING; GET returns empty after ENDED. No student-to-student chat.
 - Local demos keep `use_external_ip: false`; VPS deploys set it `true` (and usually `LIVEKIT_NODE_IP`) via `configure-public-ip.sh`.
 - Bare HTTP on a public IP works (cookies `Secure=false`); browsers may still warn about camera/mic permissions compared to HTTPS. Prefer domain + Caddy (`--profile tls`) for production.

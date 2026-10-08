@@ -40,7 +40,6 @@ import { SESSION_CHECK_EVENT, SESSION_ENDED_EVENT, isEndedReason, loginHref } fr
 import { useRoomState, type RosterInfo } from '@/hooks/useRoomState';
 import { phoneChatBox, usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { shortName } from '@/lib/displayNames';
-import { freezeSupported, shouldFreezeShare, snapshotTrack, startBackgroundStills, stillTrack, type FrozenStill } from '@/lib/shareFreeze';
 import { Controls } from './Controls';
 import { LocalPreview } from './LocalPreview';
 import { ChatView, useChatThread } from './Chat';
@@ -55,7 +54,6 @@ import {
   startMaskPipeline,
   type MaskPipeline,
 } from '@/lib/screenMaskPipeline';
-import { ScreenAnnotator, useScreenAnnotate, ANNOTATE_COLORS, type AnnotateMode } from './ScreenAnnotator';
 import {
   InlineShareDock,
   TeacherShareHud,
@@ -206,18 +204,11 @@ function ParticipantGrid({
   localPreview,
   teacherIdentities,
   visibleIdentities: _visibleIdentities,
-  annotate,
-  annotateOn,
-  annotateMode,
-  annotateColor,
   localShareSurface = '',
-  localShareFrozen = false,
   onStopShare,
   entireShareInfo,
 }: {
   entireShareInfo?: EntireShareInfo;
-  /** Entire-screen share frozen for drawing: the local share is a still, safe to preview. */
-  localShareFrozen?: boolean;
   /** What this teacher tab is capturing; decides whether the local share may be previewed. */
   localShareSurface?: string;
   onStopShare?: () => void;
@@ -225,10 +216,6 @@ function ParticipantGrid({
   isTeacher: boolean;
   localPreview: ReactNode;
   teacherIdentities: string[];
-  annotate?: ReturnType<typeof useScreenAnnotate>;
-  annotateOn?: boolean;
-  annotateMode?: AnnotateMode;
-  annotateColor?: string;
 }) {
   void _visibleIdentities;
   const tracks = useTracks(
@@ -293,22 +280,14 @@ function ParticipantGrid({
           )}
         >
           {screenShares.map((t) =>
-            t.participant.isLocal && !showLocalSharePreview(localShareSurface) && !localShareFrozen ? (
+            t.participant.isLocal && !showLocalSharePreview(localShareSurface) ? (
               <EntireScreenShareCard
                 key={`${t.participant.identity}-${t.source}`}
                 onStop={onStopShare}
                 info={entireShareInfo}
               />
             ) : (
-            <TeacherShareTile
-              key={`${t.participant.identity}-${t.source}`}
-              trackRef={t}
-              canAnnotate={!!isTeacher && !!t.participant.isLocal && !!annotate}
-              annotate={annotate}
-              annotateOn={!!annotateOn}
-              annotateMode={annotateMode || 'pen'}
-              annotateColor={annotateColor || ANNOTATE_COLORS[0]}
-            />
+            <TeacherShareTile key={`${t.participant.identity}-${t.source}`} trackRef={t} />
             )
           )}
         </div>
@@ -366,11 +345,9 @@ function ParticipantGrid({
  * admin tiles and the observer render the remote track and are unaffected.
  */
 export type EntireShareInfo = {
-  /** Share controls (Annotate, hands, chat) are docked in this tab, not floating on the screen. */
+  /** Share controls (hands, chat, roster) are docked in this tab, not floating on the screen. */
   controlsInTab: boolean;
   hands: number;
-  /** Freeze-draw available: turn Annotate on from the card. */
-  onAnnotate?: () => void;
 };
 
 function EntireScreenShareCard({ onStop, info }: { onStop?: () => void; info?: EntireShareInfo }) {
@@ -386,14 +363,10 @@ function EntireScreenShareCard({ onStop, info }: { onStop?: () => void; info?: E
         <p className="mt-1.5 text-xs leading-relaxed text-slate-400">
           Students see your screen live. Your own preview is hidden here so it is not captured again.
         </p>
-        <p className="mt-2 text-xs leading-relaxed text-slate-300">
-          <span className="font-semibold text-slate-100">To draw:</span> press Annotate. The screen freezes
-          for students and you draw on the still picture right here; turn Annotate off to go live again.
-        </p>
         <p className="mt-2 text-xs leading-relaxed text-slate-400">
           {controlsInTab
-            ? 'Annotate, raised hands and chat are in Share controls in this tab. Keep this tab where you can reach it (beside your slides or on a second monitor) instead of minimising it; the tab title shows new hands and messages.'
-            : 'Share controls float on your screen (hidden from students), so Annotate, raised hands and chat stay in reach while you present.'}
+            ? 'Raised hands, chat and the roster are in Share controls in this tab. Keep this tab where you can reach it (beside your slides or on a second monitor) instead of minimising it; the tab title shows new hands and messages.'
+            : 'Share controls float on your screen (hidden from students), so raised hands, chat and the roster stay in reach while you present.'}
         </p>
         {hands > 0 && (
           <p className="mt-2 inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-2xs font-semibold text-amber-200">
@@ -401,67 +374,30 @@ function EntireScreenShareCard({ onStop, info }: { onStop?: () => void; info?: E
             {hands} raised {hands === 1 ? 'hand' : 'hands'}
           </p>
         )}
-        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-          {info?.onAnnotate && (
-            <Button size="sm" variant="secondary" onClick={info.onAnnotate}>
-              Annotate (freeze &amp; draw)
-            </Button>
-          )}
-          {onStop && (
+        {onStop && (
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
             <Button variant="danger" size="sm" onClick={onStop}>
               <IconScreen size={14} />
               Stop sharing
             </Button>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-function TeacherShareTile({
-  trackRef,
-  canAnnotate,
-  annotate,
-  annotateOn,
-  annotateMode,
-  annotateColor,
-}: {
-  trackRef: ReturnType<typeof useTracks>[number];
-  canAnnotate: boolean;
-  annotate?: ReturnType<typeof useScreenAnnotate>;
-  annotateOn: boolean;
-  annotateMode: AnnotateMode;
-  annotateColor: string;
-}) {
-  const frameRef = useRef<HTMLDivElement | null>(null);
+function TeacherShareTile({ trackRef }: { trackRef: ReturnType<typeof useTracks>[number] }) {
   const t = trackRef;
-  const draw = canAnnotate && annotateOn && !!annotate;
-
   return (
     <div className="video-tile relative min-h-0 h-full w-full overflow-hidden bg-black">
-      <div ref={frameRef} className="relative h-full w-full">
+      <div className="relative h-full w-full">
         {t.publication?.track ? (
           <VideoTrack trackRef={t} className="h-full w-full object-contain" />
         ) : (
           <div className="flex h-full items-center justify-center bg-ink-900 text-slate-400">
             No screen
           </div>
-        )}
-        {canAnnotate && annotate && (
-          <ScreenAnnotator
-            frameRef={frameRef}
-            strokes={annotate.strokes}
-            canDraw={draw}
-            tool={annotateMode}
-            color={annotateColor}
-            onBegin={(p) =>
-              annotate.begin(p, annotateMode === 'eraser' ? 'pen' : annotateMode, annotateColor)
-            }
-            onExtend={annotate.extend}
-            onEnd={annotate.end}
-            onErase={annotate.eraseAt}
-          />
         )}
       </div>
       <div className="pointer-events-none absolute bottom-2 left-2 z-20 flex items-center gap-2 rounded-lg bg-black/65 px-2.5 py-1 text-xs backdrop-blur">
@@ -474,22 +410,13 @@ function TeacherShareTile({
           {t.participant.name || t.participant.identity}
           {' · screen'}
           {t.participant.isLocal ? ' (you)' : ''}
-          {draw ? ' · drawing' : ''}
         </span>
       </div>
     </div>
   );
 }
 
-export function TeacherScreenStage({
-  teacherIdentities,
-  code,
-  active,
-}: {
-  teacherIdentities: string[];
-  code: string;
-  active: boolean;
-}) {
+export function TeacherScreenStage({ teacherIdentities }: { teacherIdentities: string[] }) {
   const tracks = useTracks(
     [{ source: Track.Source.ScreenShare, withPlaceholder: false }],
     { onlySubscribed: true }
@@ -501,10 +428,6 @@ export function TeacherScreenStage({
     return isTeacherParticipant(t.participant, teacherSet);
   });
 
-  // Students render the teacher's annotation layer read-only over the share.
-  const annotate = useScreenAnnotate({ code, active, canDraw: false });
-  const frameRef = useRef<HTMLDivElement | null>(null);
-
   if (screens.length === 0) {
     return (
       <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-ink-950 text-slate-400">
@@ -514,22 +437,16 @@ export function TeacherScreenStage({
     );
   }
 
-  // Only the last screen share is annotated; the overlay tracks that frame.
-  const primary = screens[screens.length - 1];
-
   return (
     <div className="relative h-full w-full bg-black">
       {screens.map((t) => (
         <div key={`${t.participant.identity}-${t.source}`} className="absolute inset-0">
           <div className="relative h-full w-full">
-            <div ref={t === primary ? frameRef : undefined} className="relative h-full w-full">
+            <div className="relative h-full w-full">
               {t.publication?.track ? (
                 <VideoTrack trackRef={t} className="h-full w-full object-contain" />
               ) : (
                 <div className="flex h-full items-center justify-center text-slate-400">No screen</div>
-              )}
-              {t === primary && (
-                <ScreenAnnotator frameRef={frameRef} strokes={annotate.strokes} />
               )}
             </div>
           </div>
@@ -598,13 +515,13 @@ function displaySurfaceOf(track: MediaStreamTrack | null | undefined): string {
 }
 
 const MONITOR_SHARE_HINT =
-  'Entire screen: this browser cannot hide a floating window from the capture, so Share controls (Annotate, raised hands, chat) stay in this tab. Keep it beside what you present instead of minimising it. Chrome or Edge can float them.';
+  'Entire screen: this browser cannot hide a floating window from the capture, so Share controls (raised hands, chat, roster) stay in this tab. Keep it beside what you present instead of minimising it. Chrome or Edge can float them.';
 const MONITOR_SCREENS_HINT =
   'Several monitors: Share controls can float on your screen once you allow "Window management" (so they can be hidden from students). Until then they stay in this tab — allow it, then start the share again.';
 const MONITOR_POSITION_HINT =
-  'Entire screen on a system that does not report window positions (Linux on Wayland): Share controls stay in this tab so students never see them. Keep this tab in reach to annotate and see hands.';
+  'Entire screen on a system that does not report window positions (Linux on Wayland): Share controls stay in this tab so students never see them. Keep this tab in reach to see hands and chat.';
 const MONITOR_UNSAFE_HINT =
-  'Share controls moved into this tab because their spot on the shared screen could not be tracked (students must never see them). Annotate, raised hands and chat are here; the tab title shows new hands and messages.';
+  'Share controls moved into this tab because their spot on the shared screen could not be tracked (students must never see them). Raised hands, chat and the roster are here; the tab title shows new hands and messages.';
 
 type MaskFallback = '' | 'unsupported' | 'screens' | 'unsafe' | 'position';
 
@@ -2251,9 +2168,6 @@ function RoomInner({
   const [camError, setCamError] = useState<string | null>(null);
   const [hudOpen, setHudOpen] = useState(false);
   const [hudNotice, setHudNotice] = useState('');
-  const [annotateOn, setAnnotateOn] = useState(false);
-  const [annotateMode, setAnnotateMode] = useState<AnnotateMode>('pen');
-  const [annotateColor, setAnnotateColor] = useState(ANNOTATE_COLORS[0]);
   /** True while we intentionally change presentation stage (avoids teardown races). */
   const stageSwitchRef = useRef(false);
   /** Teacher still wants the screen shared across a LiveKit reconnect. */
@@ -2275,10 +2189,6 @@ function RoomInner({
   const maskWindowRef = useRef<Window | null>(null);
   /** The raw capture track (the published one is the masked copy when maskRef is set). */
   const rawShareRef = useRef<MediaStreamTrack | null>(null);
-  /** Entire-screen share frozen to a still while the teacher draws (see lib/shareFreeze). */
-  const freezeRef = useRef<{ still: FrozenStill; original: MediaStreamTrack; detach: () => void } | null>(null);
-  const freezeChain = useRef(Promise.resolve());
-  const [shareFrozen, setShareFrozen] = useState(false);
   /** Published screen-share audio (tab / system audio), if the teacher ticked "Share audio". */
   const screenAudioRef = useRef<{ track: LocalAudioTrack; owner: { unpublishTrack: (t: LocalAudioTrack, stop?: boolean) => Promise<unknown> } } | null>(null);
   const [maskActive, setMaskActive] = useState(false);
@@ -2333,15 +2243,6 @@ function RoomInner({
   const hasTeacherScreen = useHasTeacherScreen(teacherIdentities);
   const effectiveStage: 'idle' | 'screen' =
     stageMode !== 'idle' ? stageMode : hasTeacherScreen ? 'screen' : 'idle';
-
-  // Teacher draws on the classroom screen-share stage; HUD only holds the tools.
-  const screenAnnotateActive =
-    isTeacher && (screenOn || stageMode === 'screen' || effectiveStage === 'screen');
-  const annotate = useScreenAnnotate({
-    code,
-    active: screenAnnotateActive,
-    canDraw: isTeacher,
-  });
 
   useEffect(() => {
     onVisibilityChange(!!state?.me?.canPublishVideo);
@@ -2477,17 +2378,11 @@ function RoomInner({
 
   /**
    * Screen share ended (button, browser "Stop sharing" bar, or track teardown):
-   * close the HUD and wipe the annotation layer for everyone. Never touches the
+   * close the HUD. Never touches the
    * LiveKit connection, so students simply fall back to their waiting stage.
    */
   const endShareSession = useCallback(() => {
     shareWantedRef.current = false;
-    // Share is ending anyway: drop a freeze-frame without swapping back.
-    const still = freezeRef.current;
-    freezeRef.current = null;
-    still?.still.stop();
-    still?.detach();
-    setShareFrozen(false);
     if (shareEndTimer.current) {
       window.clearTimeout(shareEndTimer.current);
       shareEndTimer.current = null;
@@ -2509,7 +2404,6 @@ function RoomInner({
     setScreenOn(false);
     setHudOpen(false);
     setHudNotice('');
-    setAnnotateOn(false);
     shareSurfaceRef.current = '';
     setShareSurface('');
     maskWindowRef.current = null;
@@ -2649,7 +2543,7 @@ function RoomInner({
   // not tell the server the share ended, so Redis still says stage=screen and
   // students sit on "Waiting for teacher screen…" after the teacher reloads.
   // On the first room-state snapshot of a fresh teacher session, clear that
-  // stale stage (and its annotations) unless this tab is already sharing.
+  // stale stage unless this tab is already sharing.
   const staleStageChecked = useRef(false);
   useEffect(() => {
     if (!isTeacher || !state || staleStageChecked.current) return;
@@ -2711,103 +2605,6 @@ function RoomInner({
       setHudNotice('');
     });
   }, [attachShareSurface]);
-
-  // Entire-screen share + Annotate: publish a still of the current frame and
-  // let the teacher draw on it in this tab (lib/shareFreeze). Off: live again.
-  const wantFreeze = shouldFreezeShare({
-    annotateOn,
-    screenOn,
-    surface: shareSurface,
-    previewable: showLocalSharePreview(shareSurface),
-  });
-  const bgStillsRef = useRef<ReturnType<typeof startBackgroundStills> | null>(null);
-  const wholeScreenShare = screenOn && !!shareSurface && !showLocalSharePreview(shareSurface);
-  useEffect(() => {
-    if (!isTeacher || !localParticipant || !wholeScreenShare || !freezeSupported()) return;
-    const participant = localParticipant;
-    const stills = startBackgroundStills(() => {
-      if (freezeRef.current) return null;
-      return participant.getTrackPublication(Track.Source.ScreenShare)?.track?.mediaStreamTrack ?? null;
-    });
-    bgStillsRef.current = stills;
-    return () => {
-      stills.stop();
-      if (bgStillsRef.current === stills) bgStillsRef.current = null;
-    };
-  }, [isTeacher, localParticipant, wholeScreenShare]);
-
-  useEffect(() => {
-    if (!isTeacher || !localParticipant) return;
-    const participant = localParticipant;
-    freezeChain.current = freezeChain.current.then(async () => {
-      const pub = participant.getTrackPublication(Track.Source.ScreenShare);
-      const lt = pub?.track as LocalVideoTrack | undefined;
-      if (wantFreeze && !freezeRef.current) {
-        if (!lt || !shareWantedRef.current) return;
-        const original = lt.mediaStreamTrack;
-        // Tab visible: the live frame is this tab, so use the last still taken
-        // while it was hidden. Tab hidden (Annotate clicked in the floating
-        // controls): the live frame is the screen the teacher is looking at.
-        const cached = document.visibilityState === 'visible' ? bgStillsRef.current?.latest() : null;
-        const canvas = cached ?? (await snapshotTrack(original));
-        const still = canvas ? stillTrack(canvas) : null;
-        if (!still) {
-          setAnnotateOn(false);
-          setHudNotice('Could not freeze the screen for drawing. Share a window or tab to draw on it.');
-          return;
-        }
-        if (!shareWantedRef.current) {
-          still.stop();
-          return;
-        }
-        try {
-          await lt.replaceTrack(still.track, { userProvidedTrack: true });
-        } catch (e) {
-          console.warn('freeze share', e);
-          still.stop();
-          setAnnotateOn(false);
-          return;
-        }
-        // While frozen LiveKit watches the still, not the capture: if the
-        // teacher stops sharing from the browser bar, end the share here.
-        const raw = rawShareRef.current;
-        const onEnded = () => {
-          const f = freezeRef.current;
-          freezeRef.current = null;
-          f?.still.stop();
-          f?.detach();
-          setShareFrozen(false);
-          void participant.unpublishTrack(lt, false).catch(() => undefined);
-        };
-        original.addEventListener('ended', onEnded);
-        raw?.addEventListener('ended', onEnded);
-        freezeRef.current = {
-          still,
-          original,
-          detach: () => {
-            original.removeEventListener('ended', onEnded);
-            raw?.removeEventListener('ended', onEnded);
-          },
-        };
-        setShareFrozen(true);
-      } else if (!wantFreeze && freezeRef.current) {
-        const f = freezeRef.current;
-        freezeRef.current = null;
-        f.detach();
-        setShareFrozen(false);
-        if (lt && f.original.readyState === 'live') {
-          try {
-            await lt.replaceTrack(f.original, { userProvidedTrack: true });
-          } catch (e) {
-            console.warn('unfreeze share', e);
-          }
-        } else if (lt) {
-          void participant.unpublishTrack(lt, false).catch(() => undefined);
-        }
-        f.still.stop();
-      }
-    });
-  }, [wantFreeze, isTeacher, localParticipant]);
 
   // Chrome's "Share this instead" (surfaceSwitching) can move a running share
   // from a window/tab to the entire screen. Watch the live track: once it
@@ -3527,11 +3324,7 @@ function RoomInner({
 
         <div className="absolute inset-0 z-10">
           {covered ? null : showTeacherScreen ? (
-            <TeacherScreenStage
-              teacherIdentities={teacherIdentities}
-              code={code}
-              active={showTeacherScreen}
-            />
+            <TeacherScreenStage teacherIdentities={teacherIdentities} />
           ) : focus.focusMode && teacherHere ? (
             <TeacherCameraStage teacherIdentities={teacherIdentities} />
           ) : (
@@ -3776,17 +3569,11 @@ function RoomInner({
                 visibleIdentities={visibles}
                 isTeacher={isTeacher}
                 teacherIdentities={teacherIdentities}
-                annotate={annotate}
-                annotateOn={annotateOn}
-                annotateMode={annotateMode}
-                annotateColor={annotateColor}
                 localShareSurface={shareSurface}
-                localShareFrozen={shareFrozen}
                 onStopShare={() => void toggleScreen()}
                 entireShareInfo={{
                   controlsInTab: !shareMount,
                   hands: raisedHands.length,
-                  onAnnotate: freezeSupported() ? () => setAnnotateOn(true) : undefined,
                 }}
                 localPreview={
                   <LocalPreview
@@ -4095,35 +3882,6 @@ function RoomInner({
                 raisedHands={raisedHands}
                 onLowerHand={(id) => void lowerHand(id)}
               />
-            }
-            annotate={annotate}
-            annotateOn={annotateOn}
-            onAnnotateOnChange={setAnnotateOn}
-            annotateMode={annotateMode}
-            onAnnotateModeChange={setAnnotateMode}
-            annotateColor={annotateColor}
-            onAnnotateColorChange={setAnnotateColor}
-            annotateUnavailable={
-              showLocalSharePreview(shareSurface) || freezeSupported()
-                ? undefined
-                : 'Drawing on an entire-screen share is not supported in this browser. Share a window or tab to draw.'
-            }
-            annotateTitle={
-              showLocalSharePreview(shareSurface)
-                ? undefined
-                : 'Freeze the screen and draw on it in the classroom tab (students see the still picture with your drawing)'
-            }
-            onAnnotateIntent={
-              showLocalSharePreview(shareSurface)
-                ? undefined
-                : () => {
-                    // Drawing happens on the still in the classroom tab: bring it forward.
-                    try {
-                      window.focus();
-                    } catch {
-                      /* best effort */
-                    }
-                  }
             }
             notice={shareMount ? hudNotice || undefined : undefined}
           />

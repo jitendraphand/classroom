@@ -14,12 +14,11 @@ function notFound(e: unknown) {
   return /not.?found|does not exist/i.test(msg);
 }
 
-/** Back to the idle stage and drop the share's annotations. */
+/** Back to the idle stage. */
 export async function clearStage(code: string): Promise<void> {
   try {
     const redis = await ensureRedis();
     await redis.set(keys.stage(code), 'idle', 'EX', 60 * 60 * 6);
-    await redis.del(keys.annotate(code));
   } catch {
     /* Redis down: the new device's first room snapshot clears it */
   }

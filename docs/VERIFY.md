@@ -8,11 +8,11 @@ curl -sI http://localhost:3000/favicon.ico | head -1
 # expect 200
 ```
 
-## 1. Screen share + annotate
+## 1. Screen share
 1. Teacher: create room → Enter classroom → Share screen (one click).
 2. Confirm compact Share bar appears and students see the shared screen.
-3. Teacher Annotate → draw; student sees strokes over the share.
-4. Stop share → stage idle, annotations cleared.
+3. Play a video and turn on **Video** (Video mode) → students see smooth motion and hear share audio.
+4. Stop share → stage idle.
 
 
 ## 2. Join link does not hijack teachers
@@ -82,7 +82,7 @@ curl -sI http://localhost:3000/favicon.ico | head -1
 1. Student stays on `/classroom/CODE` (video or screen stage).
 2. Teacher **End class**.
 3. Within ~2s student sees **Class ended** screen (not stuck in classroom).
-4. Browser network: annotate/chat/state stop retrying after 410/ENDED — no 401 spam loop.
+4. Browser network: chat/state stop retrying after 410/ENDED — no 401 spam loop.
 5. Join link for that code shows class ended.
 
 ## 13. Chat attribution with same browser profile

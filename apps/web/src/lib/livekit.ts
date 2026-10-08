@@ -85,10 +85,10 @@ export type ParticipantGrantInput = {
  * The LiveKit video grant for a classroom participant. Pure so it can be
  * unit-tested.
  *
- * - Teacher: publish every source, publish data (annotation strokes).
+ * - Teacher: publish every source; no data publishing (chat and room events
+ *   are sent by the server).
  * - Student: publish camera (only while in the sample) and microphone (only
- *   while not teacher-muted); **no data publishing** (chat and annotations
- *   reach students from the server / teacher only) and **no screen share**.
+ *   while not teacher-muted); **no data publishing** and **no screen share**.
  */
 export function classroomGrant(input: ParticipantGrantInput) {
   const isTeacher = input.role === 'TEACHER';
@@ -106,7 +106,7 @@ export function classroomGrant(input: ParticipantGrantInput) {
     room: input.roomName,
     canPublish: true,
     canSubscribe: true,
-    canPublishData: isTeacher,
+    canPublishData: false,
     canPublishSources: sources,
   };
 }

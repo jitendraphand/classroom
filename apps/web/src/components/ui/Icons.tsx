@@ -206,3 +206,21 @@ export function IconReply(p: P) {
     </svg>
   );
 }
+
+export function IconFilm(p: P) {
+  return (
+    <svg {...base(p)}>
+      <rect x="3" y="4" width="18" height="16" rx="2" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M10 9.5v5l4.5-2.5z" fill="currentColor" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function IconSearch(p: P) {
+  return (
+    <svg {...base(p)}>
+      <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
+      <path d="m16 16 4.5 4.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}

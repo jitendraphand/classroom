@@ -34,8 +34,6 @@ export const keys = {
   rotation: (code: string) => `room:${code}:rotation`,
   /** Exclusive presentation stage: idle | screen */
   stage: (code: string) => `room:${code}:stage`,
-  /** Screen-share annotation strokes (JSON array), for late joiners */
-  annotate: (code: string) => `room:${code}:screen-annotate`,
   /** Hash identity → pinnedAt ms for active-speaker pins */
   pinnedSpeakers: (code: string) => `room:${code}:pinned-speakers`,
   /** Per-identity pin rate limit */
@@ -62,5 +60,7 @@ export type StageMode = 'idle' | 'screen';
 export const legacyKeys = (code: string) => [
   `room:${code}:whiteboard`,
   `room:${code}:wb-write`,
+  // Screen annotation layer (feature removed).
+  `room:${code}:screen-annotate`,
 ];
 

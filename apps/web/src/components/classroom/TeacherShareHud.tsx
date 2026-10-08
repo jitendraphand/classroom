@@ -3,12 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Avatar } from '@/components/ui/Avatar';
-import {
-  ANNOTATE_COLORS,
-  useScreenAnnotate,
-  type AnnotateMode,
-} from './ScreenAnnotator';
-import { IconCam, IconCamOff, IconChat, IconHand, IconHandDown, IconMic, IconMicOff, IconPin, IconScreen, IconUserPlus, IconUsers, IconVideo } from '@/components/ui/Icons';
+import { IconCam, IconCamOff, IconChat, IconFilm, IconHand, IconHandDown, IconMic, IconMicOff, IconPin, IconScreen, IconUserPlus, IconUsers, IconVideo } from '@/components/ui/Icons';
 import { toolbarInnerSize } from '@/lib/sideWindowGeometry';
 import { closeSideWindow, openSideWindow, sideWindow, SideWindowPortal, useSideWindows } from './shareSideWindows';
 import { sortRoster } from '@/lib/classSlots';
@@ -50,6 +45,8 @@ export type RosterEntry = {
   focus?: import('@/lib/focusStatus').FocusStatus;
   focusIphone?: boolean;
   gradeDivision?: string | null;
+  /** School-app student ID (teacher view only), for search. */
+  sid?: string | null;
 };
 
 export type TeacherShareHudProps = {
@@ -72,25 +69,18 @@ export type TeacherShareHudProps = {
   chatUnread: number;
   chat?: ReactNode;
   onChatOpenChange?: (open: boolean) => void;
-  annotate: ReturnType<typeof useScreenAnnotate>;
-  annotateOn: boolean;
-  onAnnotateOnChange: (on: boolean) => void;
-  annotateMode: AnnotateMode;
-  onAnnotateModeChange: (mode: AnnotateMode) => void;
-  annotateColor: string;
-  onAnnotateColorChange: (color: string) => void;
+  /**
+   * Video mode: the share is tuned for motion (a playing video) — smooth 30 fps
+   * over sharpness, more bitrate — instead of sharp text/slides.
+   */
+  videoMode?: boolean;
+  onVideoModeChange?: (on: boolean) => void;
   notice?: string;
   /** Students who left fullscreen or switched away. */
   focusAlertCount?: number;
   /** Small pill with badges; expands to the full toolbar. */
   compact?: boolean;
   onCompactChange?: (compact: boolean) => void;
-  /** Reason drawing is off (browser cannot freeze an entire-screen share). */
-  annotateUnavailable?: string;
-  /** Tooltip for Annotate when it works differently (entire screen: freeze-frame). */
-  annotateTitle?: string;
-  /** Called in the Annotate click (user gesture), when turning drawing on. */
-  onAnnotateIntent?: () => void;
   /** Render in the classroom page (monitor capture / no pop-out) instead of a portal. */
   inline?: boolean;
   /**
@@ -110,12 +100,6 @@ export type TeacherShareHudProps = {
 };
 
 type Panel = 'chat' | 'hands' | 'roster' | null;
-
-const TOOL_LABEL: Record<AnnotateMode, string> = {
-  pen: 'Pen',
-  highlighter: 'Marker',
-  eraser: 'Erase',
-};
 
 /** Compact pill window size (CSS px). Small so it covers little of the screen and of the mask. */
 const COMPACT_W = 210;
@@ -277,8 +261,6 @@ font-size:11px;font-weight:650;white-space:nowrap;position:relative;flex:0 0 aut
 .tsh-count{position:absolute;top:-4px;right:-4px;min-width:14px;height:14px;padding:0 3px;border-radius:999px;
 background:var(--warn);color:#1a1206;font-size:9px;font-weight:800;display:inline-grid;place-items:center}
 .tsh-count-blue{background:var(--accent);color:#04122b}
-.tsh-swatch{all:unset;box-sizing:border-box;cursor:pointer;width:14px;height:14px;border-radius:999px;border:2px solid transparent;flex:0 0 auto}
-.tsh-swatch[aria-pressed="true"]{border-color:#fff}
 .tsh-panel-head{display:flex;align-items:center;gap:6px;padding:4px 8px;border-bottom:1px solid var(--line)}
 .tsh-panel-title{font-weight:650;font-size:11px;flex:1}
 .tsh-scroll{flex:1 1 auto;min-height:0;overflow:auto;padding:6px 8px}
@@ -309,6 +291,8 @@ background:var(--warn);color:#1a1206;font-size:9px;font-weight:800;display:inlin
 .tsh-side{width:100%;height:100%;display:flex;flex-direction:column}
 .tsh-side .tsh-scroll{flex:1 1 auto;padding:8px}
 .share-side-chat{height:100%;display:flex;flex-direction:column;padding:8px;box-sizing:border-box}
+.tsh-search{width:100%;box-sizing:border-box;margin:0 0 8px;height:28px;padding:0 8px;border-radius:8px;border:1px solid var(--line);background:rgba(255,255,255,.06);color:var(--text);font:inherit;font-size:12px}
+.tsh-search:focus{outline:none;border-color:rgba(51,133,255,.7)}
 .tsh-inline{width:auto;max-width:calc(100vw - 16px)}
 .tsh-inline .tsh-bar{flex-wrap:wrap;width:auto;min-width:0;position:static}
 .tsh-inline .tsh-panel{width:min(420px,calc(100vw - 16px));max-height:min(280px,45vh)}
@@ -334,18 +318,10 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     chatUnread,
     chat,
     onChatOpenChange,
-    annotate,
-    annotateOn,
-    onAnnotateOnChange,
-    annotateMode: mode,
-    onAnnotateModeChange: setMode,
-    annotateColor: color,
-    onAnnotateColorChange: setColor,
+    videoMode = false,
+    onVideoModeChange,
     notice,
     inline = false,
-    annotateUnavailable,
-    annotateTitle,
-    onAnnotateIntent,
     compact = false,
     onCompactChange,
     focusAlertCount = 0,
@@ -360,11 +336,6 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
   const chatWin = sideWindowsAllowed ? sideWindow('chat') : null;
   const rosterWin = sideWindowsAllowed ? sideWindow('roster') : null;
   const [sideNotice, setSideNotice] = useState('');
-
-  // Turn drawing off if the share switched to the entire screen.
-  useEffect(() => {
-    if (annotateUnavailable && annotateOn) onAnnotateOnChange(false);
-  }, [annotateUnavailable, annotateOn, onAnnotateOnChange]);
 
   const [panel, setPanel] = useState<Panel>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -461,11 +432,14 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
       win.removeEventListener('resize', applyZoom);
       win.document.removeEventListener('pointerdown', onPointer, true);
     };
-  }, [hostWindow, panel, annotateOn, waitingCount, notice, sideNotice, mode, compact]);
+  }, [hostWindow, panel, videoMode, waitingCount, notice, sideNotice, compact]);
 
   // Raised hands first (earliest raise first), then by name.
   const students = useMemo(() => sortRoster(admitted.filter((a) => a.role === 'STUDENT')), [admitted]);
   const hands = useMemo(() => students.filter((s) => s.handRaised), [students]);
+  const [rosterQuery, setRosterQuery] = useState('');
+  const shownStudents = useMemo(() => filterPeople(students, rosterQuery), [students, rosterQuery]);
+  const shownWaiting = useMemo(() => filterPeople(waiting, rosterQuery), [waiting, rosterQuery]);
 
   const togglePanel = (next: Exclude<Panel, null>) => {
     setPanel((cur) => (cur === next ? null : next));
@@ -508,7 +482,15 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
 
   const rosterBody = (
           <div className="tsh-scroll">
-            {waiting.length > 0 && (
+            <input
+              type="search"
+              className="tsh-search"
+              placeholder="Search name or SID…"
+              value={rosterQuery}
+              onChange={(e) => setRosterQuery(e.target.value)}
+              aria-label="Search students"
+            />
+            {shownWaiting.length > 0 && (
               <div style={{ marginBottom: 8 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                   <span className="tsh-panel-title">Waiting</span>
@@ -518,7 +500,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                     </button>
                   )}
                 </div>
-                {waiting.map((w) => (
+                {shownWaiting.map((w) => (
                   <div className="tsh-person" key={w.id} title={w.displayName}>
                     <Avatar name={w.displayName} size="xs" />
                     <span className="tsh-person-name">{w.displayName}</span>
@@ -545,8 +527,10 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
             </div>
             {students.length === 0 ? (
               <p className="tsh-empty">No students yet.</p>
+            ) : shownStudents.length === 0 ? (
+              <p className="tsh-empty">No student matches “{rosterQuery.trim()}”.</p>
             ) : (
-              students.map((s) => {
+              shownStudents.map((s) => {
                 const focus = focusLabel(s.focus, s.focusIphone);
                 return (
                   <div className={s.handRaised ? 'tsh-person is-raised' : 'tsh-person'} key={s.id} title={s.displayName}>
@@ -557,7 +541,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                     )}
                     <Avatar name={s.displayName} size="xs" />
                     <span className="tsh-person-name">{s.displayName}</span>
-                    {s.gradeDivision ? <span className="tsh-person-sub">{s.gradeDivision}</span> : null}
+                    {s.sid ? <span className="tsh-person-sub">{s.sid}</span> : s.gradeDivision ? <span className="tsh-person-sub">{s.gradeDivision}</span> : null}
                     {focus ? <span className="tsh-chip tsh-chip-muted" title={focus}>{focus}</span> : null}
                     <button
                       type="button"
@@ -718,63 +702,21 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
             <IconVideo size={14} />
           </button>
         )}
-        <button
-          type="button"
-          className="tsh-btn"
-          aria-pressed={annotateOn}
-          onClick={() => {
-            if (!annotateOn) onAnnotateIntent?.();
-            onAnnotateOnChange(!annotateOn);
-          }}
-          disabled={!!annotateUnavailable}
-          title={annotateUnavailable || annotateTitle || 'Draw on the shared screen'}
-        >
-          Annotate
-        </button>
-        {annotateOn &&
-          (['pen', 'highlighter', 'eraser'] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              className="tsh-btn"
-              aria-pressed={mode === m}
-              onClick={() => setMode(m)}
-            >
-              {TOOL_LABEL[m]}
-            </button>
-          ))}
-        {annotateOn &&
-          ANNOTATE_COLORS.map((c) => (
-            <button
-              key={c}
-              type="button"
-              className="tsh-swatch"
-              style={{ background: c }}
-              aria-label={`Colour ${c}`}
-              aria-pressed={color === c}
-              onClick={() => setColor(c)}
-            />
-          ))}
-        {annotateOn && (
+        {onVideoModeChange && (
           <button
             type="button"
             className="tsh-btn"
-            onClick={annotate.undo}
-            disabled={!annotate.strokes.length}
-            title="Undo your last stroke"
+            aria-pressed={videoMode}
+            onClick={() => onVideoModeChange(!videoMode)}
+            title={
+              videoMode
+                ? 'Video mode on: smooth 30 fps for a playing video. Click for sharp slides/text.'
+                : 'Playing a video? Video mode sends smooth 30 fps (slides and text get slightly softer).'
+            }
+            aria-label={videoMode ? 'Video mode on (turn off for slides)' : 'Video mode (smooth playback)'}
           >
-            Undo
-          </button>
-        )}
-        {annotateOn && (
-          <button
-            type="button"
-            className="tsh-btn"
-            onClick={annotate.clear}
-            disabled={!annotate.strokes.length}
-            title="Clear all drawings for everyone"
-          >
-            Clear
+            <IconFilm size={14} />
+            Video
           </button>
         )}
         <span className="tsh-sep" aria-hidden />
@@ -969,5 +911,14 @@ export function InlineShareDock({
       {children}
       {hint ? <p className="share-inline-hint">{hint}</p> : null}
     </div>
+  );
+}
+
+/** Pure: filter roster rows by name or SID (case/space-insensitive). */
+export function filterPeople<T extends { displayName: string; sid?: string | null }>(people: T[], query: string): T[] {
+  const q = query.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!q) return people;
+  return people.filter(
+    (p) => p.displayName.toLowerCase().includes(q) || (p.sid ?? '').toLowerCase().includes(q)
   );
 }

@@ -1,7 +1,7 @@
 # Share HUD — teach while screen sharing
 
 Compact **teacher-only** control bar while the teacher is screen sharing.
-Students never see this chrome — only the shared screen + annotations.
+Students never see this chrome — only the shared screen.
 
 ## Where the controls live
 
@@ -28,7 +28,7 @@ If the browser blocks the window, sharing continues and the page shows
 
 ## Layout of the bar
 
-- The toolbar (Live, mic, Annotate, chat, hands, roster, waiting badge,
+- The toolbar (Live, mic, Video mode, chat, hands, roster, waiting badge,
   **Admit &lt;name&gt;** / Admit all, **Stop**) is rendered **first** and is
   `position: sticky` at the top, so it stays visible even when the window
   cannot grow.
@@ -70,9 +70,7 @@ If the browser blocks the window, sharing continues and the page shows
 |---|---|
 | `TeacherShareHud.tsx` | PiP / pop-up window management + compact bar and panels |
 | `public/share-controls.html` | Static pop-up host page (fallback) |
-| `ScreenAnnotator.tsx` | Annotation overlay + LiveKit transport |
 | `ClassroomRoom.tsx` | One-click `toggleScreen`; teacher-only HUD; docked Class panel |
-| `app/api/rooms/[code]/annotate/route.ts` | Redis snapshot for late joiners |
 
 ## Browser limits (mobile)
 
@@ -84,7 +82,7 @@ If the browser blocks the window, sharing continues and the page shows
 
 1. Teacher starts class → **Share screen** once.
 2. Pick a surface; the slim **Share** bar opens in a small always-on-top window (Chromium) or a pop-up.
-3. Students see only the shared screen (+ annotations when the teacher draws).
+3. Students see only the shared screen.
 4. Closing the bar window (✕) does **not** stop sharing — use **Open share controls** or **Stop**.
 
 ## Entire-screen sharing (Oct 2026)
@@ -127,6 +125,6 @@ Rule (`shareControlsPlacement()` in `src/lib/floatGeometry.ts`):
   in-tab dock as before.
 - Controls open as a compact pill (Live dot + chat / hand / waiting badges, Admit, mic,
   Stop); click to expand, ◂ to collapse; the PiP resizes to fit.
-- Teacher stage keeps the static card for monitor shares and Annotate stays off there:
-  drawing needs a live preview of the capture, and showing the capture on the captured
-  screen recurses regardless of the mask.
+- Teacher stage keeps the static card for monitor shares: showing the capture on the
+  captured screen recurses regardless of the mask.
+- Annotation (Oct 2026) was removed entirely.
