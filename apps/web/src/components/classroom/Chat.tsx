@@ -6,7 +6,8 @@ import { RoomEvent, DataPacket_Kind } from 'livekit-client';
 import { Avatar } from '@/components/ui/Avatar';
 import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { IconChat, IconHand, IconHandDown, IconReply, IconSend } from '@/components/ui/Icons';
+import { IconChat, IconHand, IconHandDown, IconReply, IconSearch, IconSend } from '@/components/ui/Icons';
+import { filterMessages, filterPeople, normalizeQuery } from '@/lib/peopleSearch';
 import { cn } from '@/lib/cn';
 import { replyTargetFor, resolveChatRecipient } from '@/lib/chatReply';
 import { Button } from '@/components/ui/Button';
@@ -29,7 +30,7 @@ export type ChatMessage = {
   createdAt: string;
 };
 
-type StudentOpt = { id: string; displayName: string };
+type StudentOpt = { id: string; displayName: string; sid?: string | null };
 
 type ThreadProps = {
   code: string;
@@ -369,6 +370,22 @@ export function ChatView({
   const toName = to === 'all' ? null : studentOptions.find((s) => s.id === to)?.displayName ?? null;
   const hands = isTeacher ? raisedHands ?? [] : [];
 
+  // Teacher search: narrows the "To" list (name / SID) and the messages.
+  const [query, setQuery] = useState('');
+  const searching = isTeacher && !!normalizeQuery(query);
+  const matchedStudents = useMemo(() => filterPeople(studentOptions, query), [studentOptions, query]);
+  // The current recipient always stays in the list so the select never lies.
+  const toOptions = useMemo(() => {
+    if (!searching || to === 'all' || matchedStudents.some((s) => s.id === to)) return matchedStudents;
+    const cur = studentOptions.find((s) => s.id === to);
+    return cur ? [cur, ...matchedStudents] : matchedStudents;
+  }, [searching, to, matchedStudents, studentOptions]);
+  const sidById = useMemo(() => new Map(studentOptions.map((s) => [s.id, s.sid])), [studentOptions]);
+  const shownMessages = useMemo(
+    () => (searching ? filterMessages(messages, query, sidById) : messages),
+    [searching, messages, query, sidById]
+  );
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       {hands.length > 0 && (
@@ -410,10 +427,39 @@ export function ChatView({
           </div>
         </div>
       )}
+      {isTeacher && (
+        <div className="chat-search mb-2 shrink-0" data-no-drag>
+          <IconSearch size={13} aria-hidden />
+          <input
+            type="search"
+            className="chat-search-input"
+            placeholder="Search students (name / SID) or messages…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter with exactly one matching student: message them.
+              if (e.key === 'Enter' && matchedStudents.length === 1) {
+                e.preventDefault();
+                replyTo(matchedStudents[0].id);
+              }
+              if (e.key === 'Escape') setQuery('');
+            }}
+            aria-label="Search students or messages"
+          />
+          {searching && (
+            <span className="chat-search-count" aria-live="polite">
+              {matchedStudents.length} student{matchedStudents.length === 1 ? '' : 's'} · {shownMessages.length} msg
+            </span>
+          )}
+        </div>
+      )}
       <div
         ref={listRef}
         className={cn('min-h-0 flex-1 overflow-y-auto pr-1', compact ? 'space-y-1.5' : 'space-y-2.5')}
       >
+        {searching && shownMessages.length === 0 && messages.length > 0 && (
+          <p className="py-4 text-center text-2xs text-slate-400">No messages match “{query.trim()}”.</p>
+        )}
         {messages.length === 0 && (
           <EmptyState
             icon={<IconChat size={24} />}
@@ -428,7 +474,7 @@ export function ChatView({
             className="py-8"
           />
         )}
-        {messages.map((m) => {
+        {shownMessages.map((m) => {
           const mine = m.senderParticipantId === myParticipantId;
           const replyId = isTeacher ? replyTargetFor(m, myParticipantId) : null;
           const canReply = !!replyId && studentIds.has(replyId) && !ended;
@@ -505,11 +551,16 @@ export function ChatView({
               aria-label="Send to"
             >
               <option value="all">Everyone</option>
-              {studentOptions.map((s) => (
+              {toOptions.map((s) => (
                 <option key={s.id} value={s.id}>
-                  {s.displayName}
+                  {s.sid ? `${s.displayName} · ${s.sid}` : s.displayName}
                 </option>
               ))}
+              {searching && toOptions.length === 0 && (
+                <option value="" disabled>
+                  No student matches
+                </option>
+              )}
             </select>
           </label>
         ) : compact ? null : (

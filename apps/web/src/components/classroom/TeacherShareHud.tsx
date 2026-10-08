@@ -7,6 +7,7 @@ import { IconCam, IconCamOff, IconChat, IconFilm, IconHand, IconHandDown, IconMi
 import { toolbarInnerSize } from '@/lib/sideWindowGeometry';
 import { closeSideWindow, openSideWindow, sideWindow, SideWindowPortal, useSideWindows } from './shareSideWindows';
 import { sortRoster } from '@/lib/classSlots';
+import { filterPeople } from '@/lib/peopleSearch';
 import { useFloatDrag, type FloatPos } from './FloatingPanel';
 import { focusLabel } from '@/lib/focusStatus';
 import { controlUrl, copyParentStyles, mountIn, waitForWindow } from './shareWindowDom';
@@ -914,11 +915,3 @@ export function InlineShareDock({
   );
 }
 
-/** Pure: filter roster rows by name or SID (case/space-insensitive). */
-export function filterPeople<T extends { displayName: string; sid?: string | null }>(people: T[], query: string): T[] {
-  const q = query.trim().toLowerCase().replace(/\s+/g, ' ');
-  if (!q) return people;
-  return people.filter(
-    (p) => p.displayName.toLowerCase().includes(q) || (p.sid ?? '').toLowerCase().includes(q)
-  );
-}

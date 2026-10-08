@@ -71,6 +71,62 @@ export function screenShareSimulcastFor(width: number | undefined, height: numbe
   return Math.min(width, height) >= Math.min(low.width, low.height) * 1.25;
 }
 
+/**
+ * Video mode (teacher's "Video" toggle in the share controls): the share is a
+ * playing video, not slides. Motion beats sharpness here, so:
+ * - capture at 30 fps (slides capture at 15) and hint the encoder `motion`;
+ * - top layer ≤1080p @ 30 fps / 2.5 Mbps, low layer 720p @ 30 fps / 1 Mbps
+ *   (slides: 15 fps / 1.5 Mbps and 10 fps / 0.5 Mbps);
+ * - under CPU/bandwidth pressure keep the frame rate and drop resolution
+ *   (`maintain-framerate`), the opposite of slides.
+ * Phones and small windows receive the 720p30 layer (≈1 Mbps); large
+ * viewports the top layer. Share audio is published as before (music preset).
+ */
+export const SCREEN_SHARE_VIDEO_MODE = {
+  capture: { frameRate: { ideal: 30, max: 30 } },
+  top: { maxBitrate: 2_500_000, maxFramerate: 30 },
+  low: { maxBitrate: 1_000_000, maxFramerate: 30 },
+  degradationPreference: 'maintain-framerate',
+  contentHint: 'motion',
+} as const;
+
+export type ShareProfile = {
+  capture: { frameRate: { ideal: number; max: number } };
+  top: { maxBitrate: number; maxFramerate: number };
+  low: { maxBitrate: number; maxFramerate: number };
+  degradationPreference: 'maintain-framerate' | 'maintain-resolution';
+  contentHint: 'motion' | 'detail';
+};
+
+/** Capture / encoder settings for a share: slides (default) or video mode. */
+export function shareProfile(videoMode: boolean): ShareProfile {
+  if (videoMode) return SCREEN_SHARE_VIDEO_MODE;
+  const low = SCREEN_SHARE.layers[0];
+  return {
+    capture: { frameRate: { ideal: SCREEN_SHARE.capture.frameRate.ideal, max: SCREEN_SHARE.capture.frameRate.max } },
+    top: { maxBitrate: SCREEN_SHARE.encoding.maxBitrate, maxFramerate: SCREEN_SHARE.encoding.maxFramerate },
+    low: { maxBitrate: low.maxBitrate, maxFramerate: low.maxFramerate },
+    degradationPreference: 'maintain-resolution',
+    contentHint: 'detail',
+  };
+}
+
+/**
+ * New RTCRtpSender encodings for a share profile. Simulcast encodings are
+ * ordered low → high, so the last one is the top layer; a single encoding is
+ * the top layer. Everything else on each encoding (rid, active, scale) is kept.
+ */
+export function shareEncodingsFor<E extends { maxBitrate?: number; maxFramerate?: number }>(
+  encodings: E[],
+  videoMode: boolean
+): E[] {
+  const p = shareProfile(videoMode);
+  return encodings.map((e, i) => {
+    const layer = i === encodings.length - 1 ? p.top : p.low;
+    return { ...e, maxBitrate: layer.maxBitrate, maxFramerate: layer.maxFramerate };
+  });
+}
+
 export function cameraProfile(isTeacher: boolean) {
   return isTeacher ? TEACHER_CAMERA : STUDENT_CAMERA;
 }

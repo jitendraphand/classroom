@@ -7,9 +7,6 @@ export default function HomePage() {
         <Link href="/login" className="landing-btn-primary w-full py-3 text-base">
           Staff login
         </Link>
-        <Link href="/join" className="landing-btn-secondary w-full py-3 text-base">
-          Student? Join a class
-        </Link>
       </nav>
     </main>
   );

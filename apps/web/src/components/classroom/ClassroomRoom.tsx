@@ -66,7 +66,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageLoading } from '@/components/ui/Skeleton';
-import { IconDoor, IconHand, IconHandDown, IconMic, IconMicOff, IconPin, IconScreen, IconUserPlus, IconUsers, IconVideo } from '@/components/ui/Icons';
+import { IconDoor, IconHand, IconHandDown, IconMic, IconMicOff, IconPin, IconScreen, IconSearch, IconUserPlus, IconUsers, IconVideo } from '@/components/ui/Icons';
 import {
   panelSlotsForCap,
   pickTiles,
@@ -98,10 +98,20 @@ import {
   studentHomePath,
 } from '@/lib/classroomClient';
 import { forwardActivityFrom, setLiveSession } from '@/lib/liveSession';
+import { filterPeople } from '@/lib/peopleSearch';
+import {
+  PEER_WIN_TILE_W,
+  peerWindowGrid,
+  peerWindowOuterSize,
+  peerWindowTileCount,
+  peerWindowTileWForWidth,
+} from '@/lib/peerWindow';
 import {
   cameraProfile,
   SCREEN_SHARE,
   screenShareSimulcastFor,
+  shareEncodingsFor,
+  shareProfile,
   STUDENT_CAMERA,
   TEACHER_CAMERA,
 } from '@/lib/videoQuality';
@@ -551,7 +561,19 @@ const SCREEN_SHARE_AUDIO_CAPTURE = {
   suppressLocalAudioPlayback: false,
 } as MediaTrackConstraints;
 
-function captureScreen(): Promise<MediaStream> {
+/** adaptiveStream pixel density: 1 on phones (bandwidth), the screen's ratio elsewhere. */
+function subscriberPixelDensity(): number | 'screen' {
+  if (typeof window === 'undefined') return 'screen';
+  try {
+    const coarse = window.matchMedia?.('(pointer: coarse)').matches;
+    const small = Math.min(window.screen?.width || 0, window.screen?.height || 0) < 600;
+    return coarse && small ? 1 : 'screen';
+  } catch {
+    return 'screen';
+  }
+}
+
+function captureScreen(videoMode = false): Promise<MediaStream> {
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
   const safari = /safari/i.test(ua) && !/chrome|chromium|crios|edg|android|fxios/i.test(ua);
   // Safari has no display-media audio; asking for it can reject the call.
@@ -560,7 +582,7 @@ function captureScreen(): Promise<MediaStream> {
   if (safari) return bare();
 
   const withHints = {
-    video: SCREEN_SHARE.capture,
+    video: { ...SCREEN_SHARE.capture, ...shareProfile(videoMode).capture },
     // Tab audio (any Chromium OS) or system audio (entire screen, Windows /
     // ChromeOS). The picker shows a "Share audio" checkbox; unticked = no track.
     audio: SCREEN_SHARE_AUDIO_CAPTURE,
@@ -631,38 +653,6 @@ function peerFloatLayout(
   return { cols, rows, tileW, tileH, paneW, paneH, gap };
 }
 
-
-/** Student videos in their own window (during a share): 2 → 2×1, 4 → 2×2, 6 → 3×2. */
-const PEER_WIN_TILE_W = 192;
-function peerWindowLayout(slots: 2 | 4 | 6, innerW?: number, innerH?: number) {
-  const cols = slots === 6 ? 3 : 2;
-  const rows = slots === 2 ? 1 : 2;
-  const header = 34;
-  const pad = 16;
-  const gap = 6;
-  let tileW = PEER_WIN_TILE_W;
-  if (innerW && innerH) {
-    const byW = (innerW - pad - gap * (cols - 1)) / cols;
-    const byH = (((innerH - header - pad - gap * (rows - 1)) / rows) * 16) / 9;
-    tileW = Math.max(96, Math.floor(Math.min(byW, byH)));
-  }
-  const tileH = Math.max(54, Math.floor((tileW * 9) / 16));
-  return {
-    cols,
-    rows,
-    tileW,
-    tileH,
-    gap,
-    paneW: pad + cols * tileW + gap * (cols - 1),
-    paneH: header + pad + rows * tileH + gap * (rows - 1),
-  };
-}
-
-/** Outer size to open the student videos window at (window chrome estimated). */
-export function peerWindowOuterSize(slots: 2 | 4 | 6) {
-  const l = peerWindowLayout(slots);
-  return { w: l.paneW + 16, h: l.paneH + 72 };
-}
 
 function TeacherCameraFloat({
   teacherIdentities,
@@ -1030,43 +1020,9 @@ function TeacherPeersFloat({
   const dockAvailW = dock
     ? Math.max(0, (narrowDock ? dock.width : dock.width * PEER_DOCK_MAX_W) - 2 * PEER_DOCK_MARGIN)
     : undefined;
-  const [portalSize, setPortalSize] = useState<{ w: number; h: number } | null>(null);
-  useEffect(() => {
-    if (!portalWindow || portalWindow.closed) {
-      setPortalSize(null);
-      return;
-    }
-    const pw = portalWindow;
-    const read = () => {
-      if (!pw.closed) setPortalSize({ w: pw.innerWidth, h: pw.innerHeight });
-    };
-    read();
-    pw.addEventListener('resize', read);
-    pw.addEventListener('load', read);
-    return () => {
-      pw.removeEventListener('resize', read);
-      pw.removeEventListener('load', read);
-    };
-  }, [portalWindow]);
-  // Fit the videos window to the chosen 2/4/6 layout (pop-ups opened by this
-  // page may be resized by it).
-  useEffect(() => {
-    if (!portalWindow || portalWindow.closed) return;
-    const l = peerWindowLayout(slotCount);
-    try {
-      const extraW = portalWindow.innerWidth > 0 ? Math.max(0, portalWindow.outerWidth - portalWindow.innerWidth) : 16;
-      const extraH = portalWindow.innerHeight > 0 ? Math.max(0, portalWindow.outerHeight - portalWindow.innerHeight) : 72;
-      portalWindow.resizeTo(l.paneW + extraW, l.paneH + extraH);
-    } catch {
-      /* ignore */
-    }
-  }, [portalWindow, slotCount]);
   const layout = useMemo(
-    () =>
-      portal
-        ? peerWindowLayout(slotCount, portalSize?.w, portalSize?.h)
-        : peerFloatLayout(slotCount, viewport.w, viewport.h, dockAvailH, dockAvailW),
-    [portal, portalSize?.w, portalSize?.h, slotCount, viewport.w, viewport.h, dockAvailH, dockAvailW]
+    () => peerFloatLayout(slotCount, viewport.w, viewport.h, dockAvailH, dockAvailW),
+    [slotCount, viewport.w, viewport.h, dockAvailH, dockAvailW]
   );
   sizeRef.current = isMin
     ? { w: 168, h: 36 }
@@ -1345,8 +1301,79 @@ function TeacherPeersFloat({
       ).length
     : 0;
 
+  // Student videos window (during a share): only the tiles actually shown,
+  // and the window is resized to exactly fit them (lib/peerWindow).
+  const [winTileW, setWinTileW] = useState(PEER_WIN_TILE_W);
+  const winCount = peerWindowTileCount({
+    slots: slotCount,
+    filled: Math.min(peerIds.length, slotCount - 1),
+    connecting: settling ? fillableStudents : 0,
+  });
+  const winGrid = useMemo(() => peerWindowGrid(winCount, winTileW), [winCount, winTileW]);
+  const [paneEl, setPaneEl] = useState<HTMLDivElement | null>(null);
+  const setPaneRef = useCallback((el: HTMLDivElement | null) => {
+    paneRef.current = el;
+    setPaneEl(el);
+  }, []);
+  const fitRef = useRef<{ w: number; h: number; at: number; tries: number } | null>(null);
+  useEffect(() => {
+    if (!portal || !portalWindow || !paneEl) return;
+    const pw = portalWindow;
+    fitRef.current = null;
+    const fit = () => {
+      if (pw.closed) return;
+      const r = paneEl.getBoundingClientRect();
+      const w = Math.ceil(r.width);
+      const h = Math.ceil(r.height);
+      if (!w || !h) return;
+      if (Math.abs(pw.innerWidth - w) <= 1 && Math.abs(pw.innerHeight - h) <= 1) {
+        fitRef.current = { w, h, at: Date.now(), tries: 0 };
+        return;
+      }
+      const prev = fitRef.current;
+      const tries = prev && prev.w === w && prev.h === h ? prev.tries + 1 : 1;
+      // The window manager may refuse an exact size: give up after a few tries.
+      if (tries > 4) return;
+      fitRef.current = { w, h, at: Date.now(), tries };
+      const extraW = pw.innerWidth > 0 && pw.outerWidth > 0 ? Math.max(0, pw.outerWidth - pw.innerWidth) : 16;
+      const extraH = pw.innerHeight > 0 && pw.outerHeight > 0 ? Math.max(0, pw.outerHeight - pw.innerHeight) : 72;
+      try {
+        pw.resizeTo(w + extraW, h + extraH);
+      } catch {
+        /* ignore */
+      }
+    };
+    const onResize = () => {
+      const last = fitRef.current;
+      // The teacher dragged the window wider / narrower: scale the tiles to the
+      // new width; the height then snaps to the tiles.
+      if (last && Date.now() - last.at > 700 && Math.abs(pw.innerWidth - last.w) > 8) {
+        setWinTileW(peerWindowTileWForWidth(winCount, pw.innerWidth));
+        return;
+      }
+      window.setTimeout(fit, 120);
+    };
+    fit();
+    const t1 = window.setTimeout(fit, 250);
+    const t2 = window.setTimeout(fit, 1000);
+    pw.addEventListener('load', fit);
+    pw.addEventListener('resize', onResize);
+    const RO = (pw as Window & { ResizeObserver?: typeof ResizeObserver }).ResizeObserver ?? ResizeObserver;
+    const ro = RO ? new RO(() => fit()) : null;
+    ro?.observe(paneEl);
+    return () => {
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+      pw.removeEventListener('load', fit);
+      pw.removeEventListener('resize', onResize);
+      ro?.disconnect();
+    };
+  }, [portal, portalWindow, paneEl, winGrid.paneW, winGrid.paneH, winCount]);
+  const L = portal ? winGrid : layout;
+  const shownCells = portal ? cells.slice(0, winCount) : cells;
+
   const style: CSSProperties = portal
-    ? { position: 'relative', left: 0, top: 0, width: '100%', height: '100%', borderRadius: 0, border: 0 }
+    ? { position: 'relative', left: 0, top: 0, width: 'max-content', height: 'auto', borderRadius: 0, border: 0 }
     : docked && dock
       ? { left: dock.left + PEER_DOCK_MARGIN, top: dock.top + PEER_DOCK_MARGIN }
       : pos
@@ -1360,7 +1387,7 @@ function TeacherPeersFloat({
 
   const pane = (
     <div
-      ref={paneRef}
+      ref={setPaneRef}
       className="peers-float-pane"
       role="region"
       data-slots={slotCount}
@@ -1433,11 +1460,11 @@ function TeacherPeersFloat({
           className="peers-float-grid"
           data-slots={slotCount}
           style={{
-            gridTemplateRows: `repeat(${layout.rows}, ${layout.tileH}px)`,
-            ...(portal ? { gridTemplateColumns: `repeat(${layout.cols}, max-content)` } : {}),
+            gridTemplateRows: `repeat(${L.rows}, ${L.tileH}px)`,
+            ...(portal ? { gridTemplateColumns: `repeat(${L.cols}, ${L.tileW}px)` } : {}),
           }}
         >
-          {cells.map((identity, i) => {
+          {shownCells.map((identity, i) => {
             if (identity === '__self__') {
               const selfTrack =
                 selfStream
@@ -1451,8 +1478,8 @@ function TeacherPeersFloat({
                   speaking={false}
                   pinned={false}
                   mirror
-                  tileW={layout.tileW}
-                  tileH={layout.tileH}
+                  tileW={L.tileW}
+                  tileH={L.tileH}
                 />
               );
             }
@@ -1463,8 +1490,8 @@ function TeacherPeersFloat({
                   className="peers-float-tile"
                   data-empty="1"
                   style={{
-                    width: layout.tileW,
-                    height: layout.tileH,
+                    width: L.tileW,
+                    height: L.tileH,
                     display: 'grid',
                     placeItems: 'center',
                     color: '#94a3b8',
@@ -1497,8 +1524,8 @@ function TeacherPeersFloat({
                 pinned={stickySpeakersRef.current.has(identity) || speakingId === identity}
                 teacherPinned={pinnedIdentities.includes(identity)}
                 onTogglePin={onTogglePin ? (on) => onTogglePin(identity, on) : undefined}
-                tileW={layout.tileW}
-                tileH={layout.tileH}
+                tileW={L.tileW}
+                tileH={L.tileH}
                 alert={focusAlerts[identity]}
               />
             );
@@ -2142,7 +2169,6 @@ function RoomInner({
   // Teacher camera starts OFF (turned on from the dock). Students keep their
   // previous default. Nothing is captured or published until camOn is true.
   const [camOn, setCamOn] = useState(() => !isTeacher);
-  const [inviteCopied, setInviteCopied] = useState<'' | 'link' | 'code'>('');
   const [screenOn, setScreenOn] = useState(false);
   const [chatUnread, setChatUnread] = useState(0);
   const [localCamStream, setLocalCamStream] = useState<MediaStream | null>(null);
@@ -2168,6 +2194,17 @@ function RoomInner({
   const [camError, setCamError] = useState<string | null>(null);
   const [hudOpen, setHudOpen] = useState(false);
   const [hudNotice, setHudNotice] = useState('');
+  /** Share tuned for a playing video (30 fps, motion) instead of slides. Remembered in this tab. */
+  const [videoMode, setVideoModeState] = useState(() => {
+    try {
+      return sessionStorage.getItem('share_video_mode') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const videoModeRef = useRef(videoMode);
+  /** Teacher roster search (name / SID). */
+  const [rosterQuery, setRosterQuery] = useState('');
   /** True while we intentionally change presentation stage (avoids teardown races). */
   const stageSwitchRef = useRef(false);
   /** Teacher still wants the screen shared across a LiveKit reconnect. */
@@ -2217,7 +2254,7 @@ function RoomInner({
   const myParticipantId = state?.me?.id ?? null;
   const chatStudents = (state?.admitted ?? [])
     .filter((a) => a.role === 'STUDENT')
-    .map((a) => ({ id: a.id, displayName: a.displayName }));
+    .map((a) => ({ id: a.id, displayName: a.displayName, sid: a.sid ?? null }));
   /** Teacher chat recipient, shared by the dock panel and the share HUD; it
    * stays on the chosen student after each send (Reply / hand chip set it). */
   const [chatTo, setChatTo] = useState<'all' | string>('all');
@@ -2635,6 +2672,65 @@ function RoomInner({
   }, [isTeacher, screenOn, localParticipant, attachShareSurface]);
 
   /**
+   * Switch a running share between slides and video mode without
+   * republishing: capture frame rate, content hint, degradation preference and
+   * the per-layer bitrate / frame-rate caps (lib/videoQuality shareProfile).
+   */
+  const applyShareProfile = useCallback(
+    async (on: boolean) => {
+      if (!localParticipant) return;
+      const profile = shareProfile(on);
+      const lt = localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track as LocalVideoTrack | undefined;
+      const raw = rawShareRef.current;
+      if (raw && raw.readyState === 'live') {
+        try {
+          await raw.applyConstraints({ ...raw.getConstraints(), frameRate: profile.capture.frameRate });
+        } catch (e) {
+          console.warn('share frame rate', e);
+        }
+      }
+      for (const t of [raw, lt?.mediaStreamTrack]) {
+        try {
+          if (t) t.contentHint = profile.contentHint;
+        } catch {
+          /* ignore */
+        }
+      }
+      if (!lt) return;
+      try {
+        await lt.setDegradationPreference(profile.degradationPreference as RTCDegradationPreference);
+      } catch {
+        /* ignore */
+      }
+      const sender = lt.sender;
+      if (!sender) return;
+      try {
+        const params = sender.getParameters();
+        if (!params.encodings?.length) return;
+        params.encodings = shareEncodingsFor(params.encodings, on);
+        await sender.setParameters(params);
+      } catch (e) {
+        console.warn('share encodings', e);
+      }
+    },
+    [localParticipant]
+  );
+
+  const setVideoMode = useCallback(
+    (on: boolean) => {
+      videoModeRef.current = on;
+      setVideoModeState(on);
+      try {
+        sessionStorage.setItem('share_video_mode', on ? '1' : '0');
+      } catch {
+        /* ignore */
+      }
+      void applyShareProfile(on);
+    },
+    [applyShareProfile]
+  );
+
+  /**
    * The click fires getDisplayMedia and the controls window in the same turn,
    * before any await. Awaiting either one first spends the user gesture, and
    * the other call is rejected.
@@ -2669,7 +2765,7 @@ function RoomInner({
 
     shareStartRef.current = true;
     const controlsPromise = beginShareControls();
-    const streamPromise = captureScreen();
+    const streamPromise = captureScreen(videoModeRef.current);
 
     let stream: MediaStream;
     try {
@@ -2717,7 +2813,7 @@ function RoomInner({
       return;
     }
     try {
-      media.contentHint = 'detail';
+      media.contentHint = shareProfile(videoModeRef.current).contentHint;
     } catch {
       /* Safari may reject the hint */
     }
@@ -2802,15 +2898,24 @@ function RoomInner({
       const published = new LocalVideoTrack(mask ? mask.track : media, undefined, true);
       const { width: capW, height: capH } = media.getSettings();
       const simulcast = SCREEN_SHARE.simulcast && screenShareSimulcastFor(capW, capH);
+      // Slides: text must stay sharp, so under CPU/bandwidth pressure drop
+      // frames, not pixels. Video mode: the reverse (smooth 30 fps).
+      const profile = shareProfile(videoModeRef.current);
+      try {
+        published.mediaStreamTrack.contentHint = profile.contentHint;
+      } catch {
+        /* ignore */
+      }
       const shareOpts = (layered: boolean) => ({
         name: 'screen',
         source: Track.Source.ScreenShare,
         simulcast: layered,
-        screenShareEncoding: SCREEN_SHARE.encoding,
-        // Text must stay sharp: under CPU/bandwidth pressure drop frames, not pixels.
-        degradationPreference: 'maintain-resolution' as RTCDegradationPreference,
+        screenShareEncoding: profile.top,
+        degradationPreference: profile.degradationPreference as RTCDegradationPreference,
         screenShareSimulcastLayers: layered
-          ? SCREEN_SHARE.layers.map((l) => new VideoPreset(l.width, l.height, l.maxBitrate, l.maxFramerate))
+          ? SCREEN_SHARE.layers.map(
+              (l) => new VideoPreset(l.width, l.height, profile.low.maxBitrate, profile.low.maxFramerate)
+            )
           : undefined,
       });
       await enqueueLocalPublish(async () => {
@@ -2925,18 +3030,6 @@ function RoomInner({
     room?.disconnect();
     onClassEnded();
     router.push('/teacher/dashboard');
-  }
-
-  async function copyInvite(kind: 'link' | 'code') {
-    const text =
-      kind === 'link' ? `${window.location.origin}/join/${code.toUpperCase()}` : code.toUpperCase();
-    try {
-      await navigator.clipboard.writeText(text);
-      setInviteCopied(kind);
-      window.setTimeout(() => setInviteCopied(''), 2000);
-    } catch {
-      setHudNotice(`Could not copy. Share: ${text}`);
-    }
   }
 
   async function rotateSample() {
@@ -3102,6 +3195,8 @@ function RoomInner({
       .filter((p) => p.role === 'STUDENT')
       .map((p) => ({ ...p, handRaised: !!(p.handRaised || (state?.raisedHands ?? []).includes(p.id)) }))
   );
+  const shownRoster = filterPeople(rosterStudents, rosterQuery);
+  const shownWaiting = filterPeople(state?.waiting ?? [], rosterQuery);
   /** Raised hands, earliest first: shown in the chat panel so they stay in
    * sight while the roster is closed. */
   const raisedHands = rosterStudents
@@ -3483,28 +3578,6 @@ function RoomInner({
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-          {isTeacher && (
-            <>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => void copyInvite('link')}
-                title={`Copy the student join link for ${code}`}
-              >
-                {inviteCopied === 'link' ? 'Copied!' : 'Copy invite link'}
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => void copyInvite('code')}
-                title="Copy the class code"
-              >
-                {inviteCopied === 'code' ? 'Copied!' : 'Copy code'}
-              </Button>
-            </>
-          )}
-        </div>
       </header>
       {isTeacher && (
         <span className="sr-only" aria-live="polite">
@@ -3628,7 +3701,7 @@ function RoomInner({
                   )}
                 </div>
                 <ul className="mt-1 max-h-40 space-y-0.5 overflow-y-auto">
-                  {state!.waiting!.map((p) => (
+                  {shownWaiting.map((p) => (
                     <li key={p.id} className="roster-row" title={rosterLabel(p)}>
                       <Avatar name={p.displayName} size="xs" />
                       <span className="roster-name">{p.displayName}</span>
@@ -3672,6 +3745,25 @@ function RoomInner({
                 <span>{waitingRoomOn ? 'Waiting room' : 'Direct entry'}</span>
               </button>
             </div>
+            <label className="roster-search shrink-0" data-no-drag>
+              <IconSearch size={13} aria-hidden />
+              <input
+                type="search"
+                className="roster-search-input"
+                placeholder="Search name or SID…"
+                value={rosterQuery}
+                onChange={(e) => setRosterQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') setRosterQuery('');
+                }}
+                aria-label="Search students"
+              />
+              {rosterQuery.trim() && (
+                <span className="chat-search-count">
+                  {shownRoster.length}/{rosterStudents.length}
+                </span>
+              )}
+            </label>
             <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto" data-no-drag>
               {rosterStudents.length === 0 && (
                 <EmptyState
@@ -3681,7 +3773,10 @@ function RoomInner({
                   className="py-6"
                 />
               )}
-              {rosterStudents.map((p) => {
+              {rosterStudents.length > 0 && shownRoster.length === 0 && (
+                <li className="py-4 text-center text-2xs text-slate-400">No student matches “{rosterQuery.trim()}”.</li>
+              )}
+              {shownRoster.map((p) => {
                 const raised = !!p.handRaised;
                 const focus = focusLabel(p.focus, p.focusIphone);
                 return (
@@ -3841,6 +3936,8 @@ function RoomInner({
           }
         >
           <TeacherShareHud
+            videoMode={videoMode}
+            onVideoModeChange={setVideoMode}
             focusAlertCount={focusAlertCount}
             host={shareMount}
             hostWindow={shareWindow}
@@ -3852,6 +3949,7 @@ function RoomInner({
               id: w.id,
               displayName: rosterLabel(w),
               role: 'STUDENT',
+              sid: w.sid ?? null,
             }))}
             waitingCount={waitingCount}
             onAdmit={(id) => void admitStudents([id])}
@@ -4242,7 +4340,11 @@ export function ClassroomRoom({ code }: { code: string }) {
         // showing it (teacher camera: 180p/360p/720p simulcast). Kept playing in
         // background tabs so a student alt-tabbing back never sees a frozen
         // share while the stream resumes.
-        adaptiveStream: { pauseVideoInBackground: false },
+        // Phones (touch + small screen) count CSS pixels 1:1, so a phone
+        // receives the 720p share layer (≈1 Mbps in video mode) instead of
+        // the top layer its device-pixel ratio would ask for; laptops and
+        // tablets showing the share large get the top layer.
+        adaptiveStream: { pauseVideoInBackground: false, pixelDensity: subscriberPixelDensity() },
         // Publishers stop encoding simulcast layers nobody is receiving.
         dynacast: true,
         // Per-track options in SelectivePublisher / screen share override these.

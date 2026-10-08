@@ -33,7 +33,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
           pinnedAt: true,
           createdAt: true,
           studentId: true,
-          student: { select: { rollNumber: true, grade: true, division: true } },
+          student: { select: { rollNumber: true, grade: true, division: true, externalId: true } },
         },
       },
     },
@@ -176,6 +176,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     const st = p.student;
     return {
       rollNumber: st?.rollNumber ?? null,
+      sid: st?.externalId ?? null,
       gradeDivision: st ? `${st.grade}-${st.division}` : null,
       late: p.studentId ? lateByStudent.get(p.studentId) ?? false : false,
       onTimetable: !!st && !!classSession && audienceIncludes(classSession, st.grade, st.division),

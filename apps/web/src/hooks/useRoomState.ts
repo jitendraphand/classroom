@@ -10,6 +10,8 @@ import { usePageHidden, usePushLive } from '@/hooks/usePollSignals';
 export type RosterInfo = {
   rollNumber?: string | null;
   gradeDivision?: string | null;
+  /** School student ID (teacher view only). */
+  sid?: string | null;
   late?: boolean;
   onTimetable?: boolean;
   /** The running class is ad hoc (not from the timetable): no timetable wording. */
