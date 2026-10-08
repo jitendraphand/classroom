@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { AdminShell } from '@/components/admin/AdminShell';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader } from '@/components/ui/Card';
-import { DivisionSelect, GradeSelect, useGradeOptions } from '@/components/admin/GradePickers';
+import { CampusSelect, DivisionSelect, GradeSelect, invalidateGradeOptions, useGradeOptions } from '@/components/admin/GradePickers';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { api } from '@/lib/clientFetch';
 import { displayDivision, normalizeDivision, normalizeGrade } from '@/lib/grades';
 
@@ -14,6 +15,7 @@ type Student = {
   id: string;
   externalId: string;
   name: string;
+  campus: string;
   grade: string;
   division: string;
   rollNumber: string | null;
@@ -30,8 +32,15 @@ export default function AdminStudentsPage() {
 }
 
 function StudentsPanel() {
-  const [filter, setFilter] = useState({ grade: '', division: '', q: '' });
-  const [data, setData] = useState<{ total: number; students: Student[]; groups: { grade: string; division: string; count: number }[] } | null>(null);
+  const [filter, setFilter] = useState({ campus: '', grade: '', division: '', q: '' });
+  const [data, setData] = useState<{
+    total: number;
+    students: Student[];
+    groups: { campus: string; grade: string; division: string; count: number }[];
+  } | null>(null);
+  const [importCampus, setImportCampus] = useState('');
+  const [deleting, setDeleting] = useState<Student | null>(null);
+  const [unknownCampuses, setUnknownCampuses] = useState<{ campus: string; count: number }[]>([]);
   const [csv, setCsv] = useState('');
   const [result, setResult] = useState<string>('');
   const [errors, setErrors] = useState<string[]>([]);
@@ -42,8 +51,12 @@ function StudentsPanel() {
   const [notice, setNotice] = useState('');
 
   const loadUnrecognised = useCallback(async () => {
-    const r = await api<{ unrecognised: Unrecognised[] }>('/api/admin/grades');
+    const [r, c] = await Promise.all([
+      api<{ unrecognised: Unrecognised[] }>('/api/admin/grades'),
+      api<{ unrecognised: { campus: string; count: number }[] }>('/api/admin/campuses'),
+    ]);
     if (r.ok) setUnrecognised(r.data.unrecognised ?? []);
+    if (c.ok) setUnknownCampuses(c.data.unrecognised ?? []);
   }, []);
 
   useEffect(() => {
@@ -51,7 +64,31 @@ function StudentsPanel() {
   }, [loadUnrecognised]);
 
   const unknownKeys = new Set(unrecognised.map((u) => `${u.grade}|${u.division}`));
-  const isUnknown = (s: Student) => unknownKeys.has(`${normalizeGrade(s.grade)}|${normalizeDivision(s.division)}`);
+  const unknownCampusSet = new Set(unknownCampuses.map((u) => u.campus));
+  const isUnknown = (s: Student) =>
+    unknownKeys.has(`${normalizeGrade(s.grade)}|${normalizeDivision(s.division)}`) || unknownCampusSet.has(s.campus);
+
+  async function recogniseCampus(campus: string) {
+    setBusy(true);
+    setNotice('');
+    const r = await api('/api/admin/campuses', { body: { label: campus } });
+    setBusy(false);
+    setNotice(r.ok ? `Added campus ${campus}.` : r.data.error || 'Could not add it.');
+    invalidateGradeOptions();
+    gradeOptions.reload();
+    void loadUnrecognised();
+  }
+
+  async function removeStudent(s: Student) {
+    const r = await api<{ ok: boolean }>('/api/admin/students', { method: 'DELETE', body: { id: s.id } });
+    if (!r.ok) {
+      setNotice(r.data.error || 'Delete failed');
+      return;
+    }
+    setNotice(`Deleted ${s.name} (${s.externalId}). Their attendance history stays in reports.`);
+    setDeleting(null);
+    void load();
+  }
 
   async function recognise(u: Unrecognised) {
     setBusy(true);
@@ -77,7 +114,7 @@ function StudentsPanel() {
     setResult('');
     const { ok, data: d } = await api<{ created?: number; updated?: number; valid?: number; errors: string[]; errorCount: number }>(
       '/api/admin/students/import',
-      { body: { csv, dryRun } }
+      { body: { csv, dryRun, ...(importCampus ? { campus: importCampus } : {}) } }
     );
     setBusy(false);
     if (!ok) {
@@ -99,6 +136,46 @@ function StudentsPanel() {
         <p className="rounded-xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-100" role="status">
           {notice}
         </p>
+      )}
+      {deleting && (
+        <ConfirmDialog
+          title={`Delete ${deleting.name}?`}
+          confirmLabel="Delete student"
+          onConfirm={() => removeStudent(deleting)}
+          onClose={() => setDeleting(null)}
+        >
+          <p>
+            {deleting.name} ({deleting.externalId}, {deleting.campus} · {deleting.grade}-{displayDivision(deleting.division)}) is removed from the
+            student list and new reports, and leaves any class they are in now.
+          </p>
+          <p className="text-slate-400">
+            Past attendance stays in reports. If the student opens a join link from the school app again (or is in a roster import), they come back
+            with their history.
+          </p>
+        </ConfirmDialog>
+      )}
+      {unknownCampuses.length > 0 && (
+        <Card className="border-amber-400/40">
+          <CardHeader
+            title="Students with an unrecognised campus"
+            subtitle="These came from the school app with a campus that is not in Grades & divisions → Campuses. Add the real ones; fix typos in the school app."
+          />
+          <ul className="divide-y divide-white/5 text-sm" aria-label="Unrecognised campuses">
+            {unknownCampuses.map((u) => (
+              <li key={u.campus} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                <span>
+                  <span className="font-medium text-amber-100">{u.campus}</span>{' '}
+                  <span className="text-slate-400">
+                    · {u.count} student{u.count === 1 ? '' : 's'}
+                  </span>
+                </span>
+                <Button size="sm" variant="secondary" disabled={busy} onClick={() => void recogniseCampus(u.campus)}>
+                  Add campus
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </Card>
       )}
       {unrecognised.length > 0 && (
         <Card className="border-amber-400/40">
@@ -132,13 +209,18 @@ function StudentsPanel() {
           subtitle="Students appear here automatically the first time they join from the school app. Import the roster so students who never join are counted as absent."
         />
         <p className="mb-2 text-xs text-slate-400">
-          CSV columns: <code className="text-slate-200">externalId,name,grade,division,roll</code> (header row optional). The
-          externalId must be the same student ID the school app sends. Grade and division must be active entries in{' '}
+          CSV columns: <code className="text-slate-200">externalId,name,grade,division,roll,campus</code> (header row optional). The
+          externalId must be the same student ID the school app sends. Rows without a campus use the campus picked below. Campus, grade
+          and division must be active entries in{' '}
           <a href="/admin/grades" className="text-brand-300 hover:underline">
             Grades &amp; divisions
           </a>{' '}
           (case and spaces do not matter); other rows are reported and skipped.
         </p>
+        <label className="mb-3 flex flex-wrap items-center gap-2 text-sm text-slate-300">
+          Campus for rows without one
+          <CampusSelect className="w-44" value={importCampus} onChange={setImportCampus} options={gradeOptions} emptyLabel="Only campus / none" />
+        </label>
         <input
           type="file"
           accept=".csv,text/csv"
@@ -150,7 +232,7 @@ function StudentsPanel() {
         />
         <textarea
           className="input h-32 font-mono text-xs"
-          placeholder={'externalId,name,grade,division,roll\nS1001,Asha Patil,7,A,1'}
+          placeholder={'externalId,name,grade,division,roll,campus\nS1001,Asha Patil,7,A,1,CC'}
           value={csv}
           onChange={(e) => setCsv(e.target.value)}
           aria-label="Roster CSV"
@@ -175,6 +257,7 @@ function StudentsPanel() {
 
       <Card padding={false}>
         <div className="flex flex-wrap items-end gap-3 p-5 sm:p-6">
+          <CampusSelect className="w-40" value={filter.campus} onChange={(c) => setFilter({ ...filter, campus: c })} options={gradeOptions} emptyLabel="All campuses" />
           <GradeSelect className="w-40" value={filter.grade} onChange={(g) => setFilter({ ...filter, grade: g, division: '' })} options={gradeOptions} emptyLabel="All grades" />
           <DivisionSelect className="w-40" grade={filter.grade} value={filter.division} onChange={(d) => setFilter({ ...filter, division: d })} options={gradeOptions} />
           <input className="input max-w-xs" placeholder="Name, ID or roll no" value={filter.q} onChange={(e) => setFilter({ ...filter, q: e.target.value })} aria-label="Search" />
@@ -182,14 +265,14 @@ function StudentsPanel() {
         </div>
         {data && data.groups.length > 0 && (
           <p className="px-6 pb-3 text-xs text-slate-500">
-            {data.groups.map((g) => `${g.grade}-${displayDivision(g.division)}: ${g.count}`).join(' · ')}
+            {data.groups.map((g) => `${g.campus} ${g.grade}-${displayDivision(g.division)}: ${g.count}`).join(' · ')}
           </p>
         )}
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[640px] text-left text-sm">
+          <table className="w-full min-w-[760px] text-left text-sm">
             <thead className="text-2xs uppercase tracking-wider text-slate-500">
               <tr className="border-b border-white/5">
-                {['Student ID', 'Name', 'Class', 'Roll', 'Source', 'Last joined'].map((h) => (
+                {['Student ID', 'Name', 'Campus', 'Class', 'Roll', 'Source', 'Last joined', ''].map((h) => (
                   <th key={h} className="px-4 py-3 font-semibold">
                     {h}
                   </th>
@@ -201,12 +284,13 @@ function StudentsPanel() {
                 <tr key={s.id}>
                   <td className="px-4 py-2 font-mono text-xs">{s.externalId}</td>
                   <td className="px-4 py-2 text-white">{s.name}</td>
+                  <td className="px-4 py-2">{s.campus}</td>
                   <td className="px-4 py-2">
                     {s.grade}-{displayDivision(s.division)}
                     {isUnknown(s) && (
                       <span
                         className="ml-2 rounded-md border border-amber-400/40 bg-amber-500/10 px-1.5 py-0.5 text-2xs font-semibold text-amber-200"
-                        title="Not in Grades & divisions: no class can be scheduled for this student"
+                        title="Campus, grade or division not in Grades & divisions: no class can be scheduled for this student"
                       >
                         Unrecognised
                       </span>
@@ -215,6 +299,11 @@ function StudentsPanel() {
                   <td className="px-4 py-2">{s.rollNumber}</td>
                   <td className="px-4 py-2 text-slate-400">{s.source === 'import' ? 'Roster import' : 'School app'}</td>
                   <td className="px-4 py-2 text-xs text-slate-400">{s.lastSeenAt ? new Date(s.lastSeenAt).toLocaleString() : 'Never'}</td>
+                  <td className="px-4 py-2 text-right">
+                    <Button size="sm" variant="danger" onClick={() => setDeleting(s)} aria-label={`Delete ${s.name}`}>
+                      Delete
+                    </Button>
+                  </td>
                 </tr>
               ))}
             </tbody>

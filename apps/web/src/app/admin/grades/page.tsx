@@ -14,10 +14,12 @@ type Division = { id: string; name: string; label: string; active: boolean; usag
 type Grade = { id: string; name: string; label: string; sortOrder: number; active: boolean; usageCount: number; divisions: Division[] };
 type Unrecognised = { grade: string; division: string; count: number; gradeKnown: boolean };
 type Data = { grades: Grade[]; unrecognised: Unrecognised[] };
+type Campus = { id: string; name: string; label: string; active: boolean; usageCount: number };
+type CampusData = { campuses: Campus[]; unrecognised: { campus: string; count: number }[] };
 
 export default function AdminGradesPage() {
   return (
-    <AdminShell title="Grades & divisions">
+    <AdminShell title="Campuses, grades & divisions">
       <GradesPanel />
     </AdminShell>
   );
@@ -29,11 +31,14 @@ function GradesPanel() {
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [newGrade, setNewGrade] = useState({ label: '', divisions: '' });
+  const [campusData, setCampusData] = useState<CampusData | null>(null);
+  const [newCampus, setNewCampus] = useState('');
 
   const load = useCallback(async () => {
-    const { ok, data: d } = await api<Data>('/api/admin/grades');
-    if (ok) setData(d);
-    else setError(d.error || 'Could not load grades');
+    const [g, c] = await Promise.all([api<Data>('/api/admin/grades'), api<CampusData>('/api/admin/campuses')]);
+    if (g.ok) setData(g.data);
+    else setError(g.data.error || 'Could not load grades');
+    if (c.ok) setCampusData(c.data);
   }, []);
 
   useEffect(() => {
@@ -86,6 +91,9 @@ function GradesPanel() {
   }
 
   const grades = data?.grades ?? [];
+  const campuses = campusData?.campuses ?? [];
+  const patchCampus = (c: Campus, body: Record<string, unknown>, ok = 'Saved.') =>
+    run(`/api/admin/campuses/${c.id}`, { method: 'PATCH', body }, ok);
 
   return (
     <div className="space-y-6">
@@ -123,10 +131,65 @@ function GradesPanel() {
         </Card>
       )}
 
+      <Card padding={false}>
+        <div className="p-5 sm:p-6">
+          <h2 className="font-display text-lg font-semibold">Campuses {campusData ? `(${campuses.length})` : ''}</h2>
+          <p className="mt-1 text-xs text-slate-500">
+            Classes are routed by campus + grade + division. The school app sends the campus as <code>&amp;Campus=</code> in the join link (case
+            and spaces do not matter). A link without a campus is accepted only while exactly one campus is active, and uses that campus.
+          </p>
+          <form
+            className="mt-3 flex flex-wrap gap-2"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (newCampus.trim() && (await run('/api/admin/campuses', { body: { label: newCampus } }, `Campus ${newCampus} added.`))) setNewCampus('');
+            }}
+          >
+            <input className="input w-56" maxLength={32} value={newCampus} onChange={(e) => setNewCampus(e.target.value)} placeholder="CC, North" aria-label="New campus" />
+            <Button type="submit" disabled={busy || !newCampus.trim()}>
+              Add campus
+            </Button>
+          </form>
+        </div>
+        {!!campusData?.unrecognised.length && (
+          <div className="border-t border-amber-400/20 px-5 py-3 text-sm sm:px-6">
+            <p className="mb-2 text-xs text-amber-200">Unrecognised campuses seen from the school app:</p>
+            <div className="flex flex-wrap gap-2">
+              {campusData.unrecognised.map((u) => (
+                <Button key={u.campus} size="sm" variant="secondary" disabled={busy} onClick={() => void run('/api/admin/campuses', { body: { label: u.campus } }, `Campus ${u.campus} added.`)}>
+                  Add {u.campus} ({u.count})
+                </Button>
+              ))}
+            </div>
+          </div>
+        )}
+        {campusData && campuses.length === 0 ? (
+          <p className="px-6 pb-6 text-sm text-slate-400">No campuses yet. Until one is added, campus fields accept free text.</p>
+        ) : (
+          <ul className="divide-y divide-white/5" aria-label="Campuses">
+            {campuses.map((c) => (
+              <CampusRow
+                key={c.id}
+                c={c}
+                busy={busy}
+                onRename={(label) => patchCampus(c, { label }, 'Campus renamed.')}
+                onToggle={() => void patchCampus(c, { active: !c.active }, c.active ? `Campus ${c.name} deactivated.` : `Campus ${c.name} activated.`)}
+                onDelete={() => {
+                  if (!confirm(`Delete campus ${c.label}?`)) return;
+                  void run(`/api/admin/campuses/${c.id}`, { method: 'DELETE' }, `Campus ${c.name} deleted.`, () =>
+                    patchCampus(c, { active: false }, `Campus ${c.name} deactivated.`)
+                  );
+                }}
+              />
+            ))}
+          </ul>
+        )}
+      </Card>
+
       <Card>
         <CardHeader
           title="Add grade"
-          subtitle="Grades and divisions here fill every grade/division dropdown (timetable, teachers, reports, students, ad-hoc classes). Case and spaces do not matter: 'mahaveer' and 'Mahaveer' are the same division."
+          subtitle="Grades and divisions are shared by all campuses and fill every grade/division dropdown (timetable, teachers, reports, students, ad-hoc classes). Case and spaces do not matter: 'mahaveer' and 'Mahaveer' are the same division."
         />
         <form onSubmit={addGrade} className="grid gap-3 sm:grid-cols-[1fr_2fr_auto] sm:items-end">
           <label className="block">
@@ -145,7 +208,7 @@ function GradesPanel() {
           <Button size="sm" variant="ghost" disabled={busy} onClick={() => void run('/api/admin/grades/sync', { method: 'POST' }, 'Synced from existing data.')}>
             Sync from existing data
           </Button>
-          Adds any grade/division already used by teachers, the timetable, students or past classes.
+          Adds any campus, grade or division already used by teachers, the timetable, students or past classes.
         </div>
       </Card>
 
@@ -320,6 +383,52 @@ function GradeRow(props: {
             Add
           </Button>
         </form>
+      </div>
+    </li>
+  );
+}
+
+function CampusRow(props: { c: Campus; busy: boolean; onRename: (label: string) => Promise<boolean>; onToggle: () => void; onDelete: () => void }) {
+  const { c, busy } = props;
+  const [renaming, setRenaming] = useState<string | null>(null);
+  return (
+    <li className={cn('flex flex-wrap items-center justify-between gap-3 px-5 py-3 sm:px-6', !c.active && 'opacity-60')}>
+      <div className="flex items-center gap-2">
+        {renaming !== null ? (
+          <form
+            className="flex gap-2"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (await props.onRename(renaming)) setRenaming(null);
+            }}
+          >
+            <input className="input w-48" value={renaming} maxLength={32} onChange={(e) => setRenaming(e.target.value)} aria-label="Campus label" autoFocus />
+            <Button type="submit" size="sm">
+              Save
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setRenaming(null)}>
+              Cancel
+            </Button>
+          </form>
+        ) : (
+          <p className="font-medium text-white">
+            {c.label}
+            {c.label !== c.name && <span className="ml-2 text-xs font-normal text-slate-500">({c.name})</span>}
+          </p>
+        )}
+        {!c.active && <Badge tone="warning">Inactive</Badge>}
+        <span className="text-xs text-slate-500">{c.usageCount ? `${c.usageCount} in use` : 'not used'}</span>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" variant="secondary" onClick={() => setRenaming(c.label)}>
+          Rename
+        </Button>
+        <Button size="sm" variant={c.active ? 'warning' : 'secondary'} disabled={busy} onClick={props.onToggle}>
+          {c.active ? 'Deactivate' : 'Activate'}
+        </Button>
+        <Button size="sm" variant="danger" disabled={busy} onClick={props.onDelete}>
+          Delete
+        </Button>
       </div>
     </li>
   );

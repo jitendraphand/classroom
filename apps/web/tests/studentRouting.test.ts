@@ -10,6 +10,7 @@ function slot(p: Partial<SlotLike>): SlotLike {
   return {
     id: 's',
     teacherId: 't1',
+    campus: 'CC',
     grade: '7',
     divisions: ['A'],
     allDivisions: false,
@@ -32,7 +33,7 @@ const slots = [
 const at = (hhmm: string) => zonedTimeToUtc(TODAY, Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3)), IST);
 
 function route(division: string, now: Date, sessions = new Map<string, SessionState>(), liveAdHoc: { id: string; subject: string; startedAt: Date | null }[] = []) {
-  const occ = forAudience(occurrencesOn(TODAY, slots, [], IST), '7', division).sort((a, b) => a.start.getTime() - b.start.getTime());
+  const occ = forAudience(occurrencesOn(TODAY, slots, [], IST), { campus: 'CC', grade: '7', division }).sort((a, b) => a.start.getTime() - b.start.getTime());
   return decideRoute({ occurrences: occ, sessions, liveAdHoc, now, earlyMinutes: 10, today: TODAY });
 }
 

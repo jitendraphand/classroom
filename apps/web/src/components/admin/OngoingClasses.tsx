@@ -9,6 +9,8 @@ import { IconUsers, IconVideo } from '@/components/ui/Icons';
 import { api } from '@/lib/clientFetch';
 import { formatElapsed, type LiveClass } from '@/lib/liveClassesLogic';
 import { useSessionEnded } from '@/hooks/useSessionEnded';
+import { CampusSelect, useGradeOptions } from '@/components/admin/GradePickers';
+import { normalizeCampus } from '@/lib/grades';
 
 /** How often the list (counts, new/ended classes) is refreshed. */
 const POLL_MS = 5_000;
@@ -28,6 +30,9 @@ export function OngoingClasses() {
   const [classes, setClasses] = useState<LiveClass[] | null>(null);
   const [error, setError] = useState('');
   const now = useNow();
+  const gradeOptions = useGradeOptions();
+  const [campus, setCampus] = useState('');
+  const shown = classes && campus ? classes.filter((c) => normalizeCampus(c.campus ?? '') === campus) : classes;
 
   // Signed out / replaced (StaffSessionGuard shows why): stop polling.
   const sessionEnded = useSessionEnded();
@@ -62,8 +67,11 @@ export function OngoingClasses() {
     <section aria-labelledby="ongoing-heading" className="space-y-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 id="ongoing-heading" className="font-display text-lg font-semibold">
-          Live now {classes ? `(${classes.length})` : ''}
+          Live now {shown ? `(${shown.length})` : ''}
         </h2>
+        {(gradeOptions.campuses.length > 1 || campus) && (
+          <CampusSelect className="w-44 py-1.5 text-sm" value={campus} onChange={setCampus} options={gradeOptions} emptyLabel="All campuses" />
+        )}
         <p className="text-xs text-slate-500">
           Muted previews of what students see · refreshes every {POLL_MS / 1000}s · click a class to sit in
         </p>
@@ -73,17 +81,17 @@ export function OngoingClasses() {
           {error}
         </p>
       )}
-      {!classes ? (
+      {!shown ? (
         <p className="text-sm text-slate-400">Loading…</p>
-      ) : classes.length === 0 ? (
+      ) : shown.length === 0 ? (
         <EmptyState
           icon={<IconVideo size={28} />}
-          title="No classes are live right now"
+          title={campus ? `No ${campus} classes are live right now` : 'No classes are live right now'}
           description="Classes appear here as soon as a teacher starts them."
         />
       ) : (
         <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
-          {classes.map((c) => (
+          {shown.map((c) => (
             <li key={`${c.code}:${c.sessionId}`}>
               <LiveClassTile c={c} now={now} />
             </li>

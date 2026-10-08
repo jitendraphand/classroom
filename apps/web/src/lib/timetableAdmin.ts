@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { prisma } from './db';
-import { formatAudience, normalizeGrade, parseDivisionList } from './grades';
+import { formatAudience, normalizeCampus, normalizeGrade, parseDivisionList } from './grades';
+import { campusUnknownMessage } from './campusMaster';
 import {
   WEEKDAYS,
   dateValue,
@@ -37,10 +38,13 @@ const optDate = z
 
 export const slotBody = z.object({
   teacherId: z.string().min(1),
+  campus: z.string().min(1).max(40),
   grade: z.string().min(1).max(16),
   divisions: z.union([z.string().max(200), z.array(z.string().max(32)).max(40)]),
   subject: z.string().trim().min(1).max(80),
   weekday: z.number().int().min(0).max(6),
+  /** Create only: several days at once (one weekly slot per day). */
+  weekdays: z.array(z.number().int().min(0).max(6)).min(1).max(7).optional(),
   start: time,
   end: time,
   effectiveFrom: optDate,
@@ -56,6 +60,7 @@ function toInput(b: SlotBody, id?: string): SlotInput {
   return {
     id,
     teacherId: b.teacherId,
+    campus: normalizeCampus(b.campus),
     grade: normalizeGrade(b.grade),
     divisions: d.divisions,
     allDivisions: d.allDivisions,
@@ -70,6 +75,7 @@ function toInput(b: SlotBody, id?: string): SlotInput {
 
 function describeSlot(s: SlotLike, names: Map<string, string>) {
   return `${WEEKDAYS[s.weekday]} ${formatHHMM(s.startMinute)}–${formatHHMM(s.endMinute)} ${s.subject} (${formatAudience(
+    s.campus,
     s.grade,
     s.divisions,
     s.allDivisions
@@ -82,19 +88,25 @@ async function teacherNames() {
 }
 
 /** Same audience as the stored row (editing other fields of a legacy slot stays possible). */
-function sameAudience(a: { grade: string; divisions: string[]; allDivisions: boolean }, b: typeof a) {
-  return a.grade === b.grade && a.allDivisions === b.allDivisions && [...a.divisions].sort().join() === [...b.divisions].sort().join();
+function sameAudience(a: { campus: string; grade: string; divisions: string[]; allDivisions: boolean }, b: typeof a) {
+  return a.campus === b.campus && a.grade === b.grade && a.allDivisions === b.allDivisions && [...a.divisions].sort().join() === [...b.divisions].sort().join();
 }
 
-async function validateSlot(input: SlotInput, force: boolean, existing?: { grade: string; divisions: string[]; allDivisions: boolean }) {
+async function validateSlot(
+  input: SlotInput,
+  force: boolean,
+  existing?: { campus: string; grade: string; divisions: string[]; allDivisions: boolean }
+) {
   const problem = slotProblem(input);
   if (problem) throw new TimetableError(problem);
   if (!existing || !sameAudience(existing, input)) {
+    const campusUnknown = await campusUnknownMessage(input.campus);
+    if (campusUnknown) throw new TimetableError(campusUnknown);
     const unknown = await audienceUnknownMessage(input.grade, input.divisions, input.allDivisions);
     if (unknown) throw new TimetableError(unknown);
   }
   const teacher = await prisma.teacher.findUnique({ where: { id: input.teacherId } });
-  if (!teacher) throw new TimetableError('Teacher not found', 404);
+  if (!teacher || teacher.deletedAt) throw new TimetableError('Teacher not found', 404);
   const sameDay = (await prisma.timetableSlot.findMany({ where: { weekday: input.weekday } })).map(toSlotLike);
   const c = slotConflicts(input, sameDay);
   const names = await teacherNames();
@@ -107,7 +119,7 @@ async function validateSlot(input: SlotInput, force: boolean, existing?: { grade
   }
   if (c.audience.length && !force) {
     throw new TimetableError(
-      `That grade-division already has a class at that time: ${c.audience.map((s) => describeSlot(s, names)).join('; ')}`,
+      `That campus grade-division already has a class at that time: ${c.audience.map((s) => describeSlot(s, names)).join('; ')}`,
       409,
       { conflict: 'audience', canForce: true }
     );
@@ -117,6 +129,7 @@ async function validateSlot(input: SlotInput, force: boolean, existing?: { grade
 function slotData(input: SlotInput) {
   return {
     teacherId: input.teacherId,
+    campus: input.campus,
     grade: input.grade,
     divisions: input.divisions,
     allDivisions: input.allDivisions,
@@ -129,10 +142,26 @@ function slotData(input: SlotInput) {
   };
 }
 
+/**
+ * Create one weekly slot, or one per day when `weekdays` lists several
+ * (same time, teacher and audience). All days are checked first; nothing is
+ * created if any day conflicts, and the error names that day.
+ */
 export async function createSlot(body: SlotBody) {
-  const input = toInput(body);
-  await validateSlot(input, !!body.force);
-  return prisma.timetableSlot.create({ data: slotData(input) });
+  const days = [...new Set(body.weekdays?.length ? body.weekdays : [body.weekday])].sort((a, b) => a - b);
+  const inputs = days.map((weekday) => toInput({ ...body, weekday }));
+  for (const input of inputs) {
+    try {
+      await validateSlot(input, !!body.force);
+    } catch (e) {
+      if (e instanceof TimetableError && days.length > 1) {
+        throw new TimetableError(`${WEEKDAYS[input.weekday]}: ${e.message}`, e.status, e.extra);
+      }
+      throw e;
+    }
+  }
+  const created = await prisma.$transaction(inputs.map((input) => prisma.timetableSlot.create({ data: slotData(input) })));
+  return created.length === 1 ? created[0]! : created;
 }
 
 export async function updateSlot(id: string, body: SlotBody) {
@@ -157,6 +186,7 @@ export const overrideBody = z.object({
   date: z.string().refine(isLocalDate, 'Use a YYYY-MM-DD date'),
   slotId: z.string().optional().nullable(),
   teacherId: z.string().optional().nullable(),
+  campus: z.string().max(40).optional().nullable(),
   grade: z.string().max(16).optional().nullable(),
   divisions: z.union([z.string().max(200), z.array(z.string().max(32)).max(40)]).optional().nullable(),
   subject: z.string().max(80).optional().nullable(),
@@ -176,6 +206,7 @@ function minuteOrNull(s: string | null | undefined, label: string): number | nul
 
 function describeOcc(o: Occurrence, names: Map<string, string>) {
   return `${formatHHMM(o.startMinute)}–${formatHHMM(o.endMinute)} ${o.subject} (${formatAudience(
+    o.campus,
     o.grade,
     o.divisions,
     o.allDivisions
@@ -187,10 +218,11 @@ export async function createOverride(body: OverrideBody) {
   const endMinute = minuteOrNull(body.end, 'End');
   const div = body.divisions != null && body.divisions !== '' ? parseDivisionList(body.divisions) : null;
   const grade = body.grade ? normalizeGrade(body.grade) : null;
+  const campusIn = body.campus ? normalizeCampus(body.campus) : null;
   const subject = body.subject?.trim() || null;
   const teacherId = body.teacherId || null;
 
-  if (teacherId && !(await prisma.teacher.findUnique({ where: { id: teacherId } }))) {
+  if (teacherId && !(await prisma.teacher.findFirst({ where: { id: teacherId, deletedAt: null } }))) {
     throw new TimetableError('Teacher not found', 404);
   }
 
@@ -216,11 +248,17 @@ export async function createOverride(body: OverrideBody) {
   }
   if (body.kind === 'EXTRA') {
     if (!teacherId) throw new TimetableError('Pick the teacher for the extra class');
-    if (!grade || !div || (!div.allDivisions && !div.divisions.length)) {
-      throw new TimetableError('Give the grade and divisions for the extra class');
+    if (!campusIn || !grade || !div || (!div.allDivisions && !div.divisions.length)) {
+      throw new TimetableError('Give the campus, grade and divisions for the extra class');
     }
     if (startMinute == null || endMinute == null) throw new TimetableError('Give start and end times');
     if (!subject) throw new TimetableError('Give a subject');
+  }
+  // A changed audience keeps the slot's campus unless another is given.
+  const campus = body.kind === 'CANCEL' || !grade ? null : campusIn ?? slot?.campus ?? null;
+  if (campus) {
+    const campusUnknown = await campusUnknownMessage(campus);
+    if (campusUnknown) throw new TimetableError(campusUnknown);
   }
   if (body.kind !== 'CANCEL' && grade && div) {
     const unknown = await audienceUnknownMessage(grade, div.divisions, div.allDivisions);
@@ -237,6 +275,7 @@ export async function createOverride(body: OverrideBody) {
     date: dateValue(body.date),
     slotId: body.kind === 'EXTRA' ? null : body.slotId!,
     teacherId: body.kind === 'CANCEL' ? null : teacherId,
+    campus,
     grade: body.kind === 'CANCEL' ? null : grade,
     divisions: body.kind === 'CANCEL' ? [] : div?.divisions ?? [],
     allDivisions: body.kind === 'CANCEL' ? false : div?.allDivisions ?? false,
@@ -264,7 +303,7 @@ export async function createOverride(body: OverrideBody) {
     const a = c.audience.filter(involves);
     if (a.length && !body.force) {
       const other = a[0]!.find((o) => o.key !== changedKey)!;
-      throw new TimetableError(`That grade-division already has a class then: ${describeOcc(other, names)}`, 409, {
+      throw new TimetableError(`That campus grade-division already has a class then: ${describeOcc(other, names)}`, 409, {
         conflict: 'audience',
         canForce: true,
       });

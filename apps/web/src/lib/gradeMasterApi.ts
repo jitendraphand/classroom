@@ -21,6 +21,7 @@ import {
   type Usage,
 } from './gradeMasterLogic';
 import type { AdminGuard } from './adminLiveApi';
+import { activeCampusOptions, type MasterCampus } from './campusLogic';
 
 export type GradeRow = { id: string; name: string; label: string; sortOrder: number; active: boolean };
 export type DivisionRow = { id: string; gradeId: string; gradeName: string; name: string; label: string; active: boolean };
@@ -288,11 +289,20 @@ export async function handleRecognise(body: unknown, deps: Deps) {
  * Dropdown data for admin and teacher pages: active grades in order with
  * their active divisions. Requires an admin or teacher session.
  */
-export async function handleGradeOptions(deps: { authorised: () => Promise<boolean>; list: () => Promise<MasterGrade[]> }) {
+export async function handleGradeOptions(deps: {
+  authorised: () => Promise<boolean>;
+  list: () => Promise<MasterGrade[]>;
+  campuses?: () => Promise<MasterCampus[]>;
+}) {
   if (!(await deps.authorised())) return err('Sign-in required', 401);
-  const master = await deps.list();
+  const [master, campusMaster] = await Promise.all([deps.list(), deps.campuses ? deps.campuses() : Promise.resolve([])]);
   const grades: GradeOption[] = activeOptions(master);
-  return json({ grades, configured: master.length > 0 });
+  return json({
+    grades,
+    configured: master.length > 0,
+    campuses: activeCampusOptions(campusMaster),
+    campusesConfigured: campusMaster.length > 0,
+  });
 }
 
 function parseList(raw: unknown): string[] {

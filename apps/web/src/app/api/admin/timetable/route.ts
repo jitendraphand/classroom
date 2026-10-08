@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/adminGuard';
-import { audienceIncludes, formatAudience, normalizeDivision, normalizeGrade } from '@/lib/grades';
+import { audienceIncludes, formatAudience, normalizeCampus, normalizeDivision, normalizeGrade } from '@/lib/grades';
 import { jsonOk } from '@/lib/response';
 import { addDays, dateOnly, dateValue, formatHHMM, localDateOf } from '@/lib/schedule';
 import { appTimeZone } from '@/lib/schoolConfig';
@@ -16,6 +16,7 @@ export async function GET(req: Request) {
   if (res) return res;
   const url = new URL(req.url);
   const teacherId = url.searchParams.get('teacherId') || undefined;
+  const campus = url.searchParams.get('campus') ? normalizeCampus(url.searchParams.get('campus')) : undefined;
   const grade = url.searchParams.get('grade') ? normalizeGrade(url.searchParams.get('grade')) : undefined;
   const division = url.searchParams.get('division') ? normalizeDivision(url.searchParams.get('division')) : undefined;
   const tz = appTimeZone();
@@ -25,11 +26,12 @@ export async function GET(req: Request) {
 
   const [teachers, slotRows, overrideRows] = await Promise.all([
     prisma.teacher.findMany({
+      where: { deletedAt: null },
       orderBy: { name: 'asc' },
-      select: { id: true, name: true, disabled: true, assignments: { select: { grade: true, division: true } } },
+      select: { id: true, name: true, disabled: true, assignments: { select: { campus: true, grade: true, division: true } } },
     }),
     prisma.timetableSlot.findMany({
-      where: { ...(teacherId ? { teacherId } : {}), ...(grade ? { grade } : {}) },
+      where: { ...(teacherId ? { teacherId } : {}), ...(campus ? { campus } : {}), ...(grade ? { grade } : {}) },
       orderBy: [{ weekday: 'asc' }, { startMinute: 'asc' }],
     }),
     prisma.scheduleOverride.findMany({
@@ -40,15 +42,16 @@ export async function GET(req: Request) {
   ]);
   const names = new Map(teachers.map((t) => [t.id, t.name]));
   const slots = slotRows
-    .filter((s) => !division || audienceIncludes(s, s.grade, division))
+    .filter((s) => !division || audienceIncludes(s, { campus: s.campus, grade: s.grade, division }))
     .map((s) => ({
       id: s.id,
       teacherId: s.teacherId,
       teacherName: names.get(s.teacherId) ?? '—',
+      campus: s.campus,
       grade: s.grade,
       divisions: s.divisions,
       allDivisions: s.allDivisions,
-      audience: formatAudience(s.grade, s.divisions, s.allDivisions),
+      audience: formatAudience(s.campus, s.grade, s.divisions, s.allDivisions),
       subject: s.subject,
       weekday: s.weekday,
       start: formatHHMM(s.startMinute),
@@ -63,13 +66,14 @@ export async function GET(req: Request) {
     slotId: o.slotId,
     slotLabel: o.slot
       ? `${o.slot.subject} ${formatHHMM(o.slot.startMinute)}–${formatHHMM(o.slot.endMinute)} · ${formatAudience(
+          o.slot.campus,
           o.slot.grade,
           o.slot.divisions,
           o.slot.allDivisions
         )} · ${names.get(o.slot.teacherId) ?? ''}`
       : null,
     teacherName: o.teacherId ? names.get(o.teacherId) ?? '—' : null,
-    audience: o.grade ? formatAudience(o.grade, o.divisions, o.allDivisions) : null,
+    audience: o.grade ? formatAudience(o.campus ?? o.slot?.campus ?? '', o.grade, o.divisions, o.allDivisions) : null,
     subject: o.subject,
     start: o.startMinute != null ? formatHHMM(o.startMinute) : null,
     end: o.endMinute != null ? formatHHMM(o.endMinute) : null,

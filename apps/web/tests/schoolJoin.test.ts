@@ -159,7 +159,7 @@ function memoryDb() {
 
 test('first join creates the student keyed on SID; a later join updates name/grade/division', async () => {
   const db = memoryDb();
-  const first = await upsertStudentFromClaims(validateUnsignedJoin(readUnsignedFields(new URLSearchParams(CANONICAL + '&Roll=12'))), db);
+  const first = await upsertStudentFromClaims({ ...validateUnsignedJoin(readUnsignedFields(new URLSearchParams(CANONICAL + '&Roll=12'))), campus: 'CC' }, db);
   assert.equal(first.externalId, 'GOS000123');
   assert.equal(first.name, 'Arohi Patil');
   assert.equal(first.grade, '7');
@@ -169,7 +169,7 @@ test('first join creates the student keyed on SID; a later join updates name/gra
 
   // Promoted: next year's link.
   const later = await upsertStudentFromClaims(
-    validateUnsignedJoin(readUnsignedFields(new URLSearchParams('FirstName=Arohi&LastName=Patil-Shah&SID=GOS000123&Grade=8&Division=Shivaji'))),
+    { ...validateUnsignedJoin(readUnsignedFields(new URLSearchParams('FirstName=Arohi&LastName=Patil-Shah&SID=GOS000123&Grade=8&Division=Shivaji'))), campus: 'CC' },
     db
   );
   assert.equal(db.rows.size, 1);
@@ -190,20 +190,20 @@ test('word divisions are canonical and matched case-insensitively everywhere', (
   assert.equal(normalizeDivision('Second'), 'SECOND');
   assert.equal(displayDivision('MAHAVEER'), 'Mahaveer');
   assert.equal(displayDivision('B'), 'B');
-  assert.equal(formatAudience('7', ['MAHAVEER', 'A'], false), '7-A, Mahaveer');
-  assert.equal(formatAssignment({ grade: '7', division: 'MAHAVEER' }), '7-Mahaveer');
-  assert.deepEqual(parseAssignments('7-Mahaveer, 7 shivaji, 8-ALL'), [
-    { grade: '7', division: 'MAHAVEER' },
-    { grade: '7', division: 'SHIVAJI' },
-    { grade: '8', division: '*' },
+  assert.equal(formatAudience('CC', '7', ['MAHAVEER', 'A'], false), 'CC · 7-A, Mahaveer');
+  assert.equal(formatAssignment({ campus: 'CC', grade: '7', division: 'MAHAVEER' }), 'CC@7-Mahaveer');
+  assert.deepEqual(parseAssignments('7-Mahaveer, 7 shivaji, 8-ALL', 'CC'), [
+    { campus: 'CC', grade: '7', division: 'MAHAVEER' },
+    { campus: 'CC', grade: '7', division: 'SHIVAJI' },
+    { campus: 'CC', grade: '8', division: '*' },
   ]);
   assert.deepEqual(parseDivisionList('Mahaveer, shivaji'), { divisions: ['MAHAVEER', 'SHIVAJI'], allDivisions: false });
-  const slot = { grade: '7', divisions: parseDivisionList('mahaveer').divisions, allDivisions: false };
-  assert.equal(audienceIncludes(slot, '7', 'Mahaveer'), true);
-  assert.equal(audienceIncludes(slot, '7', 'MAHAVEER'), true);
-  assert.equal(audienceIncludes(slot, '7', 'A'), false);
-  assert.equal(canTeachAudience(parseAssignments('7-Mahaveer'), '7', ['mahaveer'], false), true);
-  const roster = parseRoster('externalId,name,grade,division,roll\nGOS000123,Arohi Patil,7,mahaveer,1');
+  const slot = { campus: 'CC', grade: '7', divisions: parseDivisionList('mahaveer').divisions, allDivisions: false };
+  assert.equal(audienceIncludes(slot, { campus: 'CC', grade: '7', division: 'Mahaveer' }), true);
+  assert.equal(audienceIncludes(slot, { campus: 'CC', grade: '7', division: 'MAHAVEER' }), true);
+  assert.equal(audienceIncludes(slot, { campus: 'CC', grade: '7', division: 'A' }), false);
+  assert.equal(canTeachAudience(parseAssignments('7-Mahaveer', 'CC'), 'CC', '7', ['mahaveer'], false), true);
+  const roster = parseRoster('externalId,name,grade,division,roll\nGOS000123,Arohi Patil,7,mahaveer,1', [], [], 'CC');
   assert.equal(roster.rows[0]?.division, 'MAHAVEER');
 });
 

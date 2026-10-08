@@ -11,6 +11,8 @@ import {
 } from '@/lib/schoolJoin';
 import { JoinTokenError, schoolJwtConfigFromEnv } from '@/lib/schoolJwt';
 import { upsertStudentFromClaims } from '@/lib/studentService';
+import { resolveJoinCampus } from '@/lib/campusLogic';
+import { loadCampuses } from '@/lib/campusMaster';
 import { resolveAppUrl } from '@/lib/url';
 
 export const dynamic = 'force-dynamic';
@@ -36,7 +38,7 @@ function errorPath(code: string, field?: string) {
 
 /**
  * GET /join?… (rewritten here by middleware). Signed: `t=<jwt>`. Unsigned
- * (SCHOOL_JOIN_MODE=unsigned): `FirstName, LastName, SID, Grade, Division`.
+ * (SCHOOL_JOIN_MODE=unsigned): `FirstName, LastName, SID, Grade, Division[, Campus]`.
  * Upserts the student by SID, starts their session and redirects to /student
  * (which drops the query from the address bar) — routing, waiting room,
  * attendance and admission are unchanged. Any failure → friendly page.
@@ -59,7 +61,10 @@ export async function GET(req: Request) {
       jwt: schoolJwtConfigFromEnv(),
       claimJti,
     });
-    const student = await upsertStudentFromClaims(claims);
+    // No Campus in the link: the school's only campus (several → refused).
+    const campus = resolveJoinCampus(claims.campus, await loadCampuses());
+    if (!campus) throw new JoinTokenError('campus_required', 'campus');
+    const student = await upsertStudentFromClaims({ ...claims, campus });
     // Shared devices: drop any previous student's class seat on this browser.
     await clearStudentCookie();
     await setPupilCookie(student);

@@ -5,7 +5,7 @@ import { AdminShell } from '@/components/admin/AdminShell';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader } from '@/components/ui/Card';
-import { DivisionSelect, DivisionsPicker, GradeSelect, useGradeOptions } from '@/components/admin/GradePickers';
+import { CampusSelect, DivisionSelect, DivisionsPicker, GradeSelect, defaultCampus, useGradeOptions } from '@/components/admin/GradePickers';
 import { api } from '@/lib/clientFetch';
 import { cn } from '@/lib/cn';
 
@@ -14,6 +14,7 @@ type Slot = {
   id: string;
   teacherId: string;
   teacherName: string;
+  campus: string;
   grade: string;
   divisions: string[];
   allDivisions: boolean;
@@ -44,10 +45,13 @@ const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
 
 const emptySlot = {
   teacherId: '',
+  campus: '',
   grade: '',
   divisions: '',
   subject: '',
   weekday: 1,
+  /** New slots: every picked day gets its own weekly slot. */
+  weekdays: [1] as number[],
   start: '09:00',
   end: '09:45',
   effectiveFrom: '',
@@ -69,6 +73,7 @@ function weekdayOfDate(date: string) {
 function TimetableEditor() {
   const [mode, setMode] = useState<'teacher' | 'grade'>('teacher');
   const [teacherId, setTeacherId] = useState('');
+  const [campus, setCampus] = useState('');
   const [grade, setGrade] = useState('');
   const [division, setDivision] = useState('');
   const [view, setView] = useState<Data | null>(null);
@@ -83,6 +88,7 @@ function TimetableEditor() {
     date: '',
     slotId: '',
     teacherId: '',
+    campus: '',
     grade: '',
     divisions: '',
     subject: '',
@@ -95,6 +101,7 @@ function TimetableEditor() {
     const qs = new URLSearchParams();
     if (mode === 'teacher' && teacherId) qs.set('teacherId', teacherId);
     if (mode === 'grade' && grade) {
+      if (campus) qs.set('campus', campus);
       qs.set('grade', grade);
       if (division) qs.set('division', division);
     }
@@ -102,7 +109,7 @@ function TimetableEditor() {
     if (v.ok) setView(v.data);
     else setError(v.data.error || 'Could not load timetable');
     if (a.ok) setAll(a.data);
-  }, [mode, teacherId, grade, division]);
+  }, [mode, teacherId, campus, grade, division]);
 
   useEffect(() => {
     void load();
@@ -123,9 +130,16 @@ function TimetableEditor() {
     e.preventDefault?.();
     setError('');
     setNotice('');
+    const days = editingId ? [Number(slotForm.weekday)] : slotForm.weekdays;
+    if (!days.length) {
+      setError('Pick at least one day.');
+      return;
+    }
     const body = {
       ...slotForm,
-      weekday: Number(slotForm.weekday),
+      campus: slotForm.campus || defaultCampus(gradeOptions),
+      weekday: days[0],
+      weekdays: editingId ? undefined : days,
       effectiveFrom: slotForm.effectiveFrom || null,
       effectiveTo: slotForm.effectiveTo || null,
       force,
@@ -139,9 +153,16 @@ function TimetableEditor() {
       setError(data.error || 'Could not save');
       return;
     }
-    setNotice(editingId ? 'Slot updated.' : 'Slot added.');
+    setNotice(editingId ? 'Slot updated.' : days.length > 1 ? `${days.length} weekly slots added (${days.map((d) => DAYS[d]).join(', ')}).` : 'Slot added.');
     setEditingId(null);
-    setSlotForm({ ...emptySlot, teacherId: slotForm.teacherId, grade: slotForm.grade, divisions: slotForm.divisions });
+    setSlotForm({
+      ...emptySlot,
+      teacherId: slotForm.teacherId,
+      campus: slotForm.campus,
+      grade: slotForm.grade,
+      divisions: slotForm.divisions,
+      weekdays: slotForm.weekdays,
+    });
     void load();
   }
 
@@ -149,10 +170,12 @@ function TimetableEditor() {
     setEditingId(s.id);
     setSlotForm({
       teacherId: s.teacherId,
+      campus: s.campus,
       grade: s.grade,
       divisions: s.allDivisions ? 'ALL' : s.divisions.join(', '),
       subject: s.subject,
       weekday: s.weekday,
+      weekdays: [s.weekday],
       start: s.start,
       end: s.end,
       effectiveFrom: s.effectiveFrom ?? '',
@@ -177,6 +200,7 @@ function TimetableEditor() {
       date: ov.date,
       slotId: ov.kind === 'EXTRA' ? null : ov.slotId || null,
       teacherId: ov.teacherId || null,
+      campus: ov.kind === 'EXTRA' ? ov.campus || defaultCampus(gradeOptions) || null : null,
       grade: ov.grade || null,
       divisions: ov.divisions || null,
       subject: ov.subject || null,
@@ -192,7 +216,7 @@ function TimetableEditor() {
       return;
     }
     setNotice('Change saved.');
-    setOv({ ...ov, slotId: '', teacherId: '', grade: '', divisions: '', subject: '', start: '', end: '', note: '' });
+    setOv({ ...ov, slotId: '', teacherId: '', campus: '', grade: '', divisions: '', subject: '', start: '', end: '', note: '' });
     void load();
   }
 
@@ -246,6 +270,7 @@ function TimetableEditor() {
             </select>
           ) : (
             <>
+              <CampusSelect className="w-40" value={campus} onChange={setCampus} options={gradeOptions} emptyLabel="All campuses" />
               <GradeSelect
                 className="w-40"
                 value={grade}
@@ -305,7 +330,11 @@ function TimetableEditor() {
       <Card id="slot-form">
         <CardHeader
           title={editingId ? 'Edit weekly slot' : 'Add weekly slot'}
-          subtitle="Repeats every week. Pick one division, several to combine them, or All divisions for the whole grade. Grades and divisions come from Grades & divisions."
+          subtitle={
+            editingId
+              ? 'Repeats every week. Changing the day moves this slot.'
+              : 'Repeats every week. Pick one or more days (one slot per day), and one division, several to combine them, or All divisions for the whole grade. Lists come from Campuses & grades.'
+          }
         />
         <form onSubmit={(e) => void saveSlot(e)} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <label className="block">
@@ -318,6 +347,15 @@ function TimetableEditor() {
                 </option>
               ))}
             </select>
+          </label>
+          <label className="block">
+            <span className="label">Campus</span>
+            <CampusSelect
+              required
+              value={slotForm.campus || defaultCampus(gradeOptions)}
+              onChange={(c) => setSlotForm({ ...slotForm, campus: c })}
+              options={gradeOptions}
+            />
           </label>
           <label className="block">
             <span className="label">Grade</span>
@@ -336,16 +374,44 @@ function TimetableEditor() {
             <span className="label">Subject</span>
             <input className="input" required value={slotForm.subject} onChange={(e) => setSlotForm({ ...slotForm, subject: e.target.value })} placeholder="Mathematics" />
           </label>
-          <label className="block">
-            <span className="label">Day</span>
-            <select className="input" value={slotForm.weekday} onChange={(e) => setSlotForm({ ...slotForm, weekday: Number(e.target.value) })}>
-              {DAY_ORDER.map((d) => (
-                <option key={d} value={d}>
-                  {DAYS[d]}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="block sm:col-span-2">
+            <span className="label">{editingId ? 'Day' : 'Days'}</span>
+            <div className="flex min-h-[42px] flex-wrap items-center gap-1.5 rounded-xl border border-white/10 bg-black/20 p-1.5" role="group" aria-label="Days">
+              {DAY_ORDER.map((d) => {
+                const on = editingId ? slotForm.weekday === d : slotForm.weekdays.includes(d);
+                return (
+                  <button
+                    key={d}
+                    type="button"
+                    aria-pressed={on}
+                    className={cn(
+                      'day-chip rounded-lg border px-2.5 py-1 text-xs font-medium transition',
+                      on ? 'border-brand-400/60 bg-brand-600 text-white' : 'border-white/10 text-slate-300 hover:border-white/30'
+                    )}
+                    onClick={() =>
+                      editingId
+                        ? setSlotForm({ ...slotForm, weekday: d, weekdays: [d] })
+                        : setSlotForm({
+                            ...slotForm,
+                            weekdays: on ? slotForm.weekdays.filter((x) => x !== d) : [...slotForm.weekdays, d],
+                          })
+                    }
+                  >
+                    {DAYS[d]}
+                  </button>
+                );
+              })}
+              {!editingId && (
+                <button
+                  type="button"
+                  className="ml-auto px-1 text-2xs text-slate-400 hover:text-white"
+                  onClick={() => setSlotForm({ ...slotForm, weekdays: slotForm.weekdays.length >= 5 ? [] : [1, 2, 3, 4, 5] })}
+                >
+                  {slotForm.weekdays.length >= 5 ? 'Clear' : 'Mon–Fri'}
+                </button>
+              )}
+            </div>
+          </div>
           <label className="block">
             <span className="label">Start</span>
             <input className="input" type="time" required value={slotForm.start} onChange={(e) => setSlotForm({ ...slotForm, start: e.target.value })} />
@@ -365,7 +431,7 @@ function TimetableEditor() {
             </label>
           </div>
           <div className="flex gap-2 sm:col-span-2 lg:col-span-4">
-            <Button type="submit">{editingId ? 'Save changes' : 'Add slot'}</Button>
+            <Button type="submit">{editingId ? 'Save changes' : slotForm.weekdays.length > 1 ? `Add ${slotForm.weekdays.length} slots` : 'Add slot'}</Button>
             {editingId && (
               <Button
                 variant="ghost"
@@ -439,6 +505,10 @@ function TimetableEditor() {
               </label>
               {ov.kind === 'EXTRA' && (
                 <>
+                  <label className="block">
+                    <span className="label">Campus</span>
+                    <CampusSelect required value={ov.campus || defaultCampus(gradeOptions)} onChange={(c) => setOv({ ...ov, campus: c })} options={gradeOptions} />
+                  </label>
                   <label className="block">
                     <span className="label">Grade</span>
                     <GradeSelect

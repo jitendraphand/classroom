@@ -30,7 +30,7 @@ export async function POST() {
       student: {
         name: student.name,
         rollNumber: student.rollNumber,
-        gradeDivision: formatAudience(student.grade, [student.division], false),
+        gradeDivision: formatAudience(student.campus, student.grade, [student.division], false),
         audienceStatus,
       },
       timezone: appTimeZone(),

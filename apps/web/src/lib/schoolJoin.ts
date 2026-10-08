@@ -3,7 +3,9 @@
  * Pure apart from injected deps, so every path is unit-tested.
  *
  * SCHOOL_JOIN_MODE=unsigned (default):
- *   /join?FirstName=Arohi&LastName=Patil&SID=GOS000123&Grade=7&Division=Mahaveer
+ *   /join?FirstName=Arohi&LastName=Patil&SID=GOS000123&Grade=7&Division=Mahaveer&Campus=CC
+ *   Campus is optional: without it the school's only campus is used (see
+ *   lib/campusLogic.ts resolveJoinCampus).
  *   No signature, no expiry, no single-use check. Anyone who knows (or guesses)
  *   a student's SID and class can open the class as that student — see
  *   docs/SCHOOL_APP_INTEGRATION.md "Unsigned mode". A signed `t=<JWT>` link is
@@ -11,7 +13,7 @@
  * SCHOOL_JOIN_MODE=signed:
  *   only /join?t=<JWT> (lib/schoolJwt.ts); plain parameters are refused.
  */
-import { ALL_DIVISIONS, MAX_DIVISION_LENGTH, normalizeDivision, normalizeGrade } from './grades';
+import { ALL_DIVISIONS, MAX_CAMPUS_LENGTH, MAX_DIVISION_LENGTH, normalizeCampus, normalizeDivision, normalizeGrade } from './grades';
 import { hasUnsignedJoinParams, readUnsignedFields, type UnsignedFields } from './joinParams';
 import { JoinTokenError, verifySchoolJoinToken, type JoinClaims, type SchoolJwtConfig } from './schoolJwt';
 
@@ -23,7 +25,7 @@ export function schoolJoinModeFromEnv(env: Record<string, string | undefined> = 
   return env.SCHOOL_JOIN_MODE?.trim().toLowerCase() === 'signed' ? 'signed' : 'unsigned';
 }
 
-export const UNSIGNED_LIMITS = { sid: 64, firstName: 50, lastName: 50, grade: 16, division: MAX_DIVISION_LENGTH, roll: 20 };
+export const UNSIGNED_LIMITS = { sid: 64, firstName: 50, lastName: 50, grade: 16, division: MAX_DIVISION_LENGTH, campus: MAX_CAMPUS_LENGTH, roll: 20 };
 const SID_RE = /^[A-Za-z0-9._:@/-]+$/;
 const NAME_RE = /^[\p{L}\p{M}\p{N} .'’-]+$/u;
 const GRADE_RE = /^[A-Za-z0-9 .-]+$/;
@@ -43,6 +45,7 @@ export function validateUnsignedJoin(f: UnsignedFields): JoinClaims {
   check('lastName', NAME_RE);
   check('grade', GRADE_RE);
   check('division', DIVISION_RE);
+  check('campus', /^[\p{L}\p{N} .:-]+$/u);
   check('roll', /^[A-Za-z0-9 ./-]+$/);
   const grade = normalizeGrade(f.grade);
   const division = normalizeDivision(f.division);
@@ -53,6 +56,7 @@ export function validateUnsignedJoin(f: UnsignedFields): JoinClaims {
     name: [f.firstName, f.lastName].filter(Boolean).join(' '),
     grade,
     division,
+    campus: f.campus ? normalizeCampus(f.campus) || null : null,
     rollNumber: f.roll || null,
     email: null,
     phone: null,
@@ -102,6 +106,7 @@ export const ERROR_FIELDS: Record<string, string> = {
   lastName: 'last name',
   grade: 'grade',
   division: 'division',
+  campus: 'campus',
   roll: 'roll number',
 };
 

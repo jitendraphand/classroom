@@ -23,6 +23,7 @@ function slot(p: Partial<SlotLike> = {}): SlotLike {
   return {
     id: 's1',
     teacherId: 't1',
+    campus: 'CC',
     grade: '7',
     divisions: ['A'],
     allDivisions: false,
@@ -43,6 +44,7 @@ function ov(p: Partial<OverrideLike>): OverrideLike {
     date: '2026-10-01',
     slotId: 's1',
     teacherId: null,
+    campus: null,
     grade: null,
     divisions: [],
     allDivisions: false,
@@ -112,7 +114,7 @@ test('override EXTRA adds a one-off class', () => {
   const occs = occurrencesOn(
     '2026-10-02',
     [slot()],
-    [ov({ id: 'x1', kind: 'EXTRA', date: '2026-10-02', slotId: null, teacherId: 't3', grade: '8', allDivisions: true, subject: 'Assembly', startMinute: 600, endMinute: 660 })],
+    [ov({ id: 'x1', kind: 'EXTRA', date: '2026-10-02', slotId: null, teacherId: 't3', campus: 'CC', grade: '8', allDivisions: true, subject: 'Assembly', startMinute: 600, endMinute: 660 })],
     IST
   );
   assert.equal(occs.length, 1);
@@ -127,10 +129,10 @@ test('combined and ALL-division slots match their students', () => {
     slot({ id: 'all', teacherId: 't2', grade: '8', divisions: [], allDivisions: true }),
   ];
   const occs = occurrencesOn('2026-10-01', slots, [], IST);
-  assert.deepEqual(forAudience(occs, '7', 'B').map((o) => o.slotId), ['comb']);
-  assert.deepEqual(forAudience(occs, '7', 'C').map((o) => o.slotId), []);
-  assert.deepEqual(forAudience(occs, '8', 'Z').map((o) => o.slotId), ['all']);
-  assert.deepEqual(forAudience(occs, ' 7 ', 'a').map((o) => o.slotId), ['comb']);
+  assert.deepEqual(forAudience(occs, { campus: 'cc', grade: '7', division: 'B' }).map((o) => o.slotId), ['comb']);
+  assert.deepEqual(forAudience(occs, { campus: 'cc', grade: '7', division: 'C' }).map((o) => o.slotId), []);
+  assert.deepEqual(forAudience(occs, { campus: 'cc', grade: '8', division: 'Z' }).map((o) => o.slotId), ['all']);
+  assert.deepEqual(forAudience(occs, { campus: 'cc', grade: ' 7 ', division: 'a' }).map((o) => o.slotId), ['comb']);
 });
 
 test('early window: opens 10 min before start; late join allowed until the end', () => {

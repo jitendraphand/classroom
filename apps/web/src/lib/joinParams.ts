@@ -12,6 +12,7 @@ export const FIELD_ALIASES: Record<string, keyof UnsignedFields> = {
   grade: 'grade',
   division: 'division',
   div: 'division',
+  campus: 'campus',
   roll: 'roll',
   rollno: 'roll',
   rollnumber: 'roll',
@@ -23,6 +24,7 @@ export type UnsignedFields = {
   lastName?: string;
   grade?: string;
   division?: string;
+  campus?: string;
   roll?: string;
 };
 

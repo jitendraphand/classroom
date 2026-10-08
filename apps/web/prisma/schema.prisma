@@ -40,6 +40,9 @@ model Teacher {
   sessionVersion     Int                 @default(0)
   /// The one signed-in session (set on login, cleared on logout). A token with another id was replaced by a newer login.
   activeSessionId    String?
+  /// Deleted by the admin (soft delete): hidden everywhere, cannot sign in,
+  /// email freed; past classes and attendance keep pointing at the row.
+  deletedAt          DateTime?
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
   rooms              Room[]
@@ -54,11 +57,13 @@ model TeacherAssignment {
   id        String  @id @default(cuid())
   teacherId String
   teacher   Teacher @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  /// Canonical campus name (normalizeCampus), e.g. "CC".
+  campus    String
   grade     String
   division  String
 
-  @@unique([teacherId, grade, division])
-  @@index([grade, division])
+  @@unique([teacherId, campus, grade, division])
+  @@index([campus, grade, division])
 }
 
 enum RoomStatus {
@@ -160,6 +165,7 @@ model TimetableSlot {
   id            String             @id @default(cuid())
   teacherId     String
   teacher       Teacher            @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  campus        String
   grade         String
   /// Combined divisions (e.g. ["A","B"]); ignored when allDivisions.
   divisions     String[]
@@ -177,7 +183,7 @@ model TimetableSlot {
   sessions      ClassSession[]
 
   @@index([teacherId, weekday])
-  @@index([grade, weekday])
+  @@index([campus, grade, weekday])
 }
 
 enum OverrideKind {
@@ -200,6 +206,7 @@ model ScheduleOverride {
   teacherId    String?
   teacher      Teacher?       @relation(fields: [teacherId], references: [id], onDelete: Cascade)
   /// EXTRA (and optionally MODIFY): audience.
+  campus       String?
   grade        String?
   divisions    String[]
   allDivisions Boolean        @default(false)
@@ -230,6 +237,7 @@ model ClassSession {
   teacher        Teacher            @relation(fields: [teacherId], references: [id], onDelete: Cascade)
   roomId         String?
   room           Room?              @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  campus         String
   grade          String
   divisions      String[]
   allDivisions   Boolean            @default(false)
@@ -245,7 +253,7 @@ model ClassSession {
   attendance     AttendanceRecord[]
 
   @@index([teacherId, sessionDate])
-  @@index([grade, sessionDate])
+  @@index([campus, grade, sessionDate])
   @@index([sessionDate])
 }
 
@@ -255,6 +263,7 @@ model Student {
   id           String             @id @default(cuid())
   externalId   String             @unique
   name         String
+  campus       String
   grade        String
   division     String
   /// Display only.
@@ -264,12 +273,15 @@ model Student {
   /// "join" (signed link) or "import" (admin CSV).
   source       String             @default("join")
   lastSeenAt   DateTime?
+  /// Deleted by the admin (soft delete): hidden from lists and reports'
+  /// student pickers; attendance history is kept. Joining again restores.
+  deletedAt    DateTime?
   createdAt    DateTime           @default(now())
   updatedAt    DateTime           @updatedAt
   participants Participant[]
   attendance   AttendanceRecord[]
 
-  @@index([grade, division])
+  @@index([campus, grade, division])
 }
 
 /// One student's attendance in one class session (across reconnects).
@@ -302,6 +314,22 @@ model AttendanceRecord {
 /// canonical grade string (no foreign key), so editing this list never rewrites
 /// timetable, attendance or student history; it drives the admin dropdowns and
 /// validation of new entries.
+/// School campuses (third audience criterion next to grade and division).
+/// Rows store the canonical name as a plain string, like grades/divisions.
+model Campus {
+  id        String   @id @default(cuid())
+  /// Canonical form (normalizeCampus): upper-case, no spaces ("CC", "NORTH").
+  name      String   @unique
+  /// Display form ("CC", "North campus").
+  label     String
+  sortOrder Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sortOrder])
+}
+
 model Grade {
   id        String     @id @default(cuid())
   /// Canonical form (normalizeGrade): "7", "XII".

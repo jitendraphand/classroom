@@ -4,6 +4,7 @@
  */
 
 export type LiveClass = {
+  campus?: string;
   /** Teacher's permanent room code (what the admin joins). */
   code: string;
   /** Current room session id (part of the LiveKit room name). */

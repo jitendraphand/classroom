@@ -37,8 +37,8 @@ type Schedule = {
   today: string;
   classes: ClassItem[];
   active: { id: string | null; subject: string; audience: string; adHoc: boolean; code: string } | null;
-  assignments: { grade: string; division: string; label: string }[];
-  gradeChoices: { grade: string; label: string; whole: boolean; divisions: { name: string; label: string }[] }[];
+  assignments: { campus: string; grade: string; division: string; label: string }[];
+  gradeChoices: { campus: string; grade: string; label: string; whole: boolean; divisions: { name: string; label: string }[] }[];
   gradesConfigured: boolean;
 };
 
@@ -63,7 +63,7 @@ export default function TeacherDashboard() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
-  const [adhoc, setAdhoc] = useState({ grade: '', divisions: [] as string[], all: false, extra: '', subject: '' });
+  const [adhoc, setAdhoc] = useState({ campus: '', grade: '', divisions: [] as string[], all: false, extra: '', subject: '' });
 
   useEffect(() => {
     fetch('/api/auth/act-as', {
@@ -94,7 +94,10 @@ export default function TeacherDashboard() {
   }, [me, loadSchedule]);
 
   // Assigned grades only; divisions come from Grades & divisions (active entries).
-  const choices = useMemo(() => schedule?.gradeChoices ?? [], [schedule]);
+  const allChoices = useMemo(() => schedule?.gradeChoices ?? [], [schedule]);
+  // Campus first (only the teacher's assigned campuses), then that campus's grades.
+  const campuses = useMemo(() => [...new Set(allChoices.map((c) => c.campus))], [allChoices]);
+  const choices = useMemo(() => allChoices.filter((c) => c.campus === adhoc.campus), [allChoices, adhoc.campus]);
   const grades = useMemo(() => choices.map((c) => c.grade), [choices]);
   const choice = choices.find((c) => c.grade === adhoc.grade);
   const gradeDivs = choice?.divisions ?? [];
@@ -102,6 +105,10 @@ export default function TeacherDashboard() {
   // Free-text extra divisions only before the admin has set up Grades & divisions.
   const freeTextExtra = wholeGrade && !schedule?.gradesConfigured;
 
+  useEffect(() => {
+    if ((!adhoc.campus || !campuses.includes(adhoc.campus)) && campuses.length)
+      setAdhoc((a) => ({ ...a, campus: campuses[0]!, grade: '', divisions: [], all: false }));
+  }, [campuses, adhoc.campus]);
   useEffect(() => {
     if ((!adhoc.grade || !grades.includes(adhoc.grade)) && grades.length) setAdhoc((a) => ({ ...a, grade: grades[0]!, divisions: [], all: false }));
   }, [grades, adhoc.grade]);
@@ -138,7 +145,7 @@ export default function TeacherDashboard() {
       return;
     }
     void start(
-      { kind: 'adhoc', grade: adhoc.grade, divisions, allDivisions: adhoc.all, subject: adhoc.subject || undefined },
+      { kind: 'adhoc', campus: adhoc.campus, grade: adhoc.grade, divisions, allDivisions: adhoc.all, subject: adhoc.subject || undefined },
       'adhoc'
     );
   }
@@ -267,11 +274,26 @@ export default function TeacherDashboard() {
           title="Ad-hoc class"
           subtitle="Outside the timetable, for your assigned grades and divisions only. Students of those divisions are routed here from the school app."
         />
-        {!schedule ? null : grades.length === 0 ? (
+        {!schedule ? null : allChoices.length === 0 ? (
           <p className="text-sm text-slate-400">No grades are assigned to you yet. Ask the school administrator.</p>
         ) : (
           <form onSubmit={startAdhoc} className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-3">
+              <label className="block">
+                <span className="label">Campus</span>
+                <select
+                  className="input"
+                  value={adhoc.campus}
+                  onChange={(e) => setAdhoc({ ...adhoc, campus: e.target.value, grade: '', divisions: [], all: false, extra: '' })}
+                  aria-label="Campus"
+                >
+                  {campuses.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label className="block">
                 <span className="label">Grade</span>
                 <select
@@ -280,7 +302,7 @@ export default function TeacherDashboard() {
                   onChange={(e) => setAdhoc({ ...adhoc, grade: e.target.value, divisions: [], all: false, extra: '' })}
                 >
                   {choices.map((c) => (
-                    <option key={c.grade} value={c.grade}>
+                    <option key={`${c.campus}|${c.grade}`} value={c.grade}>
                       {c.label !== c.grade ? `${c.label} (${c.grade})` : c.grade}
                     </option>
                   ))}

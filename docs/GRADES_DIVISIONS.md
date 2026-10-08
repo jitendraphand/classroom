@@ -12,6 +12,31 @@ their divisions. It fills every grade/division dropdown in the app:
 | Teacher dashboard: ad-hoc class | Only the teacher's assigned grades; divisions = explicitly assigned ones, plus every active division of a whole-grade (ALL) assignment |
 | Students → Import roster | Rows must use an active grade + division of the list; others are reported and skipped |
 
+## Campuses
+
+The same page (`/admin/grades`, menu **Campuses & grades**) also holds the
+**campuses** (`Campus`: canonical `name` via `normalizeCampus` — upper-case,
+spaces removed, e.g. "CC", "NORTH" — plus `label`, `sortOrder`, `active`).
+Campus is the third routing criterion: timetable slots, extra classes, ad-hoc
+classes, teacher assignments and students all carry a campus, and a student is
+routed only to classes of their own campus + grade + division. Grades and
+divisions are shared by all campuses.
+
+- Add / rename the label any time; change the code or delete only while unused;
+  deactivate to hide it from new selections (existing rows keep it).
+- **Sync from existing data** also adds campuses already used.
+- Every grade/division dropdown above has a campus dropdown next to it
+  (timetable slot/extra forms and "By grade-division" view, teacher
+  assignments `CC · 7-A`, students filter + roster import, reports filters,
+  teacher ad-hoc class, Live now filter).
+- Join links: `&Campus=` (case/space-insensitive). Without it the only active
+  campus is used; with several campuses the join is refused with
+  `campus_required` (see SCHOOL_APP_INTEGRATION.md).
+- Roster CSV: optional `campus` column; rows without one use the campus picked
+  on the import form (or the only campus).
+- The schema has no back-compat default: the production database was wiped
+  for this change on 2026-10-08 (backup kept on the server).
+
 Only **active** entries appear in dropdowns. A value already saved on a row that
 is not (or no longer) in the list stays visible and selected, marked
 "not in list" / ⚠, so editing an old row never silently drops it.

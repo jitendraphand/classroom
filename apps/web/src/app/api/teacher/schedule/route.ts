@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/db';
 import { getTeacherSession } from '@/lib/auth';
-import { formatAudience, formatAssignment } from '@/lib/grades';
+import { displayAssignment, formatAudience } from '@/lib/grades';
 import { jsonError, jsonOk } from '@/lib/response';
 import { addDays, formatHHMM, localDateOf, opensAt, phaseOf } from '@/lib/schedule';
 import { occurrencesForRange } from '@/lib/scheduleService';
@@ -45,7 +45,7 @@ export async function GET() {
       key: o.key,
       date: o.date,
       subject: o.subject,
-      audience: formatAudience(o.grade, o.divisions, o.allDivisions),
+      audience: formatAudience(o.campus, o.grade, o.divisions, o.allDivisions),
       start: o.start.toISOString(),
       end: o.end.toISOString(),
       startLabel: formatHHMM(o.startMinute),
@@ -71,7 +71,7 @@ export async function GET() {
       active = {
         id: cs.id,
         subject: cs.subject,
-        audience: formatAudience(cs.grade, cs.divisions, cs.allDivisions),
+        audience: formatAudience(cs.campus, cs.grade, cs.divisions, cs.allDivisions),
         adHoc: cs.adHoc,
         code: room!.code,
       };
@@ -87,7 +87,7 @@ export async function GET() {
     today,
     classes,
     active,
-    assignments: assignments.map((a) => ({ ...a, label: formatAssignment(a) })),
+    assignments: assignments.map((a) => ({ ...a, label: displayAssignment(a) })),
     /** Ad-hoc start dropdowns: assigned grades, divisions from Grades & divisions (active only). */
     gradeChoices: teacherGradeChoices(assignments, master),
     gradesConfigured: master.length > 0,

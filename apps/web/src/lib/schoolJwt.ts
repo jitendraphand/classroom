@@ -11,7 +11,7 @@
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { decodeProtectedHeader, errors as joseErrors, importSPKI, jwtVerify, type KeyLike } from 'jose';
-import { normalizeDivision, normalizeGrade, ALL_DIVISIONS } from './grades';
+import { normalizeCampus, normalizeDivision, normalizeGrade, ALL_DIVISIONS } from './grades';
 
 export type JoinErrorCode =
   | 'not_configured'
@@ -30,6 +30,8 @@ export type JoinErrorCode =
   | 'missing_details'
   | 'invalid_details'
   | 'unsigned_disabled'
+  // No Campus in the link and the school has several (or no) campuses.
+  | 'campus_required'
   | 'rate_limited';
 
 export class JoinTokenError extends Error {
@@ -53,6 +55,8 @@ export type JoinClaims = {
   name: string;
   grade: string;
   division: string;
+  /** Canonical campus, or null when the link has none (the school's only campus is used). */
+  campus: string | null;
   rollNumber: string | null;
   email: string | null;
   phone: string | null;
@@ -207,6 +211,7 @@ export async function verifySchoolJoinToken(
     name,
     grade,
     division,
+    campus: normalizeCampus(str(payload.campus, 32) ?? '') || null,
     rollNumber: str(payload.rollNumber ?? payload.roll ?? payload.roll_no, 20),
     email: str(payload.email, 200),
     phone: str(payload.phone, 32),
@@ -253,6 +258,10 @@ export const JOIN_ERROR_TEXT: Record<JoinErrorCode, { title: string; body: strin
   invalid_details: {
     title: 'Your details could not be read',
     body: 'The school app link has a value the classroom cannot accept. Please tell your school.',
+  },
+  campus_required: {
+    title: 'Your campus is missing',
+    body: 'The school app link does not say which campus you are in. Please tell your school.',
   },
   unsigned_disabled: {
     title: 'This link is not valid',

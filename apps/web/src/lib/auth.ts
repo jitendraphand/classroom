@@ -270,7 +270,9 @@ export async function getPupil() {
   const token = (await cookies()).get(pupilCookieName())?.value;
   const claims = await verifySession(token, 'pupil').catch(() => null);
   if (!claims) return null;
-  return prisma.student.findUnique({ where: { id: claims.sub } }).catch(() => null);
+  const st = await prisma.student.findUnique({ where: { id: claims.sub } }).catch(() => null);
+  // Deleted by the admin: signed out (joining again from the school app restores).
+  return st && !st.deletedAt ? st : null;
 }
 
 export async function setStudentCookie(sessionToken: string) {

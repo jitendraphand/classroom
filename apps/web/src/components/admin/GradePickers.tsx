@@ -13,48 +13,118 @@ import { api } from '@/lib/clientFetch';
 import { cn } from '@/lib/cn';
 import {
   ALL_DIVISIONS,
+  displayAssignment,
   displayDivision,
   formatAssignment,
   normalizeDivision,
+  normalizeCampus,
   normalizeGrade,
   parseAssignments,
   parseDivisionList,
   type Assignment,
 } from '@/lib/grades';
 import type { GradeOption } from '@/lib/gradeMasterLogic';
+import type { CampusOption } from '@/lib/campusLogic';
 
-export type GradeOptions = { grades: GradeOption[]; configured: boolean; loading: boolean; reload: () => void };
+export type GradeOptions = {
+  grades: GradeOption[];
+  configured: boolean;
+  campuses: CampusOption[];
+  campusesConfigured: boolean;
+  loading: boolean;
+  reload: () => void;
+};
 
-let cache: Promise<{ grades: GradeOption[]; configured: boolean }> | null = null;
+type OptionsData = { grades: GradeOption[]; configured: boolean; campuses: CampusOption[]; campusesConfigured: boolean };
+const EMPTY: OptionsData = { grades: [], configured: false, campuses: [], campusesConfigured: false };
+
+let cache: Promise<OptionsData> | null = null;
 function fetchOptions(force = false) {
   if (!cache || force) {
-    cache = api<{ grades: GradeOption[]; configured: boolean }>('/api/grades/options').then((r) => {
+    cache = api<OptionsData>('/api/grades/options').then((r) => {
       if (!r.ok) {
         cache = null;
-        return { grades: [], configured: false };
+        return EMPTY;
       }
-      return { grades: r.data.grades ?? [], configured: Boolean(r.data.configured) };
+      return {
+        grades: r.data.grades ?? [],
+        configured: Boolean(r.data.configured),
+        campuses: r.data.campuses ?? [],
+        campusesConfigured: Boolean(r.data.campusesConfigured),
+      };
     });
   }
   return cache;
 }
 
-/** Drop the cached dropdown data (after editing Grades & divisions). */
+/** Drop the cached dropdown data (after editing Grades & divisions / Campuses). */
 export function invalidateGradeOptions() {
   cache = null;
 }
 
 export function useGradeOptions(): GradeOptions {
-  const [state, setState] = useState<{ grades: GradeOption[]; configured: boolean; loading: boolean }>({
-    grades: [],
-    configured: false,
-    loading: true,
-  });
+  const [state, setState] = useState<OptionsData & { loading: boolean }>({ ...EMPTY, loading: true });
   const load = useCallback((force = false) => {
     void fetchOptions(force).then((d) => setState({ ...d, loading: false }));
   }, []);
   useEffect(() => load(), [load]);
   return { ...state, reload: () => load(true) };
+}
+
+/** The campus a new row defaults to: the only active campus, else none. */
+export function defaultCampus(options: GradeOptions): string {
+  return options.campuses.length === 1 ? options.campuses[0].name : '';
+}
+
+const campusLabel = (c: CampusOption) => (c.label && c.label !== c.name ? `${c.label} (${c.name})` : c.name);
+
+type CampusSelectProps = {
+  value: string;
+  onChange: (campus: string) => void;
+  options: GradeOptions;
+  /** Placeholder option (value ""), e.g. "Campus…" or "All campuses". */
+  emptyLabel?: string;
+  /** Limit to these canonical campuses (teacher's assigned campuses). */
+  only?: string[];
+  required?: boolean;
+  className?: string;
+  ariaLabel?: string;
+};
+
+/** Campus dropdown (Admin → Grades & divisions → Campuses); text input before any campus is set up. */
+export function CampusSelect({ value, onChange, options, emptyLabel = 'Campus…', only, required, className, ariaLabel }: CampusSelectProps) {
+  if (!options.campusesConfigured && !options.loading) {
+    return (
+      <input
+        className={cn('input', className)}
+        value={value}
+        required={required}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Campus"
+        aria-label={ariaLabel ?? 'Campus'}
+      />
+    );
+  }
+  const v = value ? normalizeCampus(value) : '';
+  const list = options.campuses.filter((c) => !only || only.includes(c.name));
+  const missing = v && !list.some((c) => c.name === v);
+  return (
+    <select
+      className={cn('input', className)}
+      value={v}
+      required={required}
+      onChange={(e) => onChange(e.target.value)}
+      aria-label={ariaLabel ?? 'Campus'}
+    >
+      <option value="">{options.loading ? 'Loading…' : emptyLabel}</option>
+      {list.map((c) => (
+        <option key={c.name} value={c.name}>
+          {campusLabel(c)}
+        </option>
+      ))}
+      {missing && <option value={v}>{v} (not in list)</option>}
+    </select>
+  );
 }
 
 const gradeLabel = (g: GradeOption) => (g.label && g.label !== g.name ? `${g.label} (${g.name})` : g.name);
@@ -258,36 +328,41 @@ function Chip({
 
 function safeAssignments(text: string): Assignment[] {
   try {
-    return parseAssignments(text);
+    // Unprefixed legacy tokens are shown under "?" so nothing is dropped silently.
+    return parseAssignments(text, '?');
   } catch {
     return [];
   }
 }
 
 /**
- * Teacher grade assignments as chips + "add" row (grade, division or ALL).
- * Value/onChange use the existing "7-A, 8-ALL" text the teachers API takes.
+ * Teacher assignments as chips + "add" row (campus, grade, division or ALL).
+ * Value/onChange use the "CC@7-A, CC@8-ALL" text the teachers API takes.
  */
 export function AssignmentsPicker({ value, onChange, options }: { value: string; onChange: (text: string) => void; options: GradeOptions }) {
+  const [campusPick, setCampus] = useState('');
+  const campus = campusPick || defaultCampus(options);
   const [grade, setGrade] = useState('');
   const [division, setDivision] = useState('');
   if (!options.configured && !options.loading) {
     return (
-      <input className="input" value={value} onChange={(e) => onChange(e.target.value)} placeholder="7-A, 7-B, 8-ALL" aria-label="Grades" />
+      <input className="input" value={value} onChange={(e) => onChange(e.target.value)} placeholder="CC@7-A, CC@7-B, CC@8-ALL" aria-label="Grades" />
     );
   }
   const items = safeAssignments(value);
   const write = (list: Assignment[]) => onChange(list.map(formatAssignment).join(', '));
   const add = () => {
-    if (!grade || !division) return;
+    const c = normalizeCampus(campus);
+    if (!c || !grade || !division) return;
     const d = division === 'ALL' ? ALL_DIVISIONS : division;
-    const rest = items.filter((a) => !(a.grade === grade && (a.division === d || d === ALL_DIVISIONS)));
-    write([...rest, { grade, division: d }]);
+    const rest = items.filter((a) => !(a.campus === c && a.grade === grade && (a.division === d || d === ALL_DIVISIONS)));
+    write([...rest, { campus: c, grade, division: d }]);
     setDivision('');
   };
   const known = (a: Assignment) => {
     const g = options.grades.find((x) => x.name === a.grade);
-    return !!g && (a.division === ALL_DIVISIONS || g.divisions.some((d) => d.name === a.division));
+    const campusOk = !options.campusesConfigured || options.campuses.some((c) => c.name === a.campus);
+    return campusOk && !!g && (a.division === ALL_DIVISIONS || g.divisions.some((d) => d.name === a.division));
   };
   return (
     <div className="space-y-2">
@@ -295,18 +370,18 @@ export function AssignmentsPicker({ value, onChange, options }: { value: string;
         {items.length ? (
           items.map((a) => (
             <span
-              key={`${a.grade}|${a.division}`}
+              key={`${a.campus}|${a.grade}|${a.division}`}
               className={cn(
                 'inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-xs',
                 known(a) ? 'border-white/15 text-slate-200' : 'border-amber-400/40 text-amber-200'
               )}
               title={known(a) ? undefined : 'Not in Grades & divisions (or inactive)'}
             >
-              {formatAssignment(a)}
+              {displayAssignment(a)}
               <button
                 type="button"
                 className="text-slate-400 hover:text-red-300"
-                aria-label={`Remove ${formatAssignment(a)}`}
+                aria-label={`Remove ${displayAssignment(a)}`}
                 onClick={() => write(items.filter((x) => x !== a))}
               >
                 ×
@@ -318,6 +393,7 @@ export function AssignmentsPicker({ value, onChange, options }: { value: string;
         )}
       </div>
       <div className="flex flex-wrap gap-2">
+        <CampusSelect className="w-36" value={campus} onChange={setCampus} options={options} />
         <GradeSelect className="w-36" value={grade} onChange={(g) => {
             setGrade(g);
             setDivision('');
@@ -331,7 +407,7 @@ export function AssignmentsPicker({ value, onChange, options }: { value: string;
             </option>
           ))}
         </select>
-        <button type="button" className="btn-secondary px-3 py-1.5 text-xs" disabled={!grade || !division} onClick={add}>
+        <button type="button" className="btn-secondary px-3 py-1.5 text-xs" disabled={!campus || !grade || !division} onClick={add}>
           Add
         </button>
       </div>

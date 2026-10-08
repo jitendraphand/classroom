@@ -16,6 +16,7 @@ export function toSlotLike(s: TimetableSlot): SlotLike {
   return {
     id: s.id,
     teacherId: s.teacherId,
+    campus: s.campus,
     grade: s.grade,
     divisions: s.divisions,
     allDivisions: s.allDivisions,
@@ -35,6 +36,7 @@ export function toOverrideLike(o: ScheduleOverride): OverrideLike {
     date: dateOnly(o.date)!,
     slotId: o.slotId,
     teacherId: o.teacherId,
+    campus: o.campus,
     grade: o.grade,
     divisions: o.divisions,
     allDivisions: o.allDivisions,

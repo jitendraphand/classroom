@@ -15,6 +15,22 @@ export function normalizeGrade(raw: unknown): string {
   return s.toUpperCase().slice(0, 16);
 }
 
+/** Longest campus name accepted. */
+export const MAX_CAMPUS_LENGTH = 32;
+
+/**
+ * Canonical campus: trimmed, upper-cased, inner spaces removed, so matching is
+ * case- and space-insensitive like divisions ("cc", " C C " → "CC";
+ * "North Campus" → "NORTHCAMPUS").
+ */
+export function normalizeCampus(raw: unknown): string {
+  return String(raw ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '')
+    .slice(0, MAX_CAMPUS_LENGTH);
+}
+
 /** Longest division accepted (word divisions such as "Mahaveer"). */
 export const MAX_DIVISION_LENGTH = 32;
 
@@ -42,42 +58,58 @@ export function displayDivision(d: string): string {
   return d;
 }
 
-export type Assignment = { grade: string; division: string };
+export type Assignment = { campus: string; grade: string; division: string };
+
+/** Audience of a class / slot: one campus, one grade, some (or all) divisions. */
+export type Audience = { campus: string; grade: string; divisions: string[]; allDivisions: boolean };
 
 /**
- * Parse "7-A, 7-B, 8-*" / "7A 7B 8 ALL" style text from the admin form.
- * Returns normalised, de-duplicated pairs; throws on an unparseable token.
+ * Parse "7-A, 7-B, 8-*" / "7A 7B 8 ALL" style text from the admin form, for
+ * one campus ("CC:7-A" picks another campus per token).
+ * Returns normalised, de-duplicated triples; throws on an unparseable token.
  */
-export function parseAssignments(text: string): Assignment[] {
+export function parseAssignments(text: string, campus: string): Assignment[] {
   const out: Assignment[] = [];
   const seen = new Set<string>();
   const tokens = text
     .split(/[,;\n]+/)
     .map((t) => t.trim())
     .filter(Boolean);
-  for (const tok of tokens) {
+  for (const raw of tokens) {
+    // Optional "CAMPUS@" prefix: "CC@7-A".
+    const at = raw.indexOf('@');
+    const c = normalizeCampus(at > 0 ? raw.slice(0, at) : campus);
+    const tok = at > 0 ? raw.slice(at + 1).trim() : raw;
+    if (!c) throw new Error(`Pick a campus for "${raw}".`);
     // "7-A", "7 A", "7/Mahaveer", "Grade 7: Mahaveer", "7A".
     const m = /^(.+?)\s*[-/:\s]\s*(\*|all|[A-Za-z0-9]+)$/i.exec(tok) || /^(\d+)([A-Za-z])$/.exec(tok);
     if (!m) throw new Error(`Cannot read "${tok}". Use grade-division, e.g. 7-A or 8-ALL.`);
     const grade = normalizeGrade(m[1]);
     const division = normalizeDivision(m[2]);
     if (!grade || !division) throw new Error(`Cannot read "${tok}".`);
-    const key = `${grade}|${division}`;
+    const key = `${c}|${grade}|${division}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ grade, division });
+    out.push({ campus: c, grade, division });
   }
   return out;
 }
 
+/** "CC@7-A": the admin form / API text format (parseAssignments reads it back). */
 export function formatAssignment(a: Assignment): string {
-  return `${a.grade}-${displayDivision(a.division)}`;
+  return `${a.campus}@${a.grade}-${displayDivision(a.division)}`;
 }
 
-/** "7-A, B" or "7 (all divisions)". */
-export function formatAudience(grade: string, divisions: string[], allDivisions: boolean): string {
-  if (allDivisions) return `${grade} (all divisions)`;
-  return `${grade}-${[...divisions].sort().map(displayDivision).join(', ')}`;
+/** "CC · 7-A" for display. */
+export function displayAssignment(a: Assignment): string {
+  return `${a.campus} · ${a.grade}-${displayDivision(a.division)}`;
+}
+
+/** "CC · 7-A, B" or "CC · 7 (all divisions)". */
+export function formatAudience(campus: string, grade: string, divisions: string[], allDivisions: boolean): string {
+  const c = campus ? `${campus} · ` : '';
+  if (allDivisions) return `${c}${grade} (all divisions)`;
+  return `${c}${grade}-${[...divisions].sort().map(displayDivision).join(', ')}`;
 }
 
 /**
@@ -88,12 +120,14 @@ export function formatAudience(grade: string, divisions: string[], allDivisions:
  */
 export function canTeachAudience(
   assignments: Assignment[],
+  campus: string,
   grade: string,
   divisions: string[],
   allDivisions: boolean
 ): boolean {
   const g = normalizeGrade(grade);
-  const mine = assignments.filter((a) => normalizeGrade(a.grade) === g);
+  const c = normalizeCampus(campus);
+  const mine = assignments.filter((a) => normalizeCampus(a.campus) === c && normalizeGrade(a.grade) === g);
   if (!mine.length) return false;
   const whole = mine.some((a) => normalizeDivision(a.division) === ALL_DIVISIONS);
   if (allDivisions) return whole;
@@ -104,23 +138,22 @@ export function canTeachAudience(
   return divs.every((d) => set.has(d));
 }
 
-/** Does a (grade, division) student belong to this audience? */
+/** Does a (campus, grade, division) student belong to this audience? */
 export function audienceIncludes(
-  audience: { grade: string; divisions: string[]; allDivisions: boolean },
-  grade: string,
-  division: string
+  audience: Audience,
+  student: { campus: string; grade: string; division: string }
 ): boolean {
+  const { campus, grade, division } = student;
+  if (normalizeCampus(audience.campus) !== normalizeCampus(campus)) return false;
   if (normalizeGrade(audience.grade) !== normalizeGrade(grade)) return false;
   if (audience.allDivisions) return true;
   const d = normalizeDivision(division);
   return audience.divisions.some((x) => normalizeDivision(x) === d);
 }
 
-/** Do two audiences share at least one grade-division? */
-export function audiencesOverlap(
-  a: { grade: string; divisions: string[]; allDivisions: boolean },
-  b: { grade: string; divisions: string[]; allDivisions: boolean }
-): boolean {
+/** Do two audiences share at least one campus-grade-division? */
+export function audiencesOverlap(a: Audience, b: Audience): boolean {
+  if (normalizeCampus(a.campus) !== normalizeCampus(b.campus)) return false;
   if (normalizeGrade(a.grade) !== normalizeGrade(b.grade)) return false;
   if (a.allDivisions || b.allDivisions) return true;
   const set = new Set(a.divisions.map(normalizeDivision));

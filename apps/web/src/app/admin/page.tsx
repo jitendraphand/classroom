@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { api } from '@/lib/clientFetch';
 
 type Teacher = {
@@ -38,6 +39,7 @@ function TeachersPanel() {
   const [editForm, setEditForm] = useState({ name: '', assignments: '' });
   const [filter, setFilter] = useState('');
   const gradeOptions = useGradeOptions();
+  const [deleting, setDeleting] = useState<Teacher | null>(null);
 
   const load = useCallback(async () => {
     const { ok, data } = await api<{ teachers: Teacher[] }>('/api/admin/teachers');
@@ -103,6 +105,17 @@ function TeachersPanel() {
     void load();
   }
 
+  async function remove(t: Teacher) {
+    setError('');
+    const { ok, data } = await api(`/api/admin/teachers/${t.id}`, { method: 'DELETE' });
+    if (!ok) {
+      setError(data.error || 'Delete failed');
+      return;
+    }
+    setDeleting(null);
+    void load();
+  }
+
   const shown = (teachers ?? []).filter((t) =>
     !filter ? true : `${t.name} ${t.email} ${t.assignmentsText}`.toLowerCase().includes(filter.toLowerCase())
   );
@@ -110,6 +123,24 @@ function TeachersPanel() {
   return (
     <div className="space-y-6">
       <LiveNowBanner />
+      {deleting && (
+        <ConfirmDialog
+          title={`Delete ${deleting.name}?`}
+          confirmLabel="Delete teacher"
+          typeToConfirm={deleting.name}
+          onConfirm={() => remove(deleting)}
+          onClose={() => setDeleting(null)}
+        >
+          <p>
+            {deleting.name} ({deleting.email}) is signed out, any class they are running ends, and their timetable slots, grade assignments
+            and meeting code stop working. This cannot be undone.
+          </p>
+          <p className="text-slate-400">
+            Past classes, attendance and chat history stay in reports. The email address becomes free, so you can add the teacher again later
+            as a new account.
+          </p>
+        </ConfirmDialog>
+      )}
       {secret && <SecretOnce title={secret.title} lines={secret.lines} onClose={() => setSecret(null)} />}
       {error && (
         <p className="rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-2 text-sm text-danger-fg" role="alert">
@@ -136,7 +167,8 @@ function TeachersPanel() {
             <span className="label">Assigned grades / divisions</span>
             <AssignmentsPicker value={form.assignments} onChange={(a) => setForm({ ...form, assignments: a })} options={gradeOptions} />
             <p className="mt-1.5 text-xs text-slate-500">
-              Pick a grade and a division, or All divisions for the whole grade. Ad-hoc classes are limited to these. Lists come from Grades &amp; divisions.
+              Pick a campus, a grade and a division (or All divisions for the whole grade). Ad-hoc classes are limited to these. Lists come from
+              Grades &amp; divisions.
             </p>
           </div>
           <div className="sm:col-span-2">
@@ -152,7 +184,7 @@ function TeachersPanel() {
           <h2 className="font-display text-lg font-semibold">All teachers {teachers ? `(${teachers.length})` : ''}</h2>
           <input
             className="input max-w-xs"
-            placeholder="Search name, email, grade"
+            placeholder="Search name, email, campus, grade"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             aria-label="Search teachers"
@@ -192,7 +224,7 @@ function TeachersPanel() {
                       <p className="truncate text-sm text-slate-400">{t.email}</p>
                       <p className="mt-1 text-xs text-slate-500">
                         Code <span className="font-mono text-brand-300">{t.permanentCode}</span> ·{' '}
-                        {t.assignmentsText || 'No grades assigned'}
+                        {t.assignmentsText ? t.assignmentsText.replace(/@/g, ' · ') : 'No grades assigned'}
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -219,6 +251,9 @@ function TeachersPanel() {
                         }}
                       >
                         {t.disabled ? 'Enable' : 'Disable'}
+                      </Button>
+                      <Button size="sm" variant="danger" onClick={() => setDeleting(t)}>
+                        Delete
                       </Button>
                     </div>
                   </>

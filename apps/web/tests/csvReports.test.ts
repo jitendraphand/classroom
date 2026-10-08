@@ -20,7 +20,7 @@ test('csv: escaping, BOM, CRLF and formula injection', () => {
 });
 
 test('roster: header aliases, normalisation, per-line errors', () => {
-  const { rows, errors } = parseRoster('Student ID,Name,Class,Div,Roll No\nS1,Asha Patil, 7 ,b,1\n,No Id,7,A,2\nS1,Dup,7,A,3\nS2,Ravi,7,*,4\nS3,Meera,8,A,\n');
+  const { rows, errors } = parseRoster('Student ID,Name,Class,Div,Roll No\nS1,Asha Patil, 7 ,b,1\n,No Id,7,A,2\nS1,Dup,7,A,3\nS2,Ravi,7,*,4\nS3,Meera,8,A,\n', [], [], 'CC');
   assert.deepEqual(
     rows.map((r) => [r.externalId, r.grade, r.division, r.rollNumber]),
     [
@@ -29,7 +29,7 @@ test('roster: header aliases, normalisation, per-line errors', () => {
     ]
   );
   assert.equal(errors.length, 3);
-  const noHeader = parseRoster('S9,Kiran,6,C,7');
+  const noHeader = parseRoster('S9,Kiran,6,C,7', [], [], 'CC');
   assert.equal(noHeader.rows[0]?.name, 'Kiran');
   assert.match(parseRoster('id,name\nS1,X').errors[0]!, /Missing column/);
 });

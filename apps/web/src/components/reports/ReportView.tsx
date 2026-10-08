@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
-import { DivisionSelect, GradeSelect, useGradeOptions } from '@/components/admin/GradePickers';
+import { CampusSelect, DivisionSelect, GradeSelect, useGradeOptions } from '@/components/admin/GradePickers';
 import { api } from '@/lib/clientFetch';
 import { cn } from '@/lib/cn';
 
@@ -87,7 +87,7 @@ export function ReportView({
   showTeacherFilter?: boolean;
 }) {
   const [kind, setKind] = useState<Kind>('sessions');
-  const [filter, setFilter] = useState({ from: isoDay(-30), to: isoDay(0), teacherId: '', grade: '', division: '', subject: '', sessionId: '' });
+  const [filter, setFilter] = useState({ from: isoDay(-30), to: isoDay(0), teacherId: '', campus: '', grade: '', division: '', subject: '', sessionId: '' });
   const [rows, setRows] = useState<unknown[] | null>(null);
   const [total, setTotal] = useState<number | null>(null);
   const [error, setError] = useState('');
@@ -124,7 +124,7 @@ export function ReportView({
   return (
     <div className="space-y-5">
       <Card>
-        <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-7">
           <label className="block">
             <span className="label">From</span>
             <input className="input px-2" type="date" value={filter.from} onChange={set('from')} />
@@ -146,6 +146,10 @@ export function ReportView({
               </select>
             </label>
           )}
+          <label className="block">
+            <span className="label">Campus</span>
+            <CampusSelect value={filter.campus} onChange={(c) => setFilter({ ...filter, campus: c })} options={gradeOptions} emptyLabel="Any" />
+          </label>
           <label className="block">
             <span className="label">Grade</span>
             <GradeSelect value={filter.grade} onChange={(g) => setFilter({ ...filter, grade: g, division: '' })} options={gradeOptions} emptyLabel="Any" />

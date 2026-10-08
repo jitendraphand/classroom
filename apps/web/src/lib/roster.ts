@@ -1,9 +1,10 @@
 import { prisma } from './db';
 import { parseCsv } from './csv';
-import { ALL_DIVISIONS, normalizeDivision, normalizeGrade } from './grades';
+import { ALL_DIVISIONS, normalizeCampus, normalizeDivision, normalizeGrade } from './grades';
+import { campusProblem, type MasterCampus } from './campusLogic';
 import { rosterAudienceProblem, type MasterGrade } from './gradeMasterLogic';
 
-export type RosterRow = { externalId: string; name: string; grade: string; division: string; rollNumber: string | null };
+export type RosterRow = { externalId: string; name: string; campus: string; grade: string; division: string; rollNumber: string | null };
 
 const HEADER_ALIASES: Record<keyof RosterRow, string[]> = {
   externalId: ['externalid', 'studentid', 'student_id', 'id', 'sub'],
@@ -11,20 +12,27 @@ const HEADER_ALIASES: Record<keyof RosterRow, string[]> = {
   grade: ['grade', 'class', 'std', 'standard'],
   division: ['division', 'div', 'section'],
   rollNumber: ['roll', 'rollno', 'roll_no', 'rollnumber', 'roll_number'],
+  campus: ['campus', 'branch'],
 };
 
 /**
- * Parse an admin roster CSV: externalId,name,grade,division,roll (header row
+ * Parse an admin roster CSV: externalId,name,grade,division,roll,campus (header row
  * optional, column names flexible). Returns valid rows + per-line errors.
  * With `master` (Grades & divisions), grade/division must be active entries of
  * it; an empty master list (not set up yet) accepts any grade/division.
  */
-export function parseRoster(text: string, master: MasterGrade[] = []): { rows: RosterRow[]; errors: string[] } {
+export function parseRoster(
+  text: string,
+  master: MasterGrade[] = [],
+  campuses: MasterCampus[] = [],
+  /** Campus for rows without one (the school's only campus, or the admin's pick). */
+  defaultCampus = ''
+): { rows: RosterRow[]; errors: string[] } {
   const table = parseCsv(text);
   const errors: string[] = [];
   if (!table.length) return { rows: [], errors: ['The file is empty'] };
   const head = table[0]!.map((h) => h.trim().toLowerCase().replace(/[\s-]/g, ''));
-  const idx: Record<keyof RosterRow, number> = { externalId: 0, name: 1, grade: 2, division: 3, rollNumber: 4 };
+  const idx: Record<keyof RosterRow, number> = { externalId: 0, name: 1, grade: 2, division: 3, rollNumber: 4, campus: 5 };
   let start = 0;
   const hasHeader = head.some((h) => Object.values(HEADER_ALIASES).flat().includes(h));
   if (hasHeader) {
@@ -46,6 +54,7 @@ export function parseRoster(text: string, master: MasterGrade[] = []): { rows: R
     const name = get('name').replace(/\s+/g, ' ');
     const grade = normalizeGrade(get('grade'));
     const division = normalizeDivision(get('division'));
+    const campus = normalizeCampus(get('campus')) || normalizeCampus(defaultCampus);
     if (!externalId || !/^[A-Za-z0-9._:@/-]{1,64}$/.test(externalId)) {
       errors.push(`Line ${line}: invalid student ID`);
       continue;
@@ -58,6 +67,15 @@ export function parseRoster(text: string, master: MasterGrade[] = []): { rows: R
       errors.push(`Line ${line}: missing grade or division`);
       continue;
     }
+    if (!campus) {
+      errors.push(`Line ${line}: missing campus (add a campus column or pick the campus for the file)`);
+      continue;
+    }
+    const badCampus = campusProblem(campuses, campus);
+    if (badCampus) {
+      errors.push(`Line ${line}: ${badCampus}`);
+      continue;
+    }
     const unknown = rosterAudienceProblem(master, grade, division);
     if (unknown) {
       errors.push(`Line ${line}: ${unknown} (add it in Grades & divisions first)`);
@@ -68,7 +86,7 @@ export function parseRoster(text: string, master: MasterGrade[] = []): { rows: R
       continue;
     }
     seen.add(externalId);
-    rows.push({ externalId, name, grade, division, rollNumber: get('rollNumber').slice(0, 20) || null });
+    rows.push({ externalId, name, campus, grade, division, rollNumber: get('rollNumber').slice(0, 20) || null });
   }
   return { rows, errors };
 }
@@ -89,7 +107,7 @@ export async function importRoster(rows: RosterRow[]) {
         prisma.student.upsert({
           where: { externalId: r.externalId },
           create: { ...r, source: 'import' },
-          update: { name: r.name, grade: r.grade, division: r.division, rollNumber: r.rollNumber },
+          update: { name: r.name, campus: r.campus, grade: r.grade, division: r.division, rollNumber: r.rollNumber, deletedAt: null },
         })
       )
     );

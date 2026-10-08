@@ -8,9 +8,9 @@
  * - Times are minutes after local midnight (0‥1440).
  * - weekday 0 = Sunday … 6 = Saturday (JS getDay()).
  */
-import { audiencesOverlap, audienceIncludes, normalizeDivision, normalizeGrade } from './grades';
+import { audiencesOverlap, audienceIncludes, normalizeCampus, normalizeDivision, normalizeGrade, type Audience } from './grades';
 
-export type Audience = { grade: string; divisions: string[]; allDivisions: boolean };
+export type { Audience };
 
 export type SlotLike = Audience & {
   id: string;
@@ -31,6 +31,7 @@ export type OverrideLike = {
   date: string;
   slotId: string | null;
   teacherId: string | null;
+  campus: string | null;
   grade: string | null;
   divisions: string[];
   allDivisions: boolean;
@@ -206,8 +207,8 @@ export function occurrencesOn(
     const endMinute = mod?.endMinute ?? slot.endMinute;
     const teacherId = mod?.teacherId ?? slot.teacherId;
     const audience: Audience = mod?.grade
-      ? { grade: mod.grade, divisions: mod.divisions, allDivisions: mod.allDivisions }
-      : { grade: slot.grade, divisions: slot.divisions, allDivisions: slot.allDivisions };
+      ? { campus: mod.campus || slot.campus, grade: mod.grade, divisions: mod.divisions, allDivisions: mod.allDivisions }
+      : { campus: slot.campus, grade: slot.grade, divisions: slot.divisions, allDivisions: slot.allDivisions };
     out.push({
       ...audience,
       key: occurrenceKeyForSlot(slot.id, date),
@@ -227,8 +228,9 @@ export function occurrencesOn(
     });
   }
   for (const o of todays) {
-    if (o.kind !== 'EXTRA' || !o.teacherId || !o.grade || o.startMinute == null || o.endMinute == null) continue;
+    if (o.kind !== 'EXTRA' || !o.teacherId || !o.campus || !o.grade || o.startMinute == null || o.endMinute == null) continue;
     out.push({
+      campus: o.campus,
       grade: o.grade,
       divisions: o.divisions,
       allDivisions: o.allDivisions,
@@ -285,8 +287,11 @@ export function opensAt(occ: { start: Date }, earlyMinutes: number): Date {
   return new Date(occ.start.getTime() - earlyMinutes * 60_000);
 }
 
-export function forAudience<T extends Audience>(items: T[], grade: string, division: string): T[] {
-  return items.filter((o) => audienceIncludes(o, grade, division));
+export function forAudience<T extends Audience>(
+  items: T[],
+  student: { campus: string; grade: string; division: string }
+): T[] {
+  return items.filter((o) => audienceIncludes(o, student));
 }
 
 // --------------------------------------------------------------- overlaps
@@ -305,6 +310,7 @@ export type SlotInput = Omit<SlotLike, 'id'> & { id?: string };
 
 /** Basic field checks; returns an error message or null. */
 export function slotProblem(s: SlotInput): string | null {
+  if (!normalizeCampus(s.campus)) return 'Campus is required';
   if (!normalizeGrade(s.grade)) return 'Grade is required';
   if (!s.allDivisions && !s.divisions.map(normalizeDivision).filter(Boolean).length) {
     return 'Pick at least one division (or all divisions)';

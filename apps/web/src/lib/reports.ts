@@ -2,7 +2,7 @@ import type { AttendanceRecord, ClassSession, Prisma, Student } from '@prisma/cl
 import { prisma } from './db';
 import { attendanceStatus, STATUS_LABEL, totalConnectedMs, type AttendanceStatus } from './attendance';
 import { toCsv, type Cell } from './csv';
-import { audienceIncludes, formatAudience, normalizeDivision, normalizeGrade } from './grades';
+import { audienceIncludes, formatAudience, normalizeCampus, normalizeDivision, normalizeGrade } from './grades';
 import { addDays, dateOnly, dateValue, daysBetween, formatHHMM, isLocalDate, localDateOf, localMinuteOf } from './schedule';
 import { occurrencesForRange } from './scheduleService';
 import { appTimeZone } from './schoolConfig';
@@ -11,6 +11,7 @@ export type ReportFilter = {
   from: string;
   to: string;
   teacherId?: string;
+  campus?: string;
   grade?: string;
   division?: string;
   subject?: string;
@@ -29,12 +30,14 @@ export function parseReportFilter(url: URL, opts: { forceTeacherId?: string } = 
   if (!isLocalDate(from) || !isLocalDate(to)) throw new ReportError('Use YYYY-MM-DD dates');
   if (from > to) throw new ReportError('"From" must be before "to"');
   if (daysBetween(from, to) > MAX_RANGE_DAYS) throw new ReportError(`Pick at most ${MAX_RANGE_DAYS} days`);
+  const c = url.searchParams.get('campus');
   const g = url.searchParams.get('grade');
   const d = url.searchParams.get('division');
   return {
     from,
     to,
     teacherId: opts.forceTeacherId ?? (url.searchParams.get('teacherId') || undefined),
+    campus: c ? normalizeCampus(c) || undefined : undefined,
     grade: g ? normalizeGrade(g) : undefined,
     division: d ? normalizeDivision(d) : undefined,
     subject: url.searchParams.get('subject')?.trim() || undefined,
@@ -48,6 +51,7 @@ async function loadSessions(f: ReportFilter): Promise<SessionWith[]> {
   const where: Prisma.ClassSessionWhereInput = {
     sessionDate: { gte: dateValue(f.from), lte: dateValue(f.to) },
     ...(f.teacherId ? { teacherId: f.teacherId } : {}),
+    ...(f.campus ? { campus: f.campus } : {}),
     ...(f.grade ? { grade: f.grade } : {}),
     ...(f.subject ? { subject: { contains: f.subject, mode: 'insensitive' } } : {}),
     ...(f.division ? { OR: [{ allDivisions: true }, { divisions: { has: f.division } }] } : {}),
@@ -70,8 +74,10 @@ function knownStudents(cs: ClassSession, students: Student[], division?: string)
   const cutoff = (cs.endedAt ?? cs.scheduledEnd ?? new Date()).getTime();
   return students.filter(
     (s) =>
-      audienceIncludes(cs, s.grade, s.division) &&
+      audienceIncludes(cs, s) &&
       s.createdAt.getTime() <= cutoff &&
+      // A student the admin deleted still counts for classes before the deletion.
+      (!s.deletedAt || s.deletedAt.getTime() > cutoff) &&
       (!division || normalizeDivision(s.division) === division)
   );
 }
@@ -136,7 +142,7 @@ export async function sessionSummary(f: ReportFilter): Promise<SessionRow[]> {
       date: dateOnly(cs.sessionDate)!,
       subject: cs.subject,
       teacher: cs.teacher.name,
-      audience: formatAudience(cs.grade, cs.divisions, cs.allDivisions),
+      audience: formatAudience(cs.campus, cs.grade, cs.divisions, cs.allDivisions),
       type: cs.adHoc ? 'Ad-hoc' : cs.slotId ? 'Timetable' : 'Extra',
       scheduledStart: hhmm(cs.scheduledStart, tz),
       scheduledEnd: hhmm(cs.scheduledEnd, tz),
@@ -180,15 +186,16 @@ export async function sessionSummary(f: ReportFilter): Promise<SessionRow[]> {
         const born = createdAt.get(o.extra ? `override:${o.overrideId}` : `slot:${o.slotId}`);
         if (born != null && o.end.getTime() < born) continue;
         if (f.teacherId && o.teacherId !== f.teacherId) continue;
+        if (f.campus && o.campus !== f.campus) continue;
         if (f.grade && o.grade !== f.grade) continue;
-        if (f.division && !audienceIncludes(o, o.grade, f.division)) continue;
+        if (f.division && !audienceIncludes(o, { campus: o.campus, grade: o.grade, division: f.division })) continue;
         if (f.subject && !o.subject.toLowerCase().includes(f.subject.toLowerCase())) continue;
         rows.push({
           sessionId: null,
           date: o.date,
           subject: o.subject,
           teacher: teacherNames.get(o.teacherId) ?? '',
-          audience: formatAudience(o.grade, o.divisions, o.allDivisions),
+          audience: formatAudience(o.campus, o.grade, o.divisions, o.allDivisions),
           type: o.extra ? 'Extra' : 'Timetable',
           scheduledStart: formatHHMM(o.startMinute),
           scheduledEnd: formatHHMM(o.endMinute),
@@ -261,12 +268,12 @@ export async function attendanceDetail(f: ReportFilter): Promise<DetailRow[]> {
         date: dateOnly(cs.sessionDate)!,
         subject: cs.subject,
         teacher: cs.teacher.name,
-        audience: formatAudience(cs.grade, cs.divisions, cs.allDivisions),
+        audience: formatAudience(cs.campus, cs.grade, cs.divisions, cs.allDivisions),
         studentId: st.id,
         externalId: st.externalId,
         name: st.name,
         rollNumber: st.rollNumber ?? '',
-        gradeDivision: `${st.grade}-${st.division}`,
+        gradeDivision: `${st.campus} · ${st.grade}-${st.division}`,
         status,
         statusLabel: STATUS_LABEL[status],
         firstJoined: hhmm(r?.firstJoinedAt, tz),

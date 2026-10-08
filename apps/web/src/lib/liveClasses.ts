@@ -61,7 +61,8 @@ function toLiveClass(room: RoomWithTeacher, cs: ClassSession, p: Awaited<ReturnT
     classSessionId: cs.id,
     title: room.name,
     subject: cs.subject,
-    gradeDivision: formatAudience(cs.grade, cs.divisions, cs.allDivisions),
+    gradeDivision: formatAudience(cs.campus, cs.grade, cs.divisions, cs.allDivisions),
+    campus: cs.campus,
     teacherName: room.teacher.name,
     startedAt: cs.startedAt!.toISOString(),
     studentCount: p.studentCount,
@@ -100,7 +101,7 @@ export async function getLiveClass(
   const students = studentIds.length
     ? await prisma.student.findMany({
         where: { id: { in: studentIds } },
-        select: { id: true, name: true, grade: true, division: true, rollNumber: true },
+        select: { id: true, name: true, campus: true, grade: true, division: true, rollNumber: true },
         orderBy: { name: 'asc' },
       })
     : [];
@@ -110,7 +111,7 @@ export async function getLiveClass(
     students: students.map((s) => ({
       id: s.id,
       name: s.name,
-      gradeDivision: `${s.grade}-${s.division}`,
+      gradeDivision: `${s.campus} · ${s.grade}-${s.division}`,
       rollNumber: s.rollNumber,
     })),
   };

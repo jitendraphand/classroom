@@ -155,7 +155,7 @@ export function unrecognisedFromStudents(
 }
 
 /**
- * Teacher assignments ("7-A", "8-*") that the master list does not know.
+ * Teacher assignments ("CC@7-A", "CC@8-*") whose grade/division the master list does not know.
  * Pairs the teacher already holds (`keep`) are not re-checked, so editing a
  * teacher with a legacy assignment does not force removing it.
  */
@@ -175,6 +175,7 @@ export function assignmentsProblem(
 }
 
 export type TeacherGradeChoice = {
+  campus: string;
   grade: string;
   label: string;
   /** Holds the whole grade ("*"): may pick any division and "All divisions". */
@@ -189,14 +190,18 @@ export type TeacherGradeChoice = {
  * empty master list the assignments are used as they are.
  */
 export function teacherGradeChoices(
-  assignments: { grade: string; division: string }[],
+  assignments: { campus: string; grade: string; division: string }[],
   master: MasterGrade[]
 ): TeacherGradeChoice[] {
   const configured = master.length > 0;
   const byGrade = new Map<string, string[]>();
-  for (const a of assignments) byGrade.set(a.grade, [...(byGrade.get(a.grade) ?? []), a.division]);
+  for (const a of assignments) {
+    const k = `${a.campus}|${a.grade}`;
+    byGrade.set(k, [...(byGrade.get(k) ?? []), a.division]);
+  }
   const out: (TeacherGradeChoice & { order: number })[] = [];
-  for (const [grade, divs] of byGrade) {
+  for (const [key, divs] of byGrade) {
+    const [campus, grade] = key.split('|') as [string, string];
     const m = master.find((g) => g.name === grade);
     if (configured && m && !m.active) continue;
     const whole = divs.includes(ALL_DIVISIONS);
@@ -210,6 +215,7 @@ export function teacherGradeChoices(
     if (whole) for (const d of m?.divisions ?? []) if (d.active) list.set(d.name, d.label);
     if (!whole && !list.size) continue;
     out.push({
+      campus,
       grade,
       label: m?.label ?? grade,
       whole,
@@ -220,8 +226,8 @@ export function teacherGradeChoices(
     });
   }
   return out
-    .sort((a, b) => a.order - b.order || compareGrades(a.grade, b.grade))
-    .map((c) => ({ grade: c.grade, label: c.label, whole: c.whole, divisions: c.divisions }));
+    .sort((a, b) => a.campus.localeCompare(b.campus) || a.order - b.order || compareGrades(a.grade, b.grade))
+    .map((c) => ({ campus: c.campus, grade: c.grade, label: c.label, whole: c.whole, divisions: c.divisions }));
 }
 
 /**

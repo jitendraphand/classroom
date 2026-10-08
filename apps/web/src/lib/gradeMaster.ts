@@ -48,7 +48,7 @@ async function gradeUsage(grade: string): Promise<Usage> {
       select: { weekday: true, startMinute: true, subject: true },
     }),
     prisma.scheduleOverride.count({ where: { grade: g } }),
-    prisma.student.count({ where: { grade: g } }),
+    prisma.student.count({ where: { grade: g, deletedAt: null } }),
     prisma.classSession.count({ where: { grade: g } }),
   ]);
   return [
@@ -81,7 +81,7 @@ async function divisionUsage(grade: string, division: string): Promise<Usage> {
       select: { weekday: true, startMinute: true, subject: true },
     }),
     prisma.scheduleOverride.count({ where: { grade: g, divisions: { has: d } } }),
-    prisma.student.count({ where: { grade: g, division: { equals: d, mode: 'insensitive' } } }),
+    prisma.student.count({ where: { grade: g, division: { equals: d, mode: 'insensitive' }, deletedAt: null } }),
     prisma.classSession.count({ where: { grade: g, divisions: { has: d } } }),
   ]);
   return [
@@ -103,13 +103,13 @@ async function usageCounts() {
       SELECT grade AS g, COUNT(*) AS n FROM "TeacherAssignment" GROUP BY 1
       UNION ALL SELECT grade, COUNT(*) FROM "TimetableSlot" GROUP BY 1
       UNION ALL SELECT grade, COUNT(*) FROM "ScheduleOverride" WHERE grade IS NOT NULL GROUP BY 1
-      UNION ALL SELECT grade, COUNT(*) FROM "Student" GROUP BY 1
+      UNION ALL SELECT grade, COUNT(*) FROM "Student" WHERE "deletedAt" IS NULL GROUP BY 1
       UNION ALL SELECT grade, COUNT(*) FROM "ClassSession" GROUP BY 1
     ) x GROUP BY g`);
   const divRows = await prisma.$queryRaw<{ g: string; d: string; n: number }[]>(Prisma.sql`
     SELECT g, d, SUM(n)::int AS n FROM (
       SELECT grade AS g, division AS d, COUNT(*) AS n FROM "TeacherAssignment" GROUP BY 1, 2
-      UNION ALL SELECT grade, upper(division), COUNT(*) FROM "Student" GROUP BY 1, 2
+      UNION ALL SELECT grade, upper(division), COUNT(*) FROM "Student" WHERE "deletedAt" IS NULL GROUP BY 1, 2
       UNION ALL SELECT s.grade, x.d, COUNT(*) FROM "TimetableSlot" s, unnest(s.divisions) AS x(d) GROUP BY 1, 2
       UNION ALL SELECT o.grade, x.d, COUNT(*) FROM "ScheduleOverride" o, unnest(o.divisions) AS x(d)
         WHERE o.grade IS NOT NULL GROUP BY 1, 2
@@ -133,7 +133,7 @@ async function sources() {
     prisma.teacherAssignment.findMany({ select: { grade: true, division: true }, distinct: ['grade', 'division'] }),
     prisma.timetableSlot.findMany({ select: { grade: true, divisions: true } }),
     prisma.scheduleOverride.findMany({ where: { grade: { not: null } }, select: { grade: true, divisions: true } }),
-    prisma.student.findMany({ select: { grade: true, division: true }, distinct: ['grade', 'division'] }),
+    prisma.student.findMany({ where: { deletedAt: null }, select: { grade: true, division: true }, distinct: ['grade', 'division'] }),
     prisma.$queryRaw<{ grade: string; divisions: string[] }[]>(Prisma.sql`
       SELECT grade, array_agg(DISTINCT x.d) FILTER (WHERE x.d IS NOT NULL) AS divisions
       FROM "ClassSession" c LEFT JOIN LATERAL unnest(c.divisions) AS x(d) ON true GROUP BY grade`),
@@ -192,7 +192,7 @@ export const gradeStore: GradeStore = {
   },
   sources,
   async studentGroups() {
-    const rows = await prisma.student.groupBy({ by: ['grade', 'division'], _count: { _all: true } });
+    const rows = await prisma.student.groupBy({ by: ['grade', 'division'], where: { deletedAt: null }, _count: { _all: true } });
     return rows.map((r) => ({ grade: r.grade, division: r.division, count: r._count._all }));
   },
 };

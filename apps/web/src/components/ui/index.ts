@@ -7,3 +7,4 @@ export { Avatar } from './Avatar';
 export { Tabs } from './Tabs';
 export { EmptyState } from './EmptyState';
 export { Skeleton, PageLoading } from './Skeleton';
+export { ConfirmDialog } from './ConfirmDialog';

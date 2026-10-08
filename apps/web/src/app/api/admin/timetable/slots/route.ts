@@ -7,8 +7,9 @@ export async function POST(req: Request) {
   const { res } = await requireAdminApi();
   if (res) return res;
   try {
-    const slot = await createSlot(slotBody.parse(await req.json()));
-    return jsonOk({ slot });
+    const out = await createSlot(slotBody.parse(await req.json()));
+    const slots = Array.isArray(out) ? out : [out];
+    return jsonOk({ slot: slots[0], slots });
   } catch (e) {
     if (e instanceof z.ZodError) return jsonError(e.errors[0]?.message || 'Invalid input');
     if (e instanceof TimetableError) return jsonError(e.message, e.status, e.extra);

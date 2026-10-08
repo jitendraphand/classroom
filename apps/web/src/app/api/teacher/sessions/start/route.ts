@@ -13,6 +13,7 @@ const schema = z.discriminatedUnion('kind', [
   }),
   z.object({
     kind: z.literal('adhoc'),
+    campus: z.string().min(1).max(40),
     grade: z.string().min(1).max(16),
     divisions: z.array(z.string().max(16)).max(40).default([]),
     allDivisions: z.boolean().optional(),

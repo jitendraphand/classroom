@@ -3,7 +3,7 @@ import { nudgeRoomState } from './roomNudge';
 import { prisma } from './db';
 import { setActAsStudent, setStudentCookie } from './auth';
 import { generateIdentity, generateSessionToken } from './codes';
-import { audienceIncludes, formatAudience, normalizeDivision, normalizeGrade } from './grades';
+import { audienceIncludes, formatAudience, normalizeCampus, normalizeDivision, normalizeGrade } from './grades';
 import { ensureRedis, keys } from './redis';
 import { recordArrival } from './attendanceService';
 import { upsertOccurrenceSession } from './classSessions';
@@ -32,15 +32,21 @@ type StudentStore = {
  * update name / grade / division (e.g. promotion to a new grade). Optional
  * fields (roll, email, phone) are only overwritten when the link carries them.
  */
-export async function upsertStudentFromClaims(c: JoinClaims, db: StudentStore = prisma as unknown as StudentStore): Promise<Student> {
+export async function upsertStudentFromClaims(
+  c: JoinClaims & { campus: string },
+  db: StudentStore = prisma as unknown as StudentStore
+): Promise<Student> {
   const data = {
     name: c.name,
+    campus: c.campus,
     grade: c.grade,
     division: c.division,
     ...(c.rollNumber ? { rollNumber: c.rollNumber } : {}),
     ...(c.email ? { email: c.email } : {}),
     ...(c.phone ? { phone: c.phone } : {}),
     lastSeenAt: new Date(),
+    // A student the admin deleted comes back when the school app sends them again.
+    deletedAt: null,
   };
   try {
     return await db.student.upsert({
@@ -157,7 +163,7 @@ async function teacherName(id: string) {
 async function occInfo(o: Occurrence): Promise<ClassInfo> {
   return {
     subject: o.subject,
-    audience: formatAudience(o.grade, o.divisions, o.allDivisions),
+    audience: formatAudience(o.campus, o.grade, o.divisions, o.allDivisions),
     teacherName: await teacherName(o.teacherId),
     date: o.date,
     start: o.start.toISOString(),
@@ -170,7 +176,7 @@ async function occInfo(o: Occurrence): Promise<ClassInfo> {
 async function sessionInfo(cs: ClassSession): Promise<ClassInfo> {
   return {
     subject: cs.subject,
-    audience: formatAudience(cs.grade, cs.divisions, cs.allDivisions),
+    audience: formatAudience(cs.campus, cs.grade, cs.divisions, cs.allDivisions),
     teacherName: await teacherName(cs.teacherId),
     date: cs.sessionDate.toISOString().slice(0, 10),
     start: (cs.scheduledStart ?? cs.startedAt)?.toISOString() ?? null,
@@ -190,11 +196,14 @@ export async function decideStudentRoute(student: Student) {
   const early = earlyWindowMinutes();
   const now = new Date();
   const today = localDateOf(now, tz);
-  const grade = normalizeGrade(student.grade);
-  const division = normalizeDivision(student.division);
+  const who = {
+    campus: normalizeCampus(student.campus),
+    grade: normalizeGrade(student.grade),
+    division: normalizeDivision(student.division),
+  };
 
   // Yesterday too, so a class running past midnight is still found.
-  const occurrences = forAudience(await occurrencesForRange(addDays(today, -1), addDays(today, 7), tz), grade, division);
+  const occurrences = forAudience(await occurrencesForRange(addDays(today, -1), addDays(today, 7), tz), who);
 
   const [sessions, liveRooms] = await Promise.all([
     prisma.classSession.findMany({ where: { occurrenceKey: { in: occurrences.map((o) => o.key) } }, include: { room: true } }),
@@ -207,10 +216,10 @@ export async function decideStudentRoute(student: Student) {
   const liveIds = liveRooms.map((r) => r.classSessionId!);
   const adHoc = (
     await prisma.classSession.findMany({
-      where: { id: { in: liveIds }, adHoc: true, endedAt: null, grade },
+      where: { id: { in: liveIds }, adHoc: true, endedAt: null, campus: who.campus, grade: who.grade },
       orderBy: { startedAt: 'asc' },
     })
-  ).filter((s) => audienceIncludes(s, grade, division));
+  ).filter((s) => audienceIncludes(s, who));
 
   const decision = decideRoute({
     occurrences,
@@ -268,7 +277,7 @@ export async function studentMayEnterRoom(student: Student, room: Room) {
   if (!room.classSessionId) return { ok: false as const, cs: null };
   const cs = await prisma.classSession.findUnique({ where: { id: room.classSessionId } });
   if (!cs || cs.endedAt) return { ok: false as const, cs: null };
-  return { ok: audienceIncludes(cs, student.grade, student.division), cs };
+  return { ok: audienceIncludes(cs, student), cs };
 }
 
 export { arrive as arriveAtSession };

@@ -140,7 +140,7 @@ test('every admin grade/division endpoint returns 401 without an admin session a
     handleDeleteDivision('d7a', deps),
     handleReorder({ ids: ['g7'] }, deps),
     handleSync(deps),
-    handleRecognise({ grade: '7', division: 'Z' }, deps),
+    handleRecognise({ campus: 'CC', grade: '7', division: 'Z' }, deps),
   ]);
   for (const r of results) assert.equal(r.status, 401);
   assert.deepEqual(calls, []);
@@ -245,16 +245,16 @@ test('admin list: ordered, usage counts, unrecognised student entries', async ()
 test('recognise: one-click add creates the grade/division (or re-activates)', async () => {
   const { store, grades } = fakeStore([seven(), eight()]);
   const deps = { guard: asAdmin, store };
-  assert.equal((await handleRecognise({ grade: '11', division: 'b' }, deps)).status, 201);
+  assert.equal((await handleRecognise({ campus: 'CC', grade: '11', division: 'b' }, deps)).status, 201);
   const g11 = grades.find((g) => g.name === '11')!;
   assert.deepEqual(g11.divisions.map((d) => d.name), ['B']);
-  await handleRecognise({ grade: '7', division: 'mahaveer' }, deps);
+  await handleRecognise({ campus: 'CC', grade: '7', division: 'mahaveer' }, deps);
   assert.ok(grades[0]!.divisions.some((d) => d.name === 'MAHAVEER' && d.label === 'Mahaveer'));
-  await handleRecognise({ grade: '8', division: 'A' }, deps); // inactive grade → activated
+  await handleRecognise({ campus: 'CC', grade: '8', division: 'A' }, deps); // inactive grade → activated
   assert.equal(grades[1]!.active, true);
-  await handleRecognise({ grade: '7', division: 'C' }, deps); // inactive division → activated
+  await handleRecognise({ campus: 'CC', grade: '7', division: 'C' }, deps); // inactive division → activated
   assert.equal(grades[0]!.divisions.find((d) => d.name === 'C')!.active, true);
-  assert.equal((await handleRecognise({ grade: '7', division: 'ALL' }, deps)).status, 400);
+  assert.equal((await handleRecognise({ campus: 'CC', grade: '7', division: 'ALL' }, deps)).status, 400);
 });
 
 // ---------------------------------------------------------------- backfill
@@ -315,7 +315,7 @@ test('options endpoint: needs admin/teacher session; returns active entries only
     { name: '7', label: 'Grade 7', divisions: [{ name: 'A', label: 'A' }, { name: 'B', label: 'B' }] },
   ]);
   const empty = await (await handleGradeOptions({ authorised: async () => true, list: async () => [] })).json();
-  assert.deepEqual(empty, { grades: [], configured: false });
+  assert.deepEqual(empty, { grades: [], configured: false, campuses: [], campusesConfigured: false });
   assert.deepEqual(activeOptions([eight()]), []);
 });
 
@@ -349,31 +349,31 @@ test('input cleaning and audience validation (empty master list accepts anything
 
 test('roster import validates grade/division against the active master list', () => {
   const csv = 'externalId,name,grade,division\nS1,Asha,7,a\nS2,Ravi,7,C\nS3,Meera,9,A\nS4,Om,grade 7,b';
-  const strict = parseRoster(csv, [seven()]);
+  const strict = parseRoster(csv, [seven()], [], 'CC');
   assert.deepEqual(strict.rows.map((r) => r.externalId), ['S1', 'S4']);
   assert.equal(strict.errors.length, 2);
   assert.match(strict.errors[0]!, /Line 3: division C is not an active division of grade 7/);
   assert.match(strict.errors[1]!, /Line 4: grade 9 is not an active grade/);
-  assert.equal(parseRoster(csv).rows.length, 4); // master list not set up yet
+  assert.equal(parseRoster(csv, [], [], 'CC').rows.length, 4); // master list not set up yet
 });
 
 test('teacher ad-hoc choices: assigned grades only, active master divisions for whole-grade', () => {
   const master = [seven(), eight(), { id: 'g9', name: '9', label: '9', sortOrder: 5, active: true, divisions: [{ id: 'x', name: 'Q', label: 'Q', active: true }] }];
   const choices = teacherGradeChoices(
     [
-      { grade: '7', division: '*' },
-      { grade: '8', division: 'A' }, // inactive grade → hidden
-      { grade: '10', division: 'B' }, // not in master (legacy) → kept as assigned
+      { campus: 'CC', grade: '7', division: '*' },
+      { campus: 'CC', grade: '8', division: 'A' }, // inactive grade → hidden
+      { campus: 'CC', grade: '10', division: 'B' }, // not in master (legacy) → kept as assigned
     ],
     master
   );
   assert.deepEqual(choices, [
-    { grade: '7', label: 'Grade 7', whole: true, divisions: [{ name: 'A', label: 'A' }, { name: 'B', label: 'B' }] },
-    { grade: '10', label: '10', whole: false, divisions: [{ name: 'B', label: 'B' }] },
+    { campus: 'CC', grade: '7', label: 'Grade 7', whole: true, divisions: [{ name: 'A', label: 'A' }, { name: 'B', label: 'B' }] },
+    { campus: 'CC', grade: '10', label: '10', whole: false, divisions: [{ name: 'B', label: 'B' }] },
   ]);
-  const specific = teacherGradeChoices([{ grade: '7', division: 'C' }, { grade: '7', division: 'A' }], master);
+  const specific = teacherGradeChoices([{ campus: 'CC', grade: '7', division: 'C' }, { campus: 'CC', grade: '7', division: 'A' }], master);
   assert.deepEqual(specific[0]!.divisions, [{ name: 'A', label: 'A' }]); // C inactive
-  assert.deepEqual(teacherGradeChoices([{ grade: '7', division: '*' }], [])[0]!.divisions, []);
+  assert.deepEqual(teacherGradeChoices([{ campus: 'CC', grade: '7', division: '*' }], [])[0]!.divisions, []);
 });
 
 test('unrecognised list ignores known (incl. inactive) entries', () => {

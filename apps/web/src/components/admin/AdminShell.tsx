@@ -14,7 +14,7 @@ export const ADMIN_NAV = [
   { href: '/admin', label: 'Teachers' },
   { href: '/admin/timetable', label: 'Timetable' },
   { href: '/admin/students', label: 'Students' },
-  { href: '/admin/grades', label: 'Grades & divisions' },
+  { href: '/admin/grades', label: 'Campuses & grades' },
   { href: '/admin/reports', label: 'Attendance' },
   { href: '/admin/live', label: 'Ongoing classes' },
 ];

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { requireAdminApi } from '@/lib/adminGuard';
 import { parseAssignments } from '@/lib/grades';
+import { soleCampus } from '@/lib/campusMaster';
 import { jsonError, jsonOk } from '@/lib/response';
 import { createTeacher, listTeachers, TeacherError } from '@/lib/teachers';
 
@@ -10,6 +11,8 @@ const createSchema = z.object({
   name: z.string().trim().min(1).max(80),
   email: z.string().trim().email().max(200),
   assignments: z.string().max(2000).default(''),
+  /** Campus for assignment tokens without a "CAMPUS@" prefix. */
+  campus: z.string().max(40).optional(),
 });
 
 export async function GET() {
@@ -23,14 +26,14 @@ export async function POST(req: Request) {
   if (res) return res;
   try {
     const body = createSchema.parse(await req.json());
-    const assignments = parseAssignments(body.assignments);
+    const assignments = parseAssignments(body.assignments, body.campus || (await soleCampus()));
     const out = await createTeacher({ name: body.name, email: body.email, assignments });
     // The temporary password is returned exactly once; only its hash is stored.
     return jsonOk(out, { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {
     if (e instanceof z.ZodError) return jsonError(e.errors[0]?.message || 'Invalid input');
     if (e instanceof TeacherError) return jsonError(e.message, e.status);
-    if (e instanceof Error && /Cannot read/.test(e.message)) return jsonError(e.message);
+    if (e instanceof Error && /Cannot read|Pick a campus/.test(e.message)) return jsonError(e.message);
     console.error(e);
     return jsonError('Could not create teacher', 500);
   }

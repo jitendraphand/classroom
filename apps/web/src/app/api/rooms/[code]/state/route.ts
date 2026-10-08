@@ -33,7 +33,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
           pinnedAt: true,
           createdAt: true,
           studentId: true,
-          student: { select: { rollNumber: true, grade: true, division: true, externalId: true } },
+          student: { select: { rollNumber: true, campus: true, grade: true, division: true, externalId: true } },
         },
       },
     },
@@ -156,12 +156,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
 
   // Roster details for the teacher: roll number, grade-division, late flag and
   // whether the student belongs to this class's timetabled audience.
-  let classSession: { id: string; grade: string; divisions: string[]; allDivisions: boolean; subject: string; adHoc: boolean } | null = null;
+  let classSession: { id: string; campus: string; grade: string; divisions: string[]; allDivisions: boolean; subject: string; adHoc: boolean } | null = null;
   const lateByStudent = new Map<string, boolean>();
   if (isTeacher && room.classSessionId) {
     classSession = await prisma.classSession.findUnique({
       where: { id: room.classSessionId },
-      select: { id: true, grade: true, divisions: true, allDivisions: true, subject: true, adHoc: true },
+      select: { id: true, campus: true, grade: true, divisions: true, allDivisions: true, subject: true, adHoc: true },
     });
     if (classSession) {
       const recs = await prisma.attendanceRecord.findMany({
@@ -177,9 +177,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     return {
       rollNumber: st?.rollNumber ?? null,
       sid: st?.externalId ?? null,
-      gradeDivision: st ? `${st.grade}-${st.division}` : null,
+      gradeDivision: st ? `${st.campus} · ${st.grade}-${st.division}` : null,
       late: p.studentId ? lateByStudent.get(p.studentId) ?? false : false,
-      onTimetable: !!st && !!classSession && audienceIncludes(classSession, st.grade, st.division),
+      onTimetable: !!st && !!classSession && audienceIncludes(classSession, st),
       viaSchoolApp: !!p.studentId,
       adHocClass: !!classSession?.adHoc,
     };
@@ -232,7 +232,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     classSession: classSession
       ? {
           subject: classSession.subject,
-          audience: formatAudience(classSession.grade, classSession.divisions, classSession.allDivisions),
+          audience: formatAudience(classSession.campus, classSession.grade, classSession.divisions, classSession.allDivisions),
           adHoc: classSession.adHoc,
         }
       : null,

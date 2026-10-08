@@ -21,7 +21,7 @@ The school app can instead open a **plain link with no signature, no expiry
 and no secret**:
 
 ```
-https://CLASSROOM_HOST/join?FirstName=Arohi&LastName=Patil&SID=GOS000123&Grade=7&Division=Mahaveer
+https://CLASSROOM_HOST/join?FirstName=Arohi&LastName=Patil&SID=GOS000123&Grade=7&Division=Mahaveer&Campus=CC
 ```
 
 | Parameter | Required | Rules |
@@ -31,12 +31,31 @@ https://CLASSROOM_HOST/join?FirstName=Arohi&LastName=Patil&SID=GOS000123&Grade=7
 | `LastName` | no | Same rules as `FirstName` |
 | `Grade` | yes | ≤16 chars, e.g. `7` (`Grade 7` is read as `7`) |
 | `Division` | yes | ≤32 chars: a letter or one word, e.g. `B` or `Mahaveer` (any case; spaces inside are dropped) |
+| `Campus` | see below | ≤32 chars: letters/digits, e.g. `CC` or `North` (any case; spaces are dropped, so `c c` = `CC`) |
+
+### Campus
+
+Classes are routed by **campus + grade + division**: a student only sees
+classes (timetable slots, ad-hoc classes) of their own campus, grade and
+division, and teachers are assigned per campus (`CC · 7-A`).
+
+- Send `Campus=` on every link when the school has more than one campus.
+- **No `Campus` in the link:** if exactly **one** campus is active in Admin →
+  Campuses & grades, the student is put in that campus. Otherwise (several
+  campuses, or none set up yet) the join is refused with `campus_required`
+  ("Your campus is missing … tell your school"), because guessing could show
+  the student another campus's class.
+- A campus that is not in the admin's list is accepted like an unknown grade:
+  the student is saved, sees "No class right now", and the admin gets a
+  one-click **Add campus** under Students / Campuses & grades.
+- Signed links (JWT) carry the same value as the optional `campus` claim.
 
 - Parameter names are case-insensitive (`sid`, `firstname` work); values are
   URL-decoded and trimmed. URL-encode values (`encodeURIComponent`).
 - `Roll` / `RollNo` is accepted optionally (display only).
 - First join creates the student (name = FirstName + LastName). Later joins with
-  the same `SID` update the name, grade and division (e.g. a promotion).
+  the same `SID` update the name, campus, grade and division (e.g. a promotion),
+  and restore a student the admin had deleted.
 - The link can be reused any number of times (no single-use check). The query is
   removed from the address bar by a redirect, as in signed mode.
 - Divisions are matched case-insensitively everywhere (timetable, teacher
@@ -141,6 +160,7 @@ export async function classroomJoinUrl(student) {
     name: student.name,
     grade: String(student.grade),
     division: student.division,
+    campus: student.campus, // optional when the school has one campus
     rollNumber: String(student.rollNumber ?? ''),
   })
     .setProtectedHeader({ alg: 'EdDSA' })
@@ -170,6 +190,7 @@ def classroom_join_url(student):
             "name": student.name,
             "grade": str(student.grade),
             "division": student.division,
+            "campus": student.campus,
             "rollNumber": str(student.roll_number or ""),
             "iss": "https://app.your-school.org",
             "aud": "classroom",
@@ -193,6 +214,7 @@ String token = Jwts.builder()
     .claim("name", student.getName())
     .claim("grade", student.getGrade())
     .claim("division", student.getDivision())
+    .claim("campus", student.getCampus())     // optional when the school has one campus
     .claim("rollNumber", student.getRollNumber())
     .issuer("https://app.your-school.org")
     .audience().add("classroom").and()
