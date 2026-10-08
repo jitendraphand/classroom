@@ -89,15 +89,29 @@ export type RosterPerson = {
   handRaised?: boolean;
   /** ms epoch when the hand went up (unknown for hands raised before this field existed). */
   handRaisedAt?: number | null;
+  /** Drawing on the share now / asked to draw (and when). */
+  drawing?: boolean;
+  drawRequested?: boolean;
+  drawRequestedAt?: number | null;
 };
 
 /**
- * Roster order: raised hands first, earliest raise first (unknown times after
+ * Roster order: the student drawing on the share, then draw requests
+ * (earliest first), then raised hands (earliest first, unknown times after
  * known ones), then the teacher, then everyone else by name.
  */
 export function sortRoster<T extends RosterPerson>(people: T[]): T[] {
   const raised = (p: T) => p.role === 'STUDENT' && !!p.handRaised;
+  const drawRank = (p: T) => (p.role !== 'STUDENT' ? 2 : p.drawing ? 0 : p.drawRequested ? 1 : 2);
   return [...people].sort((a, b) => {
+    const ad = drawRank(a);
+    const bd = drawRank(b);
+    if (ad !== bd) return ad - bd;
+    if (ad === 1) {
+      const at = a.drawRequestedAt ?? Number.POSITIVE_INFINITY;
+      const bt = b.drawRequestedAt ?? Number.POSITIVE_INFINITY;
+      if (at !== bt) return at < bt ? -1 : 1;
+    }
     const ah = raised(a);
     const bh = raised(b);
     if (ah !== bh) return ah ? -1 : 1;

@@ -43,6 +43,10 @@ export type RoomState = {
     canPublishVideo: boolean;
     inVisibleSample: boolean;
     handRaised?: boolean;
+    /** Asked to draw on the share (waiting for the teacher). */
+    drawRequested?: boolean;
+    /** Allowed to draw on the share now. */
+    canDraw?: boolean;
   } | null;
   waiting?: ({ id: string; displayName: string } & RosterInfo)[];
   admitted: ({
@@ -60,6 +64,11 @@ export type RoomState = {
     /** Teacher only: teacher pinned this student's video. */
     pinned?: boolean;
     pinnedAt?: number | null;
+    /** Teacher only: asked to draw on the share, and when. */
+    drawRequested?: boolean;
+    drawRequestedAt?: number | null;
+    /** Allowed to draw now. */
+    drawing?: boolean;
   } & RosterInfo)[];
   /** Teacher only: the class session running in this room. */
   classSession?: { subject: string; audience: string; adHoc: boolean } | null;
@@ -67,6 +76,8 @@ export type RoomState = {
   visibleCount: number;
   raisedHands?: string[];
   stageMode?: 'idle' | 'screen';
+  drawHolder?: import('@/lib/drawLogic').DrawHolder | null;
+  drawRequestCount?: number;
 };
 
 /** `{v:1,type:'mute',muted}` from the server → muted flag; anything else → null. */

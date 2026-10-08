@@ -13,6 +13,7 @@ import {
   IconChat,
   IconHand,
   IconUsers,
+  IconPen,
 } from '@/components/ui/Icons';
 import { cn } from '@/lib/cn';
 
@@ -60,6 +61,13 @@ type Props = {
   handRaised?: boolean;
   onToggleHand?: () => void;
   /**
+   * Student: drawing on the teacher's share. 'off' → "Request to draw",
+   * 'requested' → cancel the request, 'drawing' → stop drawing. Hidden when
+   * undefined (no share).
+   */
+  drawState?: 'off' | 'requested' | 'drawing';
+  onToggleDraw?: () => void;
+  /**
    * Fired on pointer-down / Enter / Space before the share click, so Firefox
    * and Safari can open the controls popup without consuming the gesture that
    * getDisplayMedia needs.
@@ -95,6 +103,8 @@ export function Controls({
   handsCount = 0,
   handRaised,
   onToggleHand,
+  drawState,
+  onToggleDraw,
   onPrepareScreenShare,
 }: Props) {
   void _canPublishVideo;
@@ -180,6 +190,28 @@ export function Controls({
             onClick={onToggleHand}
           >
             <IconHand />
+          </IconButton>
+        )}
+
+        {!isTeacher && drawState && onToggleDraw && (
+          <IconButton
+            size={btn}
+            label={
+              drawState === 'drawing'
+                ? 'Stop drawing'
+                : drawState === 'requested'
+                  ? 'Cancel request to draw'
+                  : 'Request to draw on the screen'
+            }
+            active={drawState !== 'off'}
+            onClick={onToggleDraw}
+          >
+            <span className="relative inline-flex">
+              <IconPen />
+              {drawState === 'requested' && (
+                <span className="absolute -right-1.5 -top-1.5 h-2.5 w-2.5 animate-pulse rounded-full bg-amber-400" aria-hidden />
+              )}
+            </span>
           </IconButton>
         )}
 

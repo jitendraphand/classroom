@@ -4,6 +4,7 @@ import { prisma } from '@/lib/db';
 import { getTeacherSession } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
 import { ensureRedis, keys, type StageMode } from '@/lib/redis';
+import { endDrawingSession } from '@/lib/drawServer';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,7 +27,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     const body = schema.parse(await req.json());
     const mode: StageMode = body.mode;
     const redis = await ensureRedis();
+    const prev = await redis.get(keys.stage(code));
     await redis.set(keys.stage(code), mode, 'EX', STAGE_TTL);
+    // Share stopped: drawing permission ends and the drawing is wiped.
+    if (mode === 'idle' && prev === 'screen') await endDrawingSession(code);
 
     nudgeRoomState(room.code, 'all');
     return jsonOk({ ok: true, stageMode: mode });

@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Inter, Outfit } from 'next/font/google';
 import { SessionIdleGuard } from '@/components/auth/SessionIdleGuard';
 import { StaffSessionGuard } from '@/components/auth/StaffSessionGuard';
@@ -26,6 +26,15 @@ export const metadata: Metadata = {
       { url: '/favicon.svg', type: 'image/svg+xml' },
     ],
   },
+};
+
+/** Same viewport on every phone/tablet/desktop browser; notch areas handled with safe-area insets. */
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
+  colorScheme: 'dark',
+  themeColor: '#05060a',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

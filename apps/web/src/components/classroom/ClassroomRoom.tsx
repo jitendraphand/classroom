@@ -38,10 +38,11 @@ import { useRouter } from 'next/navigation';
 import { TEACHER_ABSENCE_GRACE_MS } from '@/lib/graceTimer';
 import { SESSION_CHECK_EVENT, SESSION_ENDED_EVENT, isEndedReason, loginHref } from '@/lib/sessionClient';
 import { useRoomState, type RosterInfo } from '@/hooks/useRoomState';
-import { phoneChatBox, usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { compactViewport, studentChatBox, usePseudoFullscreen, useViewport } from '@/hooks/useStudentLayout';
 import { shortName } from '@/lib/displayNames';
 import { Controls } from './Controls';
 import { LocalPreview } from './LocalPreview';
+import { DrawOverlay, ShareDrawingProvider, useDrawingActions, useShareDrawing } from './ShareDrawing';
 import { ChatView, useChatThread } from './Chat';
 import { useStudentFocus } from './useStudentFocus';
 import { countFocusAlerts, focusLabel, isFocusAlert, needsCover } from '@/lib/focusStatus';
@@ -66,7 +67,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageLoading } from '@/components/ui/Skeleton';
-import { IconDoor, IconHand, IconHandDown, IconMic, IconMicOff, IconPin, IconScreen, IconSearch, IconUserPlus, IconUsers, IconVideo } from '@/components/ui/Icons';
+import { IconDoor, IconHand, IconHandDown, IconMic, IconMicOff, IconPen, IconPin, IconScreen, IconSearch, IconUserPlus, IconUsers, IconVideo } from '@/components/ui/Icons';
 import {
   panelSlotsForCap,
   pickTiles,
@@ -360,6 +361,48 @@ export type EntireShareInfo = {
   hands: number;
 };
 
+/**
+ * Entire-screen share: the teacher's own picture cannot be shown here (it
+ * would be captured again), so students' strokes are previewed on a dark box
+ * of the screen's shape instead.
+ */
+function EntireShareDrawingPreview() {
+  const d = useShareDrawing();
+  if (!d || (!d.strokes.length && !d.holder)) return null;
+  const aspect = typeof window !== 'undefined' && window.screen?.height ? window.screen.width / window.screen.height : 16 / 9;
+  return (
+    <div className="mt-3 text-left">
+      <p className="mb-1 inline-flex items-center gap-1 text-2xs font-semibold text-slate-300">
+        <IconPen size={12} />
+        {d.holder ? `${d.holder.name} is drawing` : 'Student drawing'} (what students see over your screen)
+      </p>
+      <div className="draw-preview" style={{ aspectRatio: String(aspect) }}>
+        <DrawOverlay aspect={aspect} interactive={false} />
+      </div>
+      <div className="mt-2 flex flex-wrap justify-center gap-2">
+        {d.strokes.length > 0 && (
+          <button
+            type="button"
+            className="rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-2xs font-semibold text-slate-100 hover:bg-white/10"
+            onClick={() => void d.post({ action: 'clear' })}
+          >
+            Clear drawing
+          </button>
+        )}
+        {d.holder && (
+          <button
+            type="button"
+            className="rounded-lg border border-red-400/30 bg-red-500/10 px-2.5 py-1 text-2xs font-semibold text-red-200 hover:bg-red-500/20"
+            onClick={() => void d.post({ action: 'revoke' })}
+          >
+            Revoke {d.holder.name}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function EntireScreenShareCard({ onStop, info }: { onStop?: () => void; info?: EntireShareInfo }) {
   const controlsInTab = info?.controlsInTab ?? true;
   const hands = info?.hands ?? 0;
@@ -384,6 +427,7 @@ function EntireScreenShareCard({ onStop, info }: { onStop?: () => void; info?: E
             {hands} raised {hands === 1 ? 'hand' : 'hands'}
           </p>
         )}
+        <EntireShareDrawingPreview />
         {onStop && (
           <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
             <Button variant="danger" size="sm" onClick={onStop}>
@@ -409,6 +453,8 @@ function TeacherShareTile({ trackRef }: { trackRef: ReturnType<typeof useTracks>
             No screen
           </div>
         )}
+        {/* What students draw, over the teacher's in-page preview (never on the real desktop). */}
+        <DrawOverlay interactive={false} />
       </div>
       <div className="pointer-events-none absolute bottom-2 left-2 z-20 flex items-center gap-2 rounded-lg bg-black/65 px-2.5 py-1 text-xs backdrop-blur">
         <Avatar
@@ -458,6 +504,8 @@ export function TeacherScreenStage({ teacherIdentities }: { teacherIdentities: s
               ) : (
                 <div className="flex h-full items-center justify-center text-slate-400">No screen</div>
               )}
+              {/* Students' drawing (and the allowed student's drawing surface). */}
+              <DrawOverlay />
             </div>
           </div>
         </div>
@@ -1640,29 +1688,6 @@ function PeerCamTile({
   );
 }
 
-/** Focus mode (iPhone): the teacher camera fills the stage when nothing is shared. */
-function TeacherCameraStage({ teacherIdentities }: { teacherIdentities: string[] }) {
-  const tracks = useTracks([{ source: Track.Source.Camera, withPlaceholder: false }], { onlySubscribed: true });
-  const teacherSet = new Set(teacherIdentities);
-  // Never a classmate: only a remote teacher's camera.
-  const cam = tracks.find(
-    (t) =>
-      !!t.publication?.track &&
-      !t.participant.isLocal &&
-      isTeacherParticipant(t.participant, teacherSet) &&
-      !t.publication.isMuted
-  );
-  if (!cam) {
-    return (
-      <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-ink-950 px-6 text-center text-slate-400">
-        <IconVideo size={32} />
-        <p className="text-sm">Teacher camera off</p>
-      </div>
-    );
-  }
-  return <VideoTrack trackRef={cam as TrackReference} className="h-full w-full bg-black object-contain" />;
-}
-
 function useHasTeacherScreen(teacherIdentities: string[]) {
   const tracks = useTracks(
     [{ source: Track.Source.ScreenShare, withPlaceholder: false }],
@@ -2191,6 +2216,8 @@ function RoomInner({
   }, []);
   /** Student left fullscreen (Esc, swipe, app switch): prompt, never kick. */
   const focus = useStudentFocus(code, !isTeacher);
+  // No element fullscreen (iPhone Safari): same look, as a scroll-locked fixed page.
+  usePseudoFullscreen(!isTeacher && focus.focusMode);
   const [camError, setCamError] = useState<string | null>(null);
   const [hudOpen, setHudOpen] = useState(false);
   const [hudNotice, setHudNotice] = useState('');
@@ -2233,8 +2260,8 @@ function RoomInner({
   /** Share controls start as the compact pill on every share. */
   const [hudCompact, setHudCompact] = useState(true);
   const { state, refresh } = useRoomState(code, 2000, room);
-  /** Phone portrait / landscape: slim student controls and a smaller chat sheet. */
-  const phone = usePhoneLayout();
+  /** Student layout: one design on every device; only sizes follow the viewport. */
+  const viewport = useViewport();
   /** Student-camera cap chosen from the float, shown before the next poll confirms it. */
   const [sampleCap, setSampleCap] = useState<number | null>(null);
   const capQueue = useRef(Promise.resolve());
@@ -3333,6 +3360,82 @@ function RoomInner({
       setHudNotice('Could not lower hand');
     }
   }
+  // —— Student drawing on the shared screen (ShareDrawing.tsx, lib/drawLogic.ts) ——
+  const drawActions = useDrawingActions(code);
+  const drawHolder = state?.drawHolder ?? null;
+  const sharingNow = isTeacher ? screenOn || stageMode === 'screen' : effectiveStage === 'screen';
+  const [drawOverride, setDrawOverride] = useState<'off' | 'requested' | 'drawing' | null>(null);
+  const serverDrawState: 'off' | 'requested' | 'drawing' = state?.me?.canDraw
+    ? 'drawing'
+    : state?.me?.drawRequested
+      ? 'requested'
+      : 'off';
+  useEffect(() => {
+    if (drawOverride !== null && drawOverride === serverDrawState) setDrawOverride(null);
+  }, [drawOverride, serverDrawState]);
+  const myDrawState = drawOverride ?? serverDrawState;
+  async function toggleDraw() {
+    if (isTeacher) return;
+    const prev = myDrawState;
+    if (prev === 'drawing') {
+      setDrawOverride('off');
+      const res = await roomFetch(code, '/draw', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'release' }),
+      }).catch(() => null);
+      if (!res?.ok) setDrawOverride(null);
+    } else {
+      setDrawOverride(prev === 'requested' ? 'off' : 'requested');
+      const err = await drawActions.request(prev !== 'requested');
+      if (err) setDrawOverride(null);
+    }
+    refresh();
+  }
+  async function allowDrawing(participantId: string) {
+    const err = await drawActions.allow(participantId);
+    if (err) setHudNotice(err);
+    refresh();
+  }
+  async function revokeDrawing(participantId?: string) {
+    const err = await drawActions.revoke(participantId);
+    if (err) setHudNotice(err);
+    refresh();
+  }
+  async function clearDrawing() {
+    const err = await drawActions.clear();
+    if (err) setHudNotice(err);
+  }
+  // Teacher: a toast for each new request to draw (in this tab and in share controls).
+  const drawRequesters = useMemo(
+    () =>
+      (state?.admitted ?? [])
+        .filter((p) => p.role === 'STUDENT' && p.drawRequested)
+        .sort((a, b) => (a.drawRequestedAt ?? 0) - (b.drawRequestedAt ?? 0)),
+    [state?.admitted]
+  );
+  const seenDrawReq = useRef<Set<string>>(new Set());
+  const [drawToast, setDrawToast] = useState<{ id: string; name: string } | null>(null);
+  useEffect(() => {
+    if (!isTeacher) return;
+    const ids = new Set(drawRequesters.map((p) => p.id));
+    const fresh = drawRequesters.find((p) => !seenDrawReq.current.has(p.id));
+    seenDrawReq.current = ids;
+    if (fresh) {
+      setDrawToast({ id: fresh.id, name: fresh.displayName });
+      setHudNotice(`${fresh.displayName} asks to draw on your screen. Allow in the roster.`);
+    } else if (drawToast && !ids.has(drawToast.id)) {
+      // Allowed, cancelled or revoked: the request notice is stale.
+      setDrawToast(null);
+      setHudNotice((n) => (n && n.includes(' asks to draw on your screen.') ? '' : n));
+    }
+  }, [isTeacher, drawRequesters, drawToast]);
+  useEffect(() => {
+    if (!drawToast) return;
+    const t = window.setTimeout(() => setDrawToast(null), 12_000);
+    return () => window.clearTimeout(t);
+  }, [drawToast]);
+
   const controlsProps = {
     micOn: micOn && !effectiveMuted,
     camOn,
@@ -3351,7 +3454,20 @@ function RoomInner({
     showScreenShare: isTeacher,
     handRaised,
     onToggleHand: isTeacher ? undefined : toggleHand,
+    drawState: !isTeacher && sharingNow ? myDrawState : undefined,
+    onToggleDraw: isTeacher ? undefined : () => void toggleDraw(),
   };
+  const withDrawing = (node: ReactNode) => (
+    <ShareDrawingProvider
+      code={code}
+      active={sharingNow}
+      holder={drawHolder}
+      myIdentity={state?.me?.livekitIdentity ?? localParticipant.identity}
+      canDraw={!isTeacher && myDrawState === 'drawing' && !!state?.me?.canDraw}
+    >
+      {node}
+    </ShareDrawingProvider>
+  );
 
   // —— Student path: always fullscreen stage + floating teacher cam + float chrome ——
   if (!isTeacher) {
@@ -3369,7 +3485,7 @@ function RoomInner({
           ? 'Teacher is in the room'
           : 'Waiting for teacher…';
 
-    return (
+    return withDrawing(
       <div className="stage-fullscreen">
         <SelectivePublisher
           isTeacher={false}
@@ -3387,7 +3503,7 @@ function RoomInner({
         />
         <RoomAudioRenderer />
 
-        {!focus.focusMode && <div className="stage-fullscreen-badge">{badge}</div>}
+        <div className="stage-fullscreen-badge">{badge}</div>
 
         {camError && camOn && (
           <CameraErrorBanner message={camError} onDismiss={() => setCamError(null)} />
@@ -3410,8 +3526,8 @@ function RoomInner({
           </button>
         )}
 
-        {/* Focus mode (no Fullscreen API, e.g. iPhone): a hint only, never blocks taps or audio. */}
-        {focus.focusMode && focus.portrait && (
+        {/* Small portrait screens (any device): a hint only, never blocks taps or audio. */}
+        {focus.portrait && viewport.w < 640 && showTeacherScreen && (
           <div className="pointer-events-none fixed inset-x-3 top-3 z-[70] rounded-xl border border-white/15 bg-black/70 px-3 py-2 text-center text-xs font-semibold text-white backdrop-blur">
             Rotate your phone to landscape for a bigger view
           </div>
@@ -3420,8 +3536,6 @@ function RoomInner({
         <div className="absolute inset-0 z-10">
           {covered ? null : showTeacherScreen ? (
             <TeacherScreenStage teacherIdentities={teacherIdentities} />
-          ) : focus.focusMode && teacherHere ? (
-            <TeacherCameraStage teacherIdentities={teacherIdentities} />
           ) : (
             <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-ink-950 px-6 text-center text-slate-400">
               <IconVideo size={32} />
@@ -3434,8 +3548,8 @@ function RoomInner({
           )}
         </div>
 
-        {/* Focus mode shows only the teacher's share/camera; the float would clutter it. */}
-        {!covered && !focus.focusMode && (
+        {/* The floating teacher video, on every device (draggable, minimisable). */}
+        {!covered && (
           <TeacherCameraFloat
             teacherIdentities={teacherIdentities}
             roomCode={code}
@@ -3445,18 +3559,12 @@ function RoomInner({
           />
         )}
 
-        <div
-          className={cn(
-            'stage-float-chrome',
-            phone === 'landscape' && 'is-rail',
-            phone === 'portrait' && 'is-phone-portrait'
-          )}
-          data-float-bound={phone === 'landscape' ? 'right' : 'bottom'}
-        >
+        {/* Student controls: a vertical panel on the right edge, on every device. */}
+        <div className="stage-float-chrome is-rail" data-float-bound="right">
           <Controls
             {...controlsProps}
             variant="float"
-            layout={phone === 'landscape' ? 'rail' : phone === 'portrait' ? 'phone' : undefined}
+            layout="rail"
             onToggleChat={() => {
               setChatOpen((v) => !v);
             }}
@@ -3466,22 +3574,15 @@ function RoomInner({
         </div>
 
         <FloatingPanel
-          key={phone ?? 'desk'}
           title="Chat"
-          // Separate remembered spot per layout, so a desktop position never
-          // lands a full-size sheet on a phone.
-          storageKey={phone ? `student_chat_${phone}_v2` : 'student_chat'}
+          storageKey="student_chat_v3"
           open={chatOpen}
           onClose={() => setChatOpen(false)}
-          width={phoneChatBox(phone, viewportW(), viewportH())?.width ?? 320}
-          height={phoneChatBox(phone, viewportW(), viewportH())?.height ?? 420}
+          width={studentChatBox(viewport.w, viewport.h).width}
+          height={studentChatBox(viewport.w, viewport.h).height}
           defaultPos={() => {
-            const box = phoneChatBox(phone, window.innerWidth, window.innerHeight);
-            if (box) return { x: box.x, y: box.y };
-            return {
-              x: Math.max(8, window.innerWidth - 340),
-              y: Math.max(8, window.innerHeight - 520),
-            };
+            const box = studentChatBox(window.innerWidth, window.innerHeight);
+            return { x: box.x, y: box.y };
           }}
           badge={
             chatUnread > 0 ? (
@@ -3496,14 +3597,14 @@ function RoomInner({
             isTeacher={false}
             myParticipantId={myParticipantId}
             students={chatStudents}
-            compact={!!phone}
+            compact={compactViewport(viewport.w, viewport.h)}
           />
         </FloatingPanel>
       </div>
     );
   }
 
-  return (
+  return withDrawing(
     <div className="flex h-[100dvh] max-h-[100dvh] flex-col overflow-hidden bg-surface-0/40">
       <SelectivePublisher
         isTeacher
@@ -3587,6 +3688,26 @@ function RoomInner({
         </span>
       )}
 
+      {isTeacher && drawToast && (
+        <div className="teacher-toast" role="status">
+          <IconPen size={16} className="shrink-0 text-amber-300" />
+          <span className="flex-1">
+            <b>{drawToast.name}</b> asks to draw on your screen
+          </span>
+          <Button
+            size="sm"
+            onClick={() => {
+              void allowDrawing(drawToast.id);
+              setDrawToast(null);
+            }}
+          >
+            Allow
+          </Button>
+          <button type="button" className="text-xs text-slate-400 hover:text-white" onClick={() => setDrawToast(null)} aria-label="Dismiss">
+            ✕
+          </button>
+        </div>
+      )}
       {hudNotice && isTeacher && !hudOpen && (
         <div
           role="status"
@@ -3782,9 +3903,18 @@ function RoomInner({
                 return (
                   <li
                     key={p.id}
-                    className={cn('roster-row', raised && 'roster-row-raised')}
+                    className={cn('roster-row', (raised || p.drawRequested || p.drawing) && 'roster-row-raised')}
                     title={rosterLabel(p)}
                   >
+                    {(p.drawing || p.drawRequested) && (
+                      <span
+                        className={cn('roster-hand', p.drawing && 'text-sky-300')}
+                        title={p.drawing ? 'Drawing on your screen' : 'Asks to draw'}
+                        aria-label={p.drawing ? 'Drawing on your screen' : 'Asks to draw'}
+                      >
+                        <IconPen size={13} />
+                      </span>
+                    )}
                     {raised && (
                       <span className="roster-hand" title="Hand raised" aria-label="Hand raised">
                         <IconHand size={13} />
@@ -3828,6 +3958,15 @@ function RoomInner({
                           <IconHandDown size={14} />
                         </RosterIconButton>
                       )}
+                      {p.drawing ? (
+                        <button type="button" className="roster-chip roster-chip-red" onClick={() => void revokeDrawing(p.id)}>
+                          Revoke
+                        </button>
+                      ) : p.drawRequested ? (
+                        <button type="button" className="roster-chip roster-chip-warn" onClick={() => void allowDrawing(p.id)}>
+                          Allow
+                        </button>
+                      ) : null}
                     </span>
                   </li>
                 );
@@ -3967,6 +4106,11 @@ function RoomInner({
             onMuteAll={(muted) => void muteAllStudents(muted)}
             onLowerHand={(id) => void lowerHand(id)}
             onTogglePin={(id, on) => void togglePin(id, on)}
+            drawHolderName={drawHolder?.name ?? null}
+            onAllowDraw={(id) => void allowDrawing(id)}
+            onRevokeDraw={(id) => void revokeDrawing(id)}
+            onClearDrawing={() => void clearDrawing()}
+            drawPreview={sideWindowsAllowed && !!shareMount ? 'video' : 'strokes'}
             chatUnread={chatUnread}
             onChatOpenChange={setHudChatOpen}
             chat={

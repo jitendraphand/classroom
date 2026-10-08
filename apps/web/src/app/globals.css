@@ -238,23 +238,19 @@ body {
     padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
   }
 
-  /* Phones: slim student controls (see usePhoneLayout). Portrait keeps the
-     bottom pill with less padding; landscape uses a small right-edge rail. */
-  .stage-float-chrome.is-phone-portrait {
-    @apply px-2 pt-2;
-    padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0px));
-    background: linear-gradient(to top, rgba(0, 0, 0, 0.45), transparent);
-  }
-  .control-float.control-float-phone {
-    @apply gap-1 px-2 py-1.5;
-    padding-bottom: max(0.375rem, env(safe-area-inset-bottom, 0px));
-  }
+  /* Student controls: ONE layout on every device (see useStudentLayout): a
+     vertical panel centred on the right edge. Only sizes scale. */
   .stage-float-chrome.is-rail {
-    inset: auto;
-    top: 0.5rem;
-    right: 0;
-    padding: 0 max(0.375rem, env(safe-area-inset-right, 0px)) 0 0;
+    /* No transform here: it would become the containing block of the
+       position:fixed mute pill. A full-height flex column centres instead. */
+    inset: 0 0 0 auto;
+    align-items: center;
+    pointer-events: none;
+    padding: 0 max(0.5rem, env(safe-area-inset-right, 0px)) 0 0;
     background: none;
+  }
+  .stage-float-chrome.is-rail > .control-rail {
+    pointer-events: auto;
   }
   .control-rail {
     @apply flex flex-col items-center rounded-2xl p-1 shadow-dock backdrop-blur-xl;
@@ -624,4 +620,198 @@ body {
   line-height: 1.35;
   color: #fde68a;
   background: rgba(245, 158, 11, 0.12);
+}
+
+/* —— Student drawing on the shared screen (ShareDrawing.tsx) ——
+   One look on every device: sizes scale only with the picture/viewport. */
+.draw-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  pointer-events: none;
+  overflow: hidden;
+}
+.draw-pic {
+  position: absolute;
+}
+.draw-svg {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+.draw-name {
+  position: absolute;
+  transform: translate(6px, 6px);
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-left: 3px solid;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: clamp(10px, 1.1vw, 13px);
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 2px 6px;
+}
+.draw-surface {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  cursor: crosshair;
+}
+.draw-surface.is-eraser {
+  cursor: cell;
+}
+.draw-toolbar {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(10, 12, 20, 0.88);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  pointer-events: auto;
+  touch-action: manipulation;
+  z-index: 2;
+  white-space: nowrap;
+}
+.draw-toolbar-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: #cbd5e1;
+  padding-right: 2px;
+}
+.draw-color {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+}
+.draw-color.is-on {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35);
+}
+.draw-tool {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  color: #e2e8f0;
+  background: rgba(255, 255, 255, 0.08);
+}
+.draw-tool.is-on {
+  background: #f8fafc;
+  color: #0f172a;
+}
+.draw-tool:disabled {
+  opacity: 0.35;
+}
+.draw-done {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: #4f46e5;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+.draw-error {
+  position: absolute;
+  top: 52px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-radius: 8px;
+  background: rgba(127, 29, 29, 0.9);
+  color: #fff;
+  font-size: 12px;
+  padding: 4px 10px;
+  pointer-events: none;
+}
+.draw-preview {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #05060a;
+}
+.draw-preview video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.teacher-toast {
+  position: fixed;
+  right: 16px;
+  bottom: 88px;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(92vw, 360px);
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(15, 18, 30, 0.95);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  padding: 10px 12px;
+  color: #f1f5f9;
+  font-size: 13px;
+}
+
+/* Student control panel buttons scale with the viewport (same look on a phone
+   and a desktop, just bigger/smaller). */
+.control-rail {
+  --rail-btn: clamp(34px, min(7.2vh, 5.2vw), 50px);
+  gap: clamp(3px, 0.8vh, 8px);
+  padding: clamp(3px, 0.6vh, 6px);
+}
+.control-rail button {
+  width: var(--rail-btn);
+  height: var(--rail-btn);
+}
+.control-rail button svg {
+  width: calc(var(--rail-btn) * 0.46);
+  height: calc(var(--rail-btn) * 0.46);
+}
+/* iPhone Safari has no element fullscreen: the same look as a fixed,
+   scroll-locked page that fills the visible viewport. */
+html.pseudo-fullscreen,
+html.pseudo-fullscreen body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+html.pseudo-fullscreen .stage-fullscreen {
+  position: fixed;
+  inset: 0;
+  height: 100dvh;
+  max-height: 100dvh;
+}
+
+/* No automatic text inflation (iOS landscape, Samsung Internet): identical type everywhere. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* The mute pill sits under the drawing toolbar while the student draws. */
+html:has(.draw-toolbar) .control-status-pill {
+  top: 3.4rem;
 }

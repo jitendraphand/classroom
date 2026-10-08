@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Avatar } from '@/components/ui/Avatar';
-import { IconCam, IconCamOff, IconChat, IconFilm, IconHand, IconHandDown, IconMic, IconMicOff, IconPin, IconScreen, IconUserPlus, IconUsers, IconVideo } from '@/components/ui/Icons';
+import { IconCam, IconCamOff, IconChat, IconFilm, IconHand, IconHandDown, IconMic, IconMicOff, IconPen, IconPin, IconScreen, IconUserPlus, IconUsers, IconVideo } from '@/components/ui/Icons';
 import { toolbarInnerSize } from '@/lib/sideWindowGeometry';
 import { closeSideWindow, openSideWindow, sideWindow, SideWindowPortal, useSideWindows } from './shareSideWindows';
 import { sortRoster } from '@/lib/classSlots';
@@ -11,6 +11,9 @@ import { filterPeople } from '@/lib/peopleSearch';
 import { useFloatDrag, type FloatPos } from './FloatingPanel';
 import { focusLabel } from '@/lib/focusStatus';
 import { controlUrl, copyParentStyles, mountIn, waitForWindow } from './shareWindowDom';
+import { DrawOverlay, useShareDrawing } from './ShareDrawing';
+import { useTracks, VideoTrack, type TrackReference } from '@livekit/components-react';
+import { Track } from 'livekit-client';
 
 /**
  * Teacher share controls.
@@ -48,6 +51,10 @@ export type RosterEntry = {
   gradeDivision?: string | null;
   /** School-app student ID (teacher view only), for search. */
   sid?: string | null;
+  /** Asked to draw on the share / drawing now. */
+  drawRequested?: boolean;
+  drawRequestedAt?: number | null;
+  drawing?: boolean;
 };
 
 export type TeacherShareHudProps = {
@@ -67,6 +74,17 @@ export type TeacherShareHudProps = {
   onLowerHand: (participantId: string) => void;
   /** Pin / unpin a student's video in the class panel. */
   onTogglePin?: (participantId: string, pinned: boolean) => void;
+  /** Student drawing on the share: who draws now, and the teacher's actions. */
+  drawHolderName?: string | null;
+  onAllowDraw?: (participantId: string) => void;
+  onRevokeDraw?: (participantId?: string) => void;
+  onClearDrawing?: () => void;
+  /**
+   * Drawing preview in the roster: `video` = the shared picture with the
+   * strokes (this window is not captured, or is masked); `strokes` = strokes on
+   * a dark box (a picture here would be captured again).
+   */
+  drawPreview?: 'video' | 'strokes';
   chatUnread: number;
   chat?: ReactNode;
   onChatOpenChange?: (open: boolean) => void;
@@ -315,6 +333,11 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     onMuteStudent,
     onMuteAll,
     onLowerHand,
+    drawHolderName,
+    onAllowDraw,
+    onRevokeDraw,
+    onClearDrawing,
+    drawPreview = 'strokes',
     onTogglePin,
     chatUnread,
     chat,
@@ -483,6 +506,12 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
 
   const rosterBody = (
           <div className="tsh-scroll">
+            <HudDrawing
+              holderName={drawHolderName ?? null}
+              preview={drawPreview}
+              onRevoke={onRevokeDraw}
+              onClear={onClearDrawing}
+            />
             <input
               type="search"
               className="tsh-search"
@@ -534,7 +563,16 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
               shownStudents.map((s) => {
                 const focus = focusLabel(s.focus, s.focusIphone);
                 return (
-                  <div className={s.handRaised ? 'tsh-person is-raised' : 'tsh-person'} key={s.id} title={s.displayName}>
+                  <div
+                    className={s.handRaised || s.drawRequested || s.drawing ? 'tsh-person is-raised' : 'tsh-person'}
+                    key={s.id}
+                    title={s.displayName}
+                  >
+                    {(s.drawing || s.drawRequested) && (
+                      <span className="tsh-hand" title={s.drawing ? 'Drawing on your screen' : 'Asks to draw'} aria-label={s.drawing ? 'Drawing' : 'Asks to draw'}>
+                        <IconPen size={12} />
+                      </span>
+                    )}
                     {s.handRaised && (
                       <span className="tsh-hand" title="Hand raised" aria-label="Hand raised">
                         <IconHand size={12} />
@@ -566,6 +604,15 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                         <IconPin size={12} />
                       </button>
                     )}
+                    {s.drawing && onRevokeDraw ? (
+                      <button type="button" className="tsh-btn is-warn" onClick={() => onRevokeDraw(s.id)} title={`Stop ${s.displayName} drawing and clear the drawing`}>
+                        Revoke
+                      </button>
+                    ) : s.drawRequested && onAllowDraw ? (
+                      <button type="button" className="tsh-btn is-on" onClick={() => onAllowDraw(s.id)} title={`Let ${s.displayName} draw on your shared screen`}>
+                        Allow
+                      </button>
+                    ) : null}
                     {s.handRaised && (
                       <button
                         type="button"
@@ -915,3 +962,49 @@ export function InlineShareDock({
   );
 }
 
+
+/**
+ * Share controls → Roster: what students draw, with Clear / Revoke. The
+ * shared picture is shown only where this window is not captured (or masked).
+ */
+function HudDrawing({
+  holderName,
+  preview,
+  onRevoke,
+  onClear,
+}: {
+  holderName: string | null;
+  preview: 'video' | 'strokes';
+  onRevoke?: (participantId?: string) => void;
+  onClear?: () => void;
+}) {
+  const d = useShareDrawing();
+  const tracks = useTracks([{ source: Track.Source.ScreenShare, withPlaceholder: false }], { onlySubscribed: false });
+  const mine = tracks.find((t) => t.participant.isLocal && t.publication?.track);
+  if (!d || (!d.strokes.length && !holderName)) return null;
+  const aspect = typeof window !== 'undefined' && window.screen?.height ? window.screen.width / window.screen.height : 16 / 9;
+  return (
+    <div className="tsh-draw" style={{ marginBottom: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+        <span className="tsh-panel-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <IconPen size={12} /> {holderName ? `${holderName} is drawing` : 'Drawing'}
+        </span>
+        <span style={{ flex: 1 }} />
+        {onClear && d.strokes.length > 0 && (
+          <button type="button" className="tsh-btn" onClick={onClear}>
+            Clear drawing
+          </button>
+        )}
+        {holderName && onRevoke && (
+          <button type="button" className="tsh-btn is-warn" onClick={() => onRevoke()}>
+            Revoke
+          </button>
+        )}
+      </div>
+      <div className="draw-preview" style={{ aspectRatio: preview === 'video' && mine ? undefined : String(aspect) }}>
+        {preview === 'video' && mine ? <VideoTrack trackRef={mine as TrackReference} /> : null}
+        <DrawOverlay aspect={preview === 'video' && mine ? undefined : aspect} interactive={false} />
+      </div>
+    </div>
+  );
+}

@@ -154,6 +154,12 @@ displays (or HiDPI) receive the 1080p layer, the admin tiles the 720p one.
   grade/division dropdown (timetable slots and one-off changes, teacher
   assignments, attendance and student filters, the teacher's ad-hoc start, and
   roster import validation). See **[docs/GRADES_DIVISIONS.md](docs/GRADES_DIVISIONS.md)**.
+- **Student drawing on the shared screen**: a student taps the pen ("Request to
+  draw"), the teacher Allows/Revokes in the roster (in-page or Share controls);
+  one student at a time, 3 minutes max, freehand strokes in red/yellow/blue are
+  shown to everyone with the drawer's name. **One student layout** on every
+  device/OS/browser (right-side control panel, floating teacher video, floating
+  chat). See **[docs/STUDENT_DRAWING_AND_LAYOUT.md](docs/STUDENT_DRAWING_AND_LAYOUT.md)**.
 - **Absent is only known for known students**: a student exists in the system
   after their first signed join, or after the admin imports the roster
   (Admin → **Students**, CSV `externalId,name,grade,division,roll`; grade and

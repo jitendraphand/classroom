@@ -46,6 +46,13 @@ export const keys = {
   hands: (code: string) => `room:${code}:hands`,
   /** Hash participant id -> ms when the hand went up (roster order). Kept beside `hands`. */
   handsAt: (code: string) => `room:${code}:hands-at`,
+  /** Student drawing on the share: hash participant id -> ms of the request. */
+  drawRequests: (code: string) => `room:${code}:draw-req`,
+  /** JSON DrawHolder: the ONE student allowed to draw now (with its end time). */
+  drawHolder: (code: string) => `room:${code}:draw-holder`,
+  /** Hash stroke id -> JSON Stroke, and the drawing order (list of ids). */
+  drawStrokes: (code: string) => `room:${code}:draw-strokes`,
+  drawOrder: (code: string) => `room:${code}:draw-order`,
   /** JSON {s: sessionId, p: boolean}: is the teacher connected to the LiveKit room (webhook / probe) */
   teacherPresent: (code: string) => `room:${code}:teacher-present`,
 };

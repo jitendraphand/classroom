@@ -224,3 +224,30 @@ export function IconSearch(p: P) {
     </svg>
   );
 }
+
+export function IconPen(p: P) {
+  return (
+    <svg {...base(p)}>
+      <path d="M4 20l1-4L16.5 4.5a2.1 2.1 0 0 1 3 3L8 19l-4 1Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <path d="m14.5 6.5 3 3" stroke="currentColor" strokeWidth="1.8" />
+    </svg>
+  );
+}
+
+export function IconEraser(p: P) {
+  return (
+    <svg {...base(p)}>
+      <path d="M9 20h11M4.6 14.6l8.5-8.5a2 2 0 0 1 2.8 0l3 3a2 2 0 0 1 0 2.8L12 18.8a2 2 0 0 1-1.4.6H8.4a2 2 0 0 1-1.4-.6l-2.4-2.4a2 2 0 0 1 0-2.8Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <path d="m9 10 5 5" stroke="currentColor" strokeWidth="1.8" />
+    </svg>
+  );
+}
+
+export function IconUndo(p: P) {
+  return (
+    <svg {...base(p)}>
+      <path d="M9 14 4 9l5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
