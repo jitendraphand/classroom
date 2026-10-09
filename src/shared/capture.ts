@@ -385,11 +385,77 @@ export const SCREEN_SHARE = {
 export type ShareKind = 'screen' | 'window' | 'region';
 
 /**
+ * Video mode (the website's share "Video" toggle, shared/web/videoQuality.ts
+ * SCREEN_SHARE_VIDEO_MODE): 30 fps capture, `motion` hint, keep the frame
+ * rate under pressure. The picture stays 1280x720 (this app's single layer),
+ * so the bitrate sits between the web's 720p30 layer (1 Mbps) and its 1080p30
+ * top layer (2.5 Mbps). The helper's capture rate is raised to 30 for as long
+ * as video mode is on; that is ~3.7x the slide readback, see REPORT.md.
+ */
+export const VIDEO_MODE_SHARE = {
+  capture: { width: 1280, height: 720, frameRate: 30 },
+  encoding: { maxBitrate: 1_500_000, maxFramerate: 30 },
+} as const;
+
+/** Sender encodings for slides (this app's SCREEN_SHARE) or video mode. Other fields are kept. */
+export function windowsShareEncodings<E extends { maxBitrate?: number; maxFramerate?: number }>(encodings: E[], videoMode: boolean): E[] {
+  const top = videoMode ? VIDEO_MODE_SHARE.encoding : SCREEN_SHARE.encoding;
+  const list = encodings.length ? encodings : [{} as E];
+  return list.map((e, i) => {
+    const low = i < list.length - 1 ? SCREEN_SHARE.layers[i] : undefined;
+    const layer = low && !videoMode ? low : top;
+    return { ...e, maxBitrate: layer.maxBitrate, maxFramerate: layer.maxFramerate };
+  });
+}
+
+/**
+ * Where the shared picture sits on the overlay's monitor, 0..1. Student ink is
+ * normalised to the shared picture (web drawLogic), so a region share maps
+ * into the region; a screen or window share (whole monitor) maps 1:1.
+ */
+export function inkRectFor(
+  kind: ShareKind,
+  region: { x: number; y: number; w: number; h: number } | null,
+  display: { x: number; y: number; w: number; h: number } | null
+): { x: number; y: number; w: number; h: number } {
+  if (kind !== 'region' || !region || !display || !(display.w > 0) || !(display.h > 0)) return { x: 0, y: 0, w: 1, h: 1 };
+  const clamp = (n: number) => Math.min(1, Math.max(0, n));
+  const x = clamp((region.x - display.x) / display.w);
+  const y = clamp((region.y - display.y) / display.h);
+  const w = clamp(region.w / display.w);
+  const h = clamp(region.h / display.h);
+  return { x, y, w: Math.min(w, 1 - x), h: Math.min(h, 1 - y) };
+}
+
+/**
  * Transparent windows that must stay in the capture.
  * annotate-overlay carries the strokes. region-picker is a layered full-monitor
  * surface; excluding it paints a black rectangle over the desktop.
  */
 const CAPTURE_VISIBLE_WINDOWS = new Set(['annotate-overlay', 'region-picker']);
+
+/**
+ * Every classroom window, decided one by one (REPORT.md "Window protection").
+ * `false` = capture-excluded (setContentProtection / WDA_EXCLUDEFROMCAPTURE),
+ * `true` = in the shared picture. tests/windowProtection.test.ts keeps this
+ * list and windowShouldBeCaptureExcluded() in step.
+ */
+export const WINDOW_CAPTURE_DECISIONS: Record<string, { captured: boolean; why: string }> = {
+  main: { captured: false, why: 'Class window (minimised during a share).' },
+  toolbar: { captured: false, why: 'Floating control panel.' },
+  chat: { captured: false, why: 'Messages panel.' },
+  roster: { captured: false, why: 'People panel (draw requests, Allow / Revoke).' },
+  devices: { captured: false, why: 'Microphone / camera picker.' },
+  'classroom-videos': { captured: false, why: 'Student videos (canvas tiles).' },
+  'annotate-tools': { captured: false, why: 'Annotation tool panel: opaque, so exclusion is clean.' },
+  'annotate-preview': { captured: false, why: 'Opaque preview popup.' },
+  'capture-test': { captured: false, why: 'Capture test window.' },
+  'annotate-overlay': {
+    captured: true,
+    why: 'Transparent ink overlay: teacher annotations and student desktop ink must be in the share. Excluding a layered transparent window composites as a black rectangle on Windows 10.',
+  },
+  'region-picker': { captured: true, why: 'Transparent picker; closes before the share starts. Excluding it paints black.' },
+};
 
 /**
  * Every other classroom window is capture-excluded: the control panel, the

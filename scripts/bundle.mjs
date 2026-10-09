@@ -40,6 +40,7 @@ await esbuild.build({
     annotate: 'src/renderer/annotate.ts',
     region: 'src/renderer/region.ts',
     captureTest: 'src/renderer/captureTest.tsx',
+    tools: 'src/renderer/tools.tsx',
   },
   outdir: 'dist/renderer',
   format: 'esm',

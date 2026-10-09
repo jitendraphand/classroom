@@ -3,6 +3,11 @@ import type { AnnotateCommand, AnnotateStatus, DipBox, PhysicalMonitor } from '.
 import type { CapturePlan, WgcStartResult } from '../shared/capture';
 import type { CaptureScenarioReport } from '../shared/captureScenario';
 
+export type StudentInk = {
+  strokes: { id: string; by: string; name: string; color: string; pts: number[] }[];
+  rect: { x: number; y: number; w: number; h: number };
+};
+
 export type LoginResult = {
   ok: boolean;
   error?: string;
@@ -82,6 +87,13 @@ export type ClassroomBridge = {
   annotationCommand: (cmd: AnnotateCommand) => void;
   annotationStatus: (status: AnnotateStatus) => void;
   annotationInk: (shapes: unknown) => void;
+  /** Student ink for the desktop overlay (normalised to the shared picture, mapped by `rect`). */
+  studentInk: (ink: StudentInk) => void;
+  onStudentInk: (cb: (ink: StudentInk) => void) => () => void;
+  /** Restart the WGC helper at this capture rate (video mode). */
+  setWgcFps: (fps: number) => Promise<{ ok: boolean }>;
+  /** Annotation panel: draw on the overlay (true) or let clicks through (false). */
+  annotationDrawMode: (on: boolean) => void;
   postVideoTile: (key: string, jpeg: Uint8Array) => void;
   onVideoTile: (cb: (key: string, jpeg: ArrayBuffer | Uint8Array) => void) => () => void;
   onAnnotateSurface: (cb: (surface: { dip: DipBox; physical: PhysicalMonitor; scale: number }) => void) => () => void;

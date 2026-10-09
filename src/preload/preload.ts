@@ -51,6 +51,10 @@ contextBridge.exposeInMainWorld('classroom', {
   annotationCommand: (cmd: unknown) => ipcRenderer.send('annotation-command', cmd),
   annotationStatus: (status: unknown) => ipcRenderer.send('annotation-status', status),
   annotationInk: (shapes: unknown) => ipcRenderer.send('annotation-ink', shapes),
+  studentInk: (ink: unknown) => ipcRenderer.send('student-ink', ink),
+  onStudentInk: (cb: (ink: unknown) => void) => listen('student-ink', cb),
+  setWgcFps: (fps: number) => ipcRenderer.invoke('wgc-fps', fps),
+  annotationDrawMode: (on: boolean) => ipcRenderer.send('annotation-draw-mode', on),
   postVideoTile: (key: string, jpeg: Uint8Array) => {
     const copy = jpeg.byteOffset === 0 && jpeg.byteLength === jpeg.buffer.byteLength ? jpeg : jpeg.slice();
     ipcRenderer.send('video-tile', key, copy.buffer);

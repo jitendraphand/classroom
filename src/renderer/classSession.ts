@@ -21,14 +21,7 @@ import {
 } from 'livekit-client';
 import type { ChromeBounds, DeviceInfo, PanelSnapshot } from '../shared/actions';
 import {
-  ANNOTATE_TOPIC,
-  applyAnnotateOp,
-  fitSnapshot,
-  packetTooBig,
-  type AnnotateMsg,
-  type AnnotateStroke,
-} from '../shared/annotate';
-import {
+  STATE_TOPIC,
   chatPollMs,
   mergeMessages,
   parseRoomState,
@@ -39,7 +32,20 @@ import {
   type RoomSnapshot,
 } from '../shared/apiModel';
 import { resolveChatRecipient } from '../shared/chatReply';
-import { SCREEN_SHARE, TEACHER_CAMERA, dockGridStyle, screenShareSimulcastFor, shareAllowed, type CapturePlan, type ShareKind } from '../shared/capture';
+import {
+  SCREEN_SHARE,
+  TEACHER_CAMERA,
+  dockGridStyle,
+  inkRectFor,
+  screenShareSimulcastFor,
+  shareAllowed,
+  windowsShareEncodings,
+  type CapturePlan,
+  type ShareKind,
+} from '../shared/capture';
+import { nextVideoMode, type VideoModeState } from '../shared/videoMode';
+import { DRAW_TOPIC, applyPacket, decodePacket, isDrawColor, validStrokeId, type Stroke } from '../shared/web/drawLogic';
+import { shareProfile } from '../shared/web/videoQuality';
 import type { VideoCell, VideoModel } from '../shared/videoModel';
 import { openWgcTrack, type WgcHandle } from './wgcTrack';
 import {
@@ -52,7 +58,7 @@ import {
   videoGrid,
   type SlotCount,
 } from '../shared/classLogic';
-import { ShareMirror } from './videoMirror';
+import { ShareMirror, type MirrorPainter } from './videoMirror';
 import { attentionEvents, countFocusAlerts, decideHandoff, endedSessionCopy, isEndedReason } from '../shared/session';
 import { oldestWaiting } from '../shared/waiting';
 import { desktop } from './bridge';
@@ -61,11 +67,6 @@ import { cropTrack, type CropHandle } from './cropTrack';
 type TrackLike = {
   attach: (el: HTMLMediaElement) => HTMLMediaElement;
   detach: (el?: HTMLMediaElement) => HTMLMediaElement[];
-};
-
-type AnnotateHandle = {
-  load: (strokes: AnnotateStroke[], from: string) => void;
-  setPreview: (stream: MediaStream | null) => void;
 };
 
 export type ClassView = {
@@ -92,6 +93,14 @@ export type ClassView = {
   unread: number;
   annotateOn: boolean;
   videosOn: boolean;
+  /** Share is in Video mode (30 fps, motion). */
+  videoMode: boolean;
+  /** Video mode follows the screen's motion (auto-detect) until the teacher toggles it. */
+  videoModeAuto: boolean;
+  /** Student allowed to draw now, and the drawing on the share. */
+  drawHolder: RoomSnapshot['drawHolder'];
+  drawStrokes: number;
+  drawRequests: number;
   devices: DeviceInfo[];
   micId: string;
   camId: string;
@@ -106,7 +115,7 @@ type ShareRequest = {
   systemAudio?: boolean;
 };
 
-type VideosApi = {
+type VideosApi = MirrorPainter & {
   setModel: (model: VideoModel) => void;
   whenPainted: (cb: () => void) => void;
 };
@@ -167,6 +176,8 @@ export class ClassController {
   private shareCrop: CropHandle | null = null;
   private previewTrack: MediaStreamTrack | null = null;
   private overlayRect: { x: number; y: number; w: number; h: number } | null = null;
+  /** Shared picture inside the overlay's monitor, 0..1 (region shares are a part of it). */
+  private inkRect = { x: 0, y: 0, w: 1, h: 1 };
   private shareEpoch = 0;
   private chain: Promise<void> = Promise.resolve();
   private mosaic: string[] = [];
@@ -175,18 +186,24 @@ export class ClassController {
   private rotationTimer = 0;
   private cameraTimer = 0;
   private readonly mirror = new ShareMirror(
+    () => this.videosPainter(),
     (key, jpeg) => desktop().postVideoTile(key, jpeg),
     (key) => this.mediaStreamFor(key)
   );
+  private emitTimer = 0;
+  private lastHud = '';
+  private videoMode: VideoModeState = { on: false, auto: true, highSince: null, lowSince: null };
+  private videoTimer = 0;
+  private lastFrames = 0;
+  private drawStrokes: Stroke[] = [];
+  private drawLoadSeq = 0;
+  private prevDrawRequests = new Set<string>();
   private speakingId: string | null = null;
   private sticky = new Set<string>();
   private pinTimes = new Map<string, number>();
-  private strokes: AnnotateStroke[] = [];
-  private annotateTimer = 0;
   private dockHost: HTMLElement | null = null;
   private videosWin: Window | null = null;
   private videosGrid: HTMLElement | null = null;
-  private annotateWin: Window | null = null;
   private wgcHandle: WgcHandle | null = null;
   private shareDisplayId = '';
   private bounds: ChromeBounds | null = null;
@@ -207,8 +224,7 @@ export class ClassController {
   ) {
     this.onMessage = (ev: MessageEvent) => {
       if (ev.origin !== location.origin || !ev.data || typeof ev.data !== 'object') return;
-      const data = ev.data as { channel?: string; msg?: AnnotateMsg; rect?: { x: number; y: number; w: number; h: number } };
-      if (data.channel === 'annotate-out' && data.msg) void this.onAnnotate(data.msg);
+      const data = ev.data as { channel?: string; rect?: { x: number; y: number; w: number; h: number } };
       if (data.channel === 'region-picked') this.regionWait?.(data.rect ?? null);
       if (data.channel === 'region-cancel') this.regionWait?.(null);
     };
@@ -256,6 +272,11 @@ export class ClassController {
       unread: unreadCount(this.messages, this.lastRead, this.snap?.meId ?? null),
       annotateOn: this.annotateOn,
       videosOn: this.videosOpen(),
+      videoMode: this.videoMode.on,
+      videoModeAuto: this.videoMode.auto,
+      drawHolder: this.snap?.drawHolder ?? null,
+      drawStrokes: this.drawStrokes.length,
+      drawRequests: this.snap?.drawRequestCount ?? 0,
       devices: this.devices,
       micId: this.opts.micId,
       camId: this.opts.camId,
@@ -295,7 +316,10 @@ export class ClassController {
     }
     const room = new Room({
       disconnectOnPageLeave: false,
-      adaptiveStream: { pauseVideoInBackground: false },
+      // Off on purpose: during a share no <video> is attached in this window,
+      // so adaptive stream reported every camera as invisible (0x0) and paused
+      // it. ensureStudentCameras() enables exactly the tiles on stage instead.
+      adaptiveStream: false,
       dynacast: true,
       publishDefaults: {
         simulcast: false,
@@ -326,10 +350,6 @@ export class ClassController {
     await this.enqueue(() => this.syncMic());
     await this.refreshDevices();
     await this.roomApi('PATCH', '/settings', { maxVisibleVideos: studentCapForLayout(this.opts.layout) });
-    // Marks are drawn on the overlay, which the monitor capture already includes.
-    // Keeping this list empty means a snapshot does not paint them a second time
-    // as SVG on the student page.
-    this.strokes = [];
     this.rotationTimer = window.setInterval(() => {
       this.rotationTick += 1;
       this.ensureStudentCameras();
@@ -420,6 +440,19 @@ export class ClassController {
         return;
       case 'toggle-videos':
         void this.toggleVideos();
+        return;
+      case 'toggle-video-mode':
+        this.videoMode = { ...this.videoMode, auto: false };
+        void this.applyVideoMode(!this.videoMode.on, 'manual');
+        return;
+      case 'draw-allow':
+        if (typeof action.id === 'string') void this.drawAction({ action: 'allow', participantId: action.id });
+        return;
+      case 'draw-revoke':
+        void this.drawAction(typeof action.id === 'string' ? { action: 'revoke', participantId: action.id } : { action: 'revoke' });
+        return;
+      case 'draw-clear':
+        void this.drawAction({ action: 'clear' });
         return;
       case 'layout':
         if (action.slots === 2 || action.slots === 4 || action.slots === 6) {
@@ -651,13 +684,18 @@ export class ClassController {
     this.screenTrack = published;
     this.previewTrack = media;
     this.sharing = true;
-    this.strokes = [];
+    this.videoMode = { on: false, auto: true, highSince: null, lowSince: null };
     void desktop().annotationOpen(this.shareDisplayId || input.source.displayId);
-    void this.publishAnnotateSnapshot();
     this.shareKind = input.kind;
     this.overlayRect = input.kind === 'region' ? input.region : input.kind === 'screen' ? input.display : null;
+    this.inkRect = inkRectFor(input.kind, input.region, input.display);
     if (audioPromise) await this.publishSystemAudio(audioPromise);
-    await this.roomApi('POST', '/stage', { mode: 'screen' });
+    // desktopInk: student drawing is painted on this desktop (captured
+    // overlay), so the website skips its own stroke layer (no double ink).
+    await this.roomApi('POST', '/stage', { mode: 'screen', desktopInk: true });
+    this.drawStrokes = [];
+    void this.loadDrawing();
+    this.startVideoWatch();
     this.showStudentVideos = true;
     desktop().minimizeMain();
     this.emit();
@@ -750,10 +788,23 @@ export class ClassController {
     void this.stopRoom();
   }
 
+  /**
+   * Coalesced: speaker changes, polls and track events can fire dozens of
+   * times a second, and each emit re-renders the class view and sends the
+   * HUD snapshot to every floating window. One emit per ~16 ms is plenty.
+   */
   private emit(): void {
+    if (this.emitTimer) return;
+    this.emitTimer = window.setTimeout(() => {
+      this.emitTimer = 0;
+      this.emitNow();
+    }, 16);
+  }
+
+  private emitNow(): void {
     this.chatTo = resolveChatRecipient(this.chatTo === 'all' ? 'all' : this.chatTo, this.studentIds());
     this.lastCells = this.computeCells();
-    if (this.sharing) this.ensureStudentCameras();
+    this.ensureStudentCameras();
     this.host.onView(this.view());
     this.paintTiles();
     this.pushHud();
@@ -818,8 +869,10 @@ export class ClassController {
     if (this.cameraTimer) window.clearInterval(this.cameraTimer);
     this.cameraTimer = 0;
     this.mirror.stop();
-    if (this.annotateTimer) window.clearTimeout(this.annotateTimer);
-    this.annotateTimer = 0;
+    this.stopVideoWatch();
+    if (this.emitTimer) window.clearTimeout(this.emitTimer);
+    this.emitTimer = 0;
+    this.drawStrokes = [];
     this.shareEpoch += 1;
     await this.dropScreen();
     this.releaseCapture();
@@ -880,15 +933,17 @@ export class ClassController {
       if (pub.source === Track.Source.Camera) this.ensureStudentCameras();
       this.emit();
     });
-    room.on(RoomEvent.ParticipantConnected, () => {
-      this.ensureStudentCameras();
-      void this.publishAnnotateSnapshot();
-    });
+    room.on(RoomEvent.ParticipantConnected, () => this.ensureStudentCameras());
     room.on(RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
       if (participant?.isLocal) return;
-      if (topic === 'cls-state') this.kickState();
+      if (topic === STATE_TOPIC) this.kickState();
       else if (topic === 'chat') this.kickChat();
-      else if (topic === ANNOTATE_TOPIC) this.onRemoteAnnotate(payload);
+      // Only the server sends `draw`; a packet naming a participant is forged.
+      else if (topic === DRAW_TOPIC && !participant) this.onDrawPacket(payload);
+    });
+    room.on(RoomEvent.Reconnected, () => {
+      if (this.sharing) void this.loadDrawing();
+      this.ensureStudentCameras();
     });
     room.on(RoomEvent.ConnectionStateChanged, () => this.emit());
   }
@@ -955,8 +1010,8 @@ export class ClassController {
   /**
    * Subscribe every admitted student's camera and keep the ones in the
    * current mosaic flowing. Off-stage cameras stay subscribed so the 8s
-   * rotation can bring them back. During a share the main window is
-   * minimized, and adaptive stream would otherwise pause every tile.
+   * rotation can bring them back. adaptiveStream is off (see start()), so
+   * this decides which cameras flow: the ones on stage.
    */
   private ensureStudentCameras(): void {
     if (!this.room) return;
@@ -984,12 +1039,15 @@ export class ClassController {
       } catch {
         /* the publication can already be closing */
       }
-      if (!this.sharing || !stage.has(p.identity)) continue;
+      // adaptiveStream is off: enable the cameras on stage (dock or the
+      // floating videos window), pause the rest. Students publish one small
+      // layer, so the size is only a hint.
       try {
-        remote.setEnabled?.(true);
-        remote.setVideoDimensions?.({ width: 320, height: 180 });
+        const on = stage.has(p.identity) && (!this.sharing || this.showStudentVideos);
+        remote.setEnabled?.(on);
+        if (on) remote.setVideoDimensions?.({ width: 320, height: 180 });
       } catch {
-        /* audio publications do not take a video size */
+        /* the publication can already be closing */
       }
     }
   }
@@ -1119,6 +1177,17 @@ export class ClassController {
   private videosApi(host: HTMLElement): VideosApi | null {
     const view = host.ownerDocument.defaultView as (Window & { classroomVideos?: VideosApi }) | null;
     return view?.classroomVideos ?? null;
+  }
+
+  /** Paint target for the mirror: the videos popup's canvas API (same process). */
+  private videosPainter(): MirrorPainter | null {
+    try {
+      if (!this.videosWin || this.videosWin.closed) return null;
+      const api = (this.videosWin as Window & { classroomVideos?: VideosApi }).classroomVideos;
+      return api && typeof api.paint === 'function' ? api : null;
+    } catch {
+      return null;
+    }
   }
 
   private paintHost(host: HTMLElement | null, cells: { key: string; label: string }[], where: 'dock' | 'share'): void {
@@ -1371,7 +1440,10 @@ export class ClassController {
     this.releaseCapture();
     this.closeAnnotate();
     this.closeVideos();
-    this.strokes = [];
+    this.stopVideoWatch();
+    this.videoMode = { on: false, auto: true, highSince: null, lowSince: null };
+    this.drawStrokes = [];
+    this.pushInk();
     if (this.code) await this.roomApi('POST', '/stage', { mode: 'idle' });
     this.emit();
   }
@@ -1411,52 +1483,112 @@ export class ClassController {
   private closeAnnotate(): void {
     this.annotateOn = false;
     void desktop().annotationClose();
-    this.annotateWin = null;
   }
 
-  private async publishAnnotate(msg: AnnotateMsg): Promise<void> {
-    if (!this.room) return;
-    if (packetTooBig(msg)) {
-      console.warn('[annotate] packet over 14000 bytes, not sent');
-      return;
+  // —— Student drawing on the real desktop (desktop ink) ——
+
+  private async drawAction(body: Record<string, unknown>): Promise<void> {
+    const res = await this.roomApi('POST', '/draw', body);
+    if (res && res.status >= 400) this.notice = errorText(res.data, 'Could not change drawing.');
+    await this.pollState();
+  }
+
+  /** Snapshot for share start / reconnect; packets re-apply idempotently by index. */
+  private async loadDrawing(): Promise<void> {
+    const seq = ++this.drawLoadSeq;
+    const res = await this.roomApi('GET', '/draw');
+    if (seq !== this.drawLoadSeq || !this.sharing || !res || res.status >= 400) return;
+    const data = (res.data ?? {}) as { strokes?: unknown };
+    const strokes: Stroke[] = [];
+    for (const raw of Array.isArray(data.strokes) ? data.strokes : []) {
+      const st = (raw ?? {}) as Partial<Stroke>;
+      if (!validStrokeId(st.id) || typeof st.by !== 'string' || !isDrawColor(st.color) || !Array.isArray(st.pts)) continue;
+      const pts = st.pts.filter((n) => typeof n === 'number' && Number.isFinite(n));
+      strokes.push({ id: st.id, by: st.by, name: typeof st.name === 'string' ? st.name : 'Student', color: st.color, pts });
     }
+    this.drawStrokes = strokes;
+    this.pushInk();
+    this.emit();
+  }
+
+  private onDrawPacket(payload: Uint8Array): void {
+    if (!this.sharing) return;
     try {
-      await this.room.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(msg)), {
-        reliable: true,
-        topic: ANNOTATE_TOPIC,
-      });
-    } catch (err) {
-      console.warn('annotate', err);
-    }
-  }
-
-  private async publishAnnotateSnapshot(): Promise<void> {
-    if (!this.room || !this.sharing) return;
-    const from = this.room.localParticipant.identity || 'teacher';
-    const msg: AnnotateMsg = { v: 1, type: 'snapshot', strokes: this.strokes, from };
-    await this.publishAnnotate(msg);
-    void this.roomApi('PUT', '/annotate', { strokes: fitSnapshot(this.strokes) });
-  }
-
-  private async onAnnotate(msg: AnnotateMsg): Promise<void> {
-    if (!msg || msg.v !== 1) return;
-    this.strokes = applyAnnotateOp(this.strokes, msg);
-    if (!this.room) return;
-    await this.publishAnnotate(msg);
-    if (this.annotateTimer) window.clearTimeout(this.annotateTimer);
-    this.annotateTimer = window.setTimeout(() => {
-      const strokes = fitSnapshot(this.strokes);
-      void this.roomApi('PUT', '/annotate', { strokes });
-    }, 400);
-  }
-
-  private onRemoteAnnotate(payload: Uint8Array): void {
-    try {
-      const msg = JSON.parse(new TextDecoder().decode(payload)) as unknown;
-      desktop().annotationCommand({ op: 'remote', msg });
+      const p = decodePacket(JSON.parse(new TextDecoder().decode(payload)));
+      if (!p) return;
+      this.drawStrokes = applyPacket(this.drawStrokes, p);
+      this.pushInk();
+      if (p.t !== 'pts') this.emit();
     } catch {
       /* ignore malformed packets */
     }
+  }
+
+  private pushInk(): void {
+    desktop().studentInk({ strokes: this.sharing ? this.drawStrokes : [], rect: this.inkRect });
+  }
+
+  // —— Video mode (30 fps, motion) with auto-detect ——
+
+  private startVideoWatch(): void {
+    this.stopVideoWatch();
+    this.lastFrames = this.wgcHandle?.frames() ?? 0;
+    this.videoTimer = window.setInterval(() => {
+      const handle = this.wgcHandle;
+      if (!handle || !this.sharing) return;
+      const frames = handle.frames();
+      const fps = frames - this.lastFrames;
+      this.lastFrames = frames;
+      const next = nextVideoMode(this.videoMode, { now: Date.now(), fps, slidesCap: SCREEN_SHARE.capture.frameRate });
+      const changed = next.on !== this.videoMode.on;
+      this.videoMode = next;
+      if (changed) void this.applyVideoMode(next.on, 'auto');
+    }, 1000);
+  }
+
+  private stopVideoWatch(): void {
+    if (this.videoTimer) window.clearInterval(this.videoTimer);
+    this.videoTimer = 0;
+  }
+
+  /**
+   * Video mode, like the website's share Video toggle: capture 30 fps (helper
+   * restarted with the new rate), encoder hint `motion`, keep the frame rate
+   * under pressure, and the web's video bitrates. Off returns to this app's
+   * slide settings. Share audio uses the system loopback stream.
+   */
+  private async applyVideoMode(on: boolean, why: 'manual' | 'auto'): Promise<void> {
+    this.videoMode = { ...this.videoMode, on, highSince: null, lowSince: null };
+    const profile = shareProfile(on);
+    const raw = this.shareRaw;
+    try {
+      if (raw) raw.contentHint = profile.contentHint;
+    } catch {
+      /* ignore */
+    }
+    const sender = (this.screenTrack as unknown as { sender?: RTCRtpSender } | null)?.sender;
+    if (sender) {
+      try {
+        const params = sender.getParameters();
+        params.encodings = windowsShareEncodings(params.encodings ?? [], on);
+        (params as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference = profile.degradationPreference;
+        await sender.setParameters(params);
+      } catch (err) {
+        console.warn('video mode encodings', err);
+      }
+    }
+    void desktop().setWgcFps(on ? profile.capture.frameRate.max : SCREEN_SHARE.capture.frameRate);
+    if (on && !this.screenAudio && why === 'manual') {
+      // Best effort: the teacher's click came from the control panel, not this window.
+      const audio = this.captureSystemAudio();
+      await this.publishSystemAudio(audio);
+    }
+    if (why === 'auto') {
+      this.notice = on
+        ? 'Moving picture detected: Video mode is on (smoother motion). Turn it off in the control panel for sharper text.'
+        : 'The screen is still again: back to sharp slides.';
+    }
+    this.emit();
   }
 
   private studentIds(): Set<string> {
@@ -1488,13 +1620,13 @@ export class ClassController {
     const state = async () => {
       while (this.gen === gen) {
         await this.pollState();
-        await sleep(statePollMs(this.pushLive));
+        await sleep(statePollMs({ role: 'teacher', hidden: document.hidden, pushLive: this.pushLive }));
       }
     };
     const chat = async () => {
       while (this.gen === gen) {
         await this.pollChat();
-        await sleep(chatPollMs(this.pushLive));
+        await sleep(chatPollMs({ hidden: document.hidden && !this.sharing, pushLive: this.pushLive }));
       }
     };
     void state();
@@ -1512,6 +1644,7 @@ export class ClassController {
       return;
     }
     this.snap = snap;
+    this.noteDrawRequests(snap);
     if (!this.clearedStaleStage && snap.stageMode === 'screen' && !this.sharing) {
       this.clearedStaleStage = true;
       void this.roomApi('POST', '/stage', { mode: 'idle' });
@@ -1530,6 +1663,18 @@ export class ClassController {
     this.messages = mergeMessages(this.messages, list).slice(-500);
     this.noteAttention();
     this.emit();
+  }
+
+  /** Like the web: "X asks to draw on your screen. Allow in the roster." */
+  private noteDrawRequests(snap: RoomSnapshot): void {
+    const now = new Set(snap.admitted.filter((p) => p.drawRequested).map((p) => p.id));
+    for (const p of snap.admitted) {
+      if (!p.drawRequested || this.prevDrawRequests.has(p.id)) continue;
+      this.notice = `${p.displayName} asks to draw on your screen. Allow in People.`;
+      desktop().notify('Asks to draw', `${p.displayName} asks to draw on your screen`);
+    }
+    if (!now.size && this.notice.includes(' asks to draw on your screen.')) this.notice = '';
+    this.prevDrawRequests = now;
   }
 
   private noteAttention(): void {
@@ -1601,10 +1746,11 @@ export class ClassController {
     return run;
   }
 
-  private pushHud(): void {
+  /** What the floating panels and the class window's roster / chat render. */
+  panelSnapshot(): PanelSnapshot {
     const students = (this.snap?.admitted ?? []).filter((p) => p.role === 'STUDENT');
     const oldest = oldestWaiting(this.snap?.waiting ?? []);
-    const snap: PanelSnapshot = {
+    return {
       hud: {
         inClass: !this.ended && !this.handoff,
         sharing: this.sharing,
@@ -1625,6 +1771,12 @@ export class ClassController {
         unread: unreadCount(this.messages, this.lastRead, this.snap?.meId ?? null),
         oldestWaitingId: oldest?.id ?? null,
         oldestWaitingName: oldest?.displayName ?? null,
+        videoMode: this.videoMode.on,
+        videoModeAuto: this.videoMode.auto,
+        drawRequests: this.snap?.drawRequestCount ?? 0,
+        drawHolderName: this.snap?.drawHolder?.name ?? null,
+        drawStrokes: this.drawStrokes.length,
+        notice: this.notice,
       },
       admitted: this.snap?.admitted ?? [],
       waiting: this.snap?.waiting ?? [],
@@ -1635,6 +1787,14 @@ export class ClassController {
       micId: this.opts.micId,
       camId: this.opts.camId,
     };
+  }
+
+  private pushHud(): void {
+    const snap = this.panelSnapshot();
+    // Same snapshot as last time: skip the IPC fan-out to every panel.
+    const key = JSON.stringify(snap);
+    if (key === this.lastHud) return;
+    this.lastHud = key;
     desktop().pushHud(snap);
   }
 

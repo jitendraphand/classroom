@@ -1,7 +1,16 @@
 /**
- * Transparent annotation overlay. Strokes are canvas pixels on this window.
- * The window is not capture-excluded, so a monitor capture contains them.
- * Tools live on the control panel, which is excluded, as are the other opaque classroom windows. This page has no buttons.
+ * Transparent annotation overlay over the shared monitor. NOT capture-excluded
+ * (REPORT.md "Window protection"): what is drawn here is in the share.
+ *
+ * Two layers of ink:
+ * - the teacher's annotations (tools in the separate, capture-excluded
+ *   annotation panel, tools.tsx);
+ * - student desktop ink: strokes a student draws on their view of the share
+ *   (server-relayed, normalised to the shared picture), mapped onto the real
+ *   desktop so the teacher sees them where they belong and the capture
+ *   carries them to everyone (the website skips its own overlay: desktopInk).
+ * This page has no buttons. Committed shapes are cached in a second canvas,
+ * so a pointer move only redraws the shape being drawn.
  */
 import { newStrokeId, type Pt } from '../shared/annotate';
 import {
@@ -9,7 +18,6 @@ import {
   applyRemoteMessage,
   cssPointerToNormalized,
   defaultOpacity,
-  defaultWidth,
   isOverlayTool,
   shapesHit,
   type AnnotShape,
@@ -18,12 +26,14 @@ import {
   type OverlayTool,
   type PhysicalMonitor,
   type ShapeType,
+  toolWidth,
 } from '../shared/annotateOverlay';
-import { desktop } from './bridge';
+import { DRAW_COLORS, isDrawColor, nameTags, strokeWidthFor } from '../shared/web/drawLogic';
+import { desktop, type StudentInk } from './bridge';
 
 const canvas = document.getElementById('board') as HTMLCanvasElement;
 const textInput = document.getElementById('ink-text') as HTMLInputElement;
-const ctx = canvas.getContext('2d');
+const cur = canvas.getContext('2d');
 
 document.body.classList.add('overlay');
 document.body.classList.remove('preview');
@@ -33,7 +43,13 @@ type Surface = { dip: DipBox; physical: PhysicalMonitor; scale: number };
 let surface: Surface | null = null;
 let tool: OverlayTool = 'pen';
 let color = '#ef4444';
+let thickness = 3;
 let active = false;
+let studentInk: StudentInk | null = null;
+/** Committed teacher shapes + student ink, redrawn only when they change. */
+const base = document.createElement('canvas');
+const baseCtx = base.getContext('2d');
+let baseDirty = true;
 const log = new ShapeLog();
 let draft: AnnotShape | null = null;
 let laser: { at: number; p: Pt } | null = null;
@@ -60,6 +76,9 @@ function resize(): void {
   canvas.height = Math.max(1, Math.round(surface.physical.heightPx));
   canvas.style.width = `${cssW}px`;
   canvas.style.height = `${cssH}px`;
+  base.width = canvas.width;
+  base.height = canvas.height;
+  baseDirty = true;
   draw();
 }
 
@@ -72,13 +91,17 @@ function lineWidth(widthCss: number): number {
   return Math.max(1, widthCss * scale);
 }
 
+/** Target of the shape painters below: the visible canvas or the cached base layer. */
+let ctx: CanvasRenderingContext2D | null = cur;
+
 function strokePath(points: Pt[]): void {
-  if (!ctx || !points.length) return;
-  ctx.beginPath();
+  const g = ctx;
+  if (!g || !points.length) return;
+  g.beginPath();
   points.forEach((p, i) => {
     const [x, y] = px(p);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
+    if (i === 0) g.moveTo(x, y);
+    else g.lineTo(x, y);
   });
 }
 
@@ -158,12 +181,83 @@ function drawLaser(): void {
   ctx.restore();
 }
 
-function draw(): void {
-  if (!ctx) return;
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+function paintBase(): void {
+  if (!baseCtx) return;
+  baseDirty = false;
+  ctx = baseCtx;
+  baseCtx.clearRect(0, 0, base.width, base.height);
   for (const shape of log.shapes) drawShape(shape);
+  drawStudentInk(baseCtx);
+  ctx = cur;
+}
+
+function draw(): void {
+  if (!cur) return;
+  if (baseDirty) paintBase();
+  ctx = cur;
+  cur.clearRect(0, 0, canvas.width, canvas.height);
+  if (base.width && base.height) cur.drawImage(base, 0, 0);
   if (draft) drawShape(draft);
   drawLaser();
+}
+
+/**
+ * Student strokes: 0..1 of the shared picture → the picture's place on this
+ * monitor (`rect`, region shares) → canvas pixels. Width: the web's
+ * strokeWidthFor() at the size students receive (≤1280 px wide), scaled up to
+ * this monitor, so a line looks as thick in the share as on a student's own
+ * overlay. The drawer's name tag sits at their last point, like the website.
+ */
+function drawStudentInk(g: CanvasRenderingContext2D): void {
+  const ink = studentInk;
+  if (!ink || !ink.strokes.length) return;
+  const r = ink.rect;
+  const picW = r.w * canvas.width;
+  const picH = r.h * canvas.height;
+  if (!(picW > 0) || !(picH > 0)) return;
+  const sentW = Math.min(1280, picW);
+  const lw = strokeWidthFor(sentW) * (picW / sentW);
+  const X = (x: number) => (r.x + x * r.w) * canvas.width;
+  const Y = (y: number) => (r.y + y * r.h) * canvas.height;
+  g.save();
+  g.lineCap = 'round';
+  g.lineJoin = 'round';
+  g.lineWidth = lw;
+  for (const s of ink.strokes) {
+    const c = isDrawColor(s.color) ? DRAW_COLORS[s.color] : '#ef4444';
+    g.strokeStyle = c;
+    g.fillStyle = c;
+    if (s.pts.length <= 2) {
+      g.beginPath();
+      g.arc(X(s.pts[0] ?? 0), Y(s.pts[1] ?? 0), lw / 2, 0, Math.PI * 2);
+      g.fill();
+      continue;
+    }
+    g.beginPath();
+    g.moveTo(X(s.pts[0]!), Y(s.pts[1]!));
+    for (let i = 2; i + 1 < s.pts.length; i += 2) g.lineTo(X(s.pts[i]!), Y(s.pts[i + 1]!));
+    g.stroke();
+  }
+  const scale = surface?.scale || 1;
+  g.font = `600 ${Math.round(12 * scale)}px "Segoe UI", sans-serif`;
+  g.textBaseline = 'middle';
+  const tags = nameTags(ink.strokes.map((s) => ({ ...s, color: isDrawColor(s.color) ? s.color : 'red' })));
+  for (const t of tags) {
+    const x = X(t.x) + 10 * scale;
+    const y = Y(t.y) + 10 * scale;
+    const w = g.measureText(t.name).width + 12 * scale;
+    const h = 20 * scale;
+    g.fillStyle = 'rgba(15,23,42,0.85)';
+    g.strokeStyle = DRAW_COLORS[t.color];
+    g.lineWidth = 1.5 * scale;
+    g.beginPath();
+    g.roundRect(x, y - h / 2, w, h, 6 * scale);
+    g.fill();
+    g.stroke();
+    g.fillStyle = '#ffffff';
+    g.fillText(t.name, x + 6 * scale, y);
+  }
+  g.restore();
 }
 
 function frame(): void {
@@ -182,7 +276,7 @@ function beginShape(type: ShapeType, p: Pt): AnnotShape {
     type,
     points: [p],
     color,
-    width: defaultWidth(type),
+    width: toolWidth(type, thickness),
     opacity: defaultOpacity(type),
     text: '',
     timestamp: Date.now(),
@@ -196,6 +290,7 @@ function commitDraft(): void {
   if (shape.type === 'text') return;
   if (shape.points.length < (shape.type === 'pen' || shape.type === 'highlight' ? 1 : 2)) return;
   log.add(shape);
+  baseDirty = true;
   publishStatus();
   pushInk();
 }
@@ -217,6 +312,7 @@ function onDown(e: PointerEvent): void {
   }
   if (tool === 'eraser') {
     log.erase(shapesHit(log.shapes, p, aspect()));
+    baseDirty = true;
     publishStatus();
     pushInk();
     poke();
@@ -238,7 +334,11 @@ function onMove(e: PointerEvent): void {
   if (!draft && tool !== 'eraser') return;
   if (tool === 'eraser') {
     if (e.buttons !== 1) return;
-    log.erase(shapesHit(log.shapes, p, aspect()));
+    const hit = shapesHit(log.shapes, p, aspect());
+    // Most eraser moves touch nothing: no repaint, no IPC to main then.
+    if (!hit.length) return;
+    log.erase(hit);
+    baseDirty = true;
     publishStatus();
     pushInk();
     poke();
@@ -264,7 +364,7 @@ function openText(clientX: number, clientY: number, p: Pt): void {
   textInput.style.left = `${clientX}px`;
   textInput.style.top = `${clientY}px`;
   textInput.style.color = color;
-  textInput.style.fontSize = `${defaultWidth('text')}px`;
+  textInput.style.fontSize = `${toolWidth('text', thickness)}px`;
   textInput.value = '';
   textInput.hidden = false;
   textInput.focus();
@@ -277,6 +377,7 @@ function openText(clientX: number, clientY: number, p: Pt): void {
     textInput.value = '';
     if (!text) return;
     log.add({ ...beginShape('text', anchor), text, points: [anchor] });
+    baseDirty = true;
     publishStatus();
     pushInk();
     poke();
@@ -301,14 +402,19 @@ function applyCommand(cmd: AnnotateCommand): void {
     tool = cmd.tool;
     return;
   }
-  if (cmd.op === 'color' && typeof cmd.color === 'string') {
+  if (cmd.op === 'color' && typeof cmd.color === 'string' && /^#[0-9a-f]{6}$/i.test(cmd.color)) {
     color = cmd.color;
+    return;
+  }
+  if (cmd.op === 'width' && Number.isFinite(cmd.width)) {
+    thickness = cmd.width;
     return;
   }
   if (cmd.op === 'undo') log.undo();
   else if (cmd.op === 'redo') log.redo();
   else if (cmd.op === 'clear') log.clear();
   else if (cmd.op === 'remote') applyRemoteMessage(log, cmd.msg);
+  baseDirty = true;
   publishStatus();
   pushInk();
   poke();
@@ -326,12 +432,14 @@ window.addEventListener('keydown', (ev) => {
     ev.preventDefault();
     if (ev.shiftKey) log.redo();
     else log.undo();
+    baseDirty = true;
     publishStatus();
     pushInk();
     poke();
   } else if ((ev.ctrlKey || ev.metaKey) && key === 'y') {
     ev.preventDefault();
     log.redo();
+    baseDirty = true;
     publishStatus();
     pushInk();
     poke();
@@ -352,6 +460,11 @@ desktop().onAnnotateMode((on) => {
   poke();
 });
 desktop().onAnnotateCommand((cmd) => applyCommand(cmd));
+desktop().onStudentInk((ink) => {
+  studentInk = ink && Array.isArray(ink.strokes) && ink.rect ? ink : null;
+  baseDirty = true;
+  poke();
+});
 
 publishStatus();
 poke();

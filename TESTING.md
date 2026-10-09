@@ -20,6 +20,10 @@ npm run typecheck
 - Pixel diff used by the capture test (tolerance and pass ratio). It is not wired to any published track.
 - Annotation coordinates at 100%, 125%, 150%, 175%, and 200% land on the same 0–1 point. A 150% monitor whose physical origin is not `dipOrigin × 1.5` stays aligned. Remote physical pixels are divided by `screenWidthPx` and `screenHeightPx`. Undo, redo, clear, and eraser restore the vector list. A laser is not stored.
 - Waiting-room admit-on-toggle, roster order (hands earliest first), 2/4/6 student cap, pin ordering.
+- `webSync`: the copies in `src/shared/web/` are byte-identical to the website's `lib` modules; poll intervals and search match the website.
+- `windowProtection`: every window has a documented capture decision that matches `windowShouldBeCaptureExcluded`; only the overlay and region picker are captured; “Annotate tools” is protected before its first show.
+- `teacherParity`: dashboard status badges and buttons, campus → grade → divisions and the ad-hoc body, room `desktopInk` / draw fields, Video mode auto-detect, share encodings, student-ink mapping for region shares, thickness.
+- `videoMirror`: 15 fps tile gap, tile size, stalled-pump watchdog.
 
 A green run does not mean capture exclusion works. It means the decisions the publisher makes are the ones these tests lock in.
 
@@ -75,6 +79,14 @@ Against one web student, in any order:
 - Chat to Everyone, then to that student. After Send, To should stay on that student. Reply on their message should select them. A student who leaves should fall back to Everyone.
 - Show 2, 4, and 6. The count includes your tile. Pin a student from the tile. Pinning every student slot should report that the pins are full.
 - End class only after sharing has stopped. Confirm “End the class for everyone?”. Back to timetable returns to the home screen. The student should see “Class ended” and Home.
+
+### 5. New in this build (needs a real Windows PC and one web student)
+
+- Student tiles during a share: open Student videos, leave it 5+ minutes; every tile keeps moving (wave at a student camera). Mute/unmute a student camera: the tile recovers within ~3 s.
+- Video toggle: play a YouTube video full screen on the shared monitor. Within ~4 s the Video button turns on (“auto”), the student sees smooth motion; stop the video and it turns off after ~10 s. Press Video by hand: auto stops; sound from the PC reaches the student if “Share audio” was not ticked (loopback).
+- Student drawing: the student presses Request to draw; the toolbar roster shows a pen dot and a notice. Allow in the roster. The student's strokes appear on your real desktop (over any app), in the student's own view once (not doubled), and fade-free for other students. Revoke and Clear drawing work. Try a Region share: strokes land inside the region.
+- Annotate tools: pressing Annotate opens the tool window below the share controls. It must be absent from the student's picture (no black box), while your marks are present. Draw / Click-through switches whether Notepad below takes clicks. Thickness, colour picker, highlighter, undo/redo, clear, close (×) all work. Drag it, stop and restart annotate: it reopens where it was.
+- Look: dashboard (campus → grade → divisions), roster and chat match the website's wording and icons; search “name or SID” in both.
 
 ## If it fails
 

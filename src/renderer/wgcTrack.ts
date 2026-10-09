@@ -7,6 +7,8 @@ export type WgcHandle = {
   freeze: () => void;
   unfreeze: () => void;
   stop: () => void;
+  /** Helper frames received so far (WGC sends one per screen change, capped at the capture fps). */
+  frames: () => number;
 };
 
 type StoredFrame = { pixels: Uint8Array; width: number; height: number };
@@ -148,6 +150,7 @@ function bindFrames(opts: {
   let frozen = false;
   let last: StoredFrame | null = null;
   let readySettled = false;
+  let received = 0;
   let resolveReady: () => void = () => undefined;
   const ready = new Promise<void>((resolve) => {
     resolveReady = () => {
@@ -172,8 +175,10 @@ function bindFrames(opts: {
       }
       return;
     }
-    const pixels = new Uint8Array(bytes);
-    pixels.set(rgba.subarray(0, bytes));
+    // The IPC message is already a private copy, and VideoFrame copies again:
+    // no third copy here (3.7 MB per 720p frame, 110 MB/s in video mode).
+    received += 1;
+    const pixels = rgba.byteLength === bytes ? rgba : rgba.subarray(0, bytes);
     const stored = { pixels, width, height };
     last = stored;
     try {
@@ -191,6 +196,7 @@ function bindFrames(opts: {
     unfreeze: () => {
       frozen = false;
     },
+    frames: () => received,
     stop: () => {
       if (stopped) return;
       stopped = true;

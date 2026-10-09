@@ -14,6 +14,8 @@ export type StoredConfig = {
   email: string;
   cookie: string | null;
   toolbar: { x: number; y: number } | null;
+  /** Annotation tool panel position (optional; older configs do not have it). */
+  annotateTools?: { x: number; y: number } | null;
   layout: 2 | 4 | 6;
   hotkeys: { mic: string; camera: string; stopShare: string };
   micId: string;

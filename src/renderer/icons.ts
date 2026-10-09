@@ -1,18 +1,53 @@
+import { WEB_ICONS } from '../shared/web/icons';
+
 /**
- * Symbols from the floating control panel. The main meeting bar uses the same
- * drawings so the two surfaces read as one set of controls.
+ * The website's icons (generated from apps/web/src/components/ui/Icons.tsx by
+ * scripts/sync-web.mjs), under the names this app uses. The meeting bar, the
+ * floating control panel, the panels and the annotation tools share them.
  */
+const TOOL_ICONS = {
+  highlighter:
+    '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m9 11-5 5v4h4l5-5M9 11l4-4 4 4-4 4M9 11l4 4M14 6l3-3 4 4-3 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  line: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 19 19 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  arrow:
+    '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 19 19 5M10 5h9v9" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  rect: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="6" width="16" height="12" rx="1.5" stroke="currentColor" stroke-width="1.8"/></svg>',
+  ellipse: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><ellipse cx="12" cy="12" rx="8.5" ry="6.5" stroke="currentColor" stroke-width="1.8"/></svg>',
+  text: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 6V4.5h14V6M12 4.5v15M9 19.5h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+  redo: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m15 14 5-5-5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+  trash:
+    '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 12.5h9l1-12.5M10 11v5M14 11v5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  pointer:
+    '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 3 14 7.5-6.2 1.6L10 18.5z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
+  laser: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="3.2" fill="currentColor"/><circle cx="12" cy="12" r="7.5" stroke="currentColor" stroke-width="1.4" opacity=".55"/></svg>',
+  close: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+} as const;
+
 export const ICONS = {
-  mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/></svg>',
-  micOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4M4 4l16 16"/></svg>',
-  cam: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="7" width="12" height="10" rx="2"/><path d="M15 11l6-3v8l-6-3z"/></svg>',
-  camOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="7" width="12" height="10" rx="2"/><path d="M15 11l6-3v8l-6-3zM4 4l16 16"/></svg>',
-  share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8"/></svg>',
-  pen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20l4-1L19 8l-3-3L5 16z"/></svg>',
-  chat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 6h14v9H8l-3 3z"/></svg>',
-  people: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3"/><path d="M3 19c1-3 3-4 6-4s5 1 6 4M17 8a3 3 0 0 1 0 6M21 19c-.4-2-1.5-3.2-3-3.7"/></svg>',
-  video: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="7" height="6" rx="1"/><rect x="14" y="5" width="7" height="6" rx="1"/><rect x="3" y="14" width="7" height="6" rx="1"/><rect x="14" y="14" width="7" height="6" rx="1"/></svg>',
-  stop: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
+  mic: WEB_ICONS.Mic,
+  micOff: WEB_ICONS.MicOff,
+  cam: WEB_ICONS.Cam,
+  camOff: WEB_ICONS.CamOff,
+  share: WEB_ICONS.Screen,
+  pen: WEB_ICONS.Pen,
+  chat: WEB_ICONS.Chat,
+  people: WEB_ICONS.Users,
+  video: WEB_ICONS.Video,
+  film: WEB_ICONS.Film,
+  hand: WEB_ICONS.Hand,
+  handDown: WEB_ICONS.HandDown,
+  pin: WEB_ICONS.Pin,
+  userPlus: WEB_ICONS.UserPlus,
+  door: WEB_ICONS.Door,
+  reply: WEB_ICONS.Reply,
+  search: WEB_ICONS.Search,
+  send: WEB_ICONS.Send,
+  eraser: WEB_ICONS.Eraser,
+  undo: WEB_ICONS.Undo,
+  leave: WEB_ICONS.Leave,
+  check: WEB_ICONS.Check,
+  stop: WEB_ICONS.Screen,
+  ...TOOL_ICONS,
 } as const;
 
 export type IconName = keyof typeof ICONS;

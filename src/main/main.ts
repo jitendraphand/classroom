@@ -117,6 +117,10 @@ let probeSkipReason = 'Probe did not run.';
 let localCaptureProven = false;
 let overlayDisplayId: number | null = null;
 let overlayActive = false;
+/** Annotation is on (tool panel open). Drawing vs click-through is overlayActive. */
+let annotateOn = false;
+let lastStudentInk: unknown = null;
+let lastWgcArgs: string[] | null = null;
 const overlayQueue: { channel: string; payload: unknown }[] = [];
 let testMonitor: { x: number; y: number; w: number; h: number } | null = null;
 let inkScale = 1;
@@ -520,6 +524,96 @@ function flushOverlayQueue(win: Win): void {
   const queued = overlayQueue.splice(0, overlayQueue.length);
   for (const item of queued) win.webContents.send(item.channel, item.payload);
   win.webContents.send('annotate-mode', overlayActive);
+  if (lastStudentInk) win.webContents.send('student-ink', lastStudentInk);
+}
+
+/** Overlay input on (draw) or off (click-through), told to the overlay and the tool panel. */
+function setOverlayDrawing(on: boolean): void {
+  overlayActive = on;
+  setOverlayClickThrough(!overlayActive);
+  sendOverlay('annotate-mode', overlayActive);
+  const tools = chrome.get('annotate-tools');
+  if (tools && !tools.isDestroyed()) tools.webContents.send('annotate-mode', overlayActive);
+  const win = chrome.get('annotate-overlay');
+  if (overlayActive && win && !win.isDestroyed()) win.focus();
+  raiseControls();
+}
+
+/**
+ * Annotation tool panel (pen, highlighter, shapes, text, eraser, undo/redo,
+ * clear, colour, thickness, draw / click-through). Opaque and
+ * capture-EXCLUDED like every other classroom panel: students see the marks
+ * on the overlay, never the panel. Opens when annotation is turned on.
+ */
+function openAnnotateTools(): void {
+  const existing = chrome.get('annotate-tools');
+  if (existing && !existing.isDestroyed()) {
+    existing.show();
+    raiseControls();
+    return;
+  }
+  const w = 212;
+  const h = 452;
+  const tb = toolbar && !toolbar.isDestroyed() && toolbar.isVisible() ? toolbar.getBounds() : null;
+  const area = workAreaFor(tb ? toolbar : mainWindow);
+  let x = tb ? tb.x + tb.width - w : area.x + area.width - w - 16;
+  let y = tb ? tb.y + tb.height + 8 : area.y + 96;
+  if (y + h > area.y + area.height) y = Math.max(area.y, (tb ? tb.y : area.y + area.height) - h - 8);
+  x = Math.min(Math.max(area.x, x), area.x + area.width - w);
+  const savedPos = config.annotateTools;
+  const saved =
+    savedPos && screen.getAllDisplays().some((d) => {
+      const a = d.workArea;
+      return savedPos.x >= a.x && savedPos.y >= a.y && savedPos.x + w <= a.x + a.width && savedPos.y + h <= a.y + a.height;
+    })
+      ? savedPos
+      : null;
+  const win = new BrowserWindow({
+    x: Math.round(saved?.x ?? x),
+    y: Math.round(saved?.y ?? y),
+    width: w,
+    height: h,
+    frame: false,
+    transparent: false,
+    resizable: false,
+    movable: true,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    hasShadow: false,
+    thickFrame: false,
+    show: false,
+    backgroundColor: '#0f172a',
+    webPreferences: prefs(),
+  });
+  win.setAlwaysOnTop(true, 'screen-saver');
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  watch(win, 'annotate-tools');
+  win.on('moved', () => {
+    if (win.isDestroyed()) return;
+    const b = win.getBounds();
+    config.annotateTools = { x: b.x, y: b.y };
+    saveConfig();
+  });
+  win.webContents.on('did-finish-load', () => {
+    if (win.isDestroyed()) return;
+    win.webContents.send('annotate-mode', overlayActive);
+    sendHud(win);
+  });
+  win.once('ready-to-show', () => {
+    if (win.isDestroyed()) return;
+    // Protect BEFORE the first show, like the other panels.
+    protectExcludedWindow(win, 'annotate-tools');
+    win.show();
+    raiseControls();
+  });
+  void win.loadURL('app://classroom/tools.html');
+}
+
+function closeAnnotateTools(): void {
+  const win = chrome.get('annotate-tools');
+  if (win && !win.isDestroyed()) win.close();
 }
 
 function displayForOverlay(displayId: unknown) {
@@ -634,6 +728,9 @@ function openAnnotationOverlay(displayId: unknown): void {
 
 function closeAnnotationOverlay(): void {
   overlayActive = false;
+  annotateOn = false;
+  lastStudentInk = null;
+  closeAnnotateTools();
   overlayDisplayId = null;
   clearInk();
   overlayQueue.splice(0, overlayQueue.length);
@@ -1584,8 +1681,10 @@ function installIpc(): void {
     const result = await wgc.start(args);
     if (!result.ok) {
       console.log(`[capture] native Windows.Graphics.Capture failed: ${result.error}`);
+      lastWgcArgs = null;
       return result;
     }
+    lastWgcArgs = args;
     if (result.monitor && result.monitor.w > 0 && result.monitor.h > 0) testMonitor = result.monitor;
     const fallbackDisplay = typeof body.displayId === 'string' ? body.displayId : '';
     const displayId = displayIdForCapturedMonitor(result.monitor, fallbackDisplay);
@@ -1657,12 +1756,46 @@ function installIpc(): void {
   });
 
   ipcMain.on('annotation-active', (_event, on: unknown) => {
-    overlayActive = on === true;
-    setOverlayClickThrough(!overlayActive);
-    sendOverlay('annotate-mode', overlayActive);
+    annotateOn = on === true;
+    if (annotateOn) openAnnotateTools();
+    else closeAnnotateTools();
+    setOverlayDrawing(annotateOn);
+  });
+
+  // Tool panel: Draw ↔ Click-through without closing the panel.
+  ipcMain.on('annotation-draw-mode', (event, on: unknown) => {
+    const tools = chrome.get('annotate-tools');
+    if (!tools || tools.isDestroyed() || event.sender !== tools.webContents) return;
+    if (!annotateOn) return;
+    setOverlayDrawing(on === true);
+  });
+
+  // Student desktop ink (from the class window) → the captured overlay.
+  ipcMain.on('student-ink', (event, ink: unknown) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents) return;
+    if (!ink || typeof ink !== 'object') return;
+    lastStudentInk = ink;
     const win = chrome.get('annotate-overlay');
-    if (overlayActive && win && !win.isDestroyed()) win.focus();
-    raiseControls();
+    if (win && !win.isDestroyed() && !win.webContents.isLoading()) win.webContents.send('student-ink', ink);
+  });
+
+  // Video mode: restart the helper with the same source at a new capture rate.
+  ipcMain.handle('wgc-fps', async (event, fps: unknown) => {
+    if (!mainWindow || event.sender.id !== mainWindow.webContents.id) return { ok: false };
+    if (!lastWgcArgs || !lastSnap?.hud.sharing) return { ok: false };
+    const rate = Math.max(1, Math.min(30, Math.round(Number(fps) || SCREEN_SHARE.capture.frameRate)));
+    const args = [...lastWgcArgs];
+    if (args[args.length - 1] === String(rate)) return { ok: true };
+    args[args.length - 1] = String(rate);
+    const result = await wgc.start(args);
+    if (!result.ok) {
+      logCapture(`[capture] fps change to ${rate} failed: ${result.error}; back to ${lastWgcArgs[lastWgcArgs.length - 1]}`);
+      await wgc.start(lastWgcArgs);
+      return { ok: false };
+    }
+    lastWgcArgs = args;
+    logCapture(`[capture] capture rate ${rate} fps`);
+    return { ok: true };
   });
 
   ipcMain.on('annotation-command', (_event, cmd: unknown) => {
@@ -1685,7 +1818,9 @@ function installIpc(): void {
   });
 
   ipcMain.on('annotation-status', (_event, status: unknown) => {
-    if (toolbar && !toolbar.isDestroyed()) toolbar.webContents.send('annotate-status', status);
+    for (const win of [toolbar, chrome.get('annotate-tools')]) {
+      if (win && !win.isDestroyed()) win.webContents.send('annotate-status', status);
+    }
   });
 
   ipcMain.on('mouse-passthrough', (event, on: unknown) => {

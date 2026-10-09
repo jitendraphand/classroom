@@ -32,6 +32,8 @@ export type DipBox = { x: number; y: number; w: number; h: number };
 export type AnnotateCommand =
   | { op: 'tool'; tool: OverlayTool }
   | { op: 'color'; color: string }
+  /** Pen size in CSS px (the highlighter and text scale from it). */
+  | { op: 'width'; width: number }
   | { op: 'undo' }
   | { op: 'redo' }
   | { op: 'clear' }
@@ -49,6 +51,16 @@ export function defaultWidth(tool: OverlayTool): number {
   if (tool === 'highlight') return 22;
   if (tool === 'text') return 22;
   return 3;
+}
+
+/** Thickness slider (1..12, pen px) → the size a tool really uses. */
+export const THICKNESS_MIN = 1;
+export const THICKNESS_MAX = 12;
+export function toolWidth(tool: OverlayTool, thickness: number): number {
+  const t = Math.min(THICKNESS_MAX, Math.max(THICKNESS_MIN, Math.round(thickness) || 3));
+  if (tool === 'highlight') return t * 6 + 4;
+  if (tool === 'text') return 12 + t * 3;
+  return t;
 }
 
 export function defaultOpacity(tool: OverlayTool): number {

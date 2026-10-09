@@ -30,6 +30,15 @@ export type HudState = {
   unread: number;
   oldestWaitingId: string | null;
   oldestWaitingName: string | null;
+  /** Share Video mode (30 fps, motion) and whether it still follows auto-detect. */
+  videoMode: boolean;
+  videoModeAuto: boolean;
+  /** Students asking to draw on the share, the one drawing now, and strokes on screen. */
+  drawRequests: number;
+  drawHolderName: string | null;
+  drawStrokes: number;
+  /** Latest one-line notice from the class (errors, auto video mode, draw requests). */
+  notice: string;
 };
 
 export type DeviceInfo = { id: string; label: string; kind: 'audioinput' | 'videoinput' };
@@ -52,6 +61,10 @@ export type TeacherAction =
   | { type: 'stop-share' }
   | { type: 'toggle-annotate' }
   | { type: 'toggle-videos' }
+  | { type: 'toggle-video-mode' }
+  | { type: 'draw-allow'; id: string }
+  | { type: 'draw-revoke'; id?: string }
+  | { type: 'draw-clear' }
   | { type: 'admit'; id: string }
   | { type: 'admit-all' }
   | { type: 'waiting-room'; on: boolean }
@@ -84,6 +97,8 @@ export function isTeacherAction(v: unknown): v is TeacherAction {
     case 'stop-share':
     case 'toggle-annotate':
     case 'toggle-videos':
+    case 'toggle-video-mode':
+    case 'draw-clear':
     case 'admit-all':
     case 'mark-chat-read':
     case 'leave':
@@ -93,7 +108,10 @@ export function isTeacherAction(v: unknown): v is TeacherAction {
       return true;
     case 'admit':
     case 'lower-hand':
+    case 'draw-allow':
       return typeof a.id === 'string' && a.id.length > 0;
+    case 'draw-revoke':
+      return a.id === undefined || (typeof a.id === 'string' && a.id.length > 0);
     case 'set-mic':
     case 'set-cam':
       return typeof a.deviceId === 'string';

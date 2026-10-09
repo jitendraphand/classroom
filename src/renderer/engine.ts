@@ -1,14 +1,25 @@
 import type { BootInfo, DisplayInfo, SourceInfo, TeacherAction } from '../shared/actions';
-import { parseSchedule, passwordProblem, type ClassChoice, type GradeChoice } from '../shared/apiModel';
+import {
+  adhocBody,
+  campusesOf,
+  classStartLabel,
+  classStatus,
+  gradeOptionLabel,
+  parseSchedule,
+  passwordProblem,
+  type ClassChoice,
+  type GradeChoice,
+} from '../shared/apiModel';
 import { dockGridStyle, isOfferedShareWindow } from '../shared/capture';
 import { endedSessionCopy, isEndedReason } from '../shared/session';
-import { focusLabel, isFocusAlert } from '../shared/session';
-import { replyTargetFor, stickyChatRecipient } from '../shared/chatReply';
-import { sortRoster, type SlotCount } from '../shared/classLogic';
+import { isFocusAlert } from '../shared/session';
+import type { SlotCount } from '../shared/classLogic';
+import { createElement } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
 import { desktop } from './bridge';
 import { ClassController, type ClassView } from './classSession';
 import { ICONS, type IconName } from './icons';
-import { avatarHue, initials, personChips, scopeBadge } from './people';
+import { ChatView, RosterView } from './teacherViews';
 
 const app = document.getElementById('app')!;
 const api = desktop();
@@ -16,8 +27,6 @@ let boot: BootInfo | null = null;
 let controller: ClassController | null = null;
 let unsubAction: (() => void) | null = null;
 let dockEl: HTMLElement | null = null;
-let chatBuilt = false;
-let paintedMessages = -1;
 
 window.addEventListener('freeze', (event) => event.stopImmediatePropagation(), true);
 
@@ -81,21 +90,6 @@ function watchDockSize(): void {
   });
 }
 
-function avatarEl(name: string, small = false): HTMLElement {
-  const el = document.createElement('span');
-  el.className = small ? 'avatar sm' : 'avatar';
-  el.style.setProperty('--hue', String(avatarHue(name)));
-  el.textContent = initials(name);
-  el.setAttribute('aria-hidden', 'true');
-  return el;
-}
-
-function chipEl(text: string, kind: string): HTMLElement {
-  const el = document.createElement('span');
-  el.className = kind ? `chip ${kind}` : 'chip';
-  el.textContent = text;
-  return el;
-}
 
 let activePane = 'pane-roster';
 
@@ -105,8 +99,7 @@ function clearController(): void {
   dockEl = null;
   controller?.destroy();
   controller = null;
-  chatBuilt = false;
-  paintedMessages = -1;
+  dropPanes();
 }
 
 async function bootApp(): Promise<void> {
@@ -207,215 +200,304 @@ function showPassword(message: string): void {
   });
 }
 
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = ''): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text) node.textContent = text;
+  return node;
+}
+
+function fmtDate(date: string): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return date;
+  return d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short', timeZone: 'UTC' });
+}
+
+function fmtTime(iso: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+/** A web-style card: title, subtitle, body. */
+function card(title: string, subtitle: string): { root: HTMLElement; body: HTMLElement } {
+  const root = el('section', 'dash-card');
+  const head = el('header', 'dash-card-head');
+  head.append(el('h2', '', title));
+  if (subtitle) head.append(el('p', 'hint', subtitle));
+  const body = el('div', 'dash-card-body');
+  root.append(head, body);
+  return { root, body };
+}
+
+/**
+ * Home: the website's teacher dashboard (same sections, labels and badges):
+ * Signed in as · Class live / Rejoin live class · Today · Coming up · Ad-hoc
+ * class (campus → grade → division checkboxes).
+ */
 async function showHome(): Promise<void> {
   clearController();
   app.innerHTML = `
     <div class="home">
       <header class="home-top">
-        <div>
-          <p class="brand">Classroom</p>
-          <h1>Today</h1>
-          <p class="hint" id="home-status">Loading the timetable…</p>
-        </div>
+        <p class="brand">Classroom <span class="hint">Teacher dashboard</span></p>
         <div class="home-actions" id="home-actions"></div>
       </header>
+      <div class="home-who">
+        <p class="hint">Signed in as</p>
+        <h1 id="home-name"></h1>
+        <p class="hint" id="home-email"></p>
+      </div>
+      <p class="err" id="home-err" role="alert"></p>
       <div id="home-live"></div>
-      <h2 class="section-label">Schedule</h2>
-      <div id="home-days"></div>
+      <div id="home-today"></div>
+      <div id="home-later"></div>
       <div id="home-adhoc"></div>
+      <p class="hint" id="home-tz"></p>
     </div>`;
+  const nameEl = document.getElementById('home-name');
+  if (nameEl) nameEl.textContent = boot?.me?.name || boot?.email || 'Teacher';
+  const emailEl = document.getElementById('home-email');
+  if (emailEl) emailEl.textContent = boot?.me?.email || boot?.email || '';
   const actions = document.getElementById('home-actions')!;
-  const who = document.createElement('span');
-  who.className = 'who-pill';
-  who.textContent = boot?.email || '';
-  who.title = boot?.email || '';
-  const out = document.createElement('button');
-  out.className = 'btn';
+  const pw = el('button', 'btn ghost sm', 'Change password');
+  pw.type = 'button';
+  pw.addEventListener('click', () => showPassword(''));
+  const out = el('button', 'btn sm', 'Log out');
   out.type = 'button';
-  out.textContent = 'Sign out';
   out.addEventListener('click', async () => {
     await api.logout();
     if (boot) boot.me = null;
     showLogin('');
   });
-  actions.append(who, out);
+  actions.append(pw, out);
+  const homeErr = document.getElementById('home-err')!;
   const res = await api.api('GET', '/api/teacher/schedule');
-  const status = document.getElementById('home-status');
   if (res.status === 401) {
     showLogin('Sign in again to continue.');
     return;
   }
   if (res.status !== 200) {
-    if (status) status.textContent = 'Could not load the timetable.';
+    homeErr.textContent = 'Could not load the timetable.';
     return;
   }
   const schedule = parseSchedule(res.data);
-  if (status) status.textContent = schedule.timezone ? `Times shown in ${schedule.timezone}` : '';
-  const liveHost = document.getElementById('home-live')!;
+  const tz = document.getElementById('home-tz');
+  if (tz && schedule.timezone) tz.textContent = `Times shown in your device’s time zone; the school timetable uses ${schedule.timezone}.`;
   if (schedule.activeCode) {
-    const live = document.createElement('div');
-    live.className = 'live-card';
-    const copy = document.createElement('div');
-    const title = document.createElement('h2');
-    title.textContent = 'Class in progress';
-    const detail = document.createElement('p');
-    detail.textContent = schedule.activeLabel
-      ? `${schedule.activeLabel}. Rejoin returns you to the same room.`
-      : 'Rejoin returns you to the same room.';
-    copy.append(title, detail);
-    const rejoin = document.createElement('button');
-    rejoin.className = 'btn primary';
+    const live = el('div', 'live-card');
+    const copy = el('div');
+    copy.append(el('span', 'badge-tone success pulse', 'Class live'), el('p', 'live-title', schedule.activeLabel || 'Class'));
+    const side = el('div', 'live-side');
+    const rejoin = el('button', 'btn primary', 'Rejoin live class');
     rejoin.type = 'button';
-    rejoin.textContent = 'Rejoin';
     rejoin.addEventListener('click', () => join(schedule.activeCode!));
-    live.append(copy, rejoin);
-    liveHost.append(live);
+    side.append(rejoin, el('p', 'hint', 'Open on another device? Rejoining moves the class here.'));
+    live.append(copy, side);
+    document.getElementById('home-live')?.append(live);
   }
-  const byDate = new Map<string, ClassChoice[]>();
-  for (const item of schedule.classes) {
-    const list = byDate.get(item.date) ?? [];
-    list.push(item);
-    byDate.set(item.date, list);
+  const today = schedule.classes.filter((c) => c.date === schedule.today);
+  const later = schedule.classes.filter((c) => c.date !== schedule.today && c.mine);
+  const todayCard = card(
+    'Today',
+    `${fmtDate(schedule.today)}${schedule.earlyMinutes != null ? ` · the waiting room opens ${schedule.earlyMinutes} min before each class` : ''}`
+  );
+  if (!today.length) todayCard.body.append(el('p', 'hint', 'No timetabled classes today. You can start an ad-hoc class below.'));
+  else {
+    const list = el('ul', 'class-list');
+    for (const item of today) list.append(classRow(item, homeErr));
+    todayCard.body.append(list);
   }
-  const dates = [...byDate.keys()].sort((a, b) => {
-    if (a === schedule.today) return -1;
-    if (b === schedule.today) return 1;
-    return a < b ? -1 : a > b ? 1 : 0;
-  });
-  const days = document.getElementById('home-days')!;
-  if (!dates.length) {
-    const empty = document.createElement('div');
-    empty.className = 'empty-state';
-    const title = document.createElement('p');
-    title.className = 'empty-title';
-    title.textContent = 'Nothing on the timetable';
-    const hint = document.createElement('p');
-    hint.className = 'hint';
-    hint.textContent = 'When a period is scheduled it will show up here. You can still start a class below.';
-    empty.append(title, hint);
-    days.append(empty);
-  }
-  for (const date of dates) {
-    const block = document.createElement('section');
-    block.className = 'day-block';
-    const label = document.createElement('h3');
-    label.className = 'day-label';
-    label.textContent = date === schedule.today ? 'Today' : date;
-    if (date === schedule.today && date) {
-      const sub = document.createElement('span');
-      sub.textContent = date;
-      label.append(sub);
+  document.getElementById('home-today')?.append(todayCard.root);
+  if (later.length) {
+    const byDate = new Map<string, ClassChoice[]>();
+    for (const item of later) byDate.set(item.date, [...(byDate.get(item.date) ?? []), item]);
+    const laterCard = card('Coming up', 'Next 6 days');
+    for (const [date, items] of [...byDate.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+      const block = el('div', 'later-day');
+      block.append(el('p', 'later-date', fmtDate(date)));
+      const list = el('ul', 'later-list');
+      for (const c of items) {
+        const li = el('li');
+        li.append(el('span', 'mono', `${c.startLabel}–${c.endLabel}`), el('strong', '', c.subject), el('span', '', c.audience));
+        if (c.substituteFor) li.append(el('span', 'amber', `substituting for ${c.substituteFor}`));
+        if (c.extra) li.append(el('span', 'green', 'extra class'));
+        list.append(li);
+      }
+      block.append(list);
+      laterCard.body.append(block);
     }
-    const list = document.createElement('div');
-    list.className = 'schedule';
-    for (const item of byDate.get(date) ?? []) list.append(classCard(item));
-    block.append(label, list);
-    days.append(block);
+    document.getElementById('home-later')?.append(laterCard.root);
   }
-  document.getElementById('home-adhoc')?.append(adHocForm(schedule.grades));
+  document.getElementById('home-adhoc')?.append(adHocForm(schedule.grades, schedule.gradesConfigured, homeErr));
 }
 
-function classCard(item: ClassChoice): HTMLElement {
-  const card = document.createElement('article');
-  card.className = item.live ? 'class-card live' : 'class-card';
-  const time = document.createElement('div');
-  time.className = 'class-time';
-  const parts = item.timeLabel.split('–');
-  const start = document.createElement('span');
-  start.className = 'clock-start';
-  start.textContent = (parts[0] || item.timeLabel || '—').trim();
-  const end = document.createElement('span');
-  end.className = 'clock-end';
-  end.textContent = (parts[1] || '').trim();
-  time.append(start, end);
-  const main = document.createElement('div');
-  main.className = 'class-main';
-  const title = document.createElement('strong');
-  title.textContent = item.subject;
-  const audience = document.createElement('div');
-  audience.className = 'audience';
-  audience.textContent = item.audience;
-  main.append(title, audience);
-  if (item.note) {
-    const note = document.createElement('span');
-    note.className = 'note hint';
-    note.textContent = item.note;
-    main.append(note);
+function classRow(c: ClassChoice, err: HTMLElement): HTMLElement {
+  const li = el('li', c.live ? 'class-row live' : 'class-row');
+  const main = el('div', 'class-main');
+  main.append(el('p', 'mono', `${c.startLabel}–${c.endLabel}`));
+  const title = el('p', 'class-title', c.subject);
+  if (c.audience) title.append(el('span', 'hint', ` · ${c.audience}`));
+  main.append(title);
+  const meta = el('div', 'class-meta');
+  const status = classStatus(c, fmtTime);
+  meta.append(el('span', `badge-tone ${status.tone}${status.pulse ? ' pulse' : ''}`, status.text));
+  if (c.substituteFor) meta.append(el('span', 'amber', `Substituting for ${c.substituteFor}`));
+  if (c.extra) meta.append(el('span', 'green', 'Extra class'));
+  if (c.note) meta.append(el('span', '', c.note));
+  main.append(meta);
+  li.append(main);
+  if (c.mine) {
+    const btn = el('button', 'btn primary', classStartLabel(c));
+    btn.type = 'button';
+    btn.disabled = !c.canStart;
+    btn.addEventListener('click', () => {
+      btn.disabled = true;
+      btn.textContent = 'Opening…';
+      void startScheduled(c.key, err).finally(() => {
+        if (!btn.isConnected) return;
+        btn.disabled = !c.canStart;
+        btn.textContent = classStartLabel(c);
+      });
+    });
+    li.append(btn);
   }
-  const chips = document.createElement('div');
-  chips.className = 'chips';
-  if (item.live) chips.append(chipEl('Live', 'live'));
-  else if (item.phase) chips.append(chipEl(item.phase, ''));
-  if (!item.mine) chips.append(chipEl('Another teacher', ''));
-  if (chips.childElementCount) main.append(chips);
-  card.append(time, main);
-  if (item.canStart) {
-    const startBtn = document.createElement('button');
-    startBtn.className = 'btn primary';
-    startBtn.type = 'button';
-    startBtn.textContent = item.live ? 'Open' : 'Start class';
-    startBtn.addEventListener('click', () => void startScheduled(item.key));
-    card.append(startBtn);
-  }
-  return card;
+  return li;
 }
 
-function adHocForm(grades: GradeChoice[]): HTMLElement {
-  const wrap = document.createElement('form');
-  wrap.className = 'adhoc-card';
-  const title = document.createElement('h2');
-  title.textContent = 'Start without a timetable slot';
-  const blurb = document.createElement('p');
-  blurb.className = 'hint';
-  blurb.textContent = 'Pick who the class is for. Students join muted, and the waiting room stays on until you turn it off.';
-  const grid = document.createElement('div');
-  grid.className = 'adhoc-grid';
-  const grade = document.createElement('select');
+function adHocForm(grades: GradeChoice[], gradesConfigured: boolean, err: HTMLElement): HTMLElement {
+  const box = card(
+    'Ad-hoc class',
+    'Outside the timetable, for your assigned grades and divisions only. Students of those divisions are routed here from the school app.'
+  );
+  if (!grades.length) {
+    box.body.append(el('p', 'hint', 'No grades are assigned to you yet. Ask the school administrator.'));
+    return box.root;
+  }
+  const state = { campus: '', grade: '', divisions: [] as string[], all: false, extra: '' };
+  const form = el('form', 'adhoc-form');
+  const grid = el('div', 'adhoc-grid');
+  const campus = el('select');
+  campus.id = 'adhoc-campus';
+  campus.setAttribute('aria-label', 'Campus');
+  const grade = el('select');
   grade.id = 'adhoc-grade';
-  const division = document.createElement('select');
-  division.id = 'adhoc-division';
-  const subject = document.createElement('input');
+  const subject = el('input');
   subject.id = 'adhoc-subject';
   subject.maxLength = 80;
-  subject.placeholder = 'Optional';
-  subject.setAttribute('aria-label', 'Subject');
-  const fillDivisions = () => {
-    division.replaceChildren();
-    const g = grades.find((item) => item.grade === grade.value);
-    if (g?.whole) {
-      const opt = document.createElement('option');
-      opt.value = '*';
-      opt.textContent = 'All divisions';
-      division.append(opt);
-    }
-    for (const div of g?.divisions ?? []) {
-      const opt = document.createElement('option');
-      opt.value = div.name;
-      opt.textContent = div.label;
-      division.append(opt);
-    }
-  };
-  for (const g of grades) {
-    const opt = document.createElement('option');
-    opt.value = g.grade;
-    opt.textContent = g.label;
-    grade.append(opt);
+  subject.placeholder = 'e.g. Revision';
+  grid.append(field('Campus', 'adhoc-campus', campus), field('Grade', 'adhoc-grade', grade), field('Subject / title', 'adhoc-subject', subject));
+  const fs = el('fieldset', 'adhoc-divs');
+  fs.append(el('legend', '', 'Divisions'));
+  const divRow = el('div', 'div-checks');
+  const extra = el('input', 'adhoc-extra');
+  extra.placeholder = 'Divisions, e.g. A, C';
+  extra.setAttribute('aria-label', 'Divisions');
+  extra.addEventListener('input', () => (state.extra = extra.value));
+  fs.append(divRow, extra);
+  const max = el('input');
+  max.id = 'adhoc-max';
+  max.type = 'number';
+  max.min = '1';
+  max.max = '6';
+  max.value = String(Math.min(6, Math.max(1, boot ? boot.layout - 1 : 3)));
+  const maxField = field('Max visible student videos', 'adhoc-max', max);
+  maxField.classList.add('narrow');
+  maxField.append(el('p', 'hint', 'Only this many student camera streams reach you. Others stay local-only on their devices.'));
+  const go = el('button', 'btn primary', 'Start ad-hoc class');
+  go.type = 'submit';
+  const campuses = campusesOf(grades);
+  for (const c of campuses) {
+    const opt = el('option', '', c || '—');
+    opt.value = c;
+    campus.append(opt);
   }
-  grade.addEventListener('change', fillDivisions);
-  fillDivisions();
-  const go = document.createElement('button');
-  go.className = 'btn primary';
-  go.type = 'button';
-  go.textContent = 'Start class';
-  const err = document.createElement('p');
-  err.className = 'err';
-  go.addEventListener('click', () => void startAdHoc(grade.value, division.value, subject.value, err));
-  const gField = field('Grade', 'adhoc-grade', grade);
-  const dField = field('Division', 'adhoc-division', division);
-  const sField = field('Subject', 'adhoc-subject', subject);
-  grid.append(gField, dField, sField, go);
-  wrap.append(title, blurb, grid, err);
-  return wrap;
+  const choice = () => grades.find((g) => g.campus === state.campus && g.grade === state.grade);
+  const paintDivs = () => {
+    const g = choice();
+    divRow.replaceChildren();
+    for (const d of g?.divisions ?? []) {
+      const lab = el('label', 'check');
+      const box = el('input');
+      box.type = 'checkbox';
+      box.disabled = state.all;
+      box.checked = state.divisions.includes(d.name);
+      box.addEventListener('change', () => {
+        state.divisions = box.checked ? [...state.divisions, d.name] : state.divisions.filter((x) => x !== d.name);
+      });
+      lab.append(box, document.createTextNode(`${state.grade}-${d.label}`));
+      divRow.append(lab);
+    }
+    if (g?.whole) {
+      const lab = el('label', 'check');
+      const box = el('input');
+      box.type = 'checkbox';
+      box.checked = state.all;
+      box.addEventListener('change', () => {
+        state.all = box.checked;
+        paintDivs();
+      });
+      lab.append(box, document.createTextNode(`All divisions of grade ${state.grade}`));
+      divRow.append(lab);
+    }
+    extra.hidden = !(g?.whole && !gradesConfigured && !state.all);
+  };
+  const fillGrades = () => {
+    grade.replaceChildren();
+    const list = grades.filter((g) => g.campus === state.campus);
+    for (const g of list) {
+      const opt = el('option', '', gradeOptionLabel(g));
+      opt.value = g.grade;
+      grade.append(opt);
+    }
+    state.grade = list[0]?.grade ?? '';
+    grade.value = state.grade;
+    state.divisions = [];
+    state.all = false;
+    state.extra = '';
+    extra.value = '';
+    paintDivs();
+  };
+  state.campus = campuses[0] ?? '';
+  campus.value = state.campus;
+  campus.addEventListener('change', () => {
+    state.campus = campus.value;
+    fillGrades();
+  });
+  grade.addEventListener('change', () => {
+    state.grade = grade.value;
+    state.divisions = [];
+    state.all = false;
+    state.extra = '';
+    extra.value = '';
+    paintDivs();
+  });
+  fillGrades();
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    err.textContent = '';
+    const g = choice();
+    const built = adhocBody({
+      ...state,
+      subject: subject.value,
+      freeTextExtra: !!g?.whole && !gradesConfigured,
+    });
+    if ('error' in built) {
+      err.textContent = built.error;
+      return;
+    }
+    const maxVisible = Math.min(6, Math.max(1, Math.round(Number(max.value)) || 3));
+    go.disabled = true;
+    go.textContent = 'Starting…';
+    void startClass({ ...built.body, maxVisibleVideos: maxVisible }, err).finally(() => {
+      if (!go.isConnected) return;
+      go.disabled = false;
+      go.textContent = 'Start ad-hoc class';
+    });
+  });
+  form.append(grid, fs, maxField, go);
+  box.body.append(form);
+  return box.root;
 }
 
 function field(label: string, id: string, control: HTMLElement): HTMLElement {
@@ -428,37 +510,16 @@ function field(label: string, id: string, control: HTMLElement): HTMLElement {
   return wrap;
 }
 
-async function startScheduled(key: string): Promise<void> {
-  const res = await api.api('POST', '/api/teacher/sessions/start', {
-    kind: 'scheduled',
-    key,
-    maxVisibleVideos: boot ? boot.layout - 1 : 3,
-  });
-  const code = res.data && typeof res.data === 'object' && 'code' in res.data ? String((res.data as { code: unknown }).code) : '';
-  if (res.status >= 400 || !code) {
-    window.alert(textOf(res.data, 'Could not start that class.'));
-    return;
-  }
-  join(code);
+async function startScheduled(key: string, err: HTMLElement): Promise<void> {
+  await startClass({ kind: 'scheduled', key, maxVisibleVideos: boot ? Math.min(6, Math.max(1, boot.layout - 1)) : 3 }, err);
 }
 
-async function startAdHoc(grade: string, division: string, subject: string, err: HTMLElement): Promise<void> {
-  if (!grade || !division) {
-    err.textContent = 'Choose a grade and division.';
-    return;
-  }
-  const body = {
-    kind: 'adhoc' as const,
-    grade,
-    divisions: division === '*' ? [] : [division],
-    allDivisions: division === '*',
-    subject: subject.trim() || undefined,
-    maxVisibleVideos: boot ? boot.layout - 1 : 3,
-  };
+async function startClass(body: Record<string, unknown>, err: HTMLElement): Promise<void> {
+  err.textContent = '';
   const res = await api.api('POST', '/api/teacher/sessions/start', body);
   const code = res.data && typeof res.data === 'object' && 'code' in res.data ? String((res.data as { code: unknown }).code) : '';
   if (res.status >= 400 || !code) {
-    err.textContent = textOf(res.data, 'Could not start that class.');
+    err.textContent = textOf(res.data, 'Could not start the class');
     return;
   }
   join(code);
@@ -524,6 +585,7 @@ function routeView(view: ClassView): void {
 function showHandoff(view: ClassView): void {
   const handoff = view.handoff;
   if (!handoff) return;
+  dropPanes();
   app.innerHTML = `
     <div class="center">
       <div class="card">
@@ -537,6 +599,7 @@ function showHandoff(view: ClassView): void {
 }
 
 function showEnded(view: ClassView): void {
+  dropPanes();
   app.innerHTML = `
     <div class="center">
       <div class="card">
@@ -568,6 +631,7 @@ function renderClass(view: ClassView): void {
   if (notice) notice.textContent = view.notice;
   const banner = document.getElementById('audio-banner');
   if (banner) banner.hidden = !view.audioBlocked;
+  const hands = view.roster.filter((p) => p.handRaised).length;
   setPressed('btn-mic', view.micOn);
   setPressed('btn-cam', view.camOn);
   document.getElementById('btn-mic')?.classList.toggle('danger', !view.micOn);
@@ -576,7 +640,9 @@ function renderClass(view: ClassView): void {
   setGlyph('btn-cam', view.camOn ? 'cam' : 'camOff');
   setLabel('btn-mic', view.micOn ? 'Mute microphone' : 'Unmute microphone');
   setLabel('btn-cam', view.camOn ? 'Turn camera off' : 'Turn camera on');
-  setLabel('btn-videos', view.sharing ? (view.videosOn ? 'Close student videos' : 'Open student videos') : 'Student videos');
+  setLabel('btn-videos', view.sharing ? (view.videosOn ? 'Close student videos window' : 'Show student videos') : 'Student videos');
+  setLabel('btn-open-chat', activePane === 'pane-chat' ? 'Chat (open)' : 'Open chat');
+  setLabel('btn-open-roster', hands > 0 ? `Open roster (${hands} raised ${hands === 1 ? 'hand' : 'hands'})` : 'Open roster');
   setPressed('btn-pen', view.annotateOn);
   const pen = document.getElementById('btn-pen');
   if (pen) pen.toggleAttribute('disabled', !view.sharing);
@@ -585,16 +651,6 @@ function renderClass(view: ClassView): void {
   document.getElementById('btn-end')?.toggleAttribute('hidden', view.sharing);
   setPressed('btn-videos', view.sharing ? view.videosOn : true);
   for (const n of [2, 4, 6] as const) setPressed(`layout-${n}`, view.layout === n);
-  const waiting = document.getElementById('btn-waiting');
-  if (waiting) {
-    const labelText = view.waitingRoomOn ? 'Waiting room on' : 'Waiting room off';
-    waiting.textContent = labelText;
-    waiting.title = view.waitingRoomOn ? 'Waiting room on. New students wait for you.' : 'Waiting room off. New students enter muted.';
-    waiting.classList.toggle('on', view.waitingRoomOn);
-    waiting.classList.toggle('warn', !view.waitingRoomOn);
-    waiting.setAttribute('aria-pressed', view.waitingRoomOn ? 'true' : 'false');
-  }
-  const hands = view.roster.filter((p) => p.handRaised).length;
   const focusN = view.roster.filter((p) => isFocusAlert(p.focus)).length;
   const rosterN = hands + view.waiting.length + focusN;
   setBadge('badge-chat', view.unread);
@@ -603,8 +659,8 @@ function renderClass(view: ClassView): void {
   setBadge('badge-roster-tab', view.waiting.length);
   document.getElementById('btn-open-chat')?.classList.toggle('on', activePane === 'pane-chat');
   document.getElementById('btn-open-roster')?.classList.toggle('on', activePane === 'pane-roster');
-  paintRoster(view);
-  paintChat(view);
+  paintPanes();
+  if (activePane === 'pane-chat' && view.unread > 0 && document.hasFocus()) controller?.handle({ type: 'mark-chat-read' });
   const dock = document.getElementById('dock-grid');
   if (dock) {
     dock.hidden = view.sharing;
@@ -613,8 +669,7 @@ function renderClass(view: ClassView): void {
 }
 
 function buildClass(): void {
-  chatBuilt = false;
-  paintedMessages = -1;
+  dropPanes();
   activePane = 'pane-roster';
   const penTitle = 'Draw on the screen. Students see the marks. Classroom windows stay out of the picture.';
   app.innerHTML = `
@@ -625,10 +680,6 @@ function buildClass(): void {
           <span class="code-pill" id="class-code"></span>
         </div>
         <span class="conn" id="class-conn"></span>
-        <div class="row">
-          <button class="btn" id="btn-leave" type="button">Leave</button>
-          <button class="btn danger" id="btn-end" type="button">End class</button>
-        </div>
       </header>
       <div class="class-body">
         <div class="film" id="film">
@@ -647,11 +698,11 @@ function buildClass(): void {
         <div class="meet-bar" id="controls">
           ${sym('btn-mic', 'mic', 'Mute microphone')}
           ${sym('btn-cam', 'cam', 'Turn camera off')}
-          ${sym('btn-share', 'share', 'Share the screen')}
-          ${sym('btn-stop', 'stop', 'Stop sharing', 'danger')}
+          ${sym('btn-share', 'share', 'Share screen')}
+          ${sym('btn-stop', 'stop', 'Stop sharing screen', 'danger')}
           ${sym('btn-pen', 'pen', penTitle)}
-          ${symCount('btn-open-chat', 'chat', 'Messages', 'badge-chat')}
-          ${symCount('btn-open-roster', 'people', 'People', 'badge-roster')}
+          ${symCount('btn-open-chat', 'chat', 'Open chat', 'badge-chat')}
+          ${symCount('btn-open-roster', 'people', 'Open roster', 'badge-roster')}
           ${sym('btn-videos', 'video', 'Student videos')}
           <span class="bar-div"></span>
           <div class="seg" role="group" aria-label="Videos on screen">
@@ -659,9 +710,10 @@ function buildClass(): void {
             <button class="sym texty" id="layout-4" type="button" title="Show 4 videos, including you" aria-label="Show 4 videos, including you">4</button>
             <button class="sym texty" id="layout-6" type="button" title="Show 6 videos, including you" aria-label="Show 6 videos, including you">6</button>
           </div>
-          <button class="sym texty" id="btn-waiting" type="button">Waiting room on</button>
-          <button class="sym texty" id="btn-mute" type="button" title="Mute every student" aria-label="Mute every student">Mute all</button>
-          <button class="sym texty" id="btn-allow" type="button" title="Allow unmute" aria-label="Allow unmute">Allow unmute</button>
+          <button class="btn sm warn" id="btn-mute" type="button">Mute all</button>
+          <button class="btn sm" id="btn-allow" type="button">Unmute all</button>
+          ${sym('btn-leave', 'leave', 'Leave class', 'danger')}
+          <button class="btn sm danger" id="btn-end" type="button">End class</button>
         </div>
         <p class="err" id="notice"></p>
         <div class="banner" id="audio-banner" hidden>Click to hear students. <button class="btn" id="btn-hear" type="button">Hear</button></div>
@@ -677,10 +729,6 @@ function buildClass(): void {
   document.getElementById('btn-end')?.addEventListener('click', act('end'));
   document.getElementById('btn-mute')?.addEventListener('click', () => controller?.handle({ type: 'mute-all', muted: true }));
   document.getElementById('btn-allow')?.addEventListener('click', () => controller?.handle({ type: 'mute-all', muted: false }));
-  document.getElementById('btn-waiting')?.addEventListener('click', () => {
-    const on = controller?.view().waitingRoomOn === false;
-    controller?.handle({ type: 'waiting-room', on });
-  });
   for (const n of [2, 4, 6] as const) {
     document.getElementById(`layout-${n}`)?.addEventListener('click', () => {
       if (boot) boot.layout = n;
@@ -720,267 +768,45 @@ function showPane(paneId: string, tabId: string): void {
   document.getElementById('btn-open-chat')?.classList.toggle('on', paneId === 'pane-chat');
   document.getElementById('btn-open-roster')?.classList.toggle('on', paneId === 'pane-roster');
   if (paneId === 'pane-chat') controller?.handle({ type: 'mark-chat-read' });
+  paintPanes();
 }
 
-function paintRoster(view: ClassView): void {
-  const pane = document.getElementById('pane-roster');
-  if (!pane) return;
-  pane.replaceChildren();
-  const head = document.createElement('div');
-  head.className = 'pane-head';
-  const copy = document.createElement('div');
-  const title = document.createElement('h2');
-  const inClass = view.roster.length;
-  title.textContent = inClass ? `People · ${inClass}` : 'People';
-  const hint = document.createElement('p');
-  hint.className = 'hint';
-  hint.textContent = view.waitingRoomOn
-    ? 'Lobby is at the top. Admitted students follow, raised hands first.'
-    : 'Waiting room is off. New students enter muted.';
-  copy.append(title, hint);
-  head.append(copy);
-  if (view.waiting.length) {
-    const all = document.createElement('button');
-    all.className = 'btn ok';
-    all.type = 'button';
-    all.textContent = 'Admit all';
-    all.addEventListener('click', () => controller?.handle({ type: 'admit-all' }));
-    head.append(all);
-  }
-  pane.append(head);
-  if (view.waiting.length) {
-    const label = document.createElement('p');
-    label.className = 'lobby-label';
-    label.textContent = `Lobby · ${view.waiting.length}`;
-    pane.append(label);
-    for (const student of view.waiting) {
-      const row = document.createElement('div');
-      row.className = 'person wait';
-      const main = document.createElement('div');
-      main.className = 'person-main';
-      const name = document.createElement('strong');
-      name.textContent = student.displayName;
-      const meta = document.createElement('div');
-      meta.className = 'meta';
-      meta.textContent = 'Waiting to be admitted';
-      main.append(name, meta);
-      const admit = document.createElement('button');
-      admit.className = 'btn primary';
-      admit.type = 'button';
-      admit.textContent = 'Admit';
-      admit.setAttribute('aria-label', `Admit ${student.displayName}`);
-      admit.addEventListener('click', () => controller?.handle({ type: 'admit', id: student.id }));
-      row.append(avatarEl(student.displayName), main, admit);
-      pane.append(row);
+/*
+ * Roster and chat panes: the same React views as the floating People /
+ * Messages windows (teacherViews.tsx), so the class window, the panels and
+ * the website all look alike. Only the visible pane re-renders, and React
+ * diffs instead of rebuilding the DOM on every class update.
+ */
+let paneRoots: { host: HTMLElement; root: Root }[] = [];
+
+function paneRoot(id: string): Root | null {
+  const host = document.getElementById(id);
+  if (!host) return null;
+  const hit = paneRoots.find((r) => r.host === host);
+  if (hit) return hit.root;
+  const root = createRoot(host);
+  paneRoots.push({ host, root });
+  return root;
+}
+
+function dropPanes(): void {
+  const old = paneRoots;
+  paneRoots = [];
+  for (const r of old) {
+    try {
+      r.root.unmount();
+    } catch {
+      /* already detached */
     }
-  }
-  if (!view.roster.length) {
-    const empty = document.createElement('div');
-    empty.className = 'empty-state compact';
-    const emptyTitle = document.createElement('p');
-    emptyTitle.className = 'empty-title';
-    emptyTitle.textContent = 'No students in class yet';
-    const emptyHint = document.createElement('p');
-    emptyHint.className = 'hint';
-    emptyHint.textContent = 'Admitted students appear under the lobby. Mute, pin, or lower a hand from each row.';
-    empty.append(emptyTitle, emptyHint);
-    pane.append(empty);
-    return;
-  }
-  for (const person of view.roster) {
-    const row = document.createElement('div');
-    row.className = 'person';
-    const main = document.createElement('div');
-    main.className = 'person-main';
-    const name = document.createElement('strong');
-    name.textContent = person.displayName;
-    main.append(name);
-    const metaText = [person.rollNumber, person.gradeDivision].filter(Boolean).join(' · ');
-    if (metaText) {
-      const meta = document.createElement('div');
-      meta.className = 'meta';
-      meta.textContent = metaText;
-      main.append(meta);
-    }
-    const chips = document.createElement('div');
-    chips.className = 'chips';
-    for (const chip of personChips(person)) chips.append(chipEl(chip.text, chip.kind));
-    main.append(chips);
-    const focus = focusLabel(person.focus);
-    if (focus) {
-      const line = document.createElement('div');
-      line.className = isFocusAlert(person.focus) ? 'focus' : 'meta';
-      line.textContent = focus;
-      main.append(line);
-    }
-    const actions = document.createElement('div');
-    actions.className = 'person-actions';
-    const mute = document.createElement('button');
-    mute.className = 'btn';
-    mute.type = 'button';
-    mute.textContent = person.mutedByTeacher ? 'Allow unmute' : 'Mute';
-    mute.addEventListener('click', () => controller?.handle({ type: 'mute-one', id: person.id, muted: !person.mutedByTeacher }));
-    const pin = document.createElement('button');
-    pin.className = 'btn';
-    pin.type = 'button';
-    pin.textContent = person.pinned ? 'Unpin' : 'Pin';
-    pin.setAttribute('aria-label', person.pinned ? `Unpin ${person.displayName}'s video` : `Pin ${person.displayName}'s video`);
-    pin.addEventListener('click', () => controller?.handle({ type: 'pin', id: person.id, pinned: !person.pinned }));
-    actions.append(mute, pin);
-    if (person.handRaised) {
-      const lower = document.createElement('button');
-      lower.className = 'btn';
-      lower.type = 'button';
-      lower.textContent = 'Lower hand';
-      lower.addEventListener('click', () => controller?.handle({ type: 'lower-hand', id: person.id }));
-      actions.append(lower);
-    }
-    main.append(actions);
-    row.append(avatarEl(person.displayName), main);
-    pane.append(row);
   }
 }
 
-function paintChat(view: ClassView): void {
-  const pane = document.getElementById('pane-chat');
-  if (!pane) return;
-  let log = pane.querySelector('.log') as HTMLElement | null;
-  let select = pane.querySelector('select') as HTMLSelectElement | null;
-  if (!chatBuilt || !log || !select) {
-    chatBuilt = true;
-    pane.replaceChildren();
-    const wrap = document.createElement('div');
-    wrap.className = 'chat-wrap';
-    const top = document.createElement('div');
-    top.className = 'chat-top';
-    const toLabel = document.createElement('label');
-    toLabel.className = 'hint';
-    toLabel.htmlFor = 'chat-to';
-    toLabel.textContent = 'To';
-    select = document.createElement('select');
-    select.id = 'chat-to';
-    top.append(toLabel, select);
-    const hands = document.createElement('div');
-    hands.className = 'hands';
-    hands.setAttribute('aria-label', 'Raised hands');
-    log = document.createElement('div');
-    log.className = 'log';
-    const form = document.createElement('form');
-    form.className = 'chat-form';
-    const input = document.createElement('input');
-    input.maxLength = 2000;
-    input.placeholder = 'Write a message…';
-    input.setAttribute('aria-label', 'Message');
-    const go = document.createElement('button');
-    go.className = 'btn primary';
-    go.type = 'submit';
-    go.textContent = 'Send';
-    go.setAttribute('aria-label', 'Send message');
-    form.append(input, go);
-    form.addEventListener('submit', (event) => {
-      event.preventDefault();
-      const text = input.value.trim();
-      if (!text || !select) return;
-      controller?.handle({ type: 'send-chat', text, to: select.value });
-      input.value = '';
-    });
-    select.addEventListener('change', () => {
-      if (select) controller?.handle({ type: 'chat-to', to: select.value });
-    });
-    wrap.append(top, hands, log, form);
-    pane.append(wrap);
-  }
-  const hands = pane.querySelector('.hands');
-  if (hands) {
-    hands.replaceChildren();
-    const raised = sortRoster(view.roster.filter((p) => p.role === 'STUDENT' && p.handRaised));
-    for (const person of raised) {
-      const pair = document.createElement('span');
-      pair.className = 'hand-pair';
-      const name = document.createElement('button');
-      name.className = 'btn';
-      name.type = 'button';
-      name.textContent = `✋ ${person.displayName}`;
-      name.addEventListener('click', () => {
-        controller?.handle({ type: 'chat-to', to: person.id });
-        (pane.querySelector('input') as HTMLInputElement | null)?.focus();
-      });
-      const lower = document.createElement('button');
-      lower.className = 'btn';
-      lower.type = 'button';
-      lower.textContent = 'Lower';
-      lower.setAttribute('aria-label', `Lower ${person.displayName}'s hand`);
-      lower.addEventListener('click', () => controller?.handle({ type: 'lower-hand', id: person.id }));
-      pair.append(name, lower);
-      hands.append(pair);
-    }
-  }
-  const previous = stickyChatRecipient(view.chatTo, select.value);
-  select.replaceChildren();
-  const everyone = document.createElement('option');
-  everyone.value = 'all';
-  everyone.textContent = 'Everyone';
-  select.append(everyone);
-  for (const person of view.roster) {
-    const opt = document.createElement('option');
-    opt.value = person.id;
-    opt.textContent = person.displayName;
-    select.append(opt);
-  }
-  select.value = [...select.options].some((o) => o.value === previous) ? previous : 'all';
-  const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 80 || view.messages.length !== paintedMessages;
-  paintedMessages = view.messages.length;
-  log.replaceChildren();
-  for (const message of view.messages) {
-    const mine = !!view.meId && message.senderParticipantId === view.meId;
-    const row = document.createElement('div');
-    row.className = 'msg' + (mine ? ' mine' : '') + (message.scope === 'DIRECT' ? ' direct' : '');
-    const top = document.createElement('div');
-    top.className = 'msg-top';
-    const who = document.createElement('strong');
-    who.textContent = message.senderName;
-    const badge = scopeBadge(message.scope);
-    top.append(avatarEl(message.senderName, true), who, chipEl(badge.text, badge.kind));
-    row.append(top);
-    if (message.scope === 'DIRECT' && message.recipientName) {
-      const meta = document.createElement('div');
-      meta.className = 'meta';
-      meta.textContent = `to ${message.recipientName}`;
-      row.append(meta);
-    }
-    const body = document.createElement('p');
-    body.className = 'bubble';
-    body.textContent = message.body;
-    row.append(body);
-    const replyTo = replyTargetFor(message, view.meId);
-    if (replyTo) {
-      const reply = document.createElement('button');
-      reply.className = 'btn';
-      reply.type = 'button';
-      reply.textContent = 'Reply';
-      const name = message.senderRole === 'STUDENT' ? message.senderName : message.recipientName || 'student';
-      reply.setAttribute('aria-label', `Reply to ${name}`);
-      reply.addEventListener('click', () => {
-        controller?.handle({ type: 'chat-to', to: replyTo });
-        (pane.querySelector('input') as HTMLInputElement | null)?.focus();
-      });
-      row.append(reply);
-    }
-    log.append(row);
-  }
-  if (!view.messages.length) {
-    const empty = document.createElement('div');
-    empty.className = 'empty-state';
-    const emptyTitle = document.createElement('p');
-    emptyTitle.className = 'empty-title';
-    emptyTitle.textContent = 'No messages yet';
-    const emptyHint = document.createElement('p');
-    emptyHint.className = 'hint';
-    emptyHint.textContent = 'Broadcast to everyone, or choose a student for a direct message.';
-    empty.append(emptyTitle, emptyHint);
-    log.append(empty);
-  }
-  if (stick) log.scrollTop = log.scrollHeight;
+function paintPanes(): void {
+  if (!controller) return;
+  const snap = controller.panelSnapshot();
+  const send = (action: TeacherAction) => controller?.handle(action);
+  if (activePane === 'pane-roster') paneRoot('pane-roster')?.render(createElement(RosterView, { snap, send }));
+  else paneRoot('pane-chat')?.render(createElement(ChatView, { snap, send }));
 }
 
 async function openShare(): Promise<void> {
@@ -1014,7 +840,8 @@ async function openShare(): Promise<void> {
   const audio = document.createElement('input');
   audio.type = 'checkbox';
   audio.id = 'share-audio';
-  audioLabel.append(audio, document.createTextNode(' Include system audio. The extra video from that request is discarded.'));
+  audioLabel.className = 'check';
+  audioLabel.append(audio, document.createTextNode(' Share audio (sound from your computer, for playing a video). Video mode turns it on too.'));
   const close = document.createElement('button');
   close.className = 'btn';
   close.type = 'button';

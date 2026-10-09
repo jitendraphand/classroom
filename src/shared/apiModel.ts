@@ -92,6 +92,8 @@ export function unreadCount(
 }
 
 export type GradeChoice = {
+  /** Campus code (the web dashboard picks campus first, then grade). */
+  campus: string;
   grade: string;
   label: string;
   whole: boolean;
@@ -109,7 +111,77 @@ export type ClassChoice = {
   mine: boolean;
   phase: string;
   note: string | null;
+  startLabel: string;
+  endLabel: string;
+  opensAt: string | null;
+  coveredBy: string | null;
+  substituteFor: string | null;
+  extra: boolean;
+  sessionStarted: boolean;
+  sessionEnded: boolean;
 };
+
+export type StatusTone = 'success' | 'neutral' | 'sky';
+
+/** The status badge the web dashboard's ClassRow shows (same order and words). */
+export function classStatus(c: ClassChoice, fmtTime: (iso: string | null) => string = (iso) => iso ?? ''): { text: string; tone: StatusTone; pulse: boolean } {
+  if (!c.mine) return { text: `Covered by ${c.coveredBy ?? 'another teacher'}`, tone: 'neutral', pulse: false };
+  if (c.live) return { text: 'Live', tone: 'success', pulse: true };
+  if (c.sessionEnded && c.phase !== 'past') return { text: 'Ended · can reopen', tone: 'neutral', pulse: false };
+  if (c.phase === 'open') return { text: 'Open now', tone: 'success', pulse: false };
+  if (c.phase === 'upcoming') return { text: `Opens ${fmtTime(c.opensAt)}`, tone: 'sky', pulse: false };
+  return { text: c.sessionStarted ? 'Held' : 'Not held', tone: 'neutral', pulse: false };
+}
+
+/** The web dashboard's start button label. */
+export function classStartLabel(c: ClassChoice): string {
+  if (c.live) return 'Re-enter';
+  if (c.sessionStarted && !c.sessionEnded) return 'Re-enter';
+  return 'Start class';
+}
+
+/** Ad-hoc form: campuses (first seen order), then that campus's grades. */
+export function campusesOf(grades: readonly GradeChoice[]): string[] {
+  return [...new Set(grades.map((g) => g.campus))];
+}
+
+export function gradeOptionLabel(g: GradeChoice): string {
+  return g.label !== g.grade ? `${g.label} (${g.grade})` : g.grade;
+}
+
+/**
+ * The web dashboard's ad-hoc request body. Free-text extra divisions only
+ * count before Grades & divisions is set up. Returns an error string when no
+ * division is picked.
+ */
+export function adhocBody(input: {
+  campus: string;
+  grade: string;
+  divisions: readonly string[];
+  all: boolean;
+  extra: string;
+  subject: string;
+  freeTextExtra: boolean;
+}): { error: string } | { body: { kind: 'adhoc'; campus: string; grade: string; divisions: string[]; allDivisions: boolean; subject?: string } } {
+  const extra = (input.freeTextExtra ? input.extra : '')
+    .split(/[,\s]+/)
+    .map((d) => d.trim())
+    .filter(Boolean);
+  const divisions = [...input.divisions.filter((d) => d !== '*'), ...extra];
+  if (!input.grade) return { error: 'Choose a grade.' };
+  if (!input.all && !divisions.length) return { error: 'Pick at least one division.' };
+  const subject = input.subject.trim();
+  return {
+    body: {
+      kind: 'adhoc',
+      campus: input.campus,
+      grade: input.grade,
+      divisions,
+      allDivisions: input.all,
+      ...(subject ? { subject } : {}),
+    },
+  };
+}
 
 export type ParsedSchedule = {
   today: string;
@@ -118,6 +190,9 @@ export type ParsedSchedule = {
   activeLabel: string | null;
   classes: ClassChoice[];
   grades: GradeChoice[];
+  /** False before the admin set up Grades & divisions (free-text extra divisions allowed then). */
+  gradesConfigured: boolean;
+  earlyMinutes: number | null;
 };
 
 type RawDiv = { name?: string; label?: string } | string;
@@ -134,7 +209,6 @@ export function parseSchedule(data: unknown): ParsedSchedule {
     const session = c.session && typeof c.session === 'object' ? (c.session as Record<string, unknown>) : null;
     const covered = typeof c.coveredBy === 'string' ? c.coveredBy : null;
     const sub = typeof c.substituteFor === 'string' ? c.substituteFor : null;
-    const note = covered ? `Covered by ${covered}` : sub ? `Substitute for ${sub}` : typeof c.note === 'string' ? c.note : null;
     classes.push({
       key: String(c.key ?? ''),
       date: String(c.date ?? ''),
@@ -145,7 +219,15 @@ export function parseSchedule(data: unknown): ParsedSchedule {
       live: session?.live === true,
       mine: c.mine !== false,
       phase: String(c.phase ?? ''),
-      note,
+      note: typeof c.note === 'string' ? c.note : null,
+      startLabel: String(c.startLabel ?? ''),
+      endLabel: String(c.endLabel ?? ''),
+      opensAt: typeof c.opensAt === 'string' ? c.opensAt : null,
+      coveredBy: covered,
+      substituteFor: sub,
+      extra: c.extra === true,
+      sessionStarted: !!session?.startedAt,
+      sessionEnded: !!session?.endedAt,
     });
   }
   const gradesRaw = Array.isArray(d.gradeChoices) ? d.gradeChoices : [];
@@ -168,6 +250,7 @@ export function parseSchedule(data: unknown): ParsedSchedule {
       })
       .filter((x): x is { name: string; label: string } => !!x);
     grades.push({
+      campus: String(g.campus ?? ''),
       grade: name,
       label: String(g.label ?? name),
       whole: g.whole === true || g.allDivisions === true,
@@ -182,7 +265,16 @@ export function parseSchedule(data: unknown): ParsedSchedule {
         .filter(Boolean)
         .join(' · ')
     : null;
-  return { today, timezone, activeCode, activeLabel: activeLabel || null, classes, grades };
+  return {
+    today,
+    timezone,
+    activeCode,
+    activeLabel: activeLabel || null,
+    classes,
+    grades,
+    gradesConfigured: d.gradesConfigured !== false,
+    earlyMinutes: typeof d.earlyMinutes === 'number' ? d.earlyMinutes : null,
+  };
 }
 
 export type AdmittedPerson = {
@@ -200,9 +292,18 @@ export type AdmittedPerson = {
   gradeDivision: string | null;
   late: boolean;
   onTimetable: boolean;
+  /** School student id (search matches it, like the web roster). */
+  sid: string | null;
+  /** Asks to draw on the shared screen. */
+  drawRequested: boolean;
+  drawRequestedAt: number | null;
+  /** Allowed to draw now. */
+  drawing: boolean;
 };
 
-export type WaitingPerson = { id: string; displayName: string; createdAt: string | null };
+export type WaitingPerson = { id: string; displayName: string; createdAt: string | null; gradeDivision: string | null; late: boolean };
+
+export type DrawHolderInfo = { participantId: string; identity: string; name: string; until: number };
 
 export type RoomSnapshot = {
   code: string;
@@ -218,6 +319,9 @@ export type RoomSnapshot = {
   waiting: WaitingPerson[];
   admitted: AdmittedPerson[];
   classLabel: string;
+  drawHolder: DrawHolderInfo | null;
+  drawRequestCount: number;
+  desktopInk: boolean;
 };
 
 export function parseRoomState(data: unknown): RoomSnapshot | null {
@@ -243,6 +347,10 @@ export function parseRoomState(data: unknown): RoomSnapshot | null {
       gradeDivision: typeof p.gradeDivision === 'string' ? p.gradeDivision : null,
       late: p.late === true,
       onTimetable: p.onTimetable === true,
+      sid: typeof p.sid === 'string' && p.sid ? p.sid : null,
+      drawRequested: p.drawRequested === true,
+      drawRequestedAt: typeof p.drawRequestedAt === 'number' ? p.drawRequestedAt : null,
+      drawing: p.drawing === true,
     };
   });
   const waiting: WaitingPerson[] = waitingRaw.map((item) => {
@@ -251,6 +359,8 @@ export function parseRoomState(data: unknown): RoomSnapshot | null {
       id: String(p.id ?? ''),
       displayName: String(p.displayName ?? 'Student'),
       createdAt: typeof p.createdAt === 'string' ? p.createdAt : null,
+      gradeDivision: typeof p.gradeDivision === 'string' ? p.gradeDivision : null,
+      late: p.late === true,
     };
   });
   const cs = d.classSession && typeof d.classSession === 'object' ? (d.classSession as Record<string, unknown>) : null;
@@ -272,16 +382,26 @@ export function parseRoomState(data: unknown): RoomSnapshot | null {
     waiting,
     admitted,
     classLabel,
+    drawHolder: parseHolder(d.drawHolder),
+    drawRequestCount: typeof d.drawRequestCount === 'number' ? d.drawRequestCount : admitted.filter((p) => p.drawRequested).length,
+    desktopInk: d.desktopInk === true,
   };
 }
 
-export function statePollMs(pushLive: boolean): number {
-  return pushLive ? 5000 : 2000;
+function parseHolder(raw: unknown): DrawHolderInfo | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const h = raw as Record<string, unknown>;
+  if (typeof h.participantId !== 'string' || typeof h.identity !== 'string') return null;
+  return {
+    participantId: h.participantId,
+    identity: h.identity,
+    name: typeof h.name === 'string' ? h.name : 'Student',
+    until: typeof h.until === 'number' ? h.until : 0,
+  };
 }
 
-export function chatPollMs(pushLive: boolean): number {
-  return pushLive ? 15000 : 3000;
-}
+/** Poll intervals: the web app's own policy (src/shared/web/pollPolicy.ts), teacher role. */
+export { STATE_TOPIC, chatPollMs, statePollMs } from './web/pollPolicy';
 
 /** Crop rectangle in the captured frame, from a DIP region on one display. */
 export function regionFrameRect(
