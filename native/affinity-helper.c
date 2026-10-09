@@ -720,6 +720,168 @@ static int readback_rgba(ID3D11Device *device, ID3D11DeviceContext *context, ID3
   return 1;
 }
 
+/* ---- Stale capture watch -------------------------------------------------
+ * E2E 2026-10-09: after a Remote Desktop reconnect / detach the WGC session
+ * kept running but never produced another frame, and this loop kept re-sending
+ * the last texture as a keep-alive: students saw a frozen screen. The watch
+ * below reports {"event":"stale","why":...} and the capture exits with code 3;
+ * the app restarts a fresh capture (src/main/captureSupervisor.ts).
+ *   device-lost      D3D device removed (driver reset, GPU/adapter change)
+ *   display-changed  the captured monitor moved, resized or disappeared
+ *   session-changed  remote <-> console session, or the session was moved
+ *   unlocked         the input desktop came back to Default after lock / UAC
+ *   frozen           GDI sees the screen change by > 10% twice in a row while
+ *                    WGC delivered no frame at all
+ */
+#define STALE_EXIT 3
+#define PROBE_W 64
+#define PROBE_H 36
+#define PROBE_IDLE_MS 3000
+
+typedef struct {
+  RECT mon;
+  int haveMon;
+  int remote;
+  DWORD session;
+  DWORD console;
+  int awayFromDefault;
+  uint8_t sig[PROBE_W * PROBE_H * 3];
+  int haveSig;
+  int strikes;
+  DWORD lastProbe;
+} StaleWatch;
+
+static int input_desktop_is_default(void) {
+  HDESK d = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
+  WCHAR name[64];
+  DWORD need = 0;
+  int isDefault = 0;
+  if (!d) return 0;
+  ZeroMemory(name, sizeof(name));
+  if (GetUserObjectInformationW(d, UOI_NAME, name, sizeof(name) - sizeof(WCHAR), &need)) isDefault = lstrcmpiW(name, L"Default") == 0;
+  CloseDesktop(d);
+  return isDefault;
+}
+
+static DWORD my_session(void) {
+  DWORD sid = 0;
+  if (!ProcessIdToSessionId(GetCurrentProcessId(), &sid)) return 0xFFFFFFFFu;
+  return sid;
+}
+
+/* Small GDI picture of the monitor (HALFTONE averaged). Returns 0 when GDI cannot read the screen (secure desktop). */
+static int gdi_probe(const RECT *mon, uint8_t *out) {
+  HDC screen = GetDC(NULL);
+  HDC mem = NULL;
+  HBITMAP bmp = NULL;
+  HGDIOBJ old = NULL;
+  void *bits = NULL;
+  BITMAPINFO bi;
+  int ok = 0;
+  if (!screen) return 0;
+  mem = CreateCompatibleDC(screen);
+  ZeroMemory(&bi, sizeof(bi));
+  bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+  bi.bmiHeader.biWidth = PROBE_W;
+  bi.bmiHeader.biHeight = -PROBE_H;
+  bi.bmiHeader.biPlanes = 1;
+  bi.bmiHeader.biBitCount = 32;
+  bi.bmiHeader.biCompression = BI_RGB;
+  if (mem) bmp = CreateDIBSection(mem, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+  if (bmp && bits) {
+    old = SelectObject(mem, bmp);
+    SetStretchBltMode(mem, HALFTONE);
+    SetBrushOrgEx(mem, 0, 0, NULL);
+    if (StretchBlt(mem, 0, 0, PROBE_W, PROBE_H, screen, mon->left, mon->top, mon->right - mon->left, mon->bottom - mon->top,
+                   SRCCOPY)) {
+      const uint8_t *px = (const uint8_t *)bits;
+      int i;
+      GdiFlush();
+      for (i = 0; i < PROBE_W * PROBE_H; i++) {
+        out[i * 3] = px[i * 4 + 2];
+        out[i * 3 + 1] = px[i * 4 + 1];
+        out[i * 3 + 2] = px[i * 4];
+      }
+      ok = 1;
+    }
+    SelectObject(mem, old);
+  }
+  if (bmp) DeleteObject(bmp);
+  if (mem) DeleteDC(mem);
+  ReleaseDC(NULL, screen);
+  return ok;
+}
+
+static void stale_init(StaleWatch *w, const RECT *monitor) {
+  ZeroMemory(w, sizeof(*w));
+  if (monitor) {
+    w->mon = *monitor;
+    w->haveMon = 1;
+  }
+  w->remote = GetSystemMetrics(SM_REMOTESESSION);
+  w->session = my_session();
+  w->console = WTSGetActiveConsoleSessionId();
+  w->awayFromDefault = !input_desktop_is_default();
+  w->lastProbe = GetTickCount();
+}
+
+static void log_stale(const char *why) {
+  fprintf(stderr, "{\"event\":\"stale\",\"why\":\"%s\"}\n", why);
+  fflush(stderr);
+}
+
+/* Called about once a second. Returns the reason the capture is stale, or NULL. */
+static const char *stale_check(StaleWatch *w, ID3D11Device *device, DWORD now, DWORD lastReal) {
+  if (device && ID3D11Device_GetDeviceRemovedReason(device) != S_OK) return "device-lost";
+  if (w->haveMon) {
+    HMONITOR hmon = MonitorFromRect(&w->mon, MONITOR_DEFAULTTONULL);
+    MONITORINFO info;
+    ZeroMemory(&info, sizeof(info));
+    info.cbSize = sizeof(info);
+    if (!hmon || !GetMonitorInfo(hmon, &info) || !EqualRect(&info.rcMonitor, &w->mon)) return "display-changed";
+  }
+  if (GetSystemMetrics(SM_REMOTESESSION) != w->remote) return "session-changed";
+  if (WTSGetActiveConsoleSessionId() != w->console) {
+    /* Our session became (or stopped being) the console session: tscon / RDP takeover. */
+    DWORD now_console = WTSGetActiveConsoleSessionId();
+    if (now_console == w->session || w->console == w->session) return "session-changed";
+    w->console = now_console;
+  }
+  if (!input_desktop_is_default()) {
+    w->awayFromDefault = 1;
+    w->haveSig = 0;
+    w->strikes = 0;
+    return NULL;
+  }
+  if (w->awayFromDefault) return "unlocked";
+  if (w->haveMon && (now - lastReal) >= PROBE_IDLE_MS && (now - w->lastProbe) >= PROBE_IDLE_MS) {
+    uint8_t cur[PROBE_W * PROBE_H * 3];
+    w->lastProbe = now;
+    if (gdi_probe(&w->mon, cur)) {
+      if (w->haveSig) {
+        int i, changed = 0;
+        for (i = 0; i < PROBE_W * PROBE_H; i++) {
+          int d = abs((int)cur[i * 3] - w->sig[i * 3]) + abs((int)cur[i * 3 + 1] - w->sig[i * 3 + 1]) +
+                  abs((int)cur[i * 3 + 2] - w->sig[i * 3 + 2]);
+          if (d > 48) changed++;
+        }
+        if (changed * 10 > PROBE_W * PROBE_H) w->strikes++;
+        else w->strikes = 0;
+        if (w->strikes >= 2) return "frozen";
+      }
+      memcpy(w->sig, cur, sizeof(cur));
+      w->haveSig = 1;
+    }
+  }
+  return NULL;
+}
+
+/* A real WGC frame arrived: the GDI baseline restarts from here. */
+static void stale_frame(StaleWatch *w) {
+  w->haveSig = 0;
+  w->strikes = 0;
+}
+
 static int capture_loop(void *item, int maxW, int maxH, int fps, const char *source, const RECT *monitor) {
   typedef HRESULT(STDMETHODCALLTYPE *GetSizeFn)(void *, WgcSize *);
   typedef HRESULT(STDMETHODCALLTYPE *CreateFreeFn)(void *, void *, int, INT32, WgcSize, void **);
@@ -751,6 +913,8 @@ static int capture_loop(void *item, int maxW, int maxH, int fps, const char *sou
   DWORD minGap, keepGap;
   HRESULT hr;
   int rc = 1;
+  StaleWatch watch;
+  DWORD lastReal, lastCheck;
 
   ZeroMemory(&gpu, sizeof(gpu));
   if (fps < 1) fps = 1;
@@ -813,6 +977,9 @@ static int capture_loop(void *item, int maxW, int maxH, int fps, const char *sou
   keepGap = 250;
   if (keepGap < minGap) keepGap = minGap;
   lastSend = GetTickCount() - keepGap;
+  stale_init(&watch, monitor);
+  lastReal = GetTickCount();
+  lastCheck = lastReal;
 
   for (;;) {
     void *frame = NULL;
@@ -854,6 +1021,8 @@ static int capture_loop(void *item, int maxW, int maxH, int fps, const char *sou
           outH = th;
           have = 1;
           dirty = 1;
+          lastReal = GetTickCount();
+          stale_frame(&watch);
         }
       }
       if (tex) ID3D11Texture2D_Release(tex);
@@ -862,6 +1031,15 @@ static int capture_loop(void *item, int maxW, int maxH, int fps, const char *sou
       release_obj(frame);
     }
     now = GetTickCount();
+    if (now - lastCheck >= 1000) {
+      const char *why = stale_check(&watch, device, now, lastReal);
+      lastCheck = now;
+      if (why) {
+        log_stale(why);
+        rc = STALE_EXIT;
+        goto done;
+      }
+    }
     due = dirty ? minGap : keepGap;
     if (have && (now - lastSend) >= due) {
       if (!write_frame(outW, outH, rgba)) break; /* parent closed the pipe */

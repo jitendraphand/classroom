@@ -29,6 +29,7 @@ import {
   toolWidth,
 } from '../shared/annotateOverlay';
 import { DRAW_COLORS, isDrawColor, nameTags, strokeWidthFor } from '../shared/web/drawLogic';
+import { cropInk } from '../shared/inkLayer';
 import { desktop, type StudentInk } from './bridge';
 
 const canvas = document.getElementById('board') as HTMLCanvasElement;
@@ -199,6 +200,48 @@ function draw(): void {
   if (base.width && base.height) cur.drawImage(base, 0, 0);
   if (draft) drawShape(draft);
   drawLaser();
+  scheduleLayer();
+}
+
+/*
+ * Ink layer for the published frames (shared/inkLayer.ts). This window is
+ * capture-excluded; main composites this bitmap into each captured frame, so
+ * students see every stroke even where WGC leaves a layered window out.
+ */
+const LAYER_MIN_GAP_MS = 66;
+let layerSize = { w: 0, h: 0 };
+const layerCanvas = document.createElement('canvas');
+const layerCtx = layerCanvas.getContext('2d', { willReadFrequently: true });
+let layerTimer = 0;
+let layerSentAt = 0;
+let layerWasEmpty = true;
+
+function scheduleLayer(): void {
+  if (layerTimer) return;
+  const wait = Math.max(0, LAYER_MIN_GAP_MS - (performance.now() - layerSentAt));
+  layerTimer = window.setTimeout(() => {
+    layerTimer = 0;
+    sendLayer();
+  }, wait);
+}
+
+function sendLayer(): void {
+  layerSentAt = performance.now();
+  const { w, h } = layerSize;
+  if (!layerCtx || w < 2 || h < 2 || !canvas.width || !canvas.height) return;
+  if (layerCanvas.width !== w || layerCanvas.height !== h) {
+    layerCanvas.width = w;
+    layerCanvas.height = h;
+  }
+  layerCtx.clearRect(0, 0, w, h);
+  layerCtx.imageSmoothingEnabled = true;
+  layerCtx.imageSmoothingQuality = 'high';
+  layerCtx.drawImage(canvas, 0, 0, w, h);
+  const layer = cropInk(layerCtx.getImageData(0, 0, w, h).data, w, h);
+  const empty = layer.w === 0;
+  if (empty && layerWasEmpty) return;
+  layerWasEmpty = empty;
+  desktop().annotationLayer(layer);
 }
 
 /**
@@ -460,6 +503,11 @@ desktop().onAnnotateMode((on) => {
   poke();
 });
 desktop().onAnnotateCommand((cmd) => applyCommand(cmd));
+desktop().onAnnotateLayerSize((size) => {
+  layerSize = size;
+  layerWasEmpty = false; // resend even an empty layer for the new size
+  scheduleLayer();
+});
 desktop().onStudentInk((ink) => {
   studentInk = ink && Array.isArray(ink.strokes) && ink.rect ? ink : null;
   baseDirty = true;

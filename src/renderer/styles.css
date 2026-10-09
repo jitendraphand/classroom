@@ -553,6 +553,12 @@ body.annotate.preview { background: #020617; }
 html:has(body.annotate.overlay),
 body.annotate.overlay { background: transparent; }
 body.annotate.overlay:not(.passthrough) #board { cursor: crosshair; }
+/* Draw mode: a per-pixel-alpha layered window (Chromium without GPU / Remote
+   Desktop) is hit-test transparent where alpha is 0, so pointer events went to
+   the app underneath and no teacher stroke ever started. Alpha 1/255 makes
+   every pixel hit-testable and is invisible (≤1 level of change). */
+html:has(body.annotate.overlay:not(.passthrough)),
+body.annotate.overlay:not(.passthrough) { background: rgba(0, 0, 0, 0.004); }
 #ink-text {
   position: fixed;
   z-index: 2;

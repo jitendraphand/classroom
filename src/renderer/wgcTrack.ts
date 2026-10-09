@@ -1,3 +1,4 @@
+import { contentChanged, frameSignature, type FrameSignature } from '../shared/frameChange';
 import { desktop } from './bridge';
 
 export type WgcHandle = {
@@ -9,6 +10,10 @@ export type WgcHandle = {
   stop: () => void;
   /** Helper frames received so far (WGC sends one per screen change, capped at the capture fps). */
   frames: () => number;
+  /** Helper frames whose pixels differed from the previous one (keep-alives excluded). Drives Video mode. */
+  changedFrames: () => number;
+  /** Date.now() of the last helper frame (keep-alive included). */
+  lastFrameAt: () => number;
 };
 
 type StoredFrame = { pixels: Uint8Array; width: number; height: number };
@@ -151,6 +156,9 @@ function bindFrames(opts: {
   let last: StoredFrame | null = null;
   let readySettled = false;
   let received = 0;
+  let changed = 0;
+  let lastAt = 0;
+  let lastSig: FrameSignature | null = null;
   let resolveReady: () => void = () => undefined;
   const ready = new Promise<void>((resolve) => {
     resolveReady = () => {
@@ -167,6 +175,7 @@ function bindFrames(opts: {
     if (!width || !height || !rgba) return;
     const bytes = width * height * 4;
     if (rgba.byteLength < bytes) return;
+    lastAt = Date.now();
     if (frozen && last) {
       try {
         opts.publish(last, resolveReady);
@@ -179,6 +188,9 @@ function bindFrames(opts: {
     // no third copy here (3.7 MB per 720p frame, 110 MB/s in video mode).
     received += 1;
     const pixels = rgba.byteLength === bytes ? rgba : rgba.subarray(0, bytes);
+    const sig = frameSignature(pixels, width, height);
+    if (contentChanged(lastSig, sig)) changed += 1;
+    lastSig = sig;
     const stored = { pixels, width, height };
     last = stored;
     try {
@@ -197,6 +209,8 @@ function bindFrames(opts: {
       frozen = false;
     },
     frames: () => received,
+    changedFrames: () => changed,
+    lastFrameAt: () => lastAt,
     stop: () => {
       if (stopped) return;
       stopped = true;

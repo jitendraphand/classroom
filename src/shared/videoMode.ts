@@ -1,9 +1,12 @@
 /**
  * Video mode auto-detect for a Windows.Graphics.Capture share.
  *
- * WGC hands the helper a frame only when the screen changes, capped at the
- * capture rate (8 fps for slides). A video playing on the shared screen keeps
- * that cap full; slides, typing and pointing do not. So:
+ * `fps` is the number of frames per second whose PIXELS changed
+ * (shared/frameChange.ts), not helper frames: the helper re-sends the last
+ * frame every 250 ms and WGC also fires for repaints of capture-excluded
+ * windows, so the raw arrival rate never fell under 4/s and auto Video mode
+ * never switched back (E2E 2026-10-09). A video playing on the shared screen
+ * keeps the changed rate at the capture cap; slides, typing and pointing do not. So:
  * - slides: the frame rate stayed at >= cap - 1 for VIDEO_ON_AFTER_MS → video mode on;
  * - auto video mode: the rate stayed under VIDEO_OFF_FPS for VIDEO_OFF_AFTER_MS → off.
  * Once the teacher toggles Video by hand, `auto` is false and nothing changes

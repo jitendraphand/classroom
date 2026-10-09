@@ -31,7 +31,8 @@ export type WgcPump = {
 export function createWgcPump(opts: {
   helper: () => string;
   onFrame: (frame: { width: number; height: number; rgba: Buffer }) => void;
-  onEnded: () => void;
+  /** The helper stopped by itself. `reason` is its last `stale`/`error` step, or `exit <code>`. */
+  onEnded: (info: { code: number | null; reason: string }) => void;
   onLog: (line: string) => void;
 }): WgcPump {
   let child: Proc | null = null;
@@ -77,6 +78,7 @@ export function createWgcPump(opts: {
       }, 8000);
 
       let stderr = '';
+      let lastReason = '';
       proc.stderr?.setEncoding('utf8');
       proc.stderr?.on('data', (chunk: string) => {
         stderr += chunk;
@@ -129,7 +131,10 @@ export function createWgcPump(opts: {
                 child = null;
                 proc.kill();
               }
+              lastReason = reason;
               finish({ ok: false, error: reason });
+            } else if (msg.event === 'stale') {
+              lastReason = `stale ${(msg as { why?: string }).why || 'capture'}`;
             }
           } catch {
             /* already logged */
@@ -199,11 +204,11 @@ export function createWgcPump(opts: {
         if (child === proc) child = null;
         finish({ ok: false, error: 'helper-spawn-failed' });
       });
-      proc.on('exit', () => {
+      proc.on('exit', (code) => {
         if (child === proc) child = null;
         const silent = proc.silentExit === true;
-        if (!settled) finish({ ok: false, error: 'helper-exited' });
-        if (!silent && gen === generation) opts.onEnded();
+        if (!settled) finish({ ok: false, error: lastReason || 'helper-exited' });
+        if (!silent && gen === generation) opts.onEnded({ code, reason: lastReason || `exit ${code}` });
       });
     });
   }

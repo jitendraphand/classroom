@@ -33,6 +33,9 @@ export type HudState = {
   /** Share Video mode (30 fps, motion) and whether it still follows auto-detect. */
   videoMode: boolean;
   videoModeAuto: boolean;
+  /** Computer sound is being sent with the share, and whether it follows Video mode ('auto'). */
+  shareAudio: boolean;
+  shareAudioAuto: boolean;
   /** Students asking to draw on the share, the one drawing now, and strokes on screen. */
   drawRequests: number;
   drawHolderName: string | null;
@@ -62,6 +65,7 @@ export type TeacherAction =
   | { type: 'toggle-annotate' }
   | { type: 'toggle-videos' }
   | { type: 'toggle-video-mode' }
+  | { type: 'toggle-share-audio' }
   | { type: 'draw-allow'; id: string }
   | { type: 'draw-revoke'; id?: string }
   | { type: 'draw-clear' }
@@ -98,6 +102,7 @@ export function isTeacherAction(v: unknown): v is TeacherAction {
     case 'toggle-annotate':
     case 'toggle-videos':
     case 'toggle-video-mode':
+    case 'toggle-share-audio':
     case 'draw-clear':
     case 'admit-all':
     case 'mark-chat-read':

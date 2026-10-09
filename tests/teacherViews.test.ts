@@ -54,6 +54,8 @@ function snap(over: Partial<PanelSnapshot['hud']> = {}): PanelSnapshot {
       oldestWaitingName: 'Ravi',
       videoMode: false,
       videoModeAuto: true,
+      shareAudio: false,
+      shareAudioAuto: true,
       drawRequests: 1,
       drawHolderName: 'Meera',
       drawStrokes: 3,

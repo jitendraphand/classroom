@@ -452,7 +452,7 @@ export const WINDOW_CAPTURE_DECISIONS: Record<string, { captured: boolean; why: 
   'capture-test': { captured: false, why: 'Capture test window.' },
   'annotate-overlay': {
     captured: true,
-    why: 'Transparent ink overlay: teacher annotations and student desktop ink must be in the share. Excluding a layered transparent window composites as a black rectangle on Windows 10.',
+    why: 'Transparent ink overlay. Excluding a layered transparent window composites as a black rectangle on Windows 10. Its ink is ALSO composited into the published frames by main (shared/inkLayer.ts) unless the captured frame already shows it.',
   },
   'region-picker': { captured: true, why: 'Transparent picker; closes before the share starts. Excluding it paints black.' },
 };

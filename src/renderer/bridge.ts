@@ -56,7 +56,10 @@ export type ClassroomBridge = {
   stopWgc: () => Promise<{ ok: boolean }>;
   adoptMask: (reason: string) => Promise<CapturePlan>;
   onWgcFrame: (cb: (frame: { width: number; height: number; rgba: Uint8Array }) => void) => () => void;
-  onWgcEnded: (cb: () => void) => () => void;
+  onWgcEnded: (cb: (reason: string) => void) => () => void;
+  onWgcStatus: (cb: (status: { state: 'recovering' | 'recovered' | 'failed'; reason: string; attempt: number }) => void) => () => void;
+  annotationLayer: (layer: import('../shared/inkLayer').InkLayer) => void;
+  onAnnotateLayerSize: (cb: (size: { w: number; h: number }) => void) => () => void;
   setMousePassthrough: (on: boolean) => void;
   displays: () => Promise<DisplayInfo[]>;
   pushHud: (snap: PanelSnapshot) => void;

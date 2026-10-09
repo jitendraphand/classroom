@@ -30,6 +30,7 @@ import {
   nativeImage,
   net,
   Notification,
+  powerMonitor,
   protocol,
   screen,
   session,
@@ -70,6 +71,8 @@ import { isSlotCount, type SlotCount } from '../shared/classLogic';
 import { ShapeLog, applyRemoteMessage, parseShape, type AnnotateCommand, type AnnotShape } from '../shared/annotateOverlay';
 import { burnShapesIntoFrame } from '../shared/inkFrame';
 import { createWgcPump } from './wgcPump';
+import { createCaptureSupervisor, monitorArgs, pickDisplay, type CaptureTarget } from './captureSupervisor';
+import { compositeInkLayer, layerAlreadyInFrame, parseInkLayer, type InkLayer } from '../shared/inkLayer';
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -184,7 +187,12 @@ function logCapture(line: string): void {
 }
 
 function deliverFrame(frame: Frame): void {
+  supervisor.frame();
   if (testRunning) burnInk(frame);
+  else if (inkLayer && lastSnap?.hud.sharing && !layerAlreadyInFrame(frame.rgba, frame.width, frame.height, inkLayer)) {
+    compositeInkLayer(frame.rgba, frame.width, frame.height, inkLayer);
+  }
+  reportFrameSize(frame.width, frame.height);
   latestFrame = frame;
   for (const fn of frameListeners) fn(frame);
   if (frameQueued) return;
@@ -215,16 +223,66 @@ function nextFrame(timeoutMs = 2500): Promise<Frame | null> {
   });
 }
 
+function sendCaptureEnded(reason: string): void {
+  for (const win of [mainWindow, testWindow]) {
+    if (win && !win.isDestroyed()) win.webContents.send('wgc-ended', reason);
+  }
+}
+
 const wgc = createWgcPump({
   helper: helperExe,
   onFrame: deliverFrame,
-  onEnded: () => {
-    for (const win of [mainWindow, testWindow]) {
-      if (win && !win.isDestroyed()) win.webContents.send('wgc-ended');
-    }
+  onEnded: (info) => {
+    logCapture(`[capture] helper ended: ${info.reason}`);
+    // A class share recovers by itself; anything else (capture test) ends.
+    if (supervisor.armed() && lastSnap?.hud.sharing && !testRunning) supervisor.trigger(info.reason);
+    else sendCaptureEnded(info.reason);
   },
   onLog: (line) => logCapture(line),
 });
+
+/** Physical rectangles of the current displays, for re-resolving a monitor share. */
+function physicalDisplays(): { id: string; rect: { x: number; y: number; w: number; h: number } }[] {
+  return screen.getAllDisplays().map((d) => {
+    const phys = screen.dipToScreenRect(null, d.bounds);
+    return { id: String(d.id), rect: { x: phys.x, y: phys.y, w: phys.width, h: phys.height } };
+  });
+}
+
+let captureTarget: CaptureTarget | null = null;
+
+const supervisor = createCaptureSupervisor({
+  start: (args) => wgc.start(args),
+  argsFor: (target, fps) => {
+    if (target.kind === 'window') {
+      return ['capture-window', target.hwnd, String(SCREEN_SHARE.capture.width), String(SCREEN_SHARE.capture.height), String(fps)];
+    }
+    const d = pickDisplay(physicalDisplays(), target.displayId, target.rect);
+    if (!d) return null;
+    captureTarget = { kind: 'monitor', displayId: d.id, rect: d.rect };
+    return monitorArgs(d.rect, SCREEN_SHARE.capture.width, SCREEN_SHARE.capture.height, fps);
+  },
+  onArgs: (args) => {
+    lastWgcArgs = args;
+  },
+  onStatus: (status) => {
+    logCapture(`[capture] supervisor ${status.state} (${status.reason}, attempt ${status.attempt})`);
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('wgc-status', status);
+    if (status.state === 'failed') sendCaptureEnded(`recovery failed: ${status.reason}`);
+  },
+  log: (line) => logCapture(line),
+});
+setInterval(() => supervisor.tick(), 1000).unref?.();
+
+/** Overlay ink rendered by the annotation window, composited into every published frame. */
+let inkLayer: InkLayer | null = null;
+let layerSize = { w: 0, h: 0 };
+
+function reportFrameSize(w: number, h: number): void {
+  if (w === layerSize.w && h === layerSize.h) return;
+  layerSize = { w, h };
+  sendOverlay('annotate-layer-size', { w, h });
+}
 
 function defaultConfig(): StoredConfig {
   return {
@@ -524,6 +582,7 @@ function flushOverlayQueue(win: Win): void {
   const queued = overlayQueue.splice(0, overlayQueue.length);
   for (const item of queued) win.webContents.send(item.channel, item.payload);
   win.webContents.send('annotate-mode', overlayActive);
+  if (layerSize.w && layerSize.h) win.webContents.send('annotate-layer-size', layerSize);
   if (lastStudentInk) win.webContents.send('student-ink', lastStudentInk);
 }
 
@@ -730,6 +789,7 @@ function closeAnnotationOverlay(): void {
   overlayActive = false;
   annotateOn = false;
   lastStudentInk = null;
+  inkLayer = null;
   closeAnnotateTools();
   overlayDisplayId = null;
   clearInk();
@@ -1685,6 +1745,13 @@ function installIpc(): void {
       return result;
     }
     lastWgcArgs = args;
+    if (body.kind === 'window') {
+      captureTarget = { kind: 'window', hwnd: args[1]! };
+    } else {
+      const m = { x: Number(args[1]), y: Number(args[2]), w: Number(args[3]) - Number(args[1]), h: Number(args[4]) - Number(args[2]) };
+      captureTarget = { kind: 'monitor', displayId: String(body.displayId ?? ''), rect: m };
+    }
+    supervisor.arm(captureTarget, SCREEN_SHARE.capture.frameRate);
     if (result.monitor && result.monitor.w > 0 && result.monitor.h > 0) testMonitor = result.monitor;
     const fallbackDisplay = typeof body.displayId === 'string' ? body.displayId : '';
     const displayId = displayIdForCapturedMonitor(result.monitor, fallbackDisplay);
@@ -1708,6 +1775,9 @@ function installIpc(): void {
   });
 
   ipcMain.handle('stop-wgc', () => {
+    supervisor.disarm();
+    captureTarget = null;
+    inkLayer = null;
     wgc.stop();
     return { ok: true };
   });
@@ -1794,6 +1864,7 @@ function installIpc(): void {
       return { ok: false };
     }
     lastWgcArgs = args;
+    if (captureTarget) supervisor.arm(captureTarget, rate);
     logCapture(`[capture] capture rate ${rate} fps`);
     return { ok: true };
   });
@@ -1805,6 +1876,15 @@ function installIpc(): void {
 
   ipcMain.on('annotation-ink', (_event, shapes: unknown) => {
     replaceInk(shapes);
+  });
+
+  // The overlay's rendered ink (teacher annotations + student desktop ink),
+  // already at the published frame size. Composited into each frame so it
+  // reaches students whether or not WGC captures the layered overlay window.
+  ipcMain.on('annotation-layer', (event, raw: unknown) => {
+    const win = chrome.get('annotate-overlay');
+    if (!win || win.isDestroyed() || event.sender !== win.webContents) return;
+    inkLayer = parseInkLayer(raw);
   });
 
   ipcMain.on('video-tile', (event, key: unknown, jpeg: unknown) => {
@@ -2036,7 +2116,18 @@ async function start(): Promise<void> {
     if (!mainWindow) createMainWindow();
     else restoreMain();
   });
-  screen.on('display-metrics-changed', (_event, display) => {
+  // Display / session changes can leave the WGC session frozen: restart it.
+  screen.on('display-added', () => supervisor.trigger('display-added'));
+  screen.on('display-removed', () => supervisor.trigger('display-removed'));
+  for (const ev of ['unlock-screen', 'resume', 'user-did-become-active'] as const) {
+    try {
+      powerMonitor.on(ev as 'resume', () => supervisor.trigger(ev));
+    } catch {
+      /* event not supported on this platform */
+    }
+  }
+  screen.on('display-metrics-changed', (_event, display, changed) => {
+    if (changed.some((m) => m === 'bounds' || m === 'scaleFactor' || m === 'rotation')) supervisor.trigger('display-metrics-changed');
     resizeVideos();
     if (overlayDisplayId != null && display.id === overlayDisplayId) placeAnnotationOverlay();
   });

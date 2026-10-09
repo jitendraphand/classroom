@@ -177,6 +177,27 @@ export function tileCells(studentIds: readonly string[], slots: SlotCount): Arra
   return cells;
 }
 
+/**
+ * Fill the student slots: cameras first (`tiles`), then students who are in
+ * the class but have no camera flowing (`noCamera`, shown with their name), up
+ * to `cap`. E2E 2026-10-09: the server's visible sample can name a student
+ * whose browser never publishes a camera (iPhone/iPad without one, camera
+ * off); that slot used to render as an unlabeled black tile.
+ */
+export function fillStudentSlots(tiles: readonly string[], noCamera: readonly string[], cap: number): string[] {
+  const out: string[] = [];
+  for (const id of [...tiles, ...noCamera]) {
+    if (out.length >= cap) break;
+    if (id && !NOT_A_STUDENT.test(id) && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+/** Cells to paint: the teacher, then the filled student slots. Never blank cells. */
+export function visibleCells(studentIds: readonly string[], slots: SlotCount): string[] {
+  return tileCells(studentIds, slots).filter((id): id is string => id !== null);
+}
+
 function defaultShuffle<T>(arr: T[]): T[] {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {

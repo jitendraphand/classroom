@@ -44,6 +44,7 @@ import {
   type ShareKind,
 } from '../shared/capture';
 import { nextVideoMode, type VideoModeState } from '../shared/videoMode';
+import { desktopLoopbackConstraints, toggleShareAudio, wantShareAudio, type ShareAudioChoice } from '../shared/shareAudio';
 import { DRAW_TOPIC, applyPacket, decodePacket, isDrawColor, validStrokeId, type Stroke } from '../shared/web/drawLogic';
 import { shareProfile } from '../shared/web/videoQuality';
 import type { VideoCell, VideoModel } from '../shared/videoModel';
@@ -54,7 +55,8 @@ import {
   selectStudentTiles,
   sortRoster,
   studentCapForLayout,
-  tileCells,
+  fillStudentSlots,
+  visibleCells,
   videoGrid,
   type SlotCount,
 } from '../shared/classLogic';
@@ -173,6 +175,10 @@ export class ClassController {
   private shareRaw: MediaStreamTrack | null = null;
   private screenAudio: LocalAudioTrack | null = null;
   private pendingAudio: Promise<MediaStream | null> | null = null;
+  /** Computer sound: follows Video mode ('auto') unless the teacher chose with the Sound button. */
+  private audioChoice: ShareAudioChoice = 'auto';
+  private audioAskedAtStart = false;
+  private audioSyncing = false;
   private shareCrop: CropHandle | null = null;
   private previewTrack: MediaStreamTrack | null = null;
   private overlayRect: { x: number; y: number; w: number; h: number } | null = null;
@@ -217,6 +223,7 @@ export class ClassController {
   private readonly onMessage: (ev: MessageEvent) => void;
   private unsubBounds: (() => void) | null = null;
   private unsubWgcEnded: (() => void) | null = null;
+  private unsubWgcStatus: (() => void) | null = null;
 
   constructor(
     private readonly opts: { layout: SlotCount; micId: string; camId: string; plan: CapturePlan },
@@ -232,8 +239,23 @@ export class ClassController {
     this.unsubBounds = desktop().onChromeBounds((bounds) => {
       this.bounds = bounds;
     });
-    this.unsubWgcEnded = desktop().onWgcEnded(() => {
-      if (this.sharing && this.wgcHandle) void this.stopShare();
+    this.unsubWgcEnded = desktop().onWgcEnded((reason) => {
+      if (this.sharing && this.wgcHandle) {
+        void this.stopShare().then(() => {
+          this.notice = `Screen share stopped: Windows stopped sending the screen${reason ? ` (${reason})` : ''} and it could not be restarted. Click Share to start again.`;
+          this.emit();
+        });
+      }
+    });
+    this.unsubWgcStatus = desktop().onWgcStatus((status) => {
+      if (!this.sharing) return;
+      if (status.state === 'recovering' && status.attempt === 1) {
+        this.notice = 'The display changed: restarting the screen capture…';
+        this.emit();
+      } else if (status.state === 'recovered') {
+        this.notice = 'Screen capture restarted after a display change. Students see your screen again.';
+        this.emit();
+      }
     });
   }
 
@@ -445,6 +467,11 @@ export class ClassController {
         this.videoMode = { ...this.videoMode, auto: false };
         void this.applyVideoMode(!this.videoMode.on, 'manual');
         return;
+      case 'toggle-share-audio':
+        if (!this.sharing) return;
+        this.audioChoice = toggleShareAudio(!!this.screenAudio);
+        void this.syncShareAudio();
+        return;
       case 'draw-allow':
         if (typeof action.id === 'string') void this.drawAction({ action: 'allow', participantId: action.id });
         return;
@@ -580,6 +607,8 @@ export class ClassController {
     }
     if (!this.room) return;
     const audioPromise = input.systemAudio ? this.captureSystemAudio() : null;
+    this.audioChoice = 'auto';
+    this.audioAskedAtStart = !!input.systemAudio;
     const epoch = ++this.shareEpoch;
     let raw: MediaStreamTrack | null = null;
     const native = await this.tryNativeCapture(input);
@@ -703,12 +732,26 @@ export class ClassController {
 
   /** Started synchronously from the share click so the user gesture is still active. */
   private captureSystemAudio(): Promise<MediaStream | null> {
+    // Desktop loopback via getUserMedia needs no user gesture (Video mode is
+    // toggled from another window or automatically). getDisplayMedia is the
+    // fallback and only works inside a click in this window.
     const promise = navigator.mediaDevices
-      .getDisplayMedia({
-        video: true,
-        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-      } as DisplayMediaStreamOptions)
-      .catch(() => null);
+      .getUserMedia(desktopLoopbackConstraints())
+      .then((stream) => (stream.getAudioTracks().length ? stream : (stream.getTracks().forEach((t) => t.stop()), null)))
+      .catch((err) => {
+        console.warn('desktop loopback audio', err);
+        return null;
+      })
+      .then(
+        (stream) =>
+          stream ??
+          navigator.mediaDevices
+            .getDisplayMedia({
+              video: true,
+              audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+            } as DisplayMediaStreamOptions)
+            .catch(() => null)
+      );
     this.pendingAudio = promise;
     return promise;
   }
@@ -784,6 +827,7 @@ export class ClassController {
     window.removeEventListener('message', this.onMessage);
     this.unsubBounds?.();
     this.unsubWgcEnded?.();
+    this.unsubWgcStatus?.();
     desktop().setClassActive(false);
     void this.stopRoom();
   }
@@ -1075,9 +1119,14 @@ export class ClassController {
     });
     this.mosaic = picked.mosaic;
     this.lastTick = picked.lastTick;
-    return tileCells(picked.tiles, this.opts.layout).map((key, index) => ({
-      key: key ?? `blank-${index}`,
-      label: !key ? '' : key === '__self__' ? 'You' : this.nameOf(key),
+    const live = new Set(pool);
+    const admitted = this.studentIdentities();
+    const visible = (this.snap?.visibleIdentities ?? []).filter((id) => admitted.has(id) && !live.has(id));
+    const others = [...admitted].filter((id) => !live.has(id) && !visible.includes(id));
+    const students = fillStudentSlots(picked.tiles, [...visible, ...others], cap);
+    return visibleCells(students, this.opts.layout).map((key) => ({
+      key,
+      label: key === '__self__' ? 'You' : live.has(key) ? this.nameOf(key) : `${this.nameOf(key)} · camera off`,
     }));
   }
 
@@ -1532,13 +1581,17 @@ export class ClassController {
 
   private startVideoWatch(): void {
     this.stopVideoWatch();
-    this.lastFrames = this.wgcHandle?.frames() ?? 0;
+    this.lastFrames = this.wgcHandle?.changedFrames() ?? 0;
     this.videoTimer = window.setInterval(() => {
       const handle = this.wgcHandle;
       if (!handle || !this.sharing) return;
-      const frames = handle.frames();
-      const fps = frames - this.lastFrames;
+      // Pixel changes per second, not helper frames: keep-alives and repaints of
+      // capture-excluded windows (video tiles) arrive as identical frames.
+      const frames = handle.changedFrames();
+      let fps = frames - this.lastFrames;
       this.lastFrames = frames;
+      // Ink is composited into the frames: drawing must not switch Video mode on.
+      if (!this.videoMode.on && this.annotateOn) fps = 0;
       const next = nextVideoMode(this.videoMode, { now: Date.now(), fps, slidesCap: SCREEN_SHARE.capture.frameRate });
       const changed = next.on !== this.videoMode.on;
       this.videoMode = next;
@@ -1578,17 +1631,42 @@ export class ClassController {
       }
     }
     void desktop().setWgcFps(on ? profile.capture.frameRate.max : SCREEN_SHARE.capture.frameRate);
-    if (on && !this.screenAudio && why === 'manual') {
-      // Best effort: the teacher's click came from the control panel, not this window.
-      const audio = this.captureSystemAudio();
-      await this.publishSystemAudio(audio);
-    }
+    await this.syncShareAudio();
     if (why === 'auto') {
       this.notice = on
         ? 'Moving picture detected: Video mode is on (smoother motion). Turn it off in the control panel for sharper text.'
         : 'The screen is still again: back to sharp slides.';
     }
     this.emit();
+  }
+
+  /** Publish or drop computer sound to match the Sound choice and Video mode. */
+  private async syncShareAudio(): Promise<void> {
+    if (this.audioSyncing) return;
+    this.audioSyncing = true;
+    try {
+      for (let i = 0; i < 3; i++) {
+        const want = this.sharing && wantShareAudio({ choice: this.audioChoice, videoMode: this.videoMode.on, askedAtStart: this.audioAskedAtStart });
+        const have = !!this.screenAudio || !!this.pendingAudio;
+        if (want === have) break;
+        if (want) {
+          await this.publishSystemAudio(this.captureSystemAudio());
+          if (!this.screenAudio) break; // could not capture: notice is set, do not loop
+        } else {
+          const audio = this.screenAudio;
+          this.screenAudio = null;
+          if (audio) await this.stopPublished(audio);
+          if (this.pendingAudio) {
+            const pending = this.pendingAudio;
+            this.pendingAudio = null;
+            void this.discardAudio(pending);
+          }
+        }
+      }
+    } finally {
+      this.audioSyncing = false;
+      this.emit();
+    }
   }
 
   private studentIds(): Set<string> {
@@ -1773,6 +1851,8 @@ export class ClassController {
         oldestWaitingName: oldest?.displayName ?? null,
         videoMode: this.videoMode.on,
         videoModeAuto: this.videoMode.auto,
+        shareAudio: !!this.screenAudio,
+        shareAudioAuto: this.audioChoice === 'auto',
         drawRequests: this.snap?.drawRequestCount ?? 0,
         drawHolderName: this.snap?.drawHolder?.name ?? null,
         drawStrokes: this.drawStrokes.length,

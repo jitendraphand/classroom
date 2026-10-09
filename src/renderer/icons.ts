@@ -6,6 +6,10 @@ import { WEB_ICONS } from '../shared/web/icons';
  * floating control panel, the panels and the annotation tools share them.
  */
 const TOOL_ICONS = {
+  speaker:
+    '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+  speakerOff:
+    '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m16 9 5 6M21 9l-5 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
   highlighter:
     '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m9 11-5 5v4h4l5-5M9 11l4-4 4 4-4 4M9 11l4 4M14 6l3-3 4 4-3 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   line: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 19 19 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',

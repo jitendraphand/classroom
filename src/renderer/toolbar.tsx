@@ -81,6 +81,22 @@ function Toolbar({ hud }: { hud: HudState }) {
             {hud.videoModeAuto ? <span className="tsh-auto">auto</span> : null}
           </button>
         ) : null}
+        {hud.sharing ? (
+          <button
+            type="button"
+            className="tsh-btn"
+            aria-pressed={hud.shareAudio}
+            onClick={() => send({ type: 'toggle-share-audio' })}
+            title={
+              hud.shareAudio
+                ? `Students hear your computer's sound${hud.shareAudioAuto ? ' (on with Video mode)' : ''}. Click to stop.`
+                : `Send your computer's sound (video audio) to students.${hud.shareAudioAuto ? ' Turns on with Video mode.' : ''}`
+            }
+            aria-label={hud.shareAudio ? 'Computer sound on (click to stop)' : 'Send computer sound'}
+          >
+            <Icon name={hud.shareAudio ? 'speaker' : 'speakerOff'} />
+          </button>
+        ) : null}
         <span className="tsh-sep" aria-hidden="true" />
         <button type="button" className="tsh-btn" onClick={() => desktop().togglePanel('chat')} aria-label="Chat" title="Chat">
           <Icon name="chat" />
