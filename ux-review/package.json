@@ -1,0 +1,11 @@
+{
+  "name": "classroom-ux-review",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "review": "node run.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.55.0"
+  }
+}

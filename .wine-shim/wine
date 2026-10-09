@@ -1,0 +1,9 @@
+#!/bin/sh
+for a in "$@"; do
+  case "$a" in
+    *rcedit-ia32.exe|*rcedit-x64.exe|*rcedit.exe)
+      exec node "/workspace/windows/scripts/rcedit-shim.mjs" "$@"
+      ;;
+  esac
+done
+exec /usr/bin/wine "$@"

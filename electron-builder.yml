@@ -1,0 +1,41 @@
+appId: io.sslip.classroom.teacher
+productName: Classroom Teacher
+copyright: Copyright Classroom
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**
+  - package.json
+extraResources:
+  - from: native/affinity-helper.exe
+    to: affinity-helper.exe
+  # Window and tray icons; main.ts iconDir() reads resources/build when packaged.
+  - from: build
+    to: build
+    filter:
+      - icon.png
+      - tray.png
+      - tray-alert.png
+asar: true
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  icon: build/icon.ico
+  # Edit (rcedit) stays on so the exe gets the icon and version info. No
+  # certificate is configured, so nothing is signed.
+  signAndEditExecutable: true
+  forceCodeSigning: false
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: Classroom Teacher
+portable:
+  artifactName: ClassroomTeacher-portable.exe
+artifactName: ClassroomTeacher-setup.${ext}

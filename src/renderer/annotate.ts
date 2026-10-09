@@ -1,0 +1,357 @@
+/**
+ * Transparent annotation overlay. Strokes are canvas pixels on this window.
+ * The window is not capture-excluded, so a monitor capture contains them.
+ * Tools live on the control panel, which is excluded, as are the other opaque classroom windows. This page has no buttons.
+ */
+import { newStrokeId, type Pt } from '../shared/annotate';
+import {
+  ShapeLog,
+  applyRemoteMessage,
+  cssPointerToNormalized,
+  defaultOpacity,
+  defaultWidth,
+  isOverlayTool,
+  shapesHit,
+  type AnnotShape,
+  type AnnotateCommand,
+  type DipBox,
+  type OverlayTool,
+  type PhysicalMonitor,
+  type ShapeType,
+} from '../shared/annotateOverlay';
+import { desktop } from './bridge';
+
+const canvas = document.getElementById('board') as HTMLCanvasElement;
+const textInput = document.getElementById('ink-text') as HTMLInputElement;
+const ctx = canvas.getContext('2d');
+
+document.body.classList.add('overlay');
+document.body.classList.remove('preview');
+
+type Surface = { dip: DipBox; physical: PhysicalMonitor; scale: number };
+
+let surface: Surface | null = null;
+let tool: OverlayTool = 'pen';
+let color = '#ef4444';
+let active = false;
+const log = new ShapeLog();
+let draft: AnnotShape | null = null;
+let laser: { at: number; p: Pt } | null = null;
+let raf = 0;
+
+function publishStatus(): void {
+  desktop().annotationStatus(log.status());
+}
+
+function pushInk(): void {
+  desktop().annotationInk(log.shapes);
+}
+
+function norm(e: { clientX: number; clientY: number }): Pt | null {
+  if (!surface) return null;
+  return cssPointerToNormalized({ x: e.clientX, y: e.clientY }, surface.dip, surface.scale, surface.physical);
+}
+
+function resize(): void {
+  if (!surface) return;
+  const cssW = Math.max(1, surface.dip.w);
+  const cssH = Math.max(1, surface.dip.h);
+  canvas.width = Math.max(1, Math.round(surface.physical.widthPx));
+  canvas.height = Math.max(1, Math.round(surface.physical.heightPx));
+  canvas.style.width = `${cssW}px`;
+  canvas.style.height = `${cssH}px`;
+  draw();
+}
+
+function px(p: Pt): [number, number] {
+  return [p[0] * canvas.width, p[1] * canvas.height];
+}
+
+function lineWidth(widthCss: number): number {
+  const scale = surface?.scale || 1;
+  return Math.max(1, widthCss * scale);
+}
+
+function strokePath(points: Pt[]): void {
+  if (!ctx || !points.length) return;
+  ctx.beginPath();
+  points.forEach((p, i) => {
+    const [x, y] = px(p);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+}
+
+function drawArrow(a: Pt, b: Pt, width: number): void {
+  if (!ctx) return;
+  const [x0, y0] = px(a);
+  const [x1, y1] = px(b);
+  ctx.beginPath();
+  ctx.moveTo(x0, y0);
+  ctx.lineTo(x1, y1);
+  ctx.stroke();
+  const ang = Math.atan2(y1 - y0, x1 - x0);
+  const len = Math.max(10, lineWidth(width) * 4);
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x1 + Math.cos(ang + Math.PI * 0.85) * len, y1 + Math.sin(ang + Math.PI * 0.85) * len);
+  ctx.lineTo(x1 + Math.cos(ang - Math.PI * 0.85) * len, y1 + Math.sin(ang - Math.PI * 0.85) * len);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawShape(shape: AnnotShape): void {
+  if (!ctx || !shape.points.length) return;
+  ctx.save();
+  ctx.globalAlpha = shape.opacity;
+  ctx.strokeStyle = shape.color;
+  ctx.fillStyle = shape.color;
+  ctx.lineWidth = lineWidth(shape.width);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  const a = shape.points[0]!;
+  const b = shape.points[shape.points.length - 1]!;
+  if (shape.type === 'rect' && shape.points.length >= 2) {
+    const [x0, y0] = px(a);
+    const [x1, y1] = px(b);
+    ctx.strokeRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0));
+  } else if (shape.type === 'ellipse' && shape.points.length >= 2) {
+    const [x0, y0] = px(a);
+    const [x1, y1] = px(b);
+    ctx.beginPath();
+    ctx.ellipse((x0 + x1) / 2, (y0 + y1) / 2, Math.max(1, Math.abs(x1 - x0) / 2), Math.max(1, Math.abs(y1 - y0) / 2), 0, 0, Math.PI * 2);
+    ctx.stroke();
+  } else if (shape.type === 'arrow' && shape.points.length >= 2) {
+    drawArrow(a, b, shape.width);
+  } else if (shape.type === 'text') {
+    const [x, y] = px(a);
+    ctx.font = `${Math.max(12, lineWidth(shape.width))}px "Segoe UI", sans-serif`;
+    ctx.textBaseline = 'top';
+    ctx.fillText(shape.text, x, y);
+  } else {
+    strokePath(shape.points);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawLaser(): void {
+  if (!ctx || !laser) return;
+  const age = performance.now() - laser.at;
+  const alpha = Math.max(0, 1 - age / 700);
+  if (alpha <= 0) {
+    laser = null;
+    return;
+  }
+  const [x, y] = px(laser.p);
+  const scale = surface?.scale || 1;
+  ctx.save();
+  ctx.fillStyle = '#fb7185';
+  ctx.globalAlpha = alpha * 0.35;
+  ctx.beginPath();
+  ctx.arc(x, y, 22 * scale, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = alpha;
+  ctx.beginPath();
+  ctx.arc(x, y, 7 * scale, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function draw(): void {
+  if (!ctx) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (const shape of log.shapes) drawShape(shape);
+  if (draft) drawShape(draft);
+  drawLaser();
+}
+
+function frame(): void {
+  raf = 0;
+  draw();
+  if (laser) raf = requestAnimationFrame(frame);
+}
+
+function poke(): void {
+  if (!raf) raf = requestAnimationFrame(frame);
+}
+
+function beginShape(type: ShapeType, p: Pt): AnnotShape {
+  return {
+    id: newStrokeId(),
+    type,
+    points: [p],
+    color,
+    width: defaultWidth(type),
+    opacity: defaultOpacity(type),
+    text: '',
+    timestamp: Date.now(),
+  };
+}
+
+function commitDraft(): void {
+  if (!draft) return;
+  const shape = draft;
+  draft = null;
+  if (shape.type === 'text') return;
+  if (shape.points.length < (shape.type === 'pen' || shape.type === 'highlight' ? 1 : 2)) return;
+  log.add(shape);
+  publishStatus();
+  pushInk();
+}
+
+function onDown(e: PointerEvent): void {
+  if (!active || e.button !== 0) return;
+  const p = norm(e);
+  if (!p) return;
+  if (tool === 'text') {
+    e.preventDefault();
+    openText(e.clientX, e.clientY, p);
+    return;
+  }
+  canvas.setPointerCapture(e.pointerId);
+  if (tool === 'laser') {
+    laser = { at: performance.now(), p };
+    poke();
+    return;
+  }
+  if (tool === 'eraser') {
+    log.erase(shapesHit(log.shapes, p, aspect()));
+    publishStatus();
+    pushInk();
+    poke();
+    return;
+  }
+  draft = beginShape(tool, p);
+  poke();
+}
+
+function onMove(e: PointerEvent): void {
+  if (!active) return;
+  const p = norm(e);
+  if (!p) return;
+  if (tool === 'laser') {
+    laser = { at: performance.now(), p };
+    poke();
+    return;
+  }
+  if (!draft && tool !== 'eraser') return;
+  if (tool === 'eraser') {
+    if (e.buttons !== 1) return;
+    log.erase(shapesHit(log.shapes, p, aspect()));
+    publishStatus();
+    pushInk();
+    poke();
+    return;
+  }
+  if (!draft) return;
+  if (draft.type === 'pen' || draft.type === 'highlight') draft.points.push(p);
+  else draft.points = [draft.points[0]!, p];
+  poke();
+}
+
+function onUp(): void {
+  commitDraft();
+  poke();
+}
+
+function aspect(): number {
+  if (!surface) return 1;
+  return surface.physical.widthPx / surface.physical.heightPx;
+}
+
+function openText(clientX: number, clientY: number, p: Pt): void {
+  textInput.style.left = `${clientX}px`;
+  textInput.style.top = `${clientY}px`;
+  textInput.style.color = color;
+  textInput.style.fontSize = `${defaultWidth('text')}px`;
+  textInput.value = '';
+  textInput.hidden = false;
+  textInput.focus();
+  const anchor = p;
+  const commit = () => {
+    textInput.removeEventListener('blur', commit);
+    textInput.removeEventListener('keydown', onKey);
+    const text = textInput.value.trim();
+    textInput.hidden = true;
+    textInput.value = '';
+    if (!text) return;
+    log.add({ ...beginShape('text', anchor), text, points: [anchor] });
+    publishStatus();
+    pushInk();
+    poke();
+  };
+  const onKey = (ev: KeyboardEvent) => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      textInput.blur();
+    }
+    if (ev.key === 'Escape') {
+      textInput.value = '';
+      textInput.blur();
+    }
+  };
+  textInput.addEventListener('blur', commit);
+  textInput.addEventListener('keydown', onKey);
+}
+
+function applyCommand(cmd: AnnotateCommand): void {
+  if (cmd.op === 'tool' && isOverlayTool(cmd.tool)) {
+    commitDraft();
+    tool = cmd.tool;
+    return;
+  }
+  if (cmd.op === 'color' && typeof cmd.color === 'string') {
+    color = cmd.color;
+    return;
+  }
+  if (cmd.op === 'undo') log.undo();
+  else if (cmd.op === 'redo') log.redo();
+  else if (cmd.op === 'clear') log.clear();
+  else if (cmd.op === 'remote') applyRemoteMessage(log, cmd.msg);
+  publishStatus();
+  pushInk();
+  poke();
+}
+
+canvas.addEventListener('pointerdown', onDown);
+canvas.addEventListener('pointermove', onMove);
+canvas.addEventListener('pointerup', onUp);
+canvas.addEventListener('pointercancel', onUp);
+
+window.addEventListener('keydown', (ev) => {
+  if (!active) return;
+  const key = ev.key.toLowerCase();
+  if ((ev.ctrlKey || ev.metaKey) && key === 'z') {
+    ev.preventDefault();
+    if (ev.shiftKey) log.redo();
+    else log.undo();
+    publishStatus();
+    pushInk();
+    poke();
+  } else if ((ev.ctrlKey || ev.metaKey) && key === 'y') {
+    ev.preventDefault();
+    log.redo();
+    publishStatus();
+    pushInk();
+    poke();
+  }
+});
+
+desktop().onAnnotateSurface((next) => {
+  surface = next;
+  resize();
+});
+desktop().onAnnotateMode((on) => {
+  active = on;
+  document.body.classList.toggle('passthrough', !on);
+  if (!on) {
+    commitDraft();
+    textInput.blur();
+  }
+  poke();
+});
+desktop().onAnnotateCommand((cmd) => applyCommand(cmd));
+
+publishStatus();
+poke();

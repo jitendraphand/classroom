@@ -1,0 +1,31 @@
+{
+  "name": "classroom-teacher",
+  "productName": "Classroom Teacher",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Windows teacher desktop app for Classroom",
+  "author": "Classroom",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "node scripts/bundle.mjs && node scripts/make-icon.mjs",
+    "start": "npm run build && electron .",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "dist:win": "bash scripts/build-win.sh"
+  },
+  "devDependencies": {
+    "@types/node": "22.17.2",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "electron": "36.9.5",
+    "electron-builder": "25.1.8",
+    "esbuild": "0.25.10",
+    "livekit-client": "2.22.3",
+    "tsx": "4.20.5",
+    "typescript": "5.9.2"
+  },
+  "dependencies": {
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  }
+}

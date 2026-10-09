@@ -1,0 +1,5 @@
+node_modules/
+media/*.y4m
+media/*.wav
+results.json
+shots/

@@ -1,0 +1,11 @@
+{
+  "name": "classroom-e2e-sim",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sim": "node run.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.55.0"
+  }
+}
