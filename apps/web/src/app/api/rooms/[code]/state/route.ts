@@ -130,7 +130,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   await ensureSampleFresh(code);
   const redis = await ensureRedis();
   // Independent reads, issued together (ioredis pipelines them on one socket).
-  const [{ visible }, mutedIds, handList, handTimes, stageRaw, focusRaw, drawHolder, drawReqs] = await Promise.all([
+  const [{ visible }, mutedIds, handList, handTimes, stageRaw, focusRaw, drawHolder, drawReqs, desktopInkRaw] = await Promise.all([
     getVisibleSample(code),
     redis.smembers(keys.muted(code)),
     redis.smembers(keys.hands(code)),
@@ -140,6 +140,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     isTeacher ? redis.hgetall(keys.focus(code)) : Promise.resolve({} as Record<string, string>),
     currentHolder(code, redis),
     drawRequests(code, redis),
+    redis.get(keys.desktopInk(code)),
   ]);
   const drawReqAt = new Map(drawReqs.map((d) => [d.id, d.at]));
   const handSet = handList.map(String);
@@ -267,6 +268,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     visibleCount: visible.length,
     raisedHands,
     stageMode,
+    /** The share already shows student ink (drawn on the teacher's desktop): skip the stroke overlay. */
+    desktopInk: stageMode === 'screen' && desktopInkRaw === '1',
     /** Student allowed to draw on the share now (one at a time), for everyone. */
     drawHolder: drawHolder
       ? { participantId: drawHolder.participantId, identity: drawHolder.identity, name: drawHolder.name, until: drawHolder.until }

@@ -34,6 +34,8 @@ export const keys = {
   rotation: (code: string) => `room:${code}:rotation`,
   /** Exclusive presentation stage: idle | screen */
   stage: (code: string) => `room:${code}:stage`,
+  /** '1' while the teacher's share draws student ink on the real desktop (Windows app). */
+  desktopInk: (code: string) => `room:${code}:desktop-ink`,
   /** Hash identity → pinnedAt ms for active-speaker pins */
   pinnedSpeakers: (code: string) => `room:${code}:pinned-speakers`,
   /** Per-identity pin rate limit */

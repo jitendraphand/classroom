@@ -76,6 +76,8 @@ export type RoomState = {
   visibleCount: number;
   raisedHands?: string[];
   stageMode?: 'idle' | 'screen';
+  /** Student ink is drawn on the teacher's real desktop (inside the share picture). */
+  desktopInk?: boolean;
   drawHolder?: import('@/lib/drawLogic').DrawHolder | null;
   drawRequestCount?: number;
 };

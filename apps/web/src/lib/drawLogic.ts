@@ -23,6 +23,12 @@
  * - Late joiners load the current strokes with GET /draw. `pts` packets carry
  *   the index they start at, so a packet that overlaps the loaded snapshot is
  *   applied idempotently.
+ * - Desktop ink (Windows teacher app, state `desktopInk`): the app draws the
+ *   strokes on the teacher's real desktop in a captured overlay, so they are
+ *   already in the shared video. Viewers then draw no overlay (it would show
+ *   twice, slightly offset in time); the drawing student keeps only the
+ *   stroke under the pen plus a short fade (DESKTOP_INK_FADE_MS) to cover the
+ *   share's latency. See desktopInkShown.
  */
 
 export const DRAW_TOPIC = 'draw';
@@ -253,4 +259,24 @@ export function createPointBatcher(
     pending: () => queue.length + (inFlight ? 1 : 0),
     flushNow: flush,
   };
+}
+
+/** Desktop ink: how long the drawer keeps a local copy after the last point. */
+export const DESKTOP_INK_FADE_MS = 1500;
+
+/**
+ * Strokes to draw locally. Normal shares: all of them. Desktop ink: only my
+ * own strokes touched in the last DESKTOP_INK_FADE_MS (`touched`: stroke id
+ * -> ms of its last local point); everything else is already in the video.
+ */
+export function desktopInkShown(
+  strokes: Stroke[],
+  opts: { desktopInk: boolean; me: string; touched: ReadonlyMap<string, number>; now: number }
+): Stroke[] {
+  if (!opts.desktopInk) return strokes;
+  return strokes.filter((s) => {
+    if (s.by !== opts.me) return false;
+    const t = opts.touched.get(s.id);
+    return t !== undefined && opts.now - t < DESKTOP_INK_FADE_MS;
+  });
 }

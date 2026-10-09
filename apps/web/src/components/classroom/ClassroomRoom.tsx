@@ -3464,6 +3464,7 @@ function RoomInner({
       holder={drawHolder}
       myIdentity={state?.me?.livekitIdentity ?? localParticipant.identity}
       canDraw={!isTeacher && myDrawState === 'drawing' && !!state?.me?.canDraw}
+      desktopInk={!!state?.desktopInk}
     >
       {node}
     </ShareDrawingProvider>

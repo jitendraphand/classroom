@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  DESKTOP_INK_FADE_MS,
   DRAW_ALLOW_MS,
+  desktopInkShown,
   applyPacket,
   cleanPoints,
   containRect,
@@ -146,4 +148,23 @@ test('roster: the drawer, then draw requests (earliest first), then hands', () =
     { id: 'e', displayName: 'Esha', role: 'STUDENT', drawing: true },
   ];
   assert.deepEqual(sortRoster(people).map((p) => p.id), ['e', 'd', 'c', 'b', 'a']);
+});
+
+test('desktop ink: viewers draw nothing, the drawer only fresh own strokes', () => {
+  const strokes = [
+    { id: 'a', by: 'me', name: 'Me', color: 'red' as const, pts: [0.1, 0.1] },
+    { id: 'b', by: 'me', name: 'Me', color: 'red' as const, pts: [0.2, 0.2] },
+    { id: 'c', by: 'other', name: 'O', color: 'blue' as const, pts: [0.3, 0.3] },
+  ];
+  const touched = new Map([
+    ['a', 1000],
+    ['b', 1000 - DESKTOP_INK_FADE_MS],
+  ]);
+  assert.equal(desktopInkShown(strokes, { desktopInk: false, me: 'me', touched, now: 1200 }).length, 3);
+  assert.deepEqual(
+    desktopInkShown(strokes, { desktopInk: true, me: 'me', touched, now: 1200 }).map((s) => s.id),
+    ['a']
+  );
+  assert.deepEqual(desktopInkShown(strokes, { desktopInk: true, me: 'viewer', touched, now: 1200 }), []);
+  assert.deepEqual(desktopInkShown(strokes, { desktopInk: true, me: 'me', touched, now: 1000 + DESKTOP_INK_FADE_MS }), []);
 });

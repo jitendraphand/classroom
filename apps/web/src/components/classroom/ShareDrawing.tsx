@@ -29,6 +29,7 @@ import {
   createPointBatcher,
   decodePacket,
   hitStroke,
+  desktopInkShown,
   holderActive,
   lastStrokeOf,
   nameTags,
@@ -46,6 +47,10 @@ type DrawingCtx = {
   /** My LiveKit identity (student) — to know which strokes I may erase. */
   myIdentity: string;
   canDraw: boolean;
+  /** The share already shows the ink (teacher's Windows app draws it on the desktop). */
+  desktopInk: boolean;
+  /** Stroke id -> ms of my last local point (desktop ink fade). */
+  touched: Map<string, number>;
   setStrokes: (fn: (s: Stroke[]) => Stroke[]) => void;
   post: (body: Record<string, unknown>) => Promise<Response | null>;
 };
@@ -66,6 +71,7 @@ export function ShareDrawingProvider({
   holder,
   myIdentity,
   canDraw,
+  desktopInk = false,
   children,
 }: {
   code: string;
@@ -73,8 +79,10 @@ export function ShareDrawingProvider({
   holder: DrawHolder | null | undefined;
   myIdentity: string;
   canDraw: boolean;
+  desktopInk?: boolean;
   children: ReactNode;
 }) {
+  const touched = useRef(new Map<string, number>()).current;
   const room = useRoomContext();
   const [strokes, setStrokesState] = useState<Stroke[]>([]);
   const setStrokes = useCallback((fn: (s: Stroke[]) => Stroke[]) => setStrokesState(fn), []);
@@ -149,10 +157,12 @@ export function ShareDrawingProvider({
       holder: holderActive(holder ?? null) ? (holder as DrawHolder) : null,
       myIdentity,
       canDraw: active && canDraw,
+      desktopInk: active && desktopInk,
+      touched,
       setStrokes,
       post,
     }),
-    [active, strokes, holder, myIdentity, canDraw, setStrokes, post]
+    [active, strokes, holder, myIdentity, canDraw, desktopInk, touched, setStrokes, post]
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
@@ -260,14 +270,25 @@ export function DrawOverlay({ aspect, interactive = true, className }: { aspect?
   const [host, setHost] = useState<HTMLElement | null>(null);
   useLayoutEffect(() => setHost(ref.current?.parentElement ?? null), []);
   const rect = usePictureRect(host, aspect);
+  const [, fadeTick] = useState(0);
+  const shown = d
+    ? desktopInkShown(d.strokes, { desktopInk: d.desktopInk, me: d.myIdentity, touched: d.touched, now: Date.now() })
+    : [];
+  const fading = !!d?.desktopInk && shown.length > 0;
+  // Desktop ink: re-render until my local copy has faded (the video shows it).
+  useEffect(() => {
+    if (!fading) return;
+    const t = window.setTimeout(() => fadeTick((n) => n + 1), 250);
+    return () => window.clearTimeout(t);
+  });
   if (!d) return <div ref={ref} hidden />;
-  const show = d.strokes.length > 0 || (interactive && d.canDraw);
+  const show = shown.length > 0 || (interactive && d.canDraw);
   return (
     <div ref={ref} className={cn('draw-layer', className)} data-draw-layer>
       {show && rect.w > 0 && (
         <div className="draw-pic" style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}>
-          <StrokesSvg strokes={d.strokes} w={rect.w} h={rect.h} />
-          {nameTags(d.strokes).map((t) => (
+          <StrokesSvg strokes={shown} w={rect.w} h={rect.h} />
+          {(d.desktopInk ? [] : nameTags(shown)).map((t) => (
             <span
               key={t.by}
               className="draw-name"
@@ -327,6 +348,7 @@ function DrawSurface({ w, h }: { w: number; h: number }) {
     const c = cur.current;
     if (!c || !pts.length) return;
     const id = c.id;
+    d.touched.set(id, Date.now());
     d.setStrokes((s) => {
       const i = s.findIndex((x) => x.id === id);
       if (i < 0) return [...s, { id, by: d.myIdentity, name: 'You', color, pts }];

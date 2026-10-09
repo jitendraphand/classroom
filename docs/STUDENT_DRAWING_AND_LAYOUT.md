@@ -49,10 +49,25 @@
 Strokes are kept when the pen expires or moves to another student, so the class can still see
 them. Room Redis keys are wiped when the class ends.
 
+**Desktop ink (Windows teacher app)**
+- When the teacher shares from the Windows app, it starts the share with
+  `POST /api/rooms/<code>/stage {mode:'screen', desktopInk:true}`. The server sets
+  `room:<code>:desktop-ink` and the room state returns `desktopInk: true` (only while the stage is
+  `screen`; any other stage call or a browser share clears it, and so does ending the class).
+- The Windows app receives the same server `draw` packets and draws the strokes on its transparent,
+  captured overlay on the teacher's real desktop. They are then part of the shared video.
+- So the web pages must not draw them again: with `desktopInk`, viewers render nothing, and the
+  drawing student sees only their own strokes for `DESKTOP_INK_FADE_MS` (1.5 s) after each point
+  (`desktopInkShown`), so the pen feels immediate until the video catches up. No name tags.
+- Allow / Revoke / Clear drawing and the limits are unchanged.
+
 **Safety**
-- Nothing is injected into the teacher's computer: no input events and no OS-level overlay.
-- Strokes exist only inside the classroom web pages (an SVG layer over the video element). The
-  teacher's real desktop and the captured video stream are never modified.
+- Nothing is injected into the teacher's computer: no input events. With the web app the strokes
+  exist only inside the classroom pages (an SVG layer over the video element) and the teacher's
+  desktop is never modified.
+- With the Windows teacher app, strokes are drawn on the app's own transparent overlay window (not
+  on other applications); it never takes input from students and is cleared on Revoke / Clear /
+  share stop.
 
 Code:
 - `src/lib/drawLogic.ts`: pure logic, unit-tested in `tests/draw.test.ts`.
