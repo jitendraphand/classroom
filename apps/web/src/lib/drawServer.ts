@@ -168,6 +168,24 @@ export async function deleteOwnStroke(code: string, identity: string, id: string
 }
 
 /** Teacher eraser: remove any stroke (relayed as `del` to every viewer). */
+/** Batch teacher erase: one Redis round trip; one `del` packet per removed stroke (what every client already understands). */
+export async function deleteStrokes(code: string, ids: readonly string[]): Promise<number> {
+  const uniq = [...new Set(ids)];
+  if (!uniq.length) return 0;
+  const r = await ensureRedis();
+  const m = r.multi();
+  for (const id of uniq) m.hdel(keys.drawStrokes(code), id).lrem(keys.drawOrder(code), 0, id);
+  const res = (await m.exec()) ?? [];
+  let removed = 0;
+  for (let i = 0; i < uniq.length; i++) {
+    if (Number(res[i * 2]?.[1] ?? 0) > 0) {
+      removed++;
+      await send(code, { v: 1, t: 'del', id: uniq[i]! });
+    }
+  }
+  return removed;
+}
+
 export async function deleteStroke(code: string, id: string) {
   const r = await ensureRedis();
   const removed = await r.hdel(keys.drawStrokes(code), id);

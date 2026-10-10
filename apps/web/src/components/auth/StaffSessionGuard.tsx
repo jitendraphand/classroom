@@ -1,5 +1,6 @@
 'use client';
 
+import { CLASS_FINISHED_EVENT } from '@/lib/classFinishEvent';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import {
@@ -67,7 +68,14 @@ export function StaffSessionGuard() {
     const onCheck = () => void check();
     document.addEventListener('visibilitychange', tick);
     window.addEventListener(SESSION_CHECK_EVENT, onCheck);
+    // Student class view finished: no more background checks from this tab.
+    const onFinished = () => {
+      ended = true;
+      window.clearInterval(iv);
+    };
+    window.addEventListener(CLASS_FINISHED_EVENT, onFinished);
     return () => {
+      window.removeEventListener(CLASS_FINISHED_EVENT, onFinished);
       if (window.fetch === patched) window.fetch = origFetch;
       window.clearInterval(iv);
       document.removeEventListener('visibilitychange', tick);

@@ -1,7 +1,9 @@
+import { isSecondDevice } from './deviceTakeover';
+import { takeOverSeat } from './deviceTakeoverServer';
 import type { ClassSession, Room, Student } from '@prisma/client';
 import { nudgeRoomState } from './roomNudge';
 import { prisma } from './db';
-import { setActAsStudent, setStudentCookie } from './auth';
+import { getStudentSessionToken, setActAsStudent, setStudentCookie } from './auth';
 import { generateIdentity, generateSessionToken } from './codes';
 import { audienceIncludes, formatAudience, normalizeCampus, normalizeDivision, normalizeGrade } from './grades';
 import { ensureRedis, keys } from './redis';
@@ -103,8 +105,15 @@ export async function ensureStudentParticipant(student: Student, room: Room, cs:
     });
     const redis = await ensureRedis();
     await redis.sadd(keys.waiting(room.code), participant.id);
-  } else if (participant.displayName !== student.name) {
-    participant = await prisma.participant.update({ where: { id: participant.id }, data: { displayName: student.name } });
+  } else {
+    if (participant.displayName !== student.name) {
+      participant = await prisma.participant.update({ where: { id: participant.id }, data: { displayName: student.name } });
+    }
+    // One device per student: a browser without this seat's session cookie is
+    // a second device, and the newer device takes over (lib/deviceTakeover).
+    if (isSecondDevice({ cookieToken: await getStudentSessionToken(), seatToken: participant.sessionToken, seatStatus: participant.status })) {
+      participant = await takeOverSeat(room, participant);
+    }
   }
   // Waiting room switched off by the teacher: admit on arrival (still muted,
   // still only this class).

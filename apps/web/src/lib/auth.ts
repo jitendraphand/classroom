@@ -1,3 +1,4 @@
+import { cachedRead } from './dbCache';
 import { cookies } from 'next/headers';
 import bcrypt from 'bcryptjs';
 import { prisma } from './db';
@@ -169,7 +170,7 @@ export async function getTeacherSession(
   const claims = await verifySession(token, 'teacher').catch(() => null);
   if (!claims) return null;
   try {
-    const teacher = await prisma.teacher.findUnique({ where: { id: claims.sub } });
+    const teacher = await cachedRead(`teacher:${claims.sub}`, () => prisma.teacher.findUnique({ where: { id: claims.sub } }));
     if (sessionStatus(claims, teacher) !== 'ok' || !teacher) return null;
     if (teacher.mustChangePassword && !opts.allowPendingPasswordChange) return null;
     let permanentCode = teacher.permanentCode;
@@ -290,10 +291,12 @@ export async function getStudentSessionToken() {
 export async function getStudentParticipant() {
   const token = await getStudentSessionToken();
   if (!token) return null;
-  return prisma.participant.findUnique({
-    where: { sessionToken: token },
-    include: { room: true },
-  });
+  return cachedRead(`student-token:${token}`, () =>
+    prisma.participant.findUnique({
+      where: { sessionToken: token },
+      include: { room: true },
+    })
+  );
 }
 
 /** Prefer student identity when a teacher also has a session (join-as-student). */

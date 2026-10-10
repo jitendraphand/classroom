@@ -1,5 +1,9 @@
 'use client';
 
+import { finishCopy, finishFromState, type FinishReason } from '@/lib/classFinish';
+import { freshTakeovers, takeoverToastText } from '@/lib/deviceTakeover';
+import { CLASS_FINISHED_EVENT } from '@/lib/classFinishEvent';
+import dynamic from 'next/dynamic';
 import {
   LiveKitRoom,
   RoomAudioRenderer,
@@ -43,7 +47,9 @@ import { shortName } from '@/lib/displayNames';
 import { Controls } from './Controls';
 import { LocalPreview } from './LocalPreview';
 import { DrawOverlay, ShareDrawingProvider, useDrawingActions, useShareDrawing } from './ShareDrawing';
-import { ChatView, useChatThread } from './Chat';
+import { useChatThread } from './chatThread';
+// Chat UI loads on first open (the thread hook above keeps unread counts live).
+const ChatView = dynamic(() => import('./Chat').then((m) => m.ChatView), { ssr: false });
 import { useStudentFocus } from './useStudentFocus';
 import { countFocusAlerts, focusLabel, isFocusAlert, needsCover } from '@/lib/focusStatus';
 import { FloatingPanel, useFloatDrag, readFloatPref, writeFloatPref, type FloatPos } from './FloatingPanel';
@@ -2235,6 +2241,7 @@ function RoomInner({
   displayName,
   onVisibilityChange,
   onClassEnded,
+  onFinished,
 }: {
   code: string;
   isTeacher: boolean;
@@ -2244,6 +2251,8 @@ function RoomInner({
   displayName: string;
   onVisibilityChange: (v: boolean) => void;
   onClassEnded: () => void;
+  /** Student: the class view stops for good (left / ended / removed / another device). */
+  onFinished: (r: FinishReason) => void;
 }) {
   const router = useRouter();
   const room = useRoomContext();
@@ -2383,6 +2392,29 @@ function RoomInner({
   useEffect(() => {
     if (micLockedNoTeacher) setMicOn(false);
   }, [micLockedNoTeacher]);
+
+  // Student: taken over by another device, or removed by the teacher.
+  useEffect(() => {
+    if (isTeacher) return;
+    const r = finishFromState(state);
+    if (r && r !== 'ended') onFinished(r);
+  }, [isTeacher, state, onFinished]);
+
+  // Teacher: toast when a student's newer device takes over their seat.
+  const takeoverSeen = useRef(Date.now());
+  const [takeoverToast, setTakeoverToast] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isTeacher) return;
+    const fresh = freshTakeovers(state?.takeovers, takeoverSeen.current);
+    if (!fresh.length) return;
+    takeoverSeen.current = Math.max(...fresh.map((t) => t.at));
+    setTakeoverToast(takeoverToastText(fresh[fresh.length - 1]!));
+  }, [isTeacher, state?.takeovers]);
+  useEffect(() => {
+    if (!takeoverToast) return;
+    const t = window.setTimeout(() => setTakeoverToast(null), 8000);
+    return () => window.clearTimeout(t);
+  }, [takeoverToast]);
 
   useEffect(() => {
     if (state?.status === 'ENDED' || state?.ended) {
@@ -3121,15 +3153,18 @@ function RoomInner({
   }, [localParticipant, screenOn, isTeacher, postStage, endShareSession, attachShareSurface, room]);
 
   async function leave() {
+    // Student: show "You left" first (the server's removal from LiveKit would
+    // otherwise arrive first and read as "removed by the teacher").
+    if (!isTeacher) onFinished('left');
     await roomFetch(code, '/leave', {
       method: 'POST',
+      keepalive: true,
       headers: { 'Content-Type': 'application/json' },
       body: '{}',
     });
+    if (!isTeacher) return; // static "you left" screen already shown
     room?.disconnect();
-    router.push(
-      isTeacher ? '/teacher/dashboard' : studentHomePath(!!state?.me?.viaSchoolApp || isSchoolStudentTab())
-    );
+    router.push('/teacher/dashboard');
   }
 
   async function endClass() {
@@ -3775,6 +3810,14 @@ function RoomInner({
         </span>
       )}
 
+      {isTeacher && takeoverToast && (
+        <div className="teacher-toast" role="status" data-testid="takeover-toast">
+          <span className="flex-1">{takeoverToast}</span>
+          <button type="button" className="text-xs text-slate-400 hover:text-white" onClick={() => setTakeoverToast(null)} aria-label="Dismiss">
+            ✕
+          </button>
+        </div>
+      )}
       {isTeacher && drawToast && (
         <div className="teacher-toast" role="status">
           <IconPen size={16} className="shrink-0 text-amber-300" />
@@ -4330,6 +4373,8 @@ export function ClassroomRoom({ code }: { code: string }) {
   const [tokenData, setTokenData] = useState<TokenPayload | null>(null);
   const [error, setError] = useState('');
   const [classEnded, setClassEnded] = useState(false);
+  /** Student: why the class view stopped for good (static screen, zero requests). */
+  const [finished, setFinished] = useState<FinishReason | null>(null);
   const [isTeacher, setIsTeacher] = useState(false);
   /** School-app student (home is /student); null until known. */
   const [schoolStudent, setSchoolStudent] = useState<boolean | null>(null);
@@ -4357,6 +4402,12 @@ export function ClassroomRoom({ code }: { code: string }) {
 
   const onDisconnected = useCallback(
     (reason?: DisconnectReason) => {
+      if (!isTeacher && (reason === DisconnectReason.DUPLICATE_IDENTITY || reason === DisconnectReason.PARTICIPANT_REMOVED)) {
+        // Students: the newer device took the seat, or the teacher removed them.
+        setFinished((f) => f ?? (reason === DisconnectReason.DUPLICATE_IDENTITY ? 'replaced' : 'removed'));
+        setTokenData(null);
+        return;
+      }
       if (reason === DisconnectReason.DUPLICATE_IDENTITY) {
         setHandoff((h) => h ?? 'device');
         setTokenData(null);
@@ -4393,6 +4444,10 @@ export function ClassroomRoom({ code }: { code: string }) {
 
   const markEnded = useCallback(() => {
     setClassEnded(true);
+    setTokenData(null);
+  }, []);
+  const finish = useCallback((r: FinishReason) => {
+    setFinished((f) => f ?? r);
     setTokenData(null);
   }, []);
 
@@ -4501,6 +4556,10 @@ export function ClassroomRoom({ code }: { code: string }) {
   // app for no behavioural gain — the props below are initial values that
   // effectiveCanPublish / effectiveMuted immediately override from `state`.
 
+  if (finished || (classEnded && !isTeacher && getClassroomRole(code) === 'student')) {
+    return <StudentFinished reason={finished ?? 'ended'} />;
+  }
+
   if (handoff) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-4 px-6">
@@ -4607,8 +4666,35 @@ export function ClassroomRoom({ code }: { code: string }) {
         displayName={displayName}
         onVisibilityChange={setCanPublishVideo}
         onClassEnded={markEnded}
+        onFinished={finish}
       />
     </LiveKitRoom>
+  );
+}
+
+/**
+ * Static end screen for students. Rendering it unmounted LiveKitRoom and
+ * RoomInner (LiveKit disconnected, tracks stopped, polls and listeners gone);
+ * it makes no requests itself. window.close() works when the tab was opened
+ * by the school app; otherwise the student closes it.
+ */
+function StudentFinished({ reason }: { reason: FinishReason }) {
+  useEffect(() => {
+    window.dispatchEvent(new Event(CLASS_FINISHED_EVENT));
+    try {
+      window.close();
+    } catch {
+      /* blocked: the screen stays */
+    }
+  }, []);
+  const copy = finishCopy(reason);
+  return (
+    <main className="flex min-h-screen flex-col items-center justify-center gap-4 px-6" data-finished={reason}>
+      <div className="max-w-md rounded-2xl border border-white/10 bg-surface-1 p-8 text-center shadow-lift">
+        <p className="font-display text-2xl font-semibold tracking-tight">{copy.title}</p>
+        <p className="mt-2 text-sm text-slate-400">{copy.body}</p>
+      </div>
+    </main>
   );
 }
 

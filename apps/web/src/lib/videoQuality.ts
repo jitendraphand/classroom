@@ -57,6 +57,10 @@ export const SCREEN_SHARE = {
  * cannot decode VP9 (older iOS Safari) get the VP8 backup codec, which the
  * publisher starts on demand (LiveKit backupCodec) with the 720p simulcast
  * layer above. Other publishers (Safari, Firefox) keep VP8 simulcast.
+ * Note (2026-10-10): with LiveKit 1.13.9 a subscriber that declines VP9 on
+ * purpose did NOT get the backup started (tested with H.264 and VP8 backups,
+ * single and dual peer connection): phones therefore still receive the one
+ * VP9 1080p layer. lib/subscriberCodecs keeps the decision logic for later.
  */
 export const SHARE_CODEC = {
   codec: 'vp9',

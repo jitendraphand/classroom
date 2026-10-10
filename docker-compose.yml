@@ -78,6 +78,10 @@ services:
     command: ["--config", "/etc/livekit.yaml"]
     volumes:
       - ./infra/livekit.yaml:/etc/livekit.yaml:ro
+      # Caddy's Let's Encrypt certificates, read by LiveKit's embedded TURN/TLS
+      # (turn.cert_file / key_file in livekit.yaml). Restart livekit after a
+      # renewal (~every 60 days) so it picks up the new certificate.
+      - caddy_data:/caddy-data:ro
     depends_on:
       redis:
         condition: service_healthy

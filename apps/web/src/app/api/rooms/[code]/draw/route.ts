@@ -1,3 +1,4 @@
+import { ERASE_BATCH_MAX } from '@/lib/eraseBatch';
 import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { getAdminSession, resolveRoomAccess } from '@/lib/auth';
@@ -12,6 +13,7 @@ import {
   currentHolder,
   deleteOwnStroke,
   deleteStroke,
+  deleteStrokes,
   listStrokes,
   revokeDraw,
   setDrawRequest,
@@ -35,6 +37,8 @@ const schema = z.object({
   action: z.enum(['request', 'cancel', 'release', 'pts', 'del', 'allow', 'revoke', 'clear', 'erase']),
   participantId: z.string().min(1).max(64).optional(),
   id: z.string().max(40).optional(),
+  /** Teacher batch erase (lib/eraseBatch): up to ERASE_BATCH_MAX stroke ids. */
+  ids: z.array(z.string().max(40)).max(ERASE_BATCH_MAX).optional(),
   from: z.number().int().min(0).max(100_000).optional(),
   pts: z.array(z.number()).max(4000).optional(),
   color: z.string().max(10).optional(),
@@ -85,6 +89,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
       }
       // Teacher eraser: remove one student stroke for everyone.
       if (body.action === 'erase') {
+        if (body.ids) {
+          const ids = body.ids.filter((x) => validStrokeId(x));
+          if (!ids.length) return jsonError('Bad stroke');
+          const removed = await deleteStrokes(code, ids);
+          return jsonOk({ ok: true, removed });
+        }
         if (!validStrokeId(body.id)) return jsonError('Bad stroke');
         await deleteStroke(code, body.id);
         return jsonOk({ ok: true });

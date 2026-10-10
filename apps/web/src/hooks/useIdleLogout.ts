@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
+import { CLASS_FINISHED_EVENT } from '@/lib/classFinishEvent';
 import { isLiveSession, onLiveSessionChange, onReportedActivity } from '@/lib/liveSession';
 
 /** 15 minutes of no pointer/keyboard/touch activity → sign out. */
@@ -117,6 +118,14 @@ export function useIdleLogout() {
     const offActivity = onReportedActivity(onActivity);
     // Joining a live room suspends the timer; leaving it starts a fresh one.
     const offLive = onLiveSessionChange(() => armTimer());
+    // A student's finished class view makes no more requests: stop polling.
+    const onFinished = () => {
+      cancelled = true;
+      authedRef.current = false;
+      clearTimer();
+      window.clearInterval(authPoll);
+    };
+    window.addEventListener(CLASS_FINISHED_EVENT, onFinished);
 
     return () => {
       cancelled = true;
@@ -128,6 +137,7 @@ export function useIdleLogout() {
       document.removeEventListener('visibilitychange', onVisibility);
       offActivity();
       offLive();
+      window.removeEventListener(CLASS_FINISHED_EVENT, onFinished);
     };
   }, [router, pathname]);
 }

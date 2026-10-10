@@ -1,6 +1,8 @@
 import { camWanted } from '@/lib/camOnDemand';
 import { prisma } from '@/lib/db';
-import { endedSessionReason, resolveRoomAccess } from '@/lib/auth';
+import { endedSessionReason, getStudentSessionToken, resolveRoomAccess } from '@/lib/auth';
+import { cachedRead } from '@/lib/dbCache';
+import { recentTakeovers, wasReplaced } from '@/lib/deviceTakeoverServer';
 import { jsonError, jsonOk } from '@/lib/response';
 import { clampMaxVisible, ensureSampleFresh, getVisibleSample } from '@/lib/sample';
 import { ensureRedis, keys } from '@/lib/redis';
@@ -18,7 +20,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     url.searchParams.get('as') === 'student' ||
     req.headers.get('x-classroom-as') === 'student';
 
-  const room = await prisma.room.findUnique({
+  const room = await cachedRead(`room-state:${code}`, () => prisma.room.findUnique({
     where: { code },
     include: {
       teacher: { select: { id: true, name: true } },
@@ -39,7 +41,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
         },
       },
     },
-  });
+  }));
   if (!room) return jsonError('Room not found', 404);
 
   // Always surface ENDED quickly so clients can kick to ended UI without auth edge-cases
@@ -69,6 +71,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     // left open on the old device): say why instead of the public join info.
     const reason = await endedSessionReason();
     if (reason) return jsonError('Your session has ended', 401, { reason });
+    // Student tab whose seat moved to another device, or who left / was removed.
+    const token = await getStudentSessionToken();
+    const replaced = await wasReplaced(token);
+    const meLeft = !replaced && !!access.student && access.student.roomId === room.id && access.student.status === 'LEFT';
     // Public minimal info for join page — include teacher-session hint
     return jsonOk({
       code: room.code,
@@ -79,6 +85,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       teacherSessionActive: !!access.teacher,
       teacherSessionName: access.teacher?.name ?? null,
       manualJoinAllowed: manualStudentJoinAllowed(),
+      ...(replaced ? { replaced: true } : {}),
+      ...(meLeft ? { meLeft: true } : {}),
     });
   }
 
@@ -166,15 +174,21 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   let classSession: { id: string; campus: string; grade: string; divisions: string[]; allDivisions: boolean; subject: string; adHoc: boolean } | null = null;
   const lateByStudent = new Map<string, boolean>();
   if (isTeacher && room.classSessionId) {
-    classSession = await prisma.classSession.findUnique({
-      where: { id: room.classSessionId },
-      select: { id: true, campus: true, grade: true, divisions: true, allDivisions: true, subject: true, adHoc: true },
-    });
+    const csId = room.classSessionId;
+    classSession = await cachedRead(`class-session:${csId}`, () =>
+      prisma.classSession.findUnique({
+        where: { id: csId },
+        select: { id: true, campus: true, grade: true, divisions: true, allDivisions: true, subject: true, adHoc: true },
+      })
+    );
     if (classSession) {
-      const recs = await prisma.attendanceRecord.findMany({
-        where: { classSessionId: classSession.id },
-        select: { studentId: true, late: true },
-      });
+      const cid = classSession.id;
+      const recs = await cachedRead(`attendance-late:${cid}`, () =>
+        prisma.attendanceRecord.findMany({
+          where: { classSessionId: cid },
+          select: { studentId: true, late: true },
+        })
+      );
       for (const r of recs) lateByStudent.set(r.studentId, r.late);
     }
   }
@@ -280,6 +294,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       ? { participantId: drawHolder.participantId, identity: drawHolder.identity, name: drawHolder.name, until: drawHolder.until }
       : null,
     drawRequestCount: isTeacher ? drawReqs.length : undefined,
+    /** Teacher: students whose newer device took over their seat (toast). */
+    takeovers: isTeacher ? await recentTakeovers(code) : undefined,
     sampleNote:
       'Only a rotating sample of students publish video to the teacher. Everyone keeps a local preview and may appear visible.',
   });

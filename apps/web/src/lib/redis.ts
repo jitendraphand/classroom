@@ -59,6 +59,10 @@ export const keys = {
   drawOrder: (code: string) => `room:${code}:draw-order`,
   /** JSON {s: sessionId, p: boolean}: is the teacher connected to the LiveKit room (webhook / probe) */
   teacherPresent: (code: string) => `room:${code}:teacher-present`,
+  /** '1': this student session token was taken over by another device (lib/deviceTakeover). */
+  replacedToken: (token: string) => `student-token:${token}:replaced`,
+  /** List of JSON TakeoverNotice for the teacher's toast (newest first). */
+  takeovers: (code: string) => `room:${code}:takeovers`,
 };
 
 export type StageMode = 'idle' | 'screen';

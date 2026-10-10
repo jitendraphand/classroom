@@ -84,6 +84,12 @@ export type RoomState = {
   videoPanelOpen?: boolean;
   drawHolder?: import('@/lib/drawLogic').DrawHolder | null;
   drawRequestCount?: number;
+  /** Public answer: this tab's student seat moved to another device. */
+  replaced?: boolean;
+  /** Public answer: this tab's student left or was removed. */
+  meLeft?: boolean;
+  /** Teacher: recent device takeovers (toast). */
+  takeovers?: import('@/lib/deviceTakeover').TakeoverNotice[];
 };
 
 /** `{v:1,type:'mute',muted}` from the server → muted flag; anything else → null. */
@@ -145,6 +151,14 @@ export function useRoomState(code: string, intervalMs = 2000, room?: Room | null
           return;
         }
         setError(data.error || 'Failed to load room');
+        return;
+      }
+      // Seat taken over by another device, or this student left / was removed:
+      // stop polling for good (the view shows a static screen).
+      if (data.public && (data.replaced || data.meLeft)) {
+        setState(data);
+        stopped.current = true;
+        setError('');
         return;
       }
       if (data.status === 'ENDED' || data.ended) {

@@ -88,7 +88,7 @@ cat > "$CADDYFILE" << CADDY
 # Bring up with TLS profile:
 #   docker compose --profile tls up --build -d
 #
-# Firewall: open 80/tcp, 443/tcp, 7881/tcp, 50000–50100/udp.
+# Firewall: open 80/tcp, 443/tcp, 7881/tcp, 50000–50100/udp, and for TURN 5349/tcp + 3478/udp.
 # Do NOT expose 3000 or 7880 publicly when using Caddy (signaling via WSS on livekit host).
 # Media (WebRTC UDP/TCP) stays direct to LiveKit — Caddy cannot terminate UDP.
 
@@ -97,12 +97,21 @@ cat > "$CADDYFILE" << CADDY
 }
 
 ${DOMAIN} {
-	encode gzip
+	encode zstd gzip
+	# Hashed build assets never change: cache for a year.
+	@immutable path /_next/static/*
+	header @immutable Cache-Control "public, max-age=31536000, immutable"
+	# Other static files: a day (unless the app set its own).
+	@assets path /favicon.ico /favicon.svg /*.png /*.jpg /*.svg /*.webp /*.woff2 /*.ico
+	header @assets ?Cache-Control "public, max-age=86400"
+	# API answers are per user and live: never cached (unless the route says otherwise).
+	@api path /api/*
+	header @api ?Cache-Control "no-store"
 	reverse_proxy 127.0.0.1:3000
 }
 
 ${LIVEKIT_HOST} {
-	encode gzip
+	encode zstd gzip
 	# WebSocket upgrade is automatic in Caddy
 	reverse_proxy 127.0.0.1:7880
 }
