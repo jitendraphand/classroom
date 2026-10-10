@@ -15,6 +15,7 @@
  * would replace it.
  */
 
+import { parseOrient, toolbarSize } from '../shared/toolbarLayout';
 import { HW_ENCODE_FEATURES } from '../shared/hwEncode';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -678,8 +679,7 @@ function openAnnotateTools(): void {
     raiseControls();
     return;
   }
-  const w = 212;
-  const h = 452;
+  const { width: w, height: h } = toolbarSize(parseOrient(config.annotateToolsOrient));
   const tb = toolbar && !toolbar.isDestroyed() && toolbar.isVisible() ? toolbar.getBounds() : null;
   const area = workAreaFor(tb ? toolbar : mainWindow);
   let x = tb ? tb.x + tb.width - w : area.x + area.width - w - 16;
@@ -736,6 +736,20 @@ function openAnnotateTools(): void {
   });
   void win.loadURL('app://classroom/tools.html');
 }
+
+ipcMain.on('annotate-tools-orient', (event, orient: unknown) => {
+  const win = chrome.get('annotate-tools');
+  if (!win || win.isDestroyed() || event.sender !== win.webContents) return;
+  const o = parseOrient(orient);
+  config.annotateToolsOrient = o;
+  saveConfig();
+  const size = toolbarSize(o);
+  const b = win.getBounds();
+  const area = screen.getDisplayMatching(b).workArea;
+  const x = Math.min(Math.max(area.x, b.x), area.x + area.width - size.width);
+  const y = Math.min(Math.max(area.y, b.y), area.y + area.height - size.height);
+  win.setBounds({ x, y, width: size.width, height: size.height });
+});
 
 function closeAnnotateTools(): void {
   const win = chrome.get('annotate-tools');

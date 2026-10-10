@@ -62,6 +62,7 @@ contextBridge.exposeInMainWorld('classroom', {
   onStudentInkEdit: (cb: (edit: unknown) => void) => listen('student-ink-edit', cb),
   setWgcFps: (fps: number) => ipcRenderer.invoke('wgc-fps', fps),
   annotationDrawMode: (on: boolean) => ipcRenderer.send('annotation-draw-mode', on),
+  annotateToolsOrient: (orient: string) => ipcRenderer.send('annotate-tools-orient', orient),
   postVideoTile: (key: string, jpeg: Uint8Array) => {
     const copy = jpeg.byteOffset === 0 && jpeg.byteLength === jpeg.buffer.byteLength ? jpeg : jpeg.slice();
     ipcRenderer.send('video-tile', key, copy.buffer);

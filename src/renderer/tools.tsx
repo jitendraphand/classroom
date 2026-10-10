@@ -1,46 +1,59 @@
 /**
- * Teacher annotation panel ("Annotate tools"): its own small, opaque,
- * capture-EXCLUDED window (see WINDOW_CAPTURE_DECISIONS in shared/capture.ts).
- * Students see the marks on the captured overlay, never this panel.
+ * Teacher annotation toolbar ("Annotate tools"): a compact floating bar in its
+ * own small, opaque, capture-EXCLUDED window (see WINDOW_CAPTURE_DECISIONS in
+ * shared/capture.ts). Students see the marks on the captured overlay, never
+ * this bar.
  *
- * Tools: pen, highlighter, line, arrow, rectangle, ellipse, text, laser,
- * eraser · undo / redo / clear · colour (swatches + picker) · thickness ·
- * Draw / Click-through (the overlay takes the mouse, or lets clicks reach
- * the apps underneath while the marks stay on screen).
+ * Groups: draw tools | shapes | text / laser | colour swatches + thickness |
+ * undo / redo / clear | draw ↔ click-through | dock | close. Horizontal by
+ * default, optional vertical dock. Tooltips show the keyboard shortcuts.
  */
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ANNOTATE_COLORS } from '../shared/annotate';
 import { THICKNESS_MAX, THICKNESS_MIN, toolWidth, type AnnotateStatus, type OverlayTool } from '../shared/annotateOverlay';
+import { TOOL_GROUPS, parseOrient, tip, toolForKey, type ToolbarOrient } from '../shared/toolbarLayout';
 import { desktop } from './bridge';
 import type { IconName } from './icons';
 import { Icon } from './teacherViews';
 
-const TOOLS: { id: OverlayTool; label: string; icon: IconName; key: string }[] = [
-  { id: 'pen', label: 'Pen', icon: 'pen', key: 'P' },
-  { id: 'highlight', label: 'Highlighter', icon: 'highlighter', key: 'H' },
-  { id: 'line', label: 'Line', icon: 'line', key: 'L' },
-  { id: 'arrow', label: 'Arrow', icon: 'arrow', key: 'A' },
-  { id: 'rect', label: 'Rectangle', icon: 'rect', key: 'R' },
-  { id: 'ellipse', label: 'Ellipse', icon: 'ellipse', key: 'O' },
-  { id: 'text', label: 'Text', icon: 'text', key: 'T' },
-  { id: 'laser', label: 'Laser pointer', icon: 'laser', key: 'K' },
-  { id: 'eraser', label: 'Eraser', icon: 'eraser', key: 'E' },
-];
-
 const HEX = /^#[0-9a-f]{6}$/i;
+const ORIENT_KEY = 'classroom.annotateOrient';
+
+function Sep() {
+  return <span className="atb-sep" aria-hidden="true" />;
+}
 
 function Tools() {
   const [tool, setTool] = useState<OverlayTool>('pen');
   const [color, setColor] = useState<string>(ANNOTATE_COLORS[0] ?? '#ef4444');
   const [thickness, setThickness] = useState(3);
   const [drawing, setDrawing] = useState(true);
+  const [orient, setOrient] = useState<ToolbarOrient>(() => {
+    try {
+      return parseOrient(localStorage.getItem(ORIENT_KEY));
+    } catch {
+      return 'horizontal';
+    }
+  });
   const [status, setStatus] = useState<AnnotateStatus>({ canUndo: false, canRedo: false, count: 0 });
   useEffect(() => desktop().onAnnotateStatus((next) => setStatus(next)), []);
   useEffect(() => desktop().onAnnotateMode((on) => setDrawing(on)), []);
   useEffect(() => desktop().annotationCommand({ op: 'tool', tool }), [tool]);
   useEffect(() => desktop().annotationCommand({ op: 'color', color }), [color]);
   useEffect(() => desktop().annotationCommand({ op: 'width', width: toolWidth('pen', thickness) }), [thickness]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(ORIENT_KEY, orient);
+    } catch {
+      /* ignore */
+    }
+    desktop().annotateToolsOrient?.(orient);
+  }, [orient]);
+  const setMode = (on: boolean) => {
+    setDrawing(on);
+    desktop().annotationDrawMode(on);
+  };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return;
@@ -55,125 +68,116 @@ function Tools() {
         return;
       }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
-      const hit = TOOLS.find((t) => t.key === e.key.toUpperCase());
+      if (e.key.toUpperCase() === 'M') {
+        setDrawing((d) => {
+          desktop().annotationDrawMode(!d);
+          return !d;
+        });
+        return;
+      }
+      const hit = toolForKey(e.key);
       if (hit) setTool(hit.id);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
-  const setMode = (on: boolean) => {
-    setDrawing(on);
-    desktop().annotationDrawMode(on);
-  };
+
   return (
-    <div className="tools-panel">
-      <header className="tools-head">
-        <span className="tools-title">Annotate</span>
-        <button
-          type="button"
-          className="tools-close"
-          title="Stop annotating (removes your marks)"
-          aria-label="Stop annotating"
-          onClick={() => desktop().sendAction({ type: 'toggle-annotate' })}
-        >
-          <Icon name="close" />
-        </button>
-      </header>
-      <div className="tools-mode" role="radiogroup" aria-label="Mouse">
-        <button type="button" role="radio" aria-checked={drawing} className={drawing ? 'on' : ''} onClick={() => setMode(true)} title="Draw on the screen">
-          <Icon name="pen" size={13} />
-          Draw
-        </button>
-        <button
-          type="button"
-          role="radio"
-          aria-checked={!drawing}
-          className={!drawing ? 'on' : ''}
-          onClick={() => setMode(false)}
-          title="Click-through: use your apps; the marks stay on screen"
-        >
-          <Icon name="pointer" size={13} />
-          Click-through
-        </button>
-      </div>
-      <div className="tools-grid" role="radiogroup" aria-label="Tool">
-        {TOOLS.map((t) => (
+    <div className={`atb atb-${orient}`} role="toolbar" aria-label="Annotate tools" aria-orientation={orient}>
+      <span className="atb-grip" title="Drag to move" aria-hidden="true">
+        ⋮⋮
+      </span>
+      <button
+        type="button"
+        className={drawing ? 'atb-btn atb-mode on' : 'atb-btn atb-mode'}
+        aria-pressed={drawing}
+        onClick={() => setMode(!drawing)}
+        title={tip(drawing ? 'Drawing: the mouse draws. Click for click-through' : 'Click-through: use your apps. Click to draw', 'M')}
+        aria-label={drawing ? 'Drawing (switch to click-through)' : 'Click-through (switch to drawing)'}
+      >
+        <Icon name={drawing ? 'pen' : 'pointer'} size={18} />
+      </button>
+      {TOOL_GROUPS.map((g) => (
+        <div key={g.id} className="atb-group" role="radiogroup" aria-label={g.label}>
+          <Sep />
+          {g.tools.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              role="radio"
+              aria-checked={tool === t.id}
+              className={tool === t.id ? 'atb-btn on' : 'atb-btn'}
+              title={tip(t.label, t.key)}
+              aria-label={t.label}
+              onClick={() => {
+                setTool(t.id);
+                if (!drawing) setMode(true);
+              }}
+            >
+              <Icon name={t.icon as IconName} size={18} />
+            </button>
+          ))}
+        </div>
+      ))}
+      <Sep />
+      <div className="atb-group atb-colors" role="radiogroup" aria-label="Colour">
+        {ANNOTATE_COLORS.map((c) => (
           <button
-            key={t.id}
+            key={c}
             type="button"
             role="radio"
-            aria-checked={tool === t.id}
-            className={tool === t.id ? 'tool on' : 'tool'}
-            title={`${t.label} (${t.key})`}
-            aria-label={t.label}
-            onClick={() => {
-              setTool(t.id);
-              if (!drawing) setMode(true);
-            }}
-          >
-            <Icon name={t.icon} size={18} />
-          </button>
-        ))}
-      </div>
-      <div className="tools-section">
-        <span className="tools-label">Colour</span>
-        <div className="tools-swatches">
-          {ANNOTATE_COLORS.map((c) => (
-            <button
-              key={c}
-              type="button"
-              className={color.toLowerCase() === c.toLowerCase() ? 'swatch on' : 'swatch'}
-              style={{ background: c }}
-              title={c}
-              aria-label={`Colour ${c}`}
-              onClick={() => setColor(c)}
-            />
-          ))}
-          <input
-            type="color"
-            className="tools-picker"
-            value={color}
-            title="Any colour"
-            aria-label="Pick any colour"
-            onChange={(e) => {
-              if (HEX.test(e.target.value)) setColor(e.target.value);
-            }}
+            aria-checked={color.toLowerCase() === c.toLowerCase()}
+            className={color.toLowerCase() === c.toLowerCase() ? 'atb-swatch on' : 'atb-swatch'}
+            style={{ background: c }}
+            title={`Colour ${c}`}
+            aria-label={`Colour ${c}`}
+            onClick={() => setColor(c)}
           />
-        </div>
-      </div>
-      <div className="tools-section">
-        <label className="tools-label" htmlFor="thickness">
-          Thickness <span className="tools-value">{thickness}</span>
-        </label>
+        ))}
         <input
-          id="thickness"
+          type="color"
+          className="atb-picker"
+          value={color}
+          title="Any colour"
+          aria-label="Pick any colour"
+          onChange={(e) => {
+            if (HEX.test(e.target.value)) setColor(e.target.value);
+          }}
+        />
+      </div>
+      <label className="atb-thick" title={`Thickness ${thickness}`}>
+        <span className="atb-dot" style={{ width: 4 + thickness, height: 4 + thickness, background: color }} aria-hidden="true" />
+        <input
           type="range"
           min={THICKNESS_MIN}
           max={THICKNESS_MAX}
           step={1}
           value={thickness}
+          aria-label="Thickness"
           onChange={(e) => setThickness(Number(e.target.value))}
         />
-      </div>
-      <div className="tools-actions">
-        <button type="button" disabled={!status.canUndo} onClick={() => desktop().annotationCommand({ op: 'undo' })} title="Undo (Ctrl+Z)" aria-label="Undo">
-          <Icon name="undo" size={16} />
+      </label>
+      <Sep />
+      <div className="atb-group" aria-label="History">
+        <button type="button" className="atb-btn" disabled={!status.canUndo} onClick={() => desktop().annotationCommand({ op: 'undo' })} title={tip('Undo', 'Ctrl+Z')} aria-label="Undo">
+          <Icon name="undo" size={18} />
         </button>
-        <button type="button" disabled={!status.canRedo} onClick={() => desktop().annotationCommand({ op: 'redo' })} title="Redo (Ctrl+Y)" aria-label="Redo">
-          <Icon name="redo" size={16} />
+        <button type="button" className="atb-btn" disabled={!status.canRedo} onClick={() => desktop().annotationCommand({ op: 'redo' })} title={tip('Redo', 'Ctrl+Y')} aria-label="Redo">
+          <Icon name="redo" size={18} />
         </button>
         <button
           type="button"
+          className="atb-btn"
           disabled={!status.students}
           onClick={() => desktop().clearStudentInk()}
           title="Clear student drawings (for everyone)"
           aria-label="Clear student drawings"
         >
-          Clear student drawings
+          <Icon name="people" size={18} />
         </button>
         <button
           type="button"
-          className="danger"
+          className="atb-btn danger"
           disabled={!status.count && !status.students}
           onClick={() => {
             desktop().annotationCommand({ op: 'clear' });
@@ -182,11 +186,28 @@ function Tools() {
           title="Clear all marks: yours and the students'"
           aria-label="Clear all marks"
         >
-          <Icon name="trash" size={16} />
-          Clear all
+          <Icon name="trash" size={18} />
         </button>
       </div>
-      <p className="tools-hint">Students see your marks. The eraser also removes student strokes. This panel stays out of the shared picture.</p>
+      <Sep />
+      <button
+        type="button"
+        className="atb-btn"
+        onClick={() => setOrient(orient === 'horizontal' ? 'vertical' : 'horizontal')}
+        title={orient === 'horizontal' ? 'Dock vertically' : 'Dock horizontally'}
+        aria-label={orient === 'horizontal' ? 'Dock vertically' : 'Dock horizontally'}
+      >
+        {orient === 'horizontal' ? '⇅' : '⇄'}
+      </button>
+      <button
+        type="button"
+        className="atb-btn atb-close"
+        title="Stop annotating (removes your marks)"
+        aria-label="Stop annotating"
+        onClick={() => desktop().sendAction({ type: 'toggle-annotate' })}
+      >
+        <Icon name="close" size={18} />
+      </button>
     </div>
   );
 }

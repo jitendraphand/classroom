@@ -105,6 +105,8 @@ export type ClassroomBridge = {
   setWgcFps: (fps: number) => Promise<{ ok: boolean }>;
   /** Annotation panel: draw on the overlay (true) or let clicks through (false). */
   annotationDrawMode: (on: boolean) => void;
+  /** Annotate toolbar dock: resize its window (horizontal bar / vertical strip). */
+  annotateToolsOrient?: (orient: 'horizontal' | 'vertical') => void;
   postVideoTile: (key: string, jpeg: Uint8Array) => void;
   onVideoTile: (cb: (key: string, jpeg: ArrayBuffer | Uint8Array) => void) => () => void;
   onAnnotateSurface: (cb: (surface: { dip: DipBox; physical: PhysicalMonitor; scale: number }) => void) => () => void;

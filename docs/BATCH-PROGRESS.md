@@ -6,3 +6,4 @@ Items: 1 sync+batch erase, 2 native sidecar publisher (Option A), 3 annotate too
 - [x] 6: student tiles enabled only when panelShownNow() (floating window shown during share / main window not minimized)
 - [x] 7: low-power (shared/lowPower.ts): toolbar "Eco" toggle, persisted; slides 5 fps, video 15 fps (helper fps + encoder cap), tiles 160x90 @7 fps
 - [x] 4 (Electron path): HW_ENCODE_FEATURES appended to the single enable-features switch
+- [x] 3: compact floating annotate toolbar (tools.tsx + shared/toolbarLayout.ts, horizontal/vertical dock via annotate-tools-orient IPC); tests/round5.test.ts

@@ -16,6 +16,7 @@ export type StoredConfig = {
   toolbar: { x: number; y: number } | null;
   /** Annotation tool panel position (optional; older configs do not have it). */
   annotateTools?: { x: number; y: number } | null;
+  annotateToolsOrient?: 'horizontal' | 'vertical';
   layout: 2 | 4 | 6;
   hotkeys: { mic: string; camera: string; stopShare: string };
   micId: string;
