@@ -261,8 +261,14 @@ export function createPointBatcher(
   };
 }
 
-/** Desktop ink: how long the drawer keeps a local copy after the last point. */
-export const DESKTOP_INK_FADE_MS = 1500;
+/**
+ * Desktop ink: how long the drawer keeps a local copy after the last point.
+ * The Windows app composites the stroke into the shared video within ~66 ms
+ * plus the share's latency (~150-400 ms), so 500 ms covers it while keeping
+ * the overlap (stroke seen twice) short. While the pen moves the local copy
+ * is always shown: zero-latency feedback under the pen.
+ */
+export const DESKTOP_INK_FADE_MS = 500;
 
 /**
  * Strokes to draw locally. Normal shares: all of them. Desktop ink: only my

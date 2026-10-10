@@ -166,3 +166,11 @@ export async function deleteOwnStroke(code: string, identity: string, id: string
   await r.multi().hdel(keys.drawStrokes(code), id).lrem(keys.drawOrder(code), 0, id).exec();
   await send(code, { v: 1, t: 'del', id });
 }
+
+/** Teacher eraser: remove any stroke (relayed as `del` to every viewer). */
+export async function deleteStroke(code: string, id: string) {
+  const r = await ensureRedis();
+  const removed = await r.hdel(keys.drawStrokes(code), id);
+  await r.lrem(keys.drawOrder(code), 0, id);
+  if (removed) await send(code, { v: 1, t: 'del', id });
+}

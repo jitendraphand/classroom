@@ -11,6 +11,7 @@ import {
   clearDrawing,
   currentHolder,
   deleteOwnStroke,
+  deleteStroke,
   listStrokes,
   revokeDraw,
   setDrawRequest,
@@ -31,7 +32,7 @@ export const dynamic = 'force-dynamic';
  * - teacher: `allow` / `revoke` (`participantId`), `clear` (wipe the drawing).
  */
 const schema = z.object({
-  action: z.enum(['request', 'cancel', 'release', 'pts', 'del', 'allow', 'revoke', 'clear']),
+  action: z.enum(['request', 'cancel', 'release', 'pts', 'del', 'allow', 'revoke', 'clear', 'erase']),
   participantId: z.string().min(1).max(64).optional(),
   id: z.string().max(40).optional(),
   from: z.number().int().min(0).max(100_000).optional(),
@@ -72,7 +73,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
   const parsed = schema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return jsonError(parsed.error.errors[0]?.message || 'Invalid input');
   const body = parsed.data;
-  const teacherAction = body.action === 'allow' || body.action === 'revoke' || body.action === 'clear';
+  const teacherAction = body.action === 'allow' || body.action === 'revoke' || body.action === 'clear' || body.action === 'erase';
   const access = await resolveRoomAccess(room, { forceStudent: !teacherAction && wantsStudent(req) });
 
   try {
@@ -80,6 +81,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
       if (!access.teacherOwns) return jsonError('Unauthorized', 401);
       if (body.action === 'clear') {
         await clearDrawing(code);
+        return jsonOk({ ok: true });
+      }
+      // Teacher eraser: remove one student stroke for everyone.
+      if (body.action === 'erase') {
+        if (!validStrokeId(body.id)) return jsonError('Bad stroke');
+        await deleteStroke(code, body.id);
         return jsonOk({ ok: true });
       }
       if (body.action === 'revoke') {

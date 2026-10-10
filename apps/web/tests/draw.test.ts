@@ -168,3 +168,13 @@ test('desktop ink: viewers draw nothing, the drawer only fresh own strokes', () 
   assert.deepEqual(desktopInkShown(strokes, { desktopInk: true, me: 'viewer', touched, now: 1200 }), []);
   assert.deepEqual(desktopInkShown(strokes, { desktopInk: true, me: 'me', touched, now: 1000 + DESKTOP_INK_FADE_MS }), []);
 });
+
+test('teacher erase is a teacher action on the draw route and relays del', async () => {
+  const fs = await import('node:fs');
+  const route = fs.readFileSync(new URL('../src/app/api/rooms/[code]/draw/route.ts', import.meta.url), 'utf8');
+  assert.match(route, /'clear', 'erase'\]/);
+  assert.match(route, /body\.action === 'erase'\) \{[\s\S]*deleteStroke\(code, body\.id\)/);
+  const server = fs.readFileSync(new URL('../src/lib/drawServer.ts', import.meta.url), 'utf8');
+  assert.match(server, /export async function deleteStroke[\s\S]*t: 'del', id/);
+  assert.ok(DESKTOP_INK_FADE_MS <= 600, 'desktop ink local copy is short-lived');
+});
