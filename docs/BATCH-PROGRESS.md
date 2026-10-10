@@ -26,3 +26,11 @@ TODO: state route (replaced/meLeft/takeovers + cache), client finish screen, tea
 - DB xacts per client per min: 24 → 11 (after5 run)
 - [x] student Leave shows "You left" (finish before /leave; keepalive). Final local: 0 requests for 120 s after end/leave; DB 10.8 xacts/min/client; /api 4/min student, 6/min teacher; first load 309 kB
 - [ ] commit/push/deploy
+
+## Deploy 2026-10-10 ~22:00 IST
+- Backup ~/classroom-backup-20261010-215102 (db.sql.gz 5.1 KB pg_dump, Caddyfile, livekit.yaml, .env, secrets/) verified.
+- /opt/classroom at 7eb5f5c; web + livekit rebuilt/recreated (postgres/redis untouched, no down -v); caddy reloaded.
+- Server Caddyfile (local file): app site encode zstd gzip + immutable /_next/static, 1d assets (unless app sets), API no-store; livekit site zstd gzip. `caddy validate` OK.
+- Server livekit.yaml: turn block (domain livekit.13-201-89-150.sslip.io, tls 5349, udp 3478, Caddy cert via caddy_data mount). LiveKit log: "Starting TURN server" (relay range 30000-40000/udp).
+- Checks: /api/health 200; static JS gzip + "public, max-age=31536000, immutable"; HTML/API "no-store, must-revalidate" (next.config). TURN/TLS on server loopback: valid cert, verify 0.
+- From outside: 5349/tcp filtered (SG). AWS creds expired → SG NOT opened. Open: 5349/tcp, 3478/udp, 30000-40000/udp. Relay-candidate check pending until then.
