@@ -164,17 +164,29 @@ function Tools() {
         </button>
         <button
           type="button"
+          disabled={!status.students}
+          onClick={() => desktop().clearStudentInk()}
+          title="Clear student drawings (for everyone)"
+          aria-label="Clear student drawings"
+        >
+          Clear student drawings
+        </button>
+        <button
+          type="button"
           className="danger"
-          disabled={!status.count}
-          onClick={() => desktop().annotationCommand({ op: 'clear' })}
-          title="Clear all marks"
+          disabled={!status.count && !status.students}
+          onClick={() => {
+            desktop().annotationCommand({ op: 'clear' });
+            if (status.students) desktop().clearStudentInk();
+          }}
+          title="Clear all marks: yours and the students'"
           aria-label="Clear all marks"
         >
           <Icon name="trash" size={16} />
-          Clear
+          Clear all
         </button>
       </div>
-      <p className="tools-hint">Students see your marks. This panel stays out of the shared picture.</p>
+      <p className="tools-hint">Students see your marks. The eraser also removes student strokes. This panel stays out of the shared picture.</p>
     </div>
   );
 }

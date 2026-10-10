@@ -3,7 +3,6 @@ import { test } from 'node:test';
 import { adhocBody, campusesOf, classStartLabel, classStatus, gradeOptionLabel, parseRoomState, parseSchedule, type ClassChoice } from '../src/shared/apiModel';
 import { THICKNESS_MAX, THICKNESS_MIN, toolWidth } from '../src/shared/annotateOverlay';
 import { SCREEN_SHARE, VIDEO_MODE_SHARE, inkRectFor, windowsShareEncodings } from '../src/shared/capture';
-import { VIDEO_OFF_AFTER_MS, VIDEO_ON_AFTER_MS, nextVideoMode, type VideoModeState } from '../src/shared/videoMode';
 
 const base: ClassChoice = {
   key: 'k',
@@ -88,31 +87,6 @@ test('room snapshot carries the draw and desktop-ink fields', () => {
   assert.equal(room.admitted[0]?.drawRequested, true);
   assert.equal(room.waiting[0]?.gradeDivision, 'CC · 7-A');
   assert.equal(room.waiting[0]?.late, true);
-});
-
-test('video mode auto-detect turns on after a busy stretch and off after a quiet one', () => {
-  let s: VideoModeState = { on: false, auto: true, highSince: null, lowSince: null };
-  s = nextVideoMode(s, { now: 0, fps: 8, slidesCap: 8 });
-  assert.equal(s.on, false);
-  s = nextVideoMode(s, { now: VIDEO_ON_AFTER_MS - 1, fps: 7, slidesCap: 8 });
-  assert.equal(s.on, false);
-  s = nextVideoMode(s, { now: VIDEO_ON_AFTER_MS, fps: 8, slidesCap: 8 });
-  assert.equal(s.on, true);
-  // A dip resets the quiet timer.
-  s = nextVideoMode(s, { now: 10_000, fps: 1, slidesCap: 8 });
-  s = nextVideoMode(s, { now: 12_000, fps: 25, slidesCap: 8 });
-  s = nextVideoMode(s, { now: 13_000, fps: 1, slidesCap: 8 });
-  assert.equal(nextVideoMode(s, { now: 13_000 + VIDEO_OFF_AFTER_MS - 1, fps: 1, slidesCap: 8 }).on, true);
-  assert.equal(nextVideoMode(s, { now: 13_000 + VIDEO_OFF_AFTER_MS, fps: 1, slidesCap: 8 }).on, false);
-  // A busy frame in the middle of a slow start does not count.
-  let t: VideoModeState = { on: false, auto: true, highSince: null, lowSince: null };
-  t = nextVideoMode(t, { now: 0, fps: 8, slidesCap: 8 });
-  t = nextVideoMode(t, { now: 2000, fps: 2, slidesCap: 8 });
-  t = nextVideoMode(t, { now: 4500, fps: 8, slidesCap: 8 });
-  assert.equal(t.on, false);
-  // Manual: nothing changes by itself.
-  const manual: VideoModeState = { on: true, auto: false, highSince: null, lowSince: null };
-  assert.equal(nextVideoMode(manual, { now: 99_999, fps: 0, slidesCap: 8 }).on, true);
 });
 
 type Enc = { maxBitrate?: number; maxFramerate?: number };

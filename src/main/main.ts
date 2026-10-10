@@ -1897,6 +1897,20 @@ function installIpc(): void {
     win.webContents.send('video-tile', key, jpeg);
   });
 
+  // Teacher eraser / clear over student ink → the class window posts to /draw.
+  ipcMain.on('student-ink-erase', (event, ids: unknown) => {
+    const overlay = chrome.get('annotate-overlay');
+    if (!overlay || overlay.isDestroyed() || event.sender !== overlay.webContents) return;
+    if (!Array.isArray(ids)) return;
+    const clean = ids.filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 40).slice(0, 100);
+    if (clean.length && mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('student-ink-edit', { erase: clean });
+  });
+  ipcMain.on('student-ink-clear', (event) => {
+    const tools = chrome.get('annotate-tools');
+    if (!tools || tools.isDestroyed() || event.sender !== tools.webContents) return;
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('student-ink-edit', { clear: true });
+  });
+
   ipcMain.on('annotation-status', (_event, status: unknown) => {
     for (const win of [toolbar, chrome.get('annotate-tools')]) {
       if (win && !win.isDestroyed()) win.webContents.send('annotate-status', status);

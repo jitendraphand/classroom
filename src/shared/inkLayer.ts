@@ -48,26 +48,44 @@ export function parseInkLayer(raw: unknown): InkLayer | null {
 }
 
 /** Blend `layer` over the frame in place. Skipped when the frame size differs from the layer's. */
+/**
+ * Pixels of a layer that carry ink (alpha > 0), computed once per layer and
+ * reused for every frame: strokes are thin, so a stroke's bounding box is
+ * mostly transparent and walking only inked pixels is ~10-50× cheaper.
+ */
+const inkedCache = new WeakMap<InkLayer, Uint32Array>();
+export function inkedPixels(layer: InkLayer): Uint32Array {
+  let list = inkedCache.get(layer);
+  if (list) return list;
+  const total = layer.w * layer.h;
+  const tmp = new Uint32Array(total);
+  let n = 0;
+  for (let p = 0; p < total; p++) if (layer.rgba[p * 4 + 3]! !== 0) tmp[n++] = p;
+  list = tmp.slice(0, n);
+  inkedCache.set(layer, list);
+  return list;
+}
+
 export function compositeInkLayer(frame: Uint8Array, width: number, height: number, layer: InkLayer): boolean {
   if (layer.fw !== width || layer.fh !== height || frame.length < width * height * 4) return false;
   const src = layer.rgba;
-  for (let row = 0; row < layer.h; row++) {
-    let si = row * layer.w * 4;
-    let di = ((layer.y + row) * width + layer.x) * 4;
-    for (let col = 0; col < layer.w; col++, si += 4, di += 4) {
-      const a = src[si + 3]!;
-      if (a === 0) continue;
-      if (a === 255) {
-        frame[di] = src[si]!;
-        frame[di + 1] = src[si + 1]!;
-        frame[di + 2] = src[si + 2]!;
-        continue;
-      }
-      const inv = 255 - a;
-      frame[di] = (src[si]! * a + frame[di]! * inv + 127) / 255;
-      frame[di + 1] = (src[si + 1]! * a + frame[di + 1]! * inv + 127) / 255;
-      frame[di + 2] = (src[si + 2]! * a + frame[di + 2]! * inv + 127) / 255;
+  const inked = inkedPixels(layer);
+  const lw = layer.w;
+  for (let k = 0; k < inked.length; k++) {
+    const p = inked[k]!;
+    const si = p * 4;
+    const di = ((layer.y + ((p / lw) | 0)) * width + layer.x + (p % lw)) * 4;
+    const a = src[si + 3]!;
+    if (a === 255) {
+      frame[di] = src[si]!;
+      frame[di + 1] = src[si + 1]!;
+      frame[di + 2] = src[si + 2]!;
+      continue;
     }
+    const inv = 255 - a;
+    frame[di] = (src[si]! * a + frame[di]! * inv + 127) / 255;
+    frame[di + 1] = (src[si + 1]! * a + frame[di + 1]! * inv + 127) / 255;
+    frame[di + 2] = (src[si + 2]! * a + frame[di + 2]! * inv + 127) / 255;
   }
   return true;
 }

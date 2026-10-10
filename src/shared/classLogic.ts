@@ -154,16 +154,11 @@ export function isSlotCount(n: number): n is SlotCount {
 }
 
 /**
- * Grid shape. Docked class view matches the web page (2 and 4 are one column,
- * 6 is 2×3). The share-side videos window matches peerWindowLayout
- * (2 → 2×1, 4 → 2×2, 6 → 3×2).
+ * Grid shape. The docked class view and the floating Student videos window
+ * share one arrangement (peerWindowLayout): 2 → 2×1, 4 → 2×2, 6 → 3×2.
+ * (The dock used to stack 2/4 as full-width strips.)
  */
-export function videoGrid(slots: SlotCount, where: 'dock' | 'share'): { cols: number; rows: number } {
-  if (where === 'dock') {
-    if (slots === 2) return { cols: 1, rows: 2 };
-    if (slots === 4) return { cols: 1, rows: 4 };
-    return { cols: 2, rows: 3 };
-  }
+export function videoGrid(slots: SlotCount, _where: 'dock' | 'share' = 'share'): { cols: number; rows: number } {
   if (slots === 2) return { cols: 2, rows: 1 };
   if (slots === 4) return { cols: 2, rows: 2 };
   return { cols: 3, rows: 2 };
@@ -260,4 +255,18 @@ export function selectStudentTiles(input: {
 /** Rotate the order by one (the next student moves to the front). */
 export function rotateOrder(order: readonly string[]): string[] {
   return order.length > 1 ? [...order.slice(1), order[0]!] : [...order];
+}
+
+/**
+ * Compact 16:9 tiles for the docked grid inside `box` (CSS px): the largest
+ * tile that fits cols×rows with `gap`, centred, like the floating window.
+ */
+export function dockTileSize(box: { w: number; h: number }, slots: SlotCount, gap = 4): { cols: number; rows: number; tileW: number; tileH: number } {
+  const { cols, rows } = videoGrid(slots);
+  const availW = Math.max(0, box.w - gap * (cols - 1)) / cols;
+  const availH = Math.max(0, box.h - gap * (rows - 1)) / rows;
+  let tileW = Math.min(availW, (availH * 16) / 9);
+  tileW = Math.max(16, Math.floor(tileW));
+  const tileH = Math.max(9, Math.floor((tileW * 9) / 16));
+  return { cols, rows, tileW, tileH };
 }

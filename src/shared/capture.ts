@@ -267,7 +267,7 @@ export function cssScreenWidth(availWidth: number | undefined, innerWidth: numbe
  * grid fills the left column instead of sitting at a fixed face size.
  */
 export function dockGridStyle(slots: SlotCount): { gridTemplateColumns: string; gridTemplateRows: string } {
-  const spec = videoGrid(slots, 'dock');
+  const spec = videoGrid(slots);
   return {
     gridTemplateColumns: `repeat(${spec.cols}, minmax(0, 1fr))`,
     gridTemplateRows: `repeat(${spec.rows}, minmax(0, 1fr))`,

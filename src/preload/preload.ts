@@ -56,6 +56,9 @@ contextBridge.exposeInMainWorld('classroom', {
   onWgcStatus: (cb: (status: unknown) => void) => listen('wgc-status', cb),
   studentInk: (ink: unknown) => ipcRenderer.send('student-ink', ink),
   onStudentInk: (cb: (ink: unknown) => void) => listen('student-ink', cb),
+  eraseStudentInk: (ids: unknown) => ipcRenderer.send('student-ink-erase', ids),
+  clearStudentInk: () => ipcRenderer.send('student-ink-clear'),
+  onStudentInkEdit: (cb: (edit: unknown) => void) => listen('student-ink-edit', cb),
   setWgcFps: (fps: number) => ipcRenderer.invoke('wgc-fps', fps),
   annotationDrawMode: (on: boolean) => ipcRenderer.send('annotation-draw-mode', on),
   postVideoTile: (key: string, jpeg: Uint8Array) => {

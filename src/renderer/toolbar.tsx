@@ -30,8 +30,8 @@ function Toolbar({ hud }: { hud: HudState }) {
   const waiting = hud.waitingCount;
   const admitLabel = waiting > 1 ? `Admit all ${waiting} waiting` : waiting === 1 && hud.oldestWaitingName ? `Admit ${hud.oldestWaitingName}` : 'Nobody waiting';
   const videoTitle = hud.videoMode
-    ? `Video mode on${hud.videoModeAuto ? ' (auto)' : ''}: smooth 30 fps for a playing video. Click for sharp slides/text.`
-    : `Playing a video? Video mode sends smooth 30 fps (slides and text get slightly softer).${hud.videoModeAuto ? ' Turns on by itself when the screen keeps moving.' : ''}`;
+    ? 'Video mode on: smooth 30 fps with sound for a playing video. Click for sharp slides/text.'
+    : 'Playing a video? Video mode sends smooth 30 fps and your computer sound (slides and text get slightly softer).';
   return (
     <div id="bar" ref={bar} className="tsh">
       <div className="tsh-bar" role="toolbar" aria-label="Share tools">
@@ -78,7 +78,6 @@ function Toolbar({ hud }: { hud: HudState }) {
           >
             <Icon name="film" />
             Video
-            {hud.videoModeAuto ? <span className="tsh-auto">auto</span> : null}
           </button>
         ) : null}
         {hud.sharing ? (

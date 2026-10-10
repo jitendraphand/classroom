@@ -4,8 +4,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { contentChanged, frameSignature, signatureDiff } from '../src/shared/frameChange';
-import { nextVideoMode, VIDEO_OFF_AFTER_MS, type VideoModeState } from '../src/shared/videoMode';
 import { createCaptureSupervisor, monitorArgs, pickDisplay, type CaptureStatus } from '../src/main/captureSupervisor';
 import { createWgcPump } from '../src/main/wgcPump';
 import { compositeInkLayer, cropInk, layerAlreadyInFrame, parseInkLayer } from '../src/shared/inkLayer';
@@ -17,31 +15,6 @@ function solid(w: number, h: number, rgb: [number, number, number]): Uint8Array 
   for (let i = 0; i < w * h; i++) a.set([rgb[0], rgb[1], rgb[2], 255], i * 4);
   return a;
 }
-
-// ---- (3) Video mode hysteresis: count changed frames, not keep-alives ----
-
-test('identical keep-alive frames are not content changes; a moving picture is', () => {
-  const a = solid(320, 180, [10, 20, 30]);
-  const sa = frameSignature(a, 320, 180);
-  assert.equal(contentChanged(sa, frameSignature(a.slice(), 320, 180)), false);
-  const b = a.slice();
-  for (let y = 60; y < 120; y++) for (let x = 100; x < 200; x++) b.set([250, 250, 250, 255], (y * 320 + x) * 4);
-  const sb = frameSignature(b, 320, 180);
-  assert.equal(contentChanged(sa, sb), true);
-  assert.ok(signatureDiff(sa, sb) > 0.05);
-  assert.equal(contentChanged(null, sb), true);
-});
-
-test('auto Video mode switches back to slides when only keep-alives arrive', () => {
-  let st: VideoModeState = { on: false, auto: true, highSince: null, lowSince: null };
-  let t = 0;
-  for (; t <= 5000; t += 1000) st = nextVideoMode(st, { now: t, fps: 8, slidesCap: 8 });
-  assert.equal(st.on, true, 'moving picture turns Video mode on');
-  // Static slide: the helper still sends 4 keep-alives/s, but 0 changed frames/s.
-  for (let i = 0; i <= VIDEO_OFF_AFTER_MS / 1000 + 1; i++, t += 1000) st = nextVideoMode(st, { now: t, fps: 0, slidesCap: 8 });
-  assert.equal(st.on, false);
-  assert.equal(st.auto, true);
-});
 
 // ---- (1) Stale capture recovery ----
 

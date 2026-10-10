@@ -39,7 +39,8 @@ export type AnnotateCommand =
   | { op: 'clear' }
   | { op: 'remote'; msg: unknown };
 
-export type AnnotateStatus = { canUndo: boolean; canRedo: boolean; count: number };
+/** `students`: student strokes on the share (the teacher can erase/clear them). */
+export type AnnotateStatus = { canUndo: boolean; canRedo: boolean; count: number; students?: number };
 
 export function isOverlayTool(v: unknown): v is OverlayTool {
   return typeof v === 'string' && (OVERLAY_TOOLS as readonly string[]).includes(v);

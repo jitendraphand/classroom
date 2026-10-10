@@ -12,6 +12,7 @@
  * This page has no buttons. Committed shapes are cached in a second canvas,
  * so a pointer move only redraws the shape being drawn.
  */
+import { studentStrokesHit, withoutStrokes } from '../shared/studentErase';
 import { newStrokeId, type Pt } from '../shared/annotate';
 import {
   ShapeLog,
@@ -57,7 +58,18 @@ let laser: { at: number; p: Pt } | null = null;
 let raf = 0;
 
 function publishStatus(): void {
-  desktop().annotationStatus(log.status());
+  desktop().annotationStatus({ ...log.status(), students: studentInk?.strokes.length ?? 0 });
+}
+
+/** Teacher eraser also removes student strokes (whole stroke, for everyone). */
+function eraseStudents(p: Pt): boolean {
+  const ink = studentInk;
+  if (!ink || !ink.strokes.length) return false;
+  const ids = studentStrokesHit(ink.strokes, ink.rect, p, aspect());
+  if (!ids.length) return false;
+  studentInk = { ...ink, strokes: withoutStrokes(ink.strokes, ids) };
+  desktop().eraseStudentInk(ids);
+  return true;
 }
 
 function pushInk(): void {
@@ -355,6 +367,7 @@ function onDown(e: PointerEvent): void {
   }
   if (tool === 'eraser') {
     log.erase(shapesHit(log.shapes, p, aspect()));
+    eraseStudents(p);
     baseDirty = true;
     publishStatus();
     pushInk();
@@ -378,9 +391,10 @@ function onMove(e: PointerEvent): void {
   if (tool === 'eraser') {
     if (e.buttons !== 1) return;
     const hit = shapesHit(log.shapes, p, aspect());
+    const studentsHit = eraseStudents(p);
     // Most eraser moves touch nothing: no repaint, no IPC to main then.
-    if (!hit.length) return;
-    log.erase(hit);
+    if (!hit.length && !studentsHit) return;
+    if (hit.length) log.erase(hit);
     baseDirty = true;
     publishStatus();
     pushInk();
@@ -509,8 +523,10 @@ desktop().onAnnotateLayerSize((size) => {
   scheduleLayer();
 });
 desktop().onStudentInk((ink) => {
+  const before = studentInk?.strokes.length ?? 0;
   studentInk = ink && Array.isArray(ink.strokes) && ink.rect ? ink : null;
   baseDirty = true;
+  if ((studentInk?.strokes.length ?? 0) !== before) publishStatus();
   poke();
 });
 

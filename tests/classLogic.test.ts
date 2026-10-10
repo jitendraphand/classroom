@@ -145,9 +145,9 @@ test('the mosaic rotates only students who have a live camera in the sample', ()
 });
 
 test('grid and cells: teacher first, blanks fill the layout', () => {
-  assert.deepEqual(videoGrid(2, 'dock'), { cols: 1, rows: 2 });
-  assert.deepEqual(videoGrid(4, 'dock'), { cols: 1, rows: 4 });
-  assert.deepEqual(videoGrid(6, 'dock'), { cols: 2, rows: 3 });
+  assert.deepEqual(videoGrid(2, 'dock'), { cols: 2, rows: 1 });
+  assert.deepEqual(videoGrid(4, 'dock'), { cols: 2, rows: 2 });
+  assert.deepEqual(videoGrid(6, 'dock'), { cols: 3, rows: 2 });
   assert.deepEqual(videoGrid(2, 'share'), { cols: 2, rows: 1 });
   assert.deepEqual(videoGrid(4, 'share'), { cols: 2, rows: 2 });
   assert.deepEqual(videoGrid(6, 'share'), { cols: 3, rows: 2 });

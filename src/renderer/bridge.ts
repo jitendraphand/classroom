@@ -93,6 +93,12 @@ export type ClassroomBridge = {
   /** Student ink for the desktop overlay (normalised to the shared picture, mapped by `rect`). */
   studentInk: (ink: StudentInk) => void;
   onStudentInk: (cb: (ink: StudentInk) => void) => () => void;
+  /** Overlay eraser hit these student strokes: delete them for everyone. */
+  eraseStudentInk: (ids: string[]) => void;
+  /** Tools panel: clear every student drawing. */
+  clearStudentInk: () => void;
+  /** Class window: the teacher erased / cleared student ink from the overlay or tools. */
+  onStudentInkEdit: (cb: (edit: { erase?: string[]; clear?: boolean }) => void) => () => void;
   /** Restart the WGC helper at this capture rate (video mode). */
   setWgcFps: (fps: number) => Promise<{ ok: boolean }>;
   /** Annotation panel: draw on the overlay (true) or let clicks through (false). */

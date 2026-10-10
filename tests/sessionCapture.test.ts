@@ -74,12 +74,12 @@ test('floating tiles stay a sixth of the work area and the meeting film fills it
   assert.deepEqual(dockTilePx(1280), { w: 213, h: 120 });
   assert.deepEqual(dockTilePx(0), { w: 320, h: 180 });
   assert.deepEqual(dockTilePx(2560), { w: 360, h: 203 });
-  assert.equal(dockGridStyle(2).gridTemplateColumns, 'repeat(1, minmax(0, 1fr))');
-  assert.equal(dockGridStyle(2).gridTemplateRows, 'repeat(2, minmax(0, 1fr))');
-  assert.equal(dockGridStyle(4).gridTemplateColumns, 'repeat(1, minmax(0, 1fr))');
-  assert.equal(dockGridStyle(4).gridTemplateRows, 'repeat(4, minmax(0, 1fr))');
-  assert.equal(dockGridStyle(6).gridTemplateColumns, 'repeat(2, minmax(0, 1fr))');
-  assert.equal(dockGridStyle(6).gridTemplateRows, 'repeat(3, minmax(0, 1fr))');
+  assert.equal(dockGridStyle(2).gridTemplateColumns, 'repeat(2, minmax(0, 1fr))');
+  assert.equal(dockGridStyle(2).gridTemplateRows, 'repeat(1, minmax(0, 1fr))');
+  assert.equal(dockGridStyle(4).gridTemplateColumns, 'repeat(2, minmax(0, 1fr))');
+  assert.equal(dockGridStyle(4).gridTemplateRows, 'repeat(2, minmax(0, 1fr))');
+  assert.equal(dockGridStyle(6).gridTemplateColumns, 'repeat(3, minmax(0, 1fr))');
+  assert.equal(dockGridStyle(6).gridTemplateRows, 'repeat(2, minmax(0, 1fr))');
   assert.equal(cssScreenWidth(undefined, 1280), 1280);
   assert.equal(cssScreenWidth(1920, 800), 1920);
 });

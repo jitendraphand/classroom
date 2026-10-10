@@ -5,6 +5,7 @@
  * The session cookie and the LiveKit token stay out of logs.
  */
 
+import { withoutStrokes } from '../shared/studentErase';
 import {
   AudioPresets,
   ConnectionState,
@@ -43,7 +44,7 @@ import {
   type CapturePlan,
   type ShareKind,
 } from '../shared/capture';
-import { nextVideoMode, type VideoModeState } from '../shared/videoMode';
+import { VIDEO_MODE_OFF, type VideoModeState } from '../shared/videoMode';
 import { desktopLoopbackConstraints, toggleShareAudio, wantShareAudio, type ShareAudioChoice } from '../shared/shareAudio';
 import { DRAW_TOPIC, applyPacket, decodePacket, isDrawColor, validStrokeId, type Stroke } from '../shared/web/drawLogic';
 import { shareProfile } from '../shared/web/videoQuality';
@@ -56,6 +57,7 @@ import {
   sortRoster,
   studentCapForLayout,
   fillStudentSlots,
+  dockTileSize,
   visibleCells,
   videoGrid,
   type SlotCount,
@@ -198,9 +200,8 @@ export class ClassController {
   );
   private emitTimer = 0;
   private lastHud = '';
-  private videoMode: VideoModeState = { on: false, auto: true, highSince: null, lowSince: null };
+  private videoMode: VideoModeState = { ...VIDEO_MODE_OFF };
   private videoTimer = 0;
-  private lastFrames = 0;
   private drawStrokes: Stroke[] = [];
   private drawLoadSeq = 0;
   private prevDrawRequests = new Set<string>();
@@ -224,6 +225,7 @@ export class ClassController {
   private unsubBounds: (() => void) | null = null;
   private unsubWgcEnded: (() => void) | null = null;
   private unsubWgcStatus: (() => void) | null = null;
+  private unsubInkEdit: (() => void) | null = null;
 
   constructor(
     private readonly opts: { layout: SlotCount; micId: string; camId: string; plan: CapturePlan },
@@ -247,6 +249,7 @@ export class ClassController {
         });
       }
     });
+    this.unsubInkEdit = desktop().onStudentInkEdit((edit) => this.onStudentInkEdit(edit ?? {}));
     this.unsubWgcStatus = desktop().onWgcStatus((status) => {
       if (!this.sharing) return;
       if (status.state === 'recovering' && status.attempt === 1) {
@@ -464,8 +467,7 @@ export class ClassController {
         void this.toggleVideos();
         return;
       case 'toggle-video-mode':
-        this.videoMode = { ...this.videoMode, auto: false };
-        void this.applyVideoMode(!this.videoMode.on, 'manual');
+                void this.applyVideoMode(!this.videoMode.on);
         return;
       case 'toggle-share-audio':
         if (!this.sharing) return;
@@ -713,7 +715,7 @@ export class ClassController {
     this.screenTrack = published;
     this.previewTrack = media;
     this.sharing = true;
-    this.videoMode = { on: false, auto: true, highSince: null, lowSince: null };
+    this.videoMode = { ...VIDEO_MODE_OFF };
     void desktop().annotationOpen(this.shareDisplayId || input.source.displayId);
     this.shareKind = input.kind;
     this.overlayRect = input.kind === 'region' ? input.region : input.kind === 'screen' ? input.display : null;
@@ -724,7 +726,6 @@ export class ClassController {
     await this.roomApi('POST', '/stage', { mode: 'screen', desktopInk: true });
     this.drawStrokes = [];
     void this.loadDrawing();
-    this.startVideoWatch();
     this.showStudentVideos = true;
     desktop().minimizeMain();
     this.emit();
@@ -828,6 +829,8 @@ export class ClassController {
     this.unsubBounds?.();
     this.unsubWgcEnded?.();
     this.unsubWgcStatus?.();
+    this.unsubInkEdit?.();
+    this.unsubInkEdit = null;
     desktop().setClassActive(false);
     void this.stopRoom();
   }
@@ -1239,6 +1242,28 @@ export class ClassController {
     }
   }
 
+  private dockObserver: ResizeObserver | null = null;
+
+  /** Same 2/4/6 arrangement and 16:9 tiles as the floating Student videos window, centred. */
+  private sizeDock(host: HTMLElement): void {
+    const t = dockTileSize({ w: host.clientWidth, h: host.clientHeight }, this.opts.layout);
+    host.style.gridTemplateColumns = `repeat(${t.cols}, ${t.tileW}px)`;
+    host.style.gridTemplateRows = `repeat(${t.rows}, ${t.tileH}px)`;
+    host.style.justifyContent = 'center';
+    host.style.alignContent = 'center';
+    if (!this.dockObserver || (this.dockObserver as unknown as { host?: HTMLElement }).host !== host) {
+      this.dockObserver?.disconnect();
+      const obs = new ResizeObserver(() => {
+        const n = dockTileSize({ w: host.clientWidth, h: host.clientHeight }, this.opts.layout);
+        host.style.gridTemplateColumns = `repeat(${n.cols}, ${n.tileW}px)`;
+        host.style.gridTemplateRows = `repeat(${n.rows}, ${n.tileH}px)`;
+      });
+      (obs as unknown as { host?: HTMLElement }).host = host;
+      obs.observe(host);
+      this.dockObserver = obs;
+    }
+  }
+
   private paintHost(host: HTMLElement | null, cells: { key: string; label: string }[], where: 'dock' | 'share'): void {
     if (!host) return;
     if (where === 'share') {
@@ -1255,9 +1280,7 @@ export class ClassController {
     const doc = host.ownerDocument;
     const spec = videoGrid(this.opts.layout, where);
     if (where === 'dock') {
-      const style = dockGridStyle(this.opts.layout);
-      host.style.gridTemplateColumns = style.gridTemplateColumns;
-      host.style.gridTemplateRows = style.gridTemplateRows;
+      this.sizeDock(host);
     } else {
       host.style.gridTemplateColumns = `repeat(${spec.cols}, minmax(0, 1fr))`;
       host.style.gridTemplateRows = `repeat(${spec.rows}, minmax(0, 1fr))`;
@@ -1490,7 +1513,7 @@ export class ClassController {
     this.closeAnnotate();
     this.closeVideos();
     this.stopVideoWatch();
-    this.videoMode = { on: false, auto: true, highSince: null, lowSince: null };
+    this.videoMode = { ...VIDEO_MODE_OFF };
     this.drawStrokes = [];
     this.pushInk();
     if (this.code) await this.roomApi('POST', '/stage', { mode: 'idle' });
@@ -1573,31 +1596,29 @@ export class ClassController {
     }
   }
 
+  /** Teacher erased (eraser over a stroke) or cleared student ink on the desktop. */
+  private onStudentInkEdit(edit: { erase?: string[]; clear?: boolean }): void {
+    if (!this.sharing) return;
+    if (edit.clear) {
+      this.drawStrokes = [];
+      this.pushInk();
+      this.emit();
+      void this.drawAction({ action: 'clear' });
+      return;
+    }
+    const ids = (edit.erase ?? []).filter((id) => validStrokeId(id));
+    if (!ids.length) return;
+    this.drawStrokes = withoutStrokes(this.drawStrokes, ids);
+    this.pushInk();
+    this.emit();
+    for (const id of ids) void this.roomApi('POST', '/draw', { action: 'erase', id });
+  }
+
   private pushInk(): void {
     desktop().studentInk({ strokes: this.sharing ? this.drawStrokes : [], rect: this.inkRect });
   }
 
-  // —— Video mode (30 fps, motion) with auto-detect ——
-
-  private startVideoWatch(): void {
-    this.stopVideoWatch();
-    this.lastFrames = this.wgcHandle?.changedFrames() ?? 0;
-    this.videoTimer = window.setInterval(() => {
-      const handle = this.wgcHandle;
-      if (!handle || !this.sharing) return;
-      // Pixel changes per second, not helper frames: keep-alives and repaints of
-      // capture-excluded windows (video tiles) arrive as identical frames.
-      const frames = handle.changedFrames();
-      let fps = frames - this.lastFrames;
-      this.lastFrames = frames;
-      // Ink is composited into the frames: drawing must not switch Video mode on.
-      if (!this.videoMode.on && this.annotateOn) fps = 0;
-      const next = nextVideoMode(this.videoMode, { now: Date.now(), fps, slidesCap: SCREEN_SHARE.capture.frameRate });
-      const changed = next.on !== this.videoMode.on;
-      this.videoMode = next;
-      if (changed) void this.applyVideoMode(next.on, 'auto');
-    }, 1000);
-  }
+  // —— Video mode (30 fps, motion): manual only ——
 
   private stopVideoWatch(): void {
     if (this.videoTimer) window.clearInterval(this.videoTimer);
@@ -1610,8 +1631,8 @@ export class ClassController {
    * under pressure, and the web's video bitrates. Off returns to this app's
    * slide settings. Share audio uses the system loopback stream.
    */
-  private async applyVideoMode(on: boolean, why: 'manual' | 'auto'): Promise<void> {
-    this.videoMode = { ...this.videoMode, on, highSince: null, lowSince: null };
+  private async applyVideoMode(on: boolean): Promise<void> {
+    this.videoMode = { on, auto: false };
     const profile = shareProfile(on);
     const raw = this.shareRaw;
     try {
@@ -1632,11 +1653,6 @@ export class ClassController {
     }
     void desktop().setWgcFps(on ? profile.capture.frameRate.max : SCREEN_SHARE.capture.frameRate);
     await this.syncShareAudio();
-    if (why === 'auto') {
-      this.notice = on
-        ? 'Moving picture detected: Video mode is on (smoother motion). Turn it off in the control panel for sharper text.'
-        : 'The screen is still again: back to sharp slides.';
-    }
     this.emit();
   }
 
