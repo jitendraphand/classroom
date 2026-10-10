@@ -80,6 +80,16 @@ function Toolbar({ hud }: { hud: HudState }) {
             Video
           </button>
         ) : null}
+        <button
+          type="button"
+          className="tsh-btn"
+          aria-pressed={!!hud.lowPower}
+          onClick={() => send({ type: 'toggle-low-power' })}
+          title={hud.lowPower ? 'Low power on: slides 5 fps, video 15 fps, smaller student tiles. Click for normal.' : 'Low power: fewer frames (slides 5 fps, video 15 fps, smaller student tiles)'}
+          aria-label={hud.lowPower ? 'Low power on (click for normal)' : 'Low power mode'}
+        >
+          Eco
+        </button>
         {hud.sharing ? (
           <button
             type="button"

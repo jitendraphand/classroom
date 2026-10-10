@@ -15,6 +15,7 @@
  * would replace it.
  */
 
+import { HW_ENCODE_FEATURES } from '../shared/hwEncode';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -84,7 +85,10 @@ protocol.registerSchemesAsPrivileged([
 app.commandLine.appendSwitch('high-dpi-support', '1');
 // Only enable-features call. The published track is the helper's WGC session;
 // these flags stay on so a mask-path getDisplayMedia is not forced onto GDI.
-app.commandLine.appendSwitch('enable-features', 'AllowWgcScreenCapturer,AllowWgcWindowCapturer');
+// Hardware encoders (Electron fallback publish path): Media Foundation H.264
+// is on by default; VP9 / AV1 MF encoders are opted in here (Chromium ignores
+// unknown names and falls back to software when no hardware encoder exists).
+app.commandLine.appendSwitch('enable-features', ['AllowWgcScreenCapturer', 'AllowWgcWindowCapturer', ...HW_ENCODE_FEATURES].join(','));
 // Separate switch from enable-features. A second append of the same name would replace it.
 // MediaStreamTrackGenerator lets the publisher hand RGBA frames to Chromium's encoder.
 app.commandLine.appendSwitch('enable-blink-features', 'MediaStreamTrackGenerator');

@@ -5,7 +5,9 @@
  * The session cookie and the LiveKit token stay out of logs.
  */
 
-import { createEraseQueue } from '../shared/eraseQueue';
+import { LOW_POWER_KEY, capEncodingFps, parseLowPower, shareFps, tileProfile } from '../shared/lowPower';
+import { freshTakeovers, takeoverToastText, type TakeoverNotice } from '../shared/web/deviceTakeover';
+import { createEraseBatcher } from '../shared/web/eraseBatch';
 import { createPanelReporter, panelShownWin } from '../shared/panelReport';
 import { withoutStrokes } from '../shared/studentErase';
 import {
@@ -174,6 +176,14 @@ export class ClassController {
     return this.room?.state === ConnectionState.Connected;
   }
   private stateInflight = false;
+  private lowPower = (() => {
+    try {
+      return parseLowPower(localStorage.getItem(LOW_POWER_KEY));
+    } catch {
+      return false;
+    }
+  })();
+  private takeoverSeen = Date.now();
   private stateAgain = false;
   private clearedStaleStage = false;
   private audioBlocked = false;
@@ -478,6 +488,17 @@ export class ClassController {
       case 'toggle-videos':
         void this.toggleVideos();
         return;
+      case 'toggle-low-power':
+        this.lowPower = !this.lowPower;
+        try {
+          localStorage.setItem(LOW_POWER_KEY, this.lowPower ? '1' : '0');
+        } catch {
+          /* ignore */
+        }
+        void this.applyVideoMode(this.videoMode.on);
+        this.ensureStudentCameras();
+        this.emit();
+        break;
       case 'toggle-video-mode':
                 void this.applyVideoMode(!this.videoMode.on);
         return;
@@ -732,6 +753,7 @@ export class ClassController {
     this.screenTrack = published;
     this.previewTrack = media;
     this.sharing = true;
+    if (this.lowPower) void this.applyVideoMode(false);
     this.videoMode = { ...VIDEO_MODE_OFF };
     void desktop().annotationOpen(this.shareDisplayId || input.source.displayId);
     this.shareKind = input.kind;
@@ -870,12 +892,24 @@ export class ClassController {
   /** Cameras on demand: report the student-video panel to the server (web /video-panel). */
   private panelWindows = { main: true, videos: false };
   /** Eraser deletes, coalesced (one eraser drag hits the same strokes many times). */
-  private eraseQueue = createEraseQueue((id) => this.roomApi('POST', '/draw', { action: 'erase', id }).then(() => undefined));
+  /** Teacher eraser over student ink: deduped, one POST /draw {action:'erase', ids:[≤50]} per flush (web eraseBatch). */
+  private eraseQueue = createEraseBatcher((body) => this.roomApi('POST', '/draw', body));
   private unsubPanels: (() => void) | null = null;
 
   private panelReporter = createPanelReporter((open) => {
     if (this.code) void this.roomApi('POST', '/video-panel', { open });
   });
+
+  /** The student-video panel the teacher can see right now (cameras on demand, tile pause). */
+  private panelShownNow(): boolean {
+    return panelShownWin({
+      sharing: this.sharing,
+      showStudentVideos: this.showStudentVideos,
+      videosOpen: this.videosOpen(),
+      videosHidden: !this.panelWindows.videos,
+      mainHidden: !this.panelWindows.main,
+    });
+  }
 
   private syncPanelReport(): void {
     if (!this.code || !this.room) return;
@@ -1134,9 +1168,15 @@ export class ClassController {
       // floating videos window), pause the rest. Students publish one small
       // layer, so the size is only a hint.
       try {
-        const on = stage.has(p.identity) && (!this.sharing || this.showStudentVideos);
+        // Paused while the panel showing them is hidden (floating window
+        // hidden/closed during a share, main window minimized otherwise).
+        const on = stage.has(p.identity) && this.panelShownNow();
         remote.setEnabled?.(on);
-        if (on) remote.setVideoDimensions?.({ width: 320, height: 180 });
+        if (on) {
+          const tile = tileProfile(this.lowPower);
+          remote.setVideoDimensions?.(tile.size);
+          (remote as { setVideoFPS?: (fps: number) => void }).setVideoFPS?.(tile.fps);
+        }
       } catch {
         /* the publication can already be closing */
       }
@@ -1678,6 +1718,7 @@ export class ClassController {
   private async applyVideoMode(on: boolean): Promise<void> {
     this.videoMode = { on, auto: false };
     const profile = shareProfile(on);
+    const fps = shareFps({ videoMode: on, lowPower: this.lowPower, slidesFps: SCREEN_SHARE.capture.frameRate, videoFps: profile.capture.frameRate.max });
     const raw = this.shareRaw;
     try {
       if (raw) raw.contentHint = profile.contentHint;
@@ -1688,14 +1729,14 @@ export class ClassController {
     if (sender) {
       try {
         const params = sender.getParameters();
-        params.encodings = windowsShareEncodings(params.encodings ?? [], on);
+        params.encodings = capEncodingFps(windowsShareEncodings(params.encodings ?? [], on), fps);
         (params as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference = profile.degradationPreference;
         await sender.setParameters(params);
       } catch (err) {
         console.warn('video mode encodings', err);
       }
     }
-    void desktop().setWgcFps(on ? profile.capture.frameRate.max : SCREEN_SHARE.capture.frameRate);
+    void desktop().setWgcFps(fps);
     await this.syncShareAudio();
     this.emit();
   }
@@ -1793,6 +1834,12 @@ export class ClassController {
     if (!res || res.status >= 400) return;
     const snap = parseRoomState(res.data);
     if (!snap) return;
+    // A student's newer device took over their seat (web deviceTakeover).
+    const fresh = freshTakeovers((res.data as { takeovers?: TakeoverNotice[] })?.takeovers, this.takeoverSeen);
+    if (fresh.length) {
+      this.takeoverSeen = Math.max(...fresh.map((t) => t.at));
+      this.notice = takeoverToastText(fresh[fresh.length - 1]!);
+    }
     if (snap.ended) {
       this.markEnded();
       return;
@@ -1927,6 +1974,7 @@ export class ClassController {
         oldestWaitingName: oldest?.displayName ?? null,
         videoMode: this.videoMode.on,
         videoModeAuto: this.videoMode.auto,
+        lowPower: this.lowPower,
         shareAudio: !!this.screenAudio,
         shareAudioAuto: this.audioChoice === 'auto',
         drawRequests: this.snap?.drawRequestCount ?? 0,

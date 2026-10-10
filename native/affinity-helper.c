@@ -381,6 +381,8 @@ static int write_frame(int width, int height, const uint8_t *rgba) {
 }
 
 /* Header-only frame: the picture has not changed since the last one sent. */
+#define STATIC_PRIO_MS 3000
+
 static int write_same(int width, int height) {
   uint32_t hdr[5];
   hdr[0] = WGC_MAGIC;
@@ -941,6 +943,8 @@ static int capture_loop(void *item, int maxW, int maxH, int fps, const char *sou
   int cursorOn = 0, borderOff = 0;
   int have = 0, dirty = 0;
   uint64_t sentHash = 0, curHash = 0;
+  DWORD lastChange = GetTickCount();
+  int lowPrio = 0;
   int sentAny = 0;
   DWORD lastSend = 0;
   DWORD minGap, keepGap;
@@ -1078,7 +1082,15 @@ static int capture_loop(void *item, int maxW, int maxH, int fps, const char *sou
           have = 1;
           {
             curHash = frame_hash(rgba, (size_t)tw * (size_t)th * 4u, tw, th);
-            if (!sentAny || curHash != sentHash) dirty = 1;
+            if (!sentAny || curHash != sentHash) {
+              dirty = 1;
+              lastChange = GetTickCount();
+              /* Picture changed: back to normal priority right away. */
+              if (lowPrio) {
+                SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
+                lowPrio = 0;
+              }
+            }
           }
           lastReal = GetTickCount();
           stale_frame(&watch);
@@ -1098,6 +1110,11 @@ static int capture_loop(void *item, int maxW, int maxH, int fps, const char *sou
         rc = STALE_EXIT;
         goto done;
       }
+    }
+    /* Static screen for 3 s: drop to below-normal priority (heartbeats only). */
+    if (!lowPrio && have && now - lastChange >= STATIC_PRIO_MS) {
+      SetPriorityClass(GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS);
+      lowPrio = 1;
     }
     due = dirty ? minGap : keepGap;
     if (have && (now - lastSend) >= due) {

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createPanelReporter, panelShownWin, PANEL_HIDE_DEBOUNCE_MS } from '../src/shared/panelReport';
-import { createEraseQueue } from '../src/shared/eraseQueue';
+import { createEraseBatcher } from '../src/shared/web/eraseBatch';
 import { SCREEN_SHARE, TEACHER_CAMERA, VIDEO_MODE_SHARE } from '../src/shared/capture';
 import { SHARE_CODEC, shareProfile } from '../src/shared/web/videoQuality';
 import { statePollMs, chatPollMs } from '../src/shared/web/pollPolicy';
@@ -75,31 +75,19 @@ test('class session reports the panel to /video-panel from main-process window s
   assert.match(src('preload/preload.ts'), /onPanelWindows/);
 });
 
-test('eraser deletes are de-duplicated, coalesced and capped in flight', async () => {
+test('eraser deletes are de-duplicated and batched (web eraseBatch, ≤50 ids per request)', () => {
   const c = clock();
-  const sent: string[] = [];
-  let inflight = 0;
-  let peak = 0;
-  const q = createEraseQueue(
-    async (id) => {
-      sent.push(id);
-      inflight++;
-      peak = Math.max(peak, inflight);
-      await new Promise((r) => setTimeout(r, 1));
-      inflight--;
-    },
-    { schedule: c.schedule, concurrency: 2 }
-  );
+  const sent: string[][] = [];
+  const q = createEraseBatcher(async (body) => void sent.push(body.ids), { schedule: c.schedule });
   q.add(['a', 'b']);
   q.add(['a', 'c', 'd', 'b']);
   assert.equal(sent.length, 0);
   c.advance(200);
-  await new Promise((r) => setTimeout(r, 30));
-  assert.deepEqual(sent, ['a', 'b', 'c', 'd']);
-  assert.ok(peak <= 2);
-  q.add(['a']);
+  assert.deepEqual(sent, [['a', 'b', 'c', 'd']]);
+  q.add(Array.from({ length: 120 }, (_, i) => `x${i}`));
   c.advance(200);
-  assert.equal(sent.length, 4);
+  assert.deepEqual(sent.slice(1).map((x) => x.length), [50, 50, 20]);
+  assert.match(src('renderer/classSession.ts'), /createEraseBatcher\(\(body\) => this\.roomApi\('POST', '\/draw', body\)\)/);
 });
 
 test('media settings match the web upgrade (673b46b)', () => {
@@ -139,7 +127,7 @@ test('helper skips unchanged frames: hash + header-only heartbeat; pump and rend
   assert.match(helper, /static uint64_t frame_hash\(/);
   assert.match(helper, /static int write_same\(/);
   assert.match(helper, /keepGap = 1000/);
-  assert.match(helper, /curHash != sentHash\) dirty = 1/);
+  assert.match(helper, /curHash != sentHash\) \{\s*dirty = 1/);
   // GPU scale stays, CPU blit fallback stays, full-monitor pool (crop fix) stays.
   assert.match(helper, /gpu_scale_blt/);
   assert.match(helper, /blit_rgba/);

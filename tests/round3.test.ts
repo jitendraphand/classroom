@@ -45,7 +45,7 @@ test('erase and clear flow overlay/tools → main → class window → /draw', (
   assert.match(src('main/main.ts'), /'student-ink-erase'[\s\S]*event\.sender !== overlay\.webContents/);
   assert.match(src('main/main.ts'), /'student-ink-clear'[\s\S]*event\.sender !== tools\.webContents/);
   const cs = src('renderer/classSession.ts');
-  assert.match(cs, /action: 'erase', id/);
+  assert.match(cs, /createEraseBatcher/);
   assert.match(cs, /edit\.clear[\s\S]*action: 'clear'/);
   const tools = src('renderer/tools.tsx');
   assert.match(tools, /Clear student drawings/);

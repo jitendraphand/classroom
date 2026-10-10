@@ -33,6 +33,8 @@ export type HudState = {
   /** Share Video mode (30 fps, motion) and whether it still follows auto-detect. */
   videoMode: boolean;
   videoModeAuto: boolean;
+  /** Low-power mode: slides 5 fps, video 15 fps, smaller/slower tiles. */
+  lowPower?: boolean;
   /** Computer sound is being sent with the share, and whether it follows Video mode ('auto'). */
   shareAudio: boolean;
   shareAudioAuto: boolean;
@@ -65,6 +67,7 @@ export type TeacherAction =
   | { type: 'toggle-annotate' }
   | { type: 'toggle-videos' }
   | { type: 'toggle-video-mode' }
+  | { type: 'toggle-low-power' }
   | { type: 'toggle-share-audio' }
   | { type: 'draw-allow'; id: string }
   | { type: 'draw-revoke'; id?: string }
@@ -102,6 +105,7 @@ export function isTeacherAction(v: unknown): v is TeacherAction {
     case 'toggle-annotate':
     case 'toggle-videos':
     case 'toggle-video-mode':
+    case 'toggle-low-power':
     case 'toggle-share-audio':
     case 'draw-clear':
     case 'admit-all':
