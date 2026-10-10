@@ -10,3 +10,4 @@ Items: 1 sync+batch erase, 2 native sidecar publisher (Option A), 3 annotate too
 - [x] 2: native/share-sidecar (Rust, livekit 0.9.4, cargo-xwin → x86_64-pc-windows-msvc, ~31 MB). Runs the helper as child, composites ink, I420, publishes VP9 L1T3 (VP8 retry) as teacher_…__screen + WASAPI loopback audio. Main: pump wrap, 15 s publish wait → fallback to Electron path. Web: POST /api/rooms/[code]/screen-token (needed).
   Smoke (Wine + local livekit 1.13.9 + fake helper): connected, published VP9 + opus; Chrome subscriber decoded 640x360 VP9, 62 frames/8 s.
 - [x] 4 (sidecar): VideoEncoderBackend::Hardware requested; livekit's Windows libwebrtc build has no HW encoders compiled → software libvpx fallback.
+- [x] Build: setup 97,141,324 B / portable 96,934,526 B (bundle share-sidecar.exe). Web f7b9790 deployed (backup ~/classroom-backup-20261010-223308). Release windows-debug-20261010d published, asset sizes verified.
