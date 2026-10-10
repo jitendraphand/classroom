@@ -67,7 +67,7 @@ export async function setDrawRequest(code: string, participantId: string, on: bo
   } else {
     await r.hdel(keys.drawRequests(code), participantId);
   }
-  nudgeRoomState(code, 'all');
+  nudgeRoomState(code, { participantIds: [participantId] });
 }
 
 /** Allow ONE student (replaces any other holder; their strokes stay). */

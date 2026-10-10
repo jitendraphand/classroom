@@ -29,6 +29,16 @@ webhook:
 logging:
   level: info
 room:
+  # Screen share publishes VP9 (L1T3 simulcast, needs server >= 1.13.6 for SVC
+  # simulcast) with a VP8 backup codec for subscribers that cannot decode VP9
+  # (older iOS Safari). Opus + RED for audio. Dynacast / adaptive stream are
+  # client options (ClassroomRoom) and need nothing here.
+  enabled_codecs:
+    - mime: audio/opus
+    - mime: audio/red
+    - mime: video/vp8
+    - mime: video/h264
+    - mime: video/vp9
   auto_create: true
   empty_timeout: 300
   max_participants: 200

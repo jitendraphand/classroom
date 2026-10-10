@@ -41,7 +41,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
       }
       return jsonError('Class ended', 410);
     }
-    nudgeRoomState(room.code, 'all');
+    // Pins only show on the teacher's roster; a sample change nudges everyone itself.
+    nudgeRoomState(room.code, 'teacher');
     return jsonOk(result);
   } catch (e) {
     if (e instanceof z.ZodError) return jsonError(e.errors[0]?.message || 'Invalid input');

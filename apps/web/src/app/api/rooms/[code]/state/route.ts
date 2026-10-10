@@ -1,3 +1,4 @@
+import { camWanted } from '@/lib/camOnDemand';
 import { prisma } from '@/lib/db';
 import { endedSessionReason, resolveRoomAccess } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
@@ -130,7 +131,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   await ensureSampleFresh(code);
   const redis = await ensureRedis();
   // Independent reads, issued together (ioredis pipelines them on one socket).
-  const [{ visible }, mutedIds, handList, handTimes, stageRaw, focusRaw, drawHolder, drawReqs, desktopInkRaw] = await Promise.all([
+  const [{ visible }, mutedIds, handList, handTimes, stageRaw, focusRaw, drawHolder, drawReqs, desktopInkRaw, panelRaw] = await Promise.all([
     getVisibleSample(code),
     redis.smembers(keys.muted(code)),
     redis.smembers(keys.hands(code)),
@@ -141,6 +142,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     currentHolder(code, redis),
     drawRequests(code, redis),
     redis.get(keys.desktopInk(code)),
+    redis.get(keys.videoPanel(code)),
   ]);
   const drawReqAt = new Map(drawReqs.map((d) => [d.id, d.at]));
   const handSet = handList.map(String);
@@ -211,6 +213,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
         mutedByTeacher: me.mutedByTeacher || mutedIds.includes(me.id),
         canPublishVideo,
         inVisibleSample: canPublishVideo,
+        /** Publish camera video now (in the sample AND the teacher shows the video panel). */
+        camWanted: camWanted({ isTeacher, inSample: canPublishVideo, panelRaw }),
         handRaised: raisedHands.includes(me.id),
         drawRequested: drawReqAt.has(me.id),
         canDraw: drawHolder?.participantId === me.id,
@@ -270,6 +274,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     stageMode,
     /** The share already shows student ink (drawn on the teacher's desktop): skip the stroke overlay. */
     desktopInk: stageMode === 'screen' && desktopInkRaw === '1',
+    videoPanelOpen: panelRaw !== '0',
     /** Student allowed to draw on the share now (one at a time), for everyone. */
     drawHolder: drawHolder
       ? { participantId: drawHolder.participantId, identity: drawHolder.identity, name: drawHolder.name, until: drawHolder.until }

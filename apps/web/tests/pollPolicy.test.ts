@@ -3,20 +3,20 @@ import assert from 'node:assert/strict';
 import { statePollMs, chatPollMs, waitingPollMs, perMinute, mergeAudience } from '../src/lib/pollPolicy';
 
 test('students poll slowly while pushes are live, fast when not', () => {
-  assert.equal(statePollMs({ role: 'student', hidden: false, pushLive: true }), 6000);
-  assert.equal(statePollMs({ role: 'student', hidden: true, pushLive: true }), 15000);
+  assert.equal(statePollMs({ role: 'student', hidden: false, pushLive: true }), 30000);
+  assert.equal(statePollMs({ role: 'student', hidden: true, pushLive: true }), 60000);
   assert.equal(statePollMs({ role: 'student', hidden: false, pushLive: false }), 2000);
   assert.equal(statePollMs({ role: 'student', hidden: true, pushLive: false }), 10000);
 });
 
 test('teacher never slows down when hidden (share HUD needs counts)', () => {
-  assert.equal(statePollMs({ role: 'teacher', hidden: true, pushLive: true }), 5000);
-  assert.equal(statePollMs({ role: 'teacher', hidden: false, pushLive: true }), 5000);
+  assert.equal(statePollMs({ role: 'teacher', hidden: true, pushLive: true }), 30000);
+  assert.equal(statePollMs({ role: 'teacher', hidden: false, pushLive: true }), 30000);
   assert.equal(statePollMs({ role: 'teacher', hidden: true, pushLive: false }), 2000);
 });
 
 test('chat and waiting polls', () => {
-  assert.equal(chatPollMs({ hidden: false, pushLive: true }), 15000);
+  assert.equal(chatPollMs({ hidden: false, pushLive: true }), 60000);
   assert.equal(chatPollMs({ hidden: false, pushLive: false }), 3000);
   assert.equal(waitingPollMs(false), 2000);
   assert.equal(waitingPollMs(true), 6000);

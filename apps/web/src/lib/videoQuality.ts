@@ -2,36 +2,28 @@
  * Camera / screen-share capture and encoding settings, in one place.
  * Plain data (no livekit-client import) so it is unit-tested and shared.
  *
- * Teacher camera: 720p with simulcast (180p + 360p + 720p). Students and the
- * admin tiles subscribe with adaptiveStream, so the SFU forwards the layer that
- * fits the element showing it; with dynacast the teacher's browser stops
- * encoding layers nobody is receiving.
- *
- * Student camera: small single layer. Only the teacher ever receives student
- * video (at most 6 in the 2/4/6 mosaic), and simulcast would cost weak student
- * devices an extra encoder for no viewer benefit.
- *
- * Screen share: ≤1080p top layer (unchanged) plus a 720p low layer for small
- * viewports and admin tiles, when the capture is big enough (see
- * screenShareSimulcastFor). Firefox publishers never simulcast a screen share
- * (livekit-client disables it there); they keep the single 1080p layer.
+ * Teacher camera: 360p single layer. Student camera: small single layer, and
+ * only published while the teacher actually shows it (see camWanted in /state).
+ * Screen share: VP9 L1T3 (frame rate degrades, resolution never) with a VP8
+ * 720p-floor simulcast backup; slides ≤8 fps, video mode 720p24. Subscribers
+ * use adaptiveStream + dynacast (ClassroomRoom), so the SFU forwards what fits
+ * the element and publishers stop encoding layers nobody receives.
  */
 
 export type Layer = { width: number; height: number; maxBitrate: number; maxFramerate: number };
 
+/**
+ * Teacher camera: 360p, one layer (2026-10). Students see it in a small
+ * floating tile (or not at all when they minimise it or pick "Audio + share
+ * only"), and the admin tiles are smaller still, so 720p simulcast cost the
+ * teacher's uplink ~1.8 Mbps for pixels nobody displayed. 360p @ 15 fps
+ * ≤300 kbps looks the same in that tile (measured ~190 kbps).
+ */
 export const TEACHER_CAMERA = {
-  /** getUserMedia constraints (ideal; the browser picks the closest mode). */
-  capture: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 24, max: 30 } },
-  /** Top layer (the captured 720p). */
-  // 24 fps / 1.2 Mbps: a talking head looks the same as 30 fps / 1.5 Mbps and
-  // costs the teacher's laptop ~20% less encode CPU and uplink.
-  encoding: { maxBitrate: 1_200_000, maxFramerate: 24 },
-  simulcast: true,
-  /** Lower simulcast layers, smallest first. */
-  layers: [
-    { width: 320, height: 180, maxBitrate: 140_000, maxFramerate: 15 },
-    { width: 640, height: 360, maxBitrate: 500_000, maxFramerate: 24 },
-  ] satisfies Layer[],
+  capture: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 15, max: 15 } },
+  encoding: { maxBitrate: 300_000, maxFramerate: 15 },
+  simulcast: false,
+  layers: [] as Layer[],
 } as const;
 
 export const STUDENT_CAMERA = {
@@ -41,22 +33,45 @@ export const STUDENT_CAMERA = {
 } as const;
 
 export const SCREEN_SHARE = {
-  // max 15: the encoder never sends more than 15 fps, so capturing (and masking)
-  // up to 30 only burned CPU. Static slides deliver far fewer frames anyway.
-  capture: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 15, max: 15 } },
+  // Slides: max 8 fps. Chrome's screen capturer only delivers a frame when the
+  // screen changes, and the encoder sends almost nothing for a static frame,
+  // so a still slide costs ~0 kbps; 8 fps keeps the pointer readable.
+  capture: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 8, max: 8 } },
   /** Top layer: the captured resolution (≤1080p with the capture hints). */
-  encoding: { maxBitrate: 1_500_000, maxFramerate: 15 },
+  encoding: { maxBitrate: 1_500_000, maxFramerate: 8 },
   simulcast: true,
   /**
-   * One lower layer, 720p @ 10 fps ≤500 kbps. 720p (a 1.5× downscale of 1080p)
-   * keeps normal slide text (≈18 pt and up) readable; 540p would be a 2× scale
-   * and blur small text, code and spreadsheet cells. Slides are mostly static,
-   * so 10 fps leaves more bits per frame for sharp text; the cost is a less
-   * smooth pointer. Received by small viewports (phones, small windows) and
-   * the admin tiles; large viewports keep the top layer.
+   * VP8/H.264 fallback only (VP9 uses one spatial layer, see SHARE_CODEC):
+   * one lower layer at 720p, the floor for legible slide text (540p blurs
+   * small text). Received by small viewports, data-saver students and admin
+   * tiles; large viewports keep the top layer.
    */
-  layers: [{ width: 1280, height: 720, maxBitrate: 500_000, maxFramerate: 10 }] satisfies Layer[],
+  layers: [{ width: 1280, height: 720, maxBitrate: 500_000, maxFramerate: 8 }] satisfies Layer[],
 } as const;
+
+/**
+ * Screen-share codec. Chromium publishers send VP9 with ONE spatial layer and
+ * three temporal layers (L1T3): the SFU can drop to 1/2 or 1/4 of the frame
+ * rate for a slow subscriber but never lowers the resolution (720p+ floor),
+ * and VP9 needs ~30-40% fewer bits than VP8 for screen text. Subscribers that
+ * cannot decode VP9 (older iOS Safari) get the VP8 backup codec, which the
+ * publisher starts on demand (LiveKit backupCodec) with the 720p simulcast
+ * layer above. Other publishers (Safari, Firefox) keep VP8 simulcast.
+ */
+export const SHARE_CODEC = {
+  codec: 'vp9',
+  scalabilityMode: 'L1T3',
+  backupCodec: 'vp8',
+} as const;
+
+/** VP9 SVC publishing is reliable in Chromium only. */
+export function shareUsesVp9(ua: string): boolean {
+  if (!ua) return false;
+  if (/Firefox\//.test(ua) || /FxiOS|CriOS|EdgiOS/.test(ua)) return false;
+  // Safari (incl. every iOS browser) has no Chrome/ token or is iOS WebKit.
+  if (/iPhone|iPad|iPod/.test(ua)) return false;
+  return /Chrome\/|Chromium\/|Edg\//.test(ua);
+}
 
 /**
  * Simulcast a screen share only when the capture is clearly bigger than the
@@ -72,26 +87,22 @@ export function screenShareSimulcastFor(width: number | undefined, height: numbe
 }
 
 /**
- * Video mode (teacher's "Video" toggle in the share controls): the share is a
- * playing video, not slides. Motion beats sharpness here, so:
- * - capture at 30 fps (slides capture at 15) and hint the encoder `motion`;
- * - top layer ≤1080p @ 30 fps / 2.5 Mbps, low layer 720p @ 30 fps / 1 Mbps
- *   (slides: 15 fps / 1.5 Mbps and 10 fps / 0.5 Mbps);
- * - under CPU/bandwidth pressure keep the frame rate and drop resolution
- *   (`maintain-framerate`), the opposite of slides.
- * Phones and small windows receive the 720p30 layer (≈1 Mbps); large
- * viewports the top layer. Share audio is published as before (music preset).
+ * Video mode (teacher's "Video" toggle in the share controls, manual only):
+ * the share is a playing video. Capped at 720p and 24 fps (capture
+ * constraints), contentHint `motion`, ≤1.5 Mbps. Resolution is still kept
+ * under pressure (frame rate drops first) so text in the video stays legible.
+ * Share audio is published as before (music preset).
  */
 export const SCREEN_SHARE_VIDEO_MODE = {
-  capture: { frameRate: { ideal: 30, max: 30 } },
-  top: { maxBitrate: 2_500_000, maxFramerate: 30 },
-  low: { maxBitrate: 1_000_000, maxFramerate: 30 },
-  degradationPreference: 'maintain-framerate',
+  capture: { frameRate: { ideal: 24, max: 24 }, height: { max: 720 }, width: { max: 1280 } },
+  top: { maxBitrate: 1_500_000, maxFramerate: 24 },
+  low: { maxBitrate: 1_000_000, maxFramerate: 24 },
+  degradationPreference: 'maintain-resolution',
   contentHint: 'motion',
 } as const;
 
 export type ShareProfile = {
-  capture: { frameRate: { ideal: number; max: number } };
+  capture: { frameRate: { ideal: number; max: number }; height?: { ideal?: number; max?: number }; width?: { ideal?: number; max?: number } };
   top: { maxBitrate: number; maxFramerate: number };
   low: { maxBitrate: number; maxFramerate: number };
   degradationPreference: 'maintain-framerate' | 'maintain-resolution';
@@ -103,7 +114,11 @@ export function shareProfile(videoMode: boolean): ShareProfile {
   if (videoMode) return SCREEN_SHARE_VIDEO_MODE;
   const low = SCREEN_SHARE.layers[0];
   return {
-    capture: { frameRate: { ideal: SCREEN_SHARE.capture.frameRate.ideal, max: SCREEN_SHARE.capture.frameRate.max } },
+    capture: {
+      frameRate: { ideal: SCREEN_SHARE.capture.frameRate.ideal, max: SCREEN_SHARE.capture.frameRate.max },
+      width: { ideal: SCREEN_SHARE.capture.width.ideal },
+      height: { ideal: SCREEN_SHARE.capture.height.ideal },
+    },
     top: { maxBitrate: SCREEN_SHARE.encoding.maxBitrate, maxFramerate: SCREEN_SHARE.encoding.maxFramerate },
     low: { maxBitrate: low.maxBitrate, maxFramerate: low.maxFramerate },
     degradationPreference: 'maintain-resolution',

@@ -61,7 +61,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
       });
       if (!participant) return jsonError('Participant not found', 404);
       await setHand(redis, code, participant.id, body.raised);
-      nudgeRoomState(room.code, 'all');
+      nudgeRoomState(room.code, { participantIds: [participant.id] });
       return jsonOk({ ok: true, raised: body.raised, participantId: participant.id });
     }
 

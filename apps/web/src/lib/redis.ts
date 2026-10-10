@@ -36,6 +36,8 @@ export const keys = {
   stage: (code: string) => `room:${code}:stage`,
   /** '1' while the teacher's share draws student ink on the real desktop (Windows app). */
   desktopInk: (code: string) => `room:${code}:desktop-ink`,
+  /** '0' while the teacher's student-video panel is minimized/closed (cameras on demand). */
+  videoPanel: (code: string) => `room:${code}:video-panel`,
   /** Hash identity → pinnedAt ms for active-speaker pins */
   pinnedSpeakers: (code: string) => `room:${code}:pinned-speakers`,
   /** Per-identity pin rate limit */

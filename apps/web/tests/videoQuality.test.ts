@@ -6,21 +6,17 @@ import {
   screenShareSimulcastFor,
   STUDENT_CAMERA,
   TEACHER_CAMERA,
+  SHARE_CODEC,
+  shareUsesVp9,
+  shareProfile,
 } from '../src/lib/videoQuality';
 
-test('teacher camera: 720p capture, 24–30 fps, simulcast with a ~180p low layer', () => {
-  assert.equal(TEACHER_CAMERA.capture.width.ideal, 1280);
-  assert.equal(TEACHER_CAMERA.capture.height.ideal, 720);
-  assert.ok(TEACHER_CAMERA.capture.frameRate.ideal >= 24 && TEACHER_CAMERA.capture.frameRate.ideal <= 30);
-  assert.equal(TEACHER_CAMERA.simulcast, true);
-  assert.ok(TEACHER_CAMERA.encoding.maxBitrate >= 1_200_000 && TEACHER_CAMERA.encoding.maxBitrate <= 1_700_000);
-  const [low, mid] = TEACHER_CAMERA.layers;
-  assert.deepEqual([low.width, low.height], [320, 180]);
-  assert.ok(low.maxBitrate >= 120_000 && low.maxBitrate <= 150_000);
-  assert.deepEqual([mid.width, mid.height], [640, 360]);
-  // Layers strictly increase in size and bitrate up to the top layer.
-  assert.ok(low.maxBitrate < mid.maxBitrate && mid.maxBitrate < TEACHER_CAMERA.encoding.maxBitrate);
-  assert.ok(mid.maxFramerate <= TEACHER_CAMERA.encoding.maxFramerate);
+test('teacher camera: 360p single layer, 15 fps, ≤300 kbps', () => {
+  assert.equal(TEACHER_CAMERA.capture.width.ideal, 640);
+  assert.equal(TEACHER_CAMERA.capture.height.ideal, 360);
+  assert.equal(TEACHER_CAMERA.capture.frameRate.max, 15);
+  assert.equal(TEACHER_CAMERA.simulcast, false);
+  assert.ok(TEACHER_CAMERA.encoding.maxBitrate <= 300_000);
 });
 
 test('student camera: small, ~15 fps, low bitrate, single layer', () => {
@@ -31,19 +27,35 @@ test('student camera: small, ~15 fps, low bitrate, single layer', () => {
   assert.equal(STUDENT_CAMERA.simulcast, false);
 });
 
-test('screen share: 1080p top layer ≤1.5 Mbps @15 fps, plus a legible 720p low layer', () => {
-  assert.equal(SCREEN_SHARE.capture.width.ideal, 1920);
+test('screen share: slides ≤8 fps, 1080p top, 720p floor layer', () => {
   assert.equal(SCREEN_SHARE.capture.height.ideal, 1080);
-  assert.equal(SCREEN_SHARE.encoding.maxBitrate, 1_500_000);
-  assert.equal(SCREEN_SHARE.encoding.maxFramerate, 15);
-  assert.equal(SCREEN_SHARE.simulcast, true);
+  assert.equal(SCREEN_SHARE.capture.frameRate.max, 8);
+  assert.equal(SCREEN_SHARE.encoding.maxFramerate, 8);
   assert.equal(SCREEN_SHARE.layers.length, 1);
-  const [low] = SCREEN_SHARE.layers;
-  // Not below 720p: 540p (2x downscale of 1080p) blurs slide text.
-  assert.ok(Math.min(low.width, low.height) >= 720);
-  assert.ok(low.maxBitrate >= 400_000 && low.maxBitrate <= 600_000);
-  assert.ok(low.maxFramerate >= 10 && low.maxFramerate <= 15);
-  assert.ok(low.maxBitrate < SCREEN_SHARE.encoding.maxBitrate);
+  assert.ok(Math.min(SCREEN_SHARE.layers[0].width, SCREEN_SHARE.layers[0].height) >= 720);
+});
+
+test('share codec: VP9 L1T3 (frame rate degrades, never resolution) with VP8 backup on Chromium only', () => {
+  assert.equal(SHARE_CODEC.codec, 'vp9');
+  assert.equal(SHARE_CODEC.scalabilityMode, 'L1T3');
+  assert.equal(SHARE_CODEC.backupCodec, 'vp8');
+  const chrome = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
+  const edge = chrome + ' Edg/130.0';
+  const ff = 'Mozilla/5.0 (Windows NT 10.0; rv:131.0) Gecko/20100101 Firefox/131.0';
+  const safari = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
+  const ios = 'Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/130.0 Mobile/15E148 Safari/604.1';
+  assert.equal(shareUsesVp9(chrome), true);
+  assert.equal(shareUsesVp9(edge), true);
+  assert.equal(shareUsesVp9(ff), false);
+  assert.equal(shareUsesVp9(safari), false);
+  assert.equal(shareUsesVp9(ios), false);
+  assert.equal(shareUsesVp9(''), false);
+});
+
+test('slides keep resolution under pressure (maintain-resolution, detail)', () => {
+  const s = shareProfile(false);
+  assert.equal(s.degradationPreference, 'maintain-resolution');
+  assert.equal(s.contentHint, 'detail');
 });
 
 test('screen share simulcasts only when the capture is clearly bigger than the low layer', () => {

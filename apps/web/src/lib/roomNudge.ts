@@ -36,12 +36,17 @@ async function send(roomCode: string, audience: NudgeAudience) {
     });
     if (!room) return;
     let destinationIdentities: string[] | undefined;
-    if (audience === 'teacher') {
-      const teachers = await prisma.participant.findMany({
-        where: { roomId: room.id, role: 'TEACHER', status: 'ADMITTED' },
+    if (audience !== 'all') {
+      const ids = typeof audience === 'object' ? audience.participantIds : [];
+      const targets = await prisma.participant.findMany({
+        where: {
+          roomId: room.id,
+          status: 'ADMITTED',
+          OR: [{ role: 'TEACHER' }, ...(ids.length ? [{ id: { in: ids } }] : [])],
+        },
         select: { livekitIdentity: true },
       });
-      destinationIdentities = teachers.map((t) => t.livekitIdentity);
+      destinationIdentities = targets.map((t) => t.livekitIdentity);
       if (destinationIdentities.length === 0) return;
     }
     await sendRoomData(

@@ -1,5 +1,6 @@
 'use client';
 
+import { dataSaverBadge, dataSaverLabel, type DataSaverMode } from '@/lib/dataSaver';
 import { IconButton } from '@/components/ui/IconButton';
 import { Button } from '@/components/ui/Button';
 import {
@@ -73,6 +74,9 @@ type Props = {
    * getDisplayMedia needs.
    */
   onPrepareScreenShare?: () => void;
+  /** Student data saver (cycles off → Low quality → Audio + share only). */
+  dataSaver?: DataSaverMode;
+  onCycleDataSaver?: () => void;
 };
 
 export function Controls({
@@ -106,6 +110,8 @@ export function Controls({
   drawState,
   onToggleDraw,
   onPrepareScreenShare,
+  dataSaver,
+  onCycleDataSaver,
 }: Props) {
   void _canPublishVideo;
   const teacherMuted = !!mutedByTeacher && !isTeacher;
@@ -211,6 +217,19 @@ export function Controls({
               {drawState === 'requested' && (
                 <span className="absolute -right-1.5 -top-1.5 h-2.5 w-2.5 animate-pulse rounded-full bg-amber-400" aria-hidden />
               )}
+            </span>
+          </IconButton>
+        )}
+
+        {!isTeacher && dataSaver && onCycleDataSaver && (
+          <IconButton
+            size={btn}
+            label={dataSaverLabel(dataSaver)}
+            active={dataSaver !== 'off'}
+            onClick={onCycleDataSaver}
+          >
+            <span className="text-[10px] font-bold leading-none tracking-tight" aria-hidden>
+              {dataSaverBadge(dataSaver)}
             </span>
           </IconButton>
         )}

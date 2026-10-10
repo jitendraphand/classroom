@@ -115,7 +115,13 @@ import {
   shareProfile,
   STUDENT_CAMERA,
   TEACHER_CAMERA,
+  SHARE_CODEC,
+  shareUsesVp9,
 } from '@/lib/videoQuality';
+import { effectiveCamWanted, panelShown } from '@/lib/camOnDemand';
+import { nextDataSaver } from '@/lib/dataSaver';
+import { useDataSaver } from '@/hooks/useDataSaver';
+import { TeacherMediaDemand } from './TeacherMediaDemand';
 
 type TokenPayload = {
   token: string;
@@ -716,6 +722,7 @@ function TeacherCameraFloat({
   camOn: boolean;
 }) {
   const room = useRoomContext();
+  const [dataSaver] = useDataSaver();
   const teacherSet = new Set(teacherIdentities);
   const [tick, setTick] = useState(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -875,6 +882,8 @@ function TeacherCameraFloat({
   const showSelfTile = selfMode === 'show';
 
   return (
+    <>
+    <TeacherMediaDemand teacherIdentities={teacherIdentities} mode={dataSaver} camPaneMinimized={paneMin} />
     <div
       ref={paneRef}
       className="student-media-float"
@@ -960,6 +969,7 @@ function TeacherCameraFloat({
         </>
       )}
     </div>
+    </>
   );
 }
 
@@ -978,7 +988,10 @@ function TeacherPeersFloat({
   pinnedIdentities = [],
   onTogglePin,
   portalWindow = null,
+  onShownChange,
 }: {
+  /** Panel visibility to the teacher (drives student cameras on demand). */
+  onShownChange?: (shown: boolean) => void;
   /**
    * While sharing: render the panel inside this separate window (beside the
    * share toolbar) instead of the classroom tab. Same tiles, pins, rotation.
@@ -1056,6 +1069,27 @@ function TeacherPeersFloat({
   }, [sharingDock]);
   const isMin = portal ? false : sharingDock ? shareMinimized : minimized;
   const narrowDock = !!dock && dock.width < PEER_DOCK_NARROW_W;
+  // Cameras on demand: report shown / minimized (incl. an OS-minimized popup).
+  const [portalHidden, setPortalHidden] = useState(false);
+  useEffect(() => {
+    if (!portal || !portalWindow) {
+      setPortalHidden(false);
+      return;
+    }
+    const doc = portalWindow.document;
+    const on = () => setPortalHidden(doc.visibilityState === 'hidden');
+    on();
+    doc.addEventListener('visibilitychange', on);
+    return () => doc.removeEventListener('visibilitychange', on);
+  }, [portal, portalWindow]);
+  const shown = panelShown({ minimized: isMin, portalHidden });
+  const onShownRef = useRef(onShownChange);
+  onShownRef.current = onShownChange;
+  useEffect(() => {
+    // Debounced: a quick minimize/restore does not bounce every camera.
+    const t = window.setTimeout(() => onShownRef.current?.(shown), shown ? 0 : 1500);
+    return () => window.clearTimeout(t);
+  }, [shown]);
   const [rotationTick, setRotationTick] = useState(0);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [stickyVersion, setStickyVersion] = useState(0);
@@ -1822,6 +1856,7 @@ function cameraErrorMessage(err: unknown): string {
 function SelectivePublisher({
   isTeacher,
   canPublishVideo,
+  camWanted = true,
   mutedByTeacher,
   camDesired,
   micDesired,
@@ -1832,6 +1867,8 @@ function SelectivePublisher({
   /** Teacher: 720p simulcast camera; student: small single-layer camera. */
   isTeacher: boolean;
   canPublishVideo: boolean;
+  /** Students: send camera video only while the teacher shows it (lib/camOnDemand). */
+  camWanted?: boolean;
   mutedByTeacher: boolean;
   camDesired: boolean;
   micDesired: boolean;
@@ -1964,8 +2001,29 @@ function SelectivePublisher({
       }
       camTrackRef.current = track;
       camSourceRef.current = source;
+      if (!isTeacher && !camWantedRef.current) await track.pauseUpstream().catch(() => undefined);
     });
   }, [canPublishVideo, camDesired, previewTrack, localParticipant, room, isTeacher, permTick]);
+
+  // Cameras on demand: pause / resume the published track (no renegotiation).
+  const camWantedRef = useRef(camWanted);
+  camWantedRef.current = camWanted;
+  useEffect(() => {
+    if (isTeacher || !localParticipant) return;
+    void enqueueLocalPublish(async () => {
+      const track = camTrackRef.current;
+      if (!track) return;
+      try {
+        if (camWantedRef.current) {
+          if (track.isUpstreamPaused) await track.resumeUpstream();
+        } else if (!track.isUpstreamPaused) {
+          await track.pauseUpstream();
+        }
+      } catch (e) {
+        console.warn('camera on demand', e);
+      }
+    });
+  }, [camWanted, isTeacher, localParticipant]);
 
   // Unmount: stop the published clone (the preview stream is stopped by its owner).
   useEffect(() => {
@@ -2222,13 +2280,9 @@ function RoomInner({
   const [hudOpen, setHudOpen] = useState(false);
   const [hudNotice, setHudNotice] = useState('');
   /** Share tuned for a playing video (30 fps, motion) instead of slides. Remembered in this tab. */
-  const [videoMode, setVideoModeState] = useState(() => {
-    try {
-      return sessionStorage.getItem('share_video_mode') === '1';
-    } catch {
-      return false;
-    }
-  });
+  const [dataSaver, setDataSaver] = useDataSaver();
+  // Video mode is manual and starts OFF for every share (slides by default).
+  const [videoMode, setVideoModeState] = useState(false);
   const videoModeRef = useRef(videoMode);
   /** Teacher roster search (name / SID). */
   const [rosterQuery, setRosterQuery] = useState('');
@@ -2394,6 +2448,23 @@ function RoomInner({
       room.off(RoomEvent.TrackMuted, onTrackMuted);
     };
   }, [isTeacher, room, code, refresh, state?.admitted, state?.visibleIdentities, visibleIdentities]);
+
+  /** Cameras on demand: tell the server whether the student-video panel is shown. */
+  const panelReported = useRef<boolean | null>(null);
+  const reportVideoPanel = useCallback(
+    (open: boolean) => {
+      if (!isTeacher || panelReported.current === open) return;
+      panelReported.current = open;
+      void roomFetch(code, '/video-panel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ open }),
+      }).catch(() => {
+        panelReported.current = null;
+      });
+    },
+    [code, isTeacher]
+  );
 
   const postStage = useCallback(
     async (mode: 'idle' | 'screen') => {
@@ -2711,7 +2782,12 @@ function RoomInner({
       const raw = rawShareRef.current;
       if (raw && raw.readyState === 'live') {
         try {
-          await raw.applyConstraints({ ...raw.getConstraints(), frameRate: profile.capture.frameRate });
+          await raw.applyConstraints({
+            ...raw.getConstraints(),
+            frameRate: profile.capture.frameRate,
+            ...(profile.capture.width ? { width: profile.capture.width } : {}),
+            ...(profile.capture.height ? { height: profile.capture.height } : {}),
+          });
         } catch (e) {
           console.warn('share frame rate', e);
         }
@@ -2747,11 +2823,6 @@ function RoomInner({
     (on: boolean) => {
       videoModeRef.current = on;
       setVideoModeState(on);
-      try {
-        sessionStorage.setItem('share_video_mode', on ? '1' : '0');
-      } catch {
-        /* ignore */
-      }
       void applyShareProfile(on);
     },
     [applyShareProfile]
@@ -2933,10 +3004,19 @@ function RoomInner({
       } catch {
         /* ignore */
       }
-      const shareOpts = (layered: boolean) => ({
+      // VP9 L1T3 + VP8 backup (Chromium); VP8 simulcast elsewhere. See SHARE_CODEC.
+      const vp9 = shareUsesVp9(navigator.userAgent || '');
+      const shareOpts = (layered: boolean, useVp9 = vp9) => ({
         name: 'screen',
         source: Track.Source.ScreenShare,
-        simulcast: layered,
+        ...(useVp9
+          ? {
+              videoCodec: SHARE_CODEC.codec,
+              scalabilityMode: SHARE_CODEC.scalabilityMode,
+              backupCodec: { codec: SHARE_CODEC.backupCodec },
+            }
+          : {}),
+        simulcast: layered || useVp9,
         screenShareEncoding: profile.top,
         degradationPreference: profile.degradationPreference as RTCDegradationPreference,
         screenShareSimulcastLayers: layered
@@ -2951,10 +3031,11 @@ function RoomInner({
         } catch (err) {
           // Fail safe: a browser/SFU that rejects the layered publish still
           // gets the plain single-layer share (the pre-simulcast behaviour).
-          if (!simulcast || media.readyState !== 'live') throw err;
+          if ((!simulcast && !vp9) || media.readyState !== 'live') throw err;
           console.warn('screen share simulcast failed; publishing a single layer', err);
           await localParticipant.unpublishTrack(published, false).catch(() => undefined);
-          await localParticipant.publishTrack(published, shareOpts(false));
+          // Plain single-layer VP8: the most compatible publish.
+          await localParticipant.publishTrack(published, shareOpts(false, false));
         }
       });
     } catch (e) {
@@ -3456,6 +3537,8 @@ function RoomInner({
     onToggleHand: isTeacher ? undefined : toggleHand,
     drawState: !isTeacher && sharingNow ? myDrawState : undefined,
     onToggleDraw: isTeacher ? undefined : () => void toggleDraw(),
+    dataSaver: isTeacher ? undefined : dataSaver,
+    onCycleDataSaver: isTeacher ? undefined : () => setDataSaver(nextDataSaver(dataSaver)),
   };
   const withDrawing = (node: ReactNode) => (
     <ShareDrawingProvider
@@ -3491,6 +3574,7 @@ function RoomInner({
         <SelectivePublisher
           isTeacher={false}
           canPublishVideo={effectiveCanPublish}
+          camWanted={effectiveCamWanted(state?.me) || (!state?.me && effectiveCanPublish)}
           mutedByTeacher={effectiveMuted || micLockedNoTeacher}
           camDesired={camOn}
           micDesired={micOn}
@@ -3549,6 +3633,8 @@ function RoomInner({
           )}
         </div>
 
+        {/* Teacher video hidden: receive no teacher camera at all. */}
+        {covered && <TeacherMediaDemand teacherIdentities={teacherIdentities} mode={dataSaver} camPaneMinimized />}
         {/* The floating teacher video, on every device (draggable, minimisable). */}
         {!covered && (
           <TeacherCameraFloat
@@ -4038,6 +4124,7 @@ function RoomInner({
         focusAlerts={focusByIdentity}
         pinnedIdentities={pinnedIdentities}
         portalWindow={videosWin}
+        onShownChange={reportVideoPanel}
         onTogglePin={(identity, on) => {
           const id = participantIdByIdentity.get(identity);
           if (id) void togglePin(id, on);

@@ -42,6 +42,8 @@ export type RoomState = {
     mutedByTeacher: boolean;
     canPublishVideo: boolean;
     inVisibleSample: boolean;
+    /** Camera video wanted now (sample AND teacher panel shown). Missing on old servers. */
+    camWanted?: boolean;
     handRaised?: boolean;
     /** Asked to draw on the share (waiting for the teacher). */
     drawRequested?: boolean;
@@ -78,6 +80,8 @@ export type RoomState = {
   stageMode?: 'idle' | 'screen';
   /** Student ink is drawn on the teacher's real desktop (inside the share picture). */
   desktopInk?: boolean;
+  /** Teacher's student-video panel shown (cameras on demand). */
+  videoPanelOpen?: boolean;
   drawHolder?: import('@/lib/drawLogic').DrawHolder | null;
   drawRequestCount?: number;
 };
