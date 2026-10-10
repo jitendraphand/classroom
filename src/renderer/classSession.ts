@@ -5,6 +5,8 @@
  * The session cookie and the LiveKit token stay out of logs.
  */
 
+import { createEraseQueue } from '../shared/eraseQueue';
+import { createPanelReporter, panelShownWin } from '../shared/panelReport';
 import { withoutStrokes } from '../shared/studentErase';
 import {
   AudioPresets,
@@ -47,7 +49,7 @@ import {
 import { VIDEO_MODE_OFF, type VideoModeState } from '../shared/videoMode';
 import { desktopLoopbackConstraints, toggleShareAudio, wantShareAudio, type ShareAudioChoice } from '../shared/shareAudio';
 import { DRAW_TOPIC, applyPacket, decodePacket, isDrawColor, validStrokeId, type Stroke } from '../shared/web/drawLogic';
-import { shareProfile } from '../shared/web/videoQuality';
+import { SHARE_CODEC, shareProfile } from '../shared/web/videoQuality';
 import type { VideoCell, VideoModel } from '../shared/videoModel';
 import { openWgcTrack, type WgcHandle } from './wgcTrack';
 import {
@@ -167,7 +169,12 @@ export class ClassController {
   private ended = false;
   private expectDisconnect = false;
   private handoff: ClassView['handoff'] = null;
-  private pushLive = false;
+  /** Server pushes (cls-state nudges, chat packets) can arrive: LiveKit is connected (as the web's usePushLive). */
+  private get pushLive(): boolean {
+    return this.room?.state === ConnectionState.Connected;
+  }
+  private stateInflight = false;
+  private stateAgain = false;
   private clearedStaleStage = false;
   private audioBlocked = false;
   private devices: DeviceInfo[] = [];
@@ -249,6 +256,10 @@ export class ClassController {
         });
       }
     });
+    this.unsubPanels = desktop().onPanelWindows((st) => {
+      this.panelWindows = { main: st?.main !== false, videos: st?.videos === true };
+      this.emit();
+    });
     this.unsubInkEdit = desktop().onStudentInkEdit((edit) => this.onStudentInkEdit(edit ?? {}));
     this.unsubWgcStatus = desktop().onWgcStatus((status) => {
       if (!this.sharing) return;
@@ -312,6 +323,7 @@ export class ClassController {
   async start(code: string): Promise<void> {
     await this.stopRoom();
     this.code = code.toUpperCase();
+    this.panelReporter.reset();
     this.ended = false;
     this.handoff = null;
     this.expectDisconnect = false;
@@ -674,10 +686,14 @@ export class ClassController {
     const height = input.kind === 'region' && input.region ? input.region.h : settings.height;
     const simulcast = screenShareSimulcastFor(width, height);
     const published = new LocalVideoTrack(media, undefined, true);
-    const shareOpts = (layered: boolean) => ({
+    // VP9 L1T3 (+ VP8 backup for viewers without VP9), as the website (SHARE_CODEC).
+    const shareOpts = (layered: boolean, vp9 = true) => ({
       name: 'screen',
       source: Track.Source.ScreenShare,
-      simulcast: layered,
+      ...(vp9
+        ? { videoCodec: SHARE_CODEC.codec, scalabilityMode: SHARE_CODEC.scalabilityMode, backupCodec: { codec: SHARE_CODEC.backupCodec } }
+        : {}),
+      simulcast: layered || vp9,
       screenShareEncoding: { maxBitrate: SCREEN_SHARE.encoding.maxBitrate, maxFramerate: SCREEN_SHARE.encoding.maxFramerate },
       degradationPreference: 'maintain-resolution' as RTCDegradationPreference,
       screenShareSimulcastLayers: layered
@@ -687,7 +703,7 @@ export class ClassController {
     try {
       await this.room.localParticipant.publishTrack(published, shareOpts(simulcast));
     } catch (err) {
-      if (!simulcast || media.readyState !== 'live') {
+      if (media.readyState !== 'live') {
         published.stop();
         this.releaseCapture();
         this.notice = 'Could not start the screen share.';
@@ -697,7 +713,8 @@ export class ClassController {
       }
       await this.room.localParticipant.unpublishTrack(published, false).catch(() => undefined);
       try {
-        await this.room.localParticipant.publishTrack(published, shareOpts(false));
+        // Plain single-layer VP8: the most compatible publish.
+        await this.room.localParticipant.publishTrack(published, shareOpts(false, false));
       } catch (err2) {
         published.stop();
         this.releaseCapture();
@@ -831,6 +848,8 @@ export class ClassController {
     this.unsubWgcStatus?.();
     this.unsubInkEdit?.();
     this.unsubInkEdit = null;
+    this.unsubPanels?.();
+    this.unsubPanels = null;
     desktop().setClassActive(false);
     void this.stopRoom();
   }
@@ -848,7 +867,32 @@ export class ClassController {
     }, 16);
   }
 
+  /** Cameras on demand: report the student-video panel to the server (web /video-panel). */
+  private panelWindows = { main: true, videos: false };
+  /** Eraser deletes, coalesced (one eraser drag hits the same strokes many times). */
+  private eraseQueue = createEraseQueue((id) => this.roomApi('POST', '/draw', { action: 'erase', id }).then(() => undefined));
+  private unsubPanels: (() => void) | null = null;
+
+  private panelReporter = createPanelReporter((open) => {
+    if (this.code) void this.roomApi('POST', '/video-panel', { open });
+  });
+
+  private syncPanelReport(): void {
+    if (!this.code || !this.room) return;
+    const videosHidden = !this.panelWindows.videos;
+    this.panelReporter.update(
+      panelShownWin({
+        sharing: this.sharing,
+        showStudentVideos: this.showStudentVideos,
+        videosOpen: this.videosOpen(),
+        videosHidden,
+        mainHidden: !this.panelWindows.main,
+      })
+    );
+  }
+
   private emitNow(): void {
+    this.syncPanelReport();
     this.chatTo = resolveChatRecipient(this.chatTo === 'all' ? 'all' : this.chatTo, this.studentIds());
     this.lastCells = this.computeCells();
     this.ensureStudentCameras();
@@ -1453,9 +1497,9 @@ export class ClassController {
     try {
       await this.room.localParticipant.publishTrack(track, {
         source: Track.Source.Camera,
-        simulcast: true,
+        simulcast: TEACHER_CAMERA.simulcast,
         videoEncoding: { maxBitrate: TEACHER_CAMERA.encoding.maxBitrate, maxFramerate: TEACHER_CAMERA.encoding.maxFramerate },
-        videoSimulcastLayers: layers,
+        videoSimulcastLayers: layers.length ? layers : undefined,
       });
     } catch (err) {
       console.warn('camera', err);
@@ -1611,7 +1655,7 @@ export class ClassController {
     this.drawStrokes = withoutStrokes(this.drawStrokes, ids);
     this.pushInk();
     this.emit();
-    for (const id of ids) void this.roomApi('POST', '/draw', { action: 'erase', id });
+    this.eraseQueue.add(ids);
   }
 
   private pushInk(): void {
@@ -1626,8 +1670,8 @@ export class ClassController {
   }
 
   /**
-   * Video mode, like the website's share Video toggle: capture 30 fps (helper
-   * restarted with the new rate), encoder hint `motion`, keep the frame rate
+   * Video mode, like the website's share Video toggle: capture 24 fps (helper
+   * restarted with the new rate), encoder hint `motion`, keep the resolution
    * under pressure, and the web's video bitrates. Off returns to this app's
    * slide settings. Share audio uses the system loopback stream.
    */
@@ -1701,12 +1745,10 @@ export class ClassController {
   }
 
   private kickState(): void {
-    this.pushLive = true;
     void this.pollState();
   }
 
   private kickChat(): void {
-    this.pushLive = true;
     void this.pollChat();
   }
 
@@ -1727,7 +1769,25 @@ export class ClassController {
     void chat();
   }
 
+  /** One /state request at a time; a push during it schedules exactly one follow-up. */
   private async pollState(): Promise<void> {
+    if (this.stateInflight) {
+      this.stateAgain = true;
+      return;
+    }
+    this.stateInflight = true;
+    try {
+      await this.pollStateOnce();
+    } finally {
+      this.stateInflight = false;
+      if (this.stateAgain) {
+        this.stateAgain = false;
+        void this.pollState();
+      }
+    }
+  }
+
+  private async pollStateOnce(): Promise<void> {
     if (!this.code || !this.room) return;
     const res = await this.roomApi('GET', '/state');
     if (!res || res.status >= 400) return;

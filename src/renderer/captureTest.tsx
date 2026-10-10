@@ -43,7 +43,7 @@ function Test() {
 
   useEffect(() => {
     const unsub = desktop().onWgcFrame((frame) => {
-      if (canvas.current && frame) paint(canvas.current, frame);
+      if (canvas.current && frame?.rgba) paint(canvas.current, { width: frame.width, height: frame.height, rgba: frame.rgba });
     });
     const timer = window.setInterval(() => {
       void desktop().captureDiagnostics().then((diag) => {

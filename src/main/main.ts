@@ -186,10 +186,51 @@ function logCapture(line: string): void {
   }
 }
 
-function deliverFrame(frame: Frame): void {
+/**
+ * The helper sends a frame only when the picture changed (hash) and a 1 s
+ * header-only heartbeat otherwise. The pristine last frame is kept here so a
+ * changed ink layer over a static screen is re-composited without the helper,
+ * and a heartbeat with no ink change costs the renderer nothing but a re-push
+ * of the frame it already has (keyframes for late joiners).
+ */
+let lastRaw: Frame | null = null;
+let inkDirty = false;
+
+function onHelperFrame(frame: Frame & { same?: boolean }): void {
+  if (!frame.same) {
+    lastRaw = frame;
+    deliverFrame(frame);
+    return;
+  }
+  if (inkDirty && lastRaw && lastSnap?.hud.sharing && !testRunning) {
+    deliverFrame(lastRaw);
+    return;
+  }
   supervisor.frame();
+  for (const win of [mainWindow, testWindow]) {
+    if (win && !win.isDestroyed()) win.webContents.send('wgc-frame', { width: frame.width, height: frame.height, same: true });
+  }
+}
+
+/** Ink changed over a static screen: re-composite the last frame now (≤8/s) instead of waiting for the heartbeat. */
+let inkTimer: ReturnType<typeof setTimeout> | null = null;
+function kickInk(): void {
+  inkDirty = true;
+  if (inkTimer) return;
+  inkTimer = setTimeout(() => {
+    inkTimer = null;
+    if (inkDirty && lastRaw && lastSnap?.hud.sharing && !testRunning) deliverFrame(lastRaw);
+  }, 125);
+}
+
+function deliverFrame(raw: Frame): void {
+  supervisor.frame();
+  let frame = raw;
+  inkDirty = false;
   if (testRunning) burnInk(frame);
-  else if (inkLayer && lastSnap?.hud.sharing && !layerAlreadyInFrame(frame.rgba, frame.width, frame.height, inkLayer)) {
+  else if (inkLayer && lastSnap?.hud.sharing && !layerAlreadyInFrame(raw.rgba, raw.width, raw.height, inkLayer)) {
+    // Composite into a copy: `raw` stays pristine for re-composites.
+    frame = { width: raw.width, height: raw.height, rgba: Buffer.from(raw.rgba) };
     compositeInkLayer(frame.rgba, frame.width, frame.height, inkLayer);
   }
   reportFrameSize(frame.width, frame.height);
@@ -231,7 +272,7 @@ function sendCaptureEnded(reason: string): void {
 
 const wgc = createWgcPump({
   helper: helperExe,
-  onFrame: deliverFrame,
+  onFrame: onHelperFrame,
   onEnded: (info) => {
     logCapture(`[capture] helper ended: ${info.reason}`);
     // A class share recovers by itself; anything else (capture test) ends.
@@ -538,8 +579,30 @@ function publishBounds(): void {
   }, 40);
 }
 
+/**
+ * Cameras on demand: which student-video panels the teacher can see. The page
+ * Visibility API is useless here (backgroundThrottling is off, so pages always
+ * report 'visible'), so the main process tells the class window.
+ */
+function shownNow(win: Win | null | undefined): boolean {
+  return !!win && !win.isDestroyed() && win.isVisible() && !win.isMinimized();
+}
+let panelTimer: ReturnType<typeof setTimeout> | null = null;
+function reportPanels(): void {
+  if (panelTimer) return;
+  panelTimer = setTimeout(() => {
+    panelTimer = null;
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send('panel-windows', { main: shownNow(mainWindow), videos: shownNow(chrome.get('classroom-videos')) });
+  }, 50);
+}
+
 function watch(win: Win, name: string): void {
   chrome.set(name, win);
+  if (name === 'classroom-videos') {
+    for (const ev of ['show', 'hide', 'minimize', 'restore', 'closed'] as const) win.on(ev as 'show', reportPanels);
+    win.webContents.once('did-finish-load', reportPanels);
+  }
   const bump = () => publishBounds();
   win.on('move', bump);
   win.on('resize', bump);
@@ -790,6 +853,7 @@ function closeAnnotationOverlay(): void {
   annotateOn = false;
   lastStudentInk = null;
   inkLayer = null;
+  inkDirty = true;
   closeAnnotateTools();
   overlayDisplayId = null;
   clearInk();
@@ -1778,6 +1842,7 @@ function installIpc(): void {
     supervisor.disarm();
     captureTarget = null;
     inkLayer = null;
+    inkDirty = true;
     wgc.stop();
     return { ok: true };
   });
@@ -1885,6 +1950,7 @@ function installIpc(): void {
     const win = chrome.get('annotate-overlay');
     if (!win || win.isDestroyed() || event.sender !== win.webContents) return;
     inkLayer = parseInkLayer(raw);
+    kickInk();
   });
 
   ipcMain.on('video-tile', (event, key: unknown, jpeg: unknown) => {
@@ -2110,6 +2176,8 @@ function createMainWindow(): void {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+  for (const ev of ['show', 'hide', 'minimize', 'restore'] as const) mainWindow.on(ev as 'show', reportPanels);
+  mainWindow.webContents.on('did-finish-load', reportPanels);
   void mainWindow.loadURL('app://classroom/engine.html');
 }
 

@@ -30,7 +30,8 @@ export type WgcPump = {
  */
 export function createWgcPump(opts: {
   helper: () => string;
-  onFrame: (frame: { width: number; height: number; rgba: Buffer }) => void;
+  /** `same`: header-only heartbeat, the picture has not changed since the last frame (rgba is empty). */
+  onFrame: (frame: { width: number; height: number; rgba: Buffer; same?: boolean }) => void;
   /** The helper stopped by itself. `reason` is its last `stale`/`error` step, or `exit <code>`. */
   onEnded: (info: { code: number | null; reason: string }) => void;
   onLog: (line: string) => void;
@@ -176,6 +177,10 @@ export function createWgcPump(opts: {
           const height = head.readUInt32LE(8);
           const stride = head.readUInt32LE(12);
           const size = head.readUInt32LE(16);
+          if (magic === WGC_MAGIC && size === 0 && stride === 0 && width >= 2 && width <= 1920 && height >= 2 && height <= 1080) {
+            opts.onFrame({ width, height, rgba: Buffer.alloc(0), same: true });
+            continue;
+          }
           const sane =
             magic === WGC_MAGIC &&
             width >= 2 &&

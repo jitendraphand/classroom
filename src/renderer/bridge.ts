@@ -55,7 +55,7 @@ export type ClassroomBridge = {
   startWgc: (req: { kind: 'monitor' | 'window'; sourceId: string; displayId: string }) => Promise<WgcStartResult>;
   stopWgc: () => Promise<{ ok: boolean }>;
   adoptMask: (reason: string) => Promise<CapturePlan>;
-  onWgcFrame: (cb: (frame: { width: number; height: number; rgba: Uint8Array }) => void) => () => void;
+  onWgcFrame: (cb: (frame: { width: number; height: number; rgba?: Uint8Array; same?: boolean }) => void) => () => void;
   onWgcEnded: (cb: (reason: string) => void) => () => void;
   onWgcStatus: (cb: (status: { state: 'recovering' | 'recovered' | 'failed'; reason: string; attempt: number }) => void) => () => void;
   annotationLayer: (layer: import('../shared/inkLayer').InkLayer) => void;
@@ -93,6 +93,8 @@ export type ClassroomBridge = {
   /** Student ink for the desktop overlay (normalised to the shared picture, mapped by `rect`). */
   studentInk: (ink: StudentInk) => void;
   onStudentInk: (cb: (ink: StudentInk) => void) => () => void;
+  /** Main window / Student videos window shown (visible and not minimized). */
+  onPanelWindows: (cb: (state: { main: boolean; videos: boolean }) => void) => () => void;
   /** Overlay eraser hit these student strokes: delete them for everyone. */
   eraseStudentInk: (ids: string[]) => void;
   /** Tools panel: clear every student drawing. */

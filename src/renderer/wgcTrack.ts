@@ -27,7 +27,7 @@ type TrackGenerator = MediaStreamTrack & {
 
 type TrackGeneratorCtor = new (init: { kind: 'video' }) => TrackGenerator;
 
-type FrameMessage = { width?: number; height?: number; rgba?: Uint8Array };
+type FrameMessage = { width?: number; height?: number; rgba?: Uint8Array; same?: boolean };
 
 /**
  * Publishes helper frames as a MediaStreamTrack.
@@ -166,6 +166,19 @@ function bindFrames(opts: {
     if (stopped || !frame) return;
     const width = frame.width ?? 0;
     const height = frame.height ?? 0;
+    if (frame.same) {
+      // Unchanged picture (helper heartbeat): re-push what we have so the
+      // encoder can answer keyframe requests; no pixels crossed IPC.
+      lastAt = Date.now();
+      if (last && last.width === width && last.height === height) {
+        try {
+          opts.publish(last, resolveReady);
+        } catch {
+          /* ignore */
+        }
+      }
+      return;
+    }
     const rgba = frame.rgba;
     if (!width || !height || !rgba) return;
     const bytes = width * height * 4;

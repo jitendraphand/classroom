@@ -23,10 +23,11 @@ test('shared web modules are byte copies of the web app (run scripts/sync-web.mj
 });
 
 test('teacher poll intervals are the web values', () => {
-  assert.equal(statePollMs({ role: 'teacher', hidden: true, pushLive: true }), 5000);
+  // Pushes (cls-state nudges, chat packets) drive refreshes; polls are 30 s / 60 s safety nets.
+  assert.equal(statePollMs({ role: 'teacher', hidden: true, pushLive: true }), 30000);
   assert.equal(statePollMs({ role: 'teacher', hidden: false, pushLive: false }), 2000);
-  assert.equal(chatPollMs({ hidden: false, pushLive: true }), 15000);
-  assert.equal(chatPollMs({ hidden: true, pushLive: true }), 30000);
+  assert.equal(chatPollMs({ hidden: false, pushLive: true }), 60000);
+  assert.equal(chatPollMs({ hidden: true, pushLive: true }), 60000);
   assert.equal(chatPollMs({ hidden: false, pushLive: false }), 3000);
 });
 
@@ -45,9 +46,10 @@ test('search matches name or SID like the web roster and chat', () => {
   assert.equal(filterMessages(msgs, 'fraction').length, 1);
 });
 
-test('video mode is 30 fps, motion, keep frame rate', () => {
+test('video mode is 720p / 24 fps, motion, keep resolution', () => {
   const p = shareProfile(true);
-  assert.equal(p.capture.frameRate.max, 30);
+  assert.equal(p.capture.frameRate.max, 24);
+  assert.equal(p.capture.height?.max, 720);
   assert.equal(p.contentHint, 'motion');
-  assert.equal(p.degradationPreference, 'maintain-framerate');
+  assert.equal(p.degradationPreference, 'maintain-resolution');
 });

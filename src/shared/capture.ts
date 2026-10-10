@@ -365,10 +365,11 @@ export function screenShareSimulcastFor(width: number | undefined, height: numbe
 }
 
 export const TEACHER_CAMERA = {
-  /** Faces in a small tile. One lower layer for phones; dynacast drops it when unused. */
+  /** Faces in a small tile: 360p / 15 fps, one layer ≤300 kbps (web TEACHER_CAMERA). */
   capture: { width: 640, height: 360, frameRate: 15 },
-  encoding: { maxBitrate: 350_000, maxFramerate: 15 },
-  layers: [{ width: 320, height: 180, maxBitrate: 80_000, maxFramerate: 10 }],
+  encoding: { maxBitrate: 300_000, maxFramerate: 15 },
+  layers: [] as { width: number; height: number; maxBitrate: number; maxFramerate: number }[],
+  simulcast: false,
 } as const;
 
 export const SCREEN_SHARE = {
@@ -376,6 +377,8 @@ export const SCREEN_SHARE = {
    * One 720p layer at 8 fps. A second simulcast layer would encode the desktop
    * twice, and 1080p/15 made the host spend most of its time on readback.
    * Slides stay sharp at this rate; the pointer is a little less smooth.
+   * 720p is also the floor: published as VP9 L1T3 (frame rate degrades,
+   * resolution never) with a VP8 backup codec, like the website.
    */
   capture: { width: 1280, height: 720, frameRate: 8 },
   encoding: { maxBitrate: 700_000, maxFramerate: 8 },
@@ -386,15 +389,15 @@ export type ShareKind = 'screen' | 'window' | 'region';
 
 /**
  * Video mode (the website's share "Video" toggle, shared/web/videoQuality.ts
- * SCREEN_SHARE_VIDEO_MODE): 30 fps capture, `motion` hint, keep the frame
- * rate under pressure. The picture stays 1280x720 (this app's single layer),
+ * SCREEN_SHARE_VIDEO_MODE): manual only, 720p / 24 fps, `motion` hint,
+ * resolution kept under pressure (maintain-resolution). The picture stays 1280x720 (this app's single layer),
  * so the bitrate sits between the web's 720p30 layer (1 Mbps) and its 1080p30
  * top layer (2.5 Mbps). The helper's capture rate is raised to 30 for as long
  * as video mode is on; that is ~3.7x the slide readback, see REPORT.md.
  */
 export const VIDEO_MODE_SHARE = {
-  capture: { width: 1280, height: 720, frameRate: 30 },
-  encoding: { maxBitrate: 1_500_000, maxFramerate: 30 },
+  capture: { width: 1280, height: 720, frameRate: 24 },
+  encoding: { maxBitrate: 1_500_000, maxFramerate: 24 },
 } as const;
 
 /** Sender encodings for slides (this app's SCREEN_SHARE) or video mode. Other fields are kept. */

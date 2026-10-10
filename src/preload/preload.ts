@@ -56,6 +56,7 @@ contextBridge.exposeInMainWorld('classroom', {
   onWgcStatus: (cb: (status: unknown) => void) => listen('wgc-status', cb),
   studentInk: (ink: unknown) => ipcRenderer.send('student-ink', ink),
   onStudentInk: (cb: (ink: unknown) => void) => listen('student-ink', cb),
+  onPanelWindows: (cb: (state: unknown) => void) => listen('panel-windows', cb),
   eraseStudentInk: (ids: unknown) => ipcRenderer.send('student-ink-erase', ids),
   clearStudentInk: () => ipcRenderer.send('student-ink-clear'),
   onStudentInkEdit: (cb: (edit: unknown) => void) => listen('student-ink-edit', cb),

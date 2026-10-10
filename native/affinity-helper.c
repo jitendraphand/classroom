@@ -380,6 +380,37 @@ static int write_frame(int width, int height, const uint8_t *rgba) {
   return 1;
 }
 
+/* Header-only frame: the picture has not changed since the last one sent. */
+static int write_same(int width, int height) {
+  uint32_t hdr[5];
+  hdr[0] = WGC_MAGIC;
+  hdr[1] = (uint32_t)width;
+  hdr[2] = (uint32_t)height;
+  hdr[3] = 0;
+  hdr[4] = 0;
+  if (!write_all(hdr, sizeof(hdr))) return 0;
+  if (fflush(stdout) != 0) return 0;
+  return 1;
+}
+
+/* FNV-1a over 64-bit words (+ size): detects an unchanged picture so static
+ * screens send nothing but a 20-byte heartbeat. */
+static uint64_t frame_hash(const uint8_t *p, size_t n, int w, int h) {
+  uint64_t x = 1469598103934665603ULL ^ ((uint64_t)w << 32) ^ (uint64_t)h;
+  size_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    uint64_t v;
+    memcpy(&v, p + i, 8);
+    x ^= v;
+    x *= 1099511628211ULL;
+  }
+  for (; i < n; i++) {
+    x ^= p[i];
+    x *= 1099511628211ULL;
+  }
+  return x;
+}
+
 /* BGRA (possibly strided, possibly a different size) → tightly packed RGBA. */
 static void blit_rgba(const uint8_t *src, int srcW, int srcH, int srcStride, uint8_t *dst, int dstW, int dstH) {
   int y, x;
@@ -909,6 +940,8 @@ static int capture_loop(void *item, int maxW, int maxH, int fps, const char *sou
   int outW = 0, outH = 0;
   int cursorOn = 0, borderOff = 0;
   int have = 0, dirty = 0;
+  uint64_t sentHash = 0, curHash = 0;
+  int sentAny = 0;
   DWORD lastSend = 0;
   DWORD minGap, keepGap;
   HRESULT hr;
@@ -979,7 +1012,7 @@ static int capture_loop(void *item, int maxW, int maxH, int fps, const char *sou
   log_ready(outW, outH, cursorOn, borderOff, source, monitor);
 
   minGap = (DWORD)(1000 / fps);
-  keepGap = 250;
+  keepGap = 1000; /* heartbeat only; the renderer re-pushes its last frame */
   if (keepGap < minGap) keepGap = minGap;
   lastSend = GetTickCount() - keepGap;
   stale_init(&watch, monitor);
@@ -1043,7 +1076,10 @@ static int capture_loop(void *item, int maxW, int maxH, int fps, const char *sou
           outW = tw;
           outH = th;
           have = 1;
-          dirty = 1;
+          {
+            curHash = frame_hash(rgba, (size_t)tw * (size_t)th * 4u, tw, th);
+            if (!sentAny || curHash != sentHash) dirty = 1;
+          }
           lastReal = GetTickCount();
           stale_frame(&watch);
         }
@@ -1065,7 +1101,13 @@ static int capture_loop(void *item, int maxW, int maxH, int fps, const char *sou
     }
     due = dirty ? minGap : keepGap;
     if (have && (now - lastSend) >= due) {
-      if (!write_frame(outW, outH, rgba)) break; /* parent closed the pipe */
+      if (dirty || !sentAny) {
+        if (!write_frame(outW, outH, rgba)) break; /* parent closed the pipe */
+        sentAny = 1;
+        sentHash = curHash;
+      } else if (!write_same(outW, outH)) {
+        break;
+      }
       lastSend = now;
       dirty = 0;
     } else {
