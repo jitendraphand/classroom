@@ -931,8 +931,13 @@ static int capture_loop(void *item, int maxW, int maxH, int fps, const char *sou
     goto done;
   }
   fit_even(itemSize.Width, itemSize.Height, maxW, maxH, &outW, &outH);
-  poolSize.Width = outW;
-  poolSize.Height = outH;
+  /* The frame pool MUST be the item's full physical size. WGC does not scale
+   * into a smaller pool: it copies the top-left poolSize pixels of the monitor,
+   * so a 1280x720 pool on a 1920x1080 (or 2560x1600, 4K, 125-200% scaled)
+   * monitor sent only the top-left part of the desktop (bug 2026-10-10).
+   * Downscaling to outW x outH happens on the GPU below (gpu_scale_blt). */
+  poolSize.Width = itemSize.Width;
+  poolSize.Height = itemSize.Height;
 
   if (!create_d3d(&device, &context, &winrtDevice)) goto done;
 
@@ -993,6 +998,24 @@ static int capture_loop(void *item, int maxW, int maxH, int fps, const char *sou
       hr = ((GetSurfaceFn)vtbl_fn(frame, 6))(frame, &surface);
       if (SUCCEEDED(hr) && surface && SUCCEEDED(qi_obj(surface, &IID_IDirect3DDxgiInterfaceAccess, &access)) && access) {
         hr = ((GetIfaceFn)vtbl_fn(access, 3))(access, &IID_ID3D11Texture2D_local, (void **)&tex);
+      }
+      {
+        /* ContentSize (IDirect3D11CaptureFrame vtbl slot 8) differs from the
+         * pool when the monitor's resolution / scaling changed: restart with a
+         * new pool instead of sending a cropped or padded picture. */
+        typedef HRESULT(STDMETHODCALLTYPE *ContentSizeFn)(void *, WgcSize *);
+        WgcSize cs;
+        ZeroMemory(&cs, sizeof(cs));
+        if (SUCCEEDED(((ContentSizeFn)vtbl_fn(frame, 8))(frame, &cs)) && cs.Width > 0 && cs.Height > 0 &&
+            (cs.Width != poolSize.Width || cs.Height != poolSize.Height)) {
+          if (tex) ID3D11Texture2D_Release(tex);
+          release_obj(access);
+          release_obj(surface);
+          release_obj(frame);
+          log_stale("display-changed");
+          rc = STALE_EXIT;
+          goto done;
+        }
       }
       if (tex) {
         D3D11_TEXTURE2D_DESC td;
