@@ -355,3 +355,44 @@ export async function setManyParticipantMics(
     identities.map((id) => setParticipantMicAllowed(code, id, allowed, inSample(id)))
   );
 }
+
+/**
+ * Screen-share sidecar (Windows teacher app, native publisher): a second
+ * participant tied to the teacher that may publish ONLY the screen share
+ * (+ its audio). It subscribes to nothing and sends no data. The identity
+ * keeps the `teacher_` prefix so every client treats its share as the
+ * teacher's (isTeacherParticipant / isTeacherIdentity).
+ */
+export const SCREEN_SIDECAR_SUFFIX = '__screen';
+
+export function screenSidecarIdentity(teacherIdentity: string) {
+  return `${teacherIdentity}${SCREEN_SIDECAR_SUFFIX}`;
+}
+
+export function isScreenSidecarIdentity(identity: string) {
+  return identity.startsWith('teacher_') && identity.endsWith(SCREEN_SIDECAR_SUFFIX);
+}
+
+export function screenSidecarGrant(roomName: string) {
+  return {
+    roomJoin: true,
+    room: roomName,
+    canPublish: true,
+    canSubscribe: false,
+    canPublishData: false,
+    canUpdateOwnMetadata: false,
+    canPublishSources: [TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO],
+  };
+}
+
+export async function createScreenSidecarToken(opts: { roomName: string; teacherIdentity: string; name: string; participantId: string }) {
+  const identity = screenSidecarIdentity(opts.teacherIdentity);
+  const at = new AccessToken(process.env.LIVEKIT_API_KEY!, process.env.LIVEKIT_API_SECRET!, {
+    identity,
+    name: opts.name,
+    metadata: JSON.stringify({ role: 'TEACHER', screenFor: opts.teacherIdentity, participantId: opts.participantId }),
+    ttl: LIVEKIT_TOKEN_TTL,
+  });
+  at.addGrant(screenSidecarGrant(opts.roomName));
+  return { token: await at.toJwt(), identity };
+}
