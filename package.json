@@ -11,7 +11,8 @@
     "start": "npm run build && electron .",
     "test": "node --import tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "dist:win": "bash scripts/build-win.sh"
+    "dist:win": "bash scripts/build-win.sh",
+    "test:sidecar": "rustc --edition 2021 --test native/share-sidecar/src/logic.rs -o native/share-sidecar/target/logic-test && native/share-sidecar/target/logic-test"
   },
   "devDependencies": {
     "@types/node": "22.17.2",

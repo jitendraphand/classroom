@@ -7,3 +7,6 @@ Items: 1 sync+batch erase, 2 native sidecar publisher (Option A), 3 annotate too
 - [x] 7: low-power (shared/lowPower.ts): toolbar "Eco" toggle, persisted; slides 5 fps, video 15 fps (helper fps + encoder cap), tiles 160x90 @7 fps
 - [x] 4 (Electron path): HW_ENCODE_FEATURES appended to the single enable-features switch
 - [x] 3: compact floating annotate toolbar (tools.tsx + shared/toolbarLayout.ts, horizontal/vertical dock via annotate-tools-orient IPC); tests/round5.test.ts
+- [x] 2: native/share-sidecar (Rust, livekit 0.9.4, cargo-xwin → x86_64-pc-windows-msvc, ~31 MB). Runs the helper as child, composites ink, I420, publishes VP9 L1T3 (VP8 retry) as teacher_…__screen + WASAPI loopback audio. Main: pump wrap, 15 s publish wait → fallback to Electron path. Web: POST /api/rooms/[code]/screen-token (needed).
+  Smoke (Wine + local livekit 1.13.9 + fake helper): connected, published VP9 + opus; Chrome subscriber decoded 640x360 VP9, 62 frames/8 s.
+- [x] 4 (sidecar): VideoEncoderBackend::Hardware requested; livekit's Windows libwebrtc build has no HW encoders compiled → software libvpx fallback.

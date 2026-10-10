@@ -15,6 +15,8 @@
  * would replace it.
  */
 
+import { SIDECAR_PUBLISH_TIMEOUT_MS, controlLine, inkMessage, sidecarInit, type Publisher, type SidecarRequest } from '../shared/sidecar';
+import { VIDEO_MODE_SHARE as SIDECAR_VIDEO } from '../shared/capture';
 import { parseOrient, toolbarSize } from '../shared/toolbarLayout';
 import { HW_ENCODE_FEATURES } from '../shared/hwEncode';
 import { spawnSync } from 'node:child_process';
@@ -201,7 +203,46 @@ function logCapture(line: string): void {
 let lastRaw: Frame | null = null;
 let inkDirty = false;
 
+/**
+ * Native screen-share sidecar: while `sidecarInitLine` is set the pump runs
+ * share-sidecar.exe (which runs the helper and publishes to LiveKit itself).
+ * Frames never reach Electron; stdout carries 1 s heartbeats only.
+ */
+let sidecarInitLine: string | null = null;
+let sidecarPublished = false;
+const sidecarWaiters = new Set<(ok: boolean, why: string) => void>();
+const sidecarActive = () => sidecarInitLine !== null;
+
+function onSidecarEvent(msg: { state: string; why: string }): void {
+  logCapture(`[sidecar] ${msg.state}${msg.why ? ` ${msg.why}` : ''}`);
+  if (msg.state === 'published') {
+    sidecarPublished = true;
+    for (const fn of sidecarWaiters) fn(true, msg.why);
+  } else if (msg.state === 'error') {
+    for (const fn of sidecarWaiters) fn(false, msg.why);
+  }
+}
+
+function waitSidecarPublished(ms: number): Promise<{ ok: boolean; why: string }> {
+  if (sidecarPublished) return Promise.resolve({ ok: true, why: '' });
+  return new Promise((resolve) => {
+    const done = (ok: boolean, why: string) => {
+      clearTimeout(timer);
+      sidecarWaiters.delete(done);
+      resolve({ ok, why });
+    };
+    const timer = setTimeout(() => done(false, 'timeout'), ms);
+    sidecarWaiters.add(done);
+  });
+}
+
 function onHelperFrame(frame: Frame & { same?: boolean }): void {
+  if (sidecarActive()) {
+    // Sidecar heartbeat: the composited frame size, for the overlay layer and the supervisor.
+    supervisor.frame();
+    reportFrameSize(frame.width, frame.height);
+    return;
+  }
   if (!frame.same) {
     lastRaw = frame;
     deliverFrame(frame);
@@ -277,6 +318,8 @@ function sendCaptureEnded(reason: string): void {
 
 const wgc = createWgcPump({
   helper: helperExe,
+  wrap: (args) => (sidecarInitLine && fs.existsSync(sidecarExe()) ? { exe: sidecarExe(), args: [helperExe(), ...args], init: sidecarInitLine } : null),
+  onSidecar: onSidecarEvent,
   onFrame: onHelperFrame,
   onEnded: (info) => {
     logCapture(`[capture] helper ended: ${info.reason}`);
@@ -382,6 +425,11 @@ function saveConfig(): void {
   } catch (err) {
     console.log('[config] save failed');
   }
+}
+
+function sidecarExe(): string {
+  if (app.isPackaged) return path.join(process.resourcesPath, 'share-sidecar.exe');
+  return path.join(__dirname, '..', 'native', 'share-sidecar.exe');
 }
 
 function helperExe(): string {
@@ -1820,7 +1868,37 @@ function installIpc(): void {
         String(SCREEN_SHARE.capture.frameRate),
       ];
     }
-    const result = await wgc.start(args);
+    // Option A: the native sidecar publishes the share itself. Any failure
+    // before "published" falls back to the Electron publish path.
+    let publisher: Publisher = 'electron';
+    const sideReq = (body as { sidecar?: SidecarRequest }).sidecar;
+    const init =
+      sideReq && typeof sideReq === 'object' && fs.existsSync(sidecarExe())
+        ? sidecarInit(sideReq, {
+            slidesFps: SCREEN_SHARE.capture.frameRate,
+            videoFps: SIDECAR_VIDEO.encoding.maxFramerate,
+            maxBitrate: SCREEN_SHARE.encoding.maxBitrate,
+            videoBitrate: SIDECAR_VIDEO.encoding.maxBitrate,
+          })
+        : null;
+    let result: Awaited<ReturnType<typeof wgc.start>>;
+    if (init) {
+      sidecarInitLine = JSON.stringify(init);
+      sidecarPublished = false;
+      result = await wgc.start(args);
+      const pub = result.ok ? await waitSidecarPublished(SIDECAR_PUBLISH_TIMEOUT_MS) : { ok: false, why: result.error };
+      if (result.ok && pub.ok) {
+        publisher = 'sidecar';
+      } else {
+        logCapture(`[sidecar] fallback to Electron publishing (${pub.why})`);
+        sidecarInitLine = null;
+        wgc.stop();
+        result = await wgc.start(args);
+      }
+    } else {
+      sidecarInitLine = null;
+      result = await wgc.start(args);
+    }
     if (!result.ok) {
       console.log(`[capture] native Windows.Graphics.Capture failed: ${result.error}`);
       lastWgcArgs = null;
@@ -1846,8 +1924,10 @@ function installIpc(): void {
       label: LABEL_WGC,
       detail: `${LABEL_WGC}. control protected=${protectedOk}. ${result.api} ${result.width}x${result.height} source=${result.source} display=${displayId} cursor=${result.cursor} borderOff=${result.borderOff}.`,
     };
+    if (publisher === 'sidecar' && inkLayer) wgc.send(inkMessage(inkLayer));
     return {
       ...result,
+      publisher,
       displayId,
       affinityOk: protectedOk ? 1 : 0,
       affinityFail: protectedOk ? 0 : 1,
@@ -1856,11 +1936,18 @@ function installIpc(): void {
     };
   });
 
-  ipcMain.handle('stop-wgc', () => {
+  ipcMain.handle('stop-wgc', async () => {
     supervisor.disarm();
     captureTarget = null;
     inkLayer = null;
     inkDirty = true;
+    if (sidecarActive()) {
+      // Let the sidecar unpublish and leave the room cleanly first.
+      wgc.send(controlLine({ op: 'stop' }));
+      await new Promise((r) => setTimeout(r, 700));
+      sidecarInitLine = null;
+      sidecarPublished = false;
+    }
     wgc.stop();
     return { ok: true };
   });
@@ -1937,6 +2024,7 @@ function installIpc(): void {
     if (!mainWindow || event.sender.id !== mainWindow.webContents.id) return { ok: false };
     if (!lastWgcArgs || !lastSnap?.hud.sharing) return { ok: false };
     const rate = Math.max(1, Math.min(30, Math.round(Number(fps) || SCREEN_SHARE.capture.frameRate)));
+    if (sidecarActive()) return { ok: wgc.send(controlLine({ op: 'fps', fps: rate })) };
     const args = [...lastWgcArgs];
     if (args[args.length - 1] === String(rate)) return { ok: true };
     args[args.length - 1] = String(rate);
@@ -1950,6 +2038,14 @@ function installIpc(): void {
     if (captureTarget) supervisor.arm(captureTarget, rate);
     logCapture(`[capture] capture rate ${rate} fps`);
     return { ok: true };
+  });
+
+  // Class window → sidecar: Video mode (frame rate) and share sound on/off.
+  ipcMain.on('sidecar-control', (event, msg: unknown) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents || !sidecarActive()) return;
+    const m = msg as { op?: unknown; videoMode?: unknown; on?: unknown } | null;
+    if (m?.op === 'mode') wgc.send(controlLine({ op: 'mode', videoMode: m.videoMode === true }));
+    else if (m?.op === 'audio') wgc.send(controlLine({ op: 'audio', on: m.on === true }));
   });
 
   ipcMain.on('annotation-command', (_event, cmd: unknown) => {
@@ -1968,6 +2064,10 @@ function installIpc(): void {
     const win = chrome.get('annotate-overlay');
     if (!win || win.isDestroyed() || event.sender !== win.webContents) return;
     inkLayer = parseInkLayer(raw);
+    if (sidecarActive()) {
+      wgc.send(inkMessage(inkLayer));
+      return;
+    }
     kickInk();
   });
 

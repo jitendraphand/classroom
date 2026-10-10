@@ -5,3 +5,4 @@ build/
 native/*.exe
 *.log
 config.json
+native/share-sidecar/target/

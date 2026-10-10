@@ -66,6 +66,8 @@ export type WgcStartOk = {
   affinityFail: number;
   label: string;
   detail: string;
+  /** Who publishes the share: the native sidecar, or the class window (Electron). */
+  publisher?: 'sidecar' | 'electron';
 };
 
 export type WgcStartResult = WgcStartOk | { ok: false; error: string };

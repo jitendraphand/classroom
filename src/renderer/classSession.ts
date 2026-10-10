@@ -5,6 +5,7 @@
  * The session cookie and the LiveKit token stay out of logs.
  */
 
+import { cropFractions, type SidecarRequest } from '../shared/sidecar';
 import { LOW_POWER_KEY, capEncodingFps, parseLowPower, shareFps, tileProfile } from '../shared/lowPower';
 import { freshTakeovers, takeoverToastText, type TakeoverNotice } from '../shared/web/deviceTakeover';
 import { createEraseBatcher } from '../shared/web/eraseBatch';
@@ -134,7 +135,8 @@ type Host = {
   onLogin: (message: string) => void;
 };
 
-const HIDDEN = /^(adminobserver_|adminpreview_)/;
+/** Admin observers, and this app's own native share sidecar (`teacher_…__screen`: never subscribe, never echo its loopback audio). */
+const HIDDEN = /^(adminobserver_|adminpreview_)|^teacher_.*__screen$/;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -176,6 +178,9 @@ export class ClassController {
     return this.room?.state === ConnectionState.Connected;
   }
   private stateInflight = false;
+  /** The share is published by the native sidecar (frames never enter this window). */
+  private viaSidecar = false;
+  private sidecarAudio = false;
   private lowPower = (() => {
     try {
       return parseLowPower(localStorage.getItem(LOW_POWER_KEY));
@@ -592,7 +597,27 @@ export class ClassController {
    * Publish the helper's Windows.Graphics.Capture session. There is no
    * getDisplayMedia video fallback: that path paints excluded windows black.
    */
-  private async tryNativeCapture(input: ShareRequest): Promise<{ track: MediaStreamTrack | null; abort: boolean }> {
+  /**
+   * Option A: a token for the native share sidecar (`<teacher>__screen`).
+   * Null (older server, error) means the Electron publish path.
+   */
+  private async sidecarRequest(input: ShareRequest): Promise<SidecarRequest | null> {
+    if (localStorage.getItem('classroom.sidecar') === 'off') return null;
+    const res = await this.roomApi('POST', '/screen-token').catch(() => null);
+    const data = res && res.status < 300 ? (res.data as { token?: unknown; url?: unknown }) : null;
+    if (!data || typeof data.token !== 'string' || typeof data.url !== 'string') return null;
+    const fps = shareFps({ videoMode: false, lowPower: this.lowPower, slidesFps: SCREEN_SHARE.capture.frameRate, videoFps: 24 });
+    return {
+      url: data.url,
+      token: data.token,
+      crop: input.kind === 'region' ? cropFractions(input.region, input.display) : null,
+      audio: !!input.systemAudio,
+      fps,
+      videoFps: shareFps({ videoMode: true, lowPower: this.lowPower, slidesFps: fps, videoFps: 24 }),
+    };
+  }
+
+  private async tryNativeCapture(input: ShareRequest): Promise<{ track: MediaStreamTrack | null; abort: boolean; sidecar?: boolean }> {
     if (this.opts.plan.mode !== 'wgc-exclude' || this.opts.plan.mask) {
       this.notice = 'Screen share stays off until Windows.Graphics.Capture can leave the classroom panels out of the picture.';
       this.emit();
@@ -607,10 +632,12 @@ export class ClassController {
       return { track: null, abort: true };
     }
     this.wgcHandle = consumer;
+    const sidecar = await this.sidecarRequest(input);
     const started = await desktop().startWgc({
       kind: input.kind === 'window' ? 'window' : 'monitor',
       sourceId: input.source.id,
       displayId: input.source.displayId,
+      ...(sidecar ? { sidecar } : {}),
     });
     if (!started.ok) {
       consumer.stop();
@@ -629,6 +656,12 @@ export class ClassController {
       detail: started.detail,
     };
     this.shareDisplayId = started.displayId || input.source.displayId;
+    if (started.publisher === 'sidecar') {
+      // Frames go helper → sidecar → LiveKit; nothing to publish here.
+      consumer.stop();
+      this.wgcHandle = null;
+      return { track: null, abort: false, sidecar: true };
+    }
     await Promise.race([consumer.ready, sleep(2500)]);
     return { track: consumer.track, abort: false };
   }
@@ -654,6 +687,26 @@ export class ClassController {
     }
     if (native.abort) {
       this.releaseCapture();
+      return;
+    }
+    if (native.sidecar) {
+      if (audioPromise) void this.discardAudio(audioPromise);
+      this.viaSidecar = true;
+      this.sidecarAudio = !!input.systemAudio;
+      this.screenTrack = null;
+      this.previewTrack = null;
+      this.sharing = true;
+      this.videoMode = { ...VIDEO_MODE_OFF };
+      void desktop().annotationOpen(this.shareDisplayId || input.source.displayId);
+      this.shareKind = input.kind;
+      this.overlayRect = input.kind === 'region' ? input.region : input.kind === 'screen' ? input.display : null;
+      this.inkRect = inkRectFor(input.kind, input.region, input.display);
+      await this.roomApi('POST', '/stage', { mode: 'screen', desktopInk: true });
+      this.drawStrokes = [];
+      void this.loadDrawing();
+      this.showStudentVideos = true;
+      desktop().minimizeMain();
+      this.emit();
       return;
     }
     raw = native.track;
@@ -1605,6 +1658,8 @@ export class ClassController {
   }
 
   private releaseCapture(): void {
+    this.viaSidecar = false;
+    this.sidecarAudio = false;
     const wgc = this.wgcHandle;
     this.wgcHandle = null;
     this.shareDisplayId = '';
@@ -1736,6 +1791,7 @@ export class ClassController {
         console.warn('video mode encodings', err);
       }
     }
+    if (this.viaSidecar) desktop().sidecarControl?.({ op: 'mode', videoMode: on });
     void desktop().setWgcFps(fps);
     await this.syncShareAudio();
     this.emit();
@@ -1743,6 +1799,15 @@ export class ClassController {
 
   /** Publish or drop computer sound to match the Sound choice and Video mode. */
   private async syncShareAudio(): Promise<void> {
+    if (this.viaSidecar) {
+      const want = this.sharing && wantShareAudio({ choice: this.audioChoice, videoMode: this.videoMode.on, askedAtStart: this.audioAskedAtStart });
+      if (want !== this.sidecarAudio) {
+        this.sidecarAudio = want;
+        desktop().sidecarControl?.({ op: 'audio', on: want });
+      }
+      this.emit();
+      return;
+    }
     if (this.audioSyncing) return;
     this.audioSyncing = true;
     try {
@@ -1975,7 +2040,7 @@ export class ClassController {
         videoMode: this.videoMode.on,
         videoModeAuto: this.videoMode.auto,
         lowPower: this.lowPower,
-        shareAudio: !!this.screenAudio,
+        shareAudio: this.viaSidecar ? this.sidecarAudio : !!this.screenAudio,
         shareAudioAuto: this.audioChoice === 'auto',
         drawRequests: this.snap?.drawRequestCount ?? 0,
         drawHolderName: this.snap?.drawHolder?.name ?? null,

@@ -52,7 +52,15 @@ export type ClassroomBridge = {
   listSources: () => Promise<SourceInfo[]>;
   prepareCapture: (source: { id: string; displayId: string; name: string; kind: 'screen' | 'window' }) => Promise<boolean>;
   capturePlan: () => Promise<CapturePlan>;
-  startWgc: (req: { kind: 'monitor' | 'window'; sourceId: string; displayId: string }) => Promise<WgcStartResult>;
+  startWgc: (req: {
+    kind: 'monitor' | 'window';
+    sourceId: string;
+    displayId: string;
+    /** Native sidecar publishing (Option A); omitted = Electron publishes. */
+    sidecar?: import('../shared/sidecar').SidecarRequest;
+  }) => Promise<WgcStartResult>;
+  /** Video mode / share sound for the native sidecar. */
+  sidecarControl?: (msg: { op: 'mode'; videoMode: boolean } | { op: 'audio'; on: boolean }) => void;
   stopWgc: () => Promise<{ ok: boolean }>;
   adoptMask: (reason: string) => Promise<CapturePlan>;
   onWgcFrame: (cb: (frame: { width: number; height: number; rgba?: Uint8Array; same?: boolean }) => void) => () => void;

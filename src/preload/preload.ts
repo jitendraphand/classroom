@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('classroom', {
   prepareCapture: (source: unknown) => ipcRenderer.invoke('prepare-capture', source),
   capturePlan: () => ipcRenderer.invoke('capture-plan'),
   startWgc: (req: unknown) => ipcRenderer.invoke('start-wgc', req),
+  sidecarControl: (msg: unknown) => ipcRenderer.send('sidecar-control', msg),
   stopWgc: () => ipcRenderer.invoke('stop-wgc'),
   adoptMask: (reason: string) => ipcRenderer.invoke('adopt-mask', reason),
   onWgcFrame: (cb: (frame: unknown) => void) => listen('wgc-frame', cb),

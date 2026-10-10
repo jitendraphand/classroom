@@ -10,6 +10,9 @@ files:
 extraResources:
   - from: native/affinity-helper.exe
     to: affinity-helper.exe
+  # Native screen-share publisher (Option A); optional at runtime (fallback: Electron publishes).
+  - from: native/share-sidecar.exe
+    to: share-sidecar.exe
   # Window and tray icons; main.ts iconDir() reads resources/build when packaged.
   - from: build
     to: build

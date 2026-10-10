@@ -21,7 +21,12 @@ type Proc = ChildProcess & { silentExit?: boolean };
 export type WgcPump = {
   start: (args: string[]) => Promise<WgcReady | WgcFail>;
   stop: () => void;
+  /** Write to the running process's stdin (share sidecar control). False when nothing is running or stdin is closed. */
+  send: (data: string | Buffer) => boolean;
 };
+
+/** Run the helper through the screen-share sidecar: exe + args, first stdin line (config). */
+export type PumpWrap = { exe: string; args: string[]; init: string };
 
 /**
  * Runs affinity-helper capture-* . stderr is JSON (ready / error). stdout is
@@ -35,6 +40,10 @@ export function createWgcPump(opts: {
   /** The helper stopped by itself. `reason` is its last `stale`/`error` step, or `exit <code>`. */
   onEnded: (info: { code: number | null; reason: string }) => void;
   onLog: (line: string) => void;
+  /** When set and returning a wrap, the sidecar is spawned instead of the helper (it runs the helper itself). */
+  wrap?: (args: string[]) => PumpWrap | null;
+  /** `{"event":"sidecar",…}` lines from the sidecar. */
+  onSidecar?: (msg: { state: string; why: string }) => void;
 }): WgcPump {
   let child: Proc | null = null;
   let generation = 0;
@@ -62,7 +71,16 @@ export function createWgcPump(opts: {
       };
       let proc: Proc;
       try {
-        proc = spawn(exe, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }) as Proc;
+        const wrapped = opts.wrap?.(args) ?? null;
+        proc = (
+          wrapped
+            ? spawn(wrapped.exe, wrapped.args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+            : spawn(exe, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+        ) as Proc;
+        if (wrapped) {
+          proc.stdin?.on('error', () => undefined);
+          proc.stdin?.write(wrapped.init.endsWith('\n') ? wrapped.init : `${wrapped.init}\n`);
+        }
       } catch {
         finish({ ok: false, error: 'helper-spawn-failed' });
         return;
@@ -106,6 +124,11 @@ export function createWgcPump(opts: {
               monR?: number;
               monB?: number;
             };
+            if (msg.event === 'sidecar') {
+              const m = msg as { state?: string; why?: string };
+              opts.onSidecar?.({ state: String(m.state || ''), why: String(m.why || '') });
+              continue;
+            }
             if (msg.event === 'ready') {
               const monL = Number(msg.monL);
               const monT = Number(msg.monT);
@@ -218,5 +241,16 @@ export function createWgcPump(opts: {
     });
   }
 
-  return { start, stop };
+  function send(data: string | Buffer): boolean {
+    const stdin = child?.stdin;
+    if (!stdin || stdin.destroyed || !stdin.writable) return false;
+    try {
+      stdin.write(data);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  return { start, stop, send };
 }

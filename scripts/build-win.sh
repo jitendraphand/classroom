@@ -5,6 +5,7 @@ set -eu
 cd "$(dirname "$0")/.."
 
 bash scripts/build-helper.sh
+bash scripts/build-sidecar.sh
 npm run build
 
 # The JS bundle lives in dist/. Do not point electron-builder at dist/ or its
