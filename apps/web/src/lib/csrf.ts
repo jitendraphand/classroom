@@ -34,7 +34,26 @@ export function isCsrfExempt(pathname: string): boolean {
 
 export const STATE_CHANGING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
+/**
+ * Paths that also accept a native same-origin HTML form post
+ * (application/x-www-form-urlencoded): the /login form's pre-hydration
+ * fallback, so credentials go in a POST body, never a GET query. A browser
+ * form post always carries Origin, which must then be present and allowed.
+ */
+export const FORM_POST_PATHS = new Set(['/api/auth/login']);
+
+export function allowsFormPost(pathname: string): boolean {
+  return FORM_POST_PATHS.has(pathname.replace(/\/+$/, ''));
+}
+
+function isFormContentType(value: string | null): boolean {
+  if (!value) return false;
+  return value.split(';')[0]!.trim().toLowerCase() === 'application/x-www-form-urlencoded';
+}
+
 export type CsrfInput = {
+  /** Accept a same-origin urlencoded form post (see FORM_POST_PATHS). */
+  allowForm?: boolean;
   method: string;
   headers: { get(name: string): string | null };
   /** Extra origins allowed besides the request host (APP_URL etc.). */
@@ -99,7 +118,12 @@ export function checkCsrf(input: CsrfInput): CsrfResult {
     }
   }
 
-  if (hasBody(input.headers) && !isJsonContentType(input.headers.get('content-type'))) {
+  const ct = input.headers.get('content-type');
+  if (input.allowForm && isFormContentType(ct)) {
+    if (origin == null) return { ok: false, status: 403, reason: 'Cross-site request blocked' };
+    return { ok: true };
+  }
+  if (hasBody(input.headers) && !isJsonContentType(ct)) {
     return { ok: false, status: 415, reason: 'Content-Type must be application/json' };
   }
 

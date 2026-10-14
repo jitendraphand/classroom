@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { checkCsrf, isCsrfExempt } from '@/lib/csrf';
+import { allowsFormPost, checkCsrf, isCsrfExempt } from '@/lib/csrf';
 import { hasUnsignedJoinParams } from '@/lib/joinParams';
 
 /**
@@ -25,6 +25,7 @@ export function middleware(req: NextRequest) {
   if (isCsrfExempt(pathname)) return NextResponse.next();
   const result = checkCsrf({
     method: req.method,
+    allowForm: allowsFormPost(pathname),
     headers: req.headers,
     configuredOrigins: [process.env.APP_URL, process.env.NEXT_PUBLIC_APP_URL],
   });
