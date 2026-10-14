@@ -270,3 +270,14 @@ export function dockTileSize(box: { w: number; h: number }, slots: SlotCount, ga
   const tileH = Math.max(9, Math.floor((tileW * 9) / 16));
   return { cols, rows, tileW, tileH };
 }
+
+/**
+ * Admitted students still in the LiveKit room. The server's admitted list can
+ * lag a departure (trial 2026-10-14: Load171/Load207 kept "camera off" tiles
+ * in the Student videos rotation after they left).
+ */
+export function presentStudents(admitted: Iterable<string>, inRoom: ReadonlySet<string>): Set<string> {
+  const out = new Set<string>();
+  for (const id of admitted) if (inRoom.has(id)) out.add(id);
+  return out;
+}

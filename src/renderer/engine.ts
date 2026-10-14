@@ -629,6 +629,7 @@ function renderClass(view: ClassView): void {
   }
   const notice = document.getElementById('notice');
   if (notice) notice.textContent = view.notice;
+  document.getElementById('btn-restart-share')?.toggleAttribute('hidden', !view.shareStopped || view.sharing);
   const banner = document.getElementById('audio-banner');
   if (banner) banner.hidden = !view.audioBlocked;
   const hands = view.roster.filter((p) => p.handRaised).length;
@@ -716,6 +717,7 @@ function buildClass(): void {
           <button class="btn sm danger" id="btn-end" type="button">End class</button>
         </div>
         <p class="err" id="notice"></p>
+        <button type="button" class="btn primary share-stopped" id="btn-restart-share" hidden>Share stopped — click to restart</button>
         <div class="banner" id="audio-banner" hidden>Click to hear students. <button class="btn" id="btn-hear" type="button">Hear</button></div>
       </div>
     </div>
@@ -736,6 +738,7 @@ function buildClass(): void {
     });
   }
   document.getElementById('btn-share')?.addEventListener('click', () => void openShare());
+  document.getElementById('btn-restart-share')?.addEventListener('click', () => void controller?.restartShare());
   document.getElementById('btn-stop')?.addEventListener('click', act('stop-share'));
   document.getElementById('btn-pen')?.addEventListener('click', act('toggle-annotate'));
   document.getElementById('btn-open-chat')?.addEventListener('click', () => showPane('pane-chat', 'tab-chat'));

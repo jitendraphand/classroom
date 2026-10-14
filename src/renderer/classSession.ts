@@ -55,6 +55,7 @@ import { DRAW_TOPIC, applyPacket, decodePacket, isDrawColor, validStrokeId, type
 import { SHARE_CODEC, shareProfile } from '../shared/web/videoQuality';
 import type { VideoCell, VideoModel } from '../shared/videoModel';
 import { openWgcTrack, type WgcHandle } from './wgcTrack';
+import { applyDrawBytes } from '../shared/studentInk';
 import {
   liveStudentPool,
   orderedPins,
@@ -62,6 +63,7 @@ import {
   sortRoster,
   studentCapForLayout,
   fillStudentSlots,
+  presentStudents,
   dockTileSize,
   visibleCells,
   videoGrid,
@@ -114,6 +116,8 @@ export type ClassView = {
   micId: string;
   camId: string;
   audioBlocked: boolean;
+  /** The share stopped on its own (capture/recovery failed): show "Share stopped — click to restart". */
+  shareStopped: boolean;
 };
 
 type ShareRequest = {
@@ -123,6 +127,9 @@ type ShareRequest = {
   region: { x: number; y: number; w: number; h: number } | null;
   systemAudio?: boolean;
 };
+
+/** Share to resume after the teacher leaves and rejoins the same class (survives a new controller). */
+let resumeShare: { code: string; input: ShareRequest } | null = null;
 
 type VideosApi = MirrorPainter & {
   setModel: (model: VideoModel) => void;
@@ -181,6 +188,9 @@ export class ClassController {
   /** The share is published by the native sidecar (frames never enter this window). */
   private viaSidecar = false;
   private sidecarAudio = false;
+  /** Last share request, for "click to restart" and resume after rejoin. */
+  private lastShare: ShareRequest | null = null;
+  private shareStopped = false;
   private lowPower = (() => {
     try {
       return parseLowPower(localStorage.getItem(LOW_POWER_KEY));
@@ -264,12 +274,9 @@ export class ClassController {
       this.bounds = bounds;
     });
     this.unsubWgcEnded = desktop().onWgcEnded((reason) => {
-      if (this.sharing && this.wgcHandle) {
-        void this.stopShare().then(() => {
-          this.notice = `Screen share stopped: Windows stopped sending the screen${reason ? ` (${reason})` : ''} and it could not be restarted. Click Share to start again.`;
-          this.emit();
-        });
-      }
+      // Sidecar shares have no wgcHandle in this window: they must stop too, or the
+      // UI keeps showing Stop while nothing is published (trial 2026-10-14).
+      if (this.sharing && (this.wgcHandle || this.viaSidecar)) void this.shareFailed(reason);
     });
     this.unsubPanels = desktop().onPanelWindows((st) => {
       this.panelWindows = { main: st?.main !== false, videos: st?.videos === true };
@@ -282,8 +289,10 @@ export class ClassController {
         this.notice = 'The display changed: restarting the screen capture…';
         this.emit();
       } else if (status.state === 'recovered') {
-        this.notice = 'Screen capture restarted after a display change. Students see your screen again.';
+        this.notice = 'Screen capture restarted. Students see your screen again.';
         this.emit();
+      } else if (status.state === 'failed') {
+        void this.shareFailed(status.reason);
       }
     });
   }
@@ -332,6 +341,7 @@ export class ClassController {
       micId: this.opts.micId,
       camId: this.opts.camId,
       audioBlocked: this.audioBlocked,
+      shareStopped: this.shareStopped && !this.sharing,
     };
   }
 
@@ -342,6 +352,7 @@ export class ClassController {
     this.ended = false;
     this.handoff = null;
     this.expectDisconnect = false;
+    this.shareStopped = false;
     this.connecting = true;
     this.notice = '';
     this.clearedStaleStage = false;
@@ -398,6 +409,18 @@ export class ClassController {
     if (this.gen !== gen) return;
     this.connecting = false;
     this.audioBlocked = room.canPlaybackAudio === false;
+    const resume = resumeShare;
+    resumeShare = null;
+    if (resume && resume.code === this.code) {
+      // Teacher left while sharing and rejoined: share the same source again.
+      window.setTimeout(() => {
+        if (this.gen === gen && !this.sharing && this.room) {
+          this.notice = 'Resuming your screen share…';
+          this.emit();
+          void this.beginShare(resume.input);
+        }
+      }, 1500);
+    }
     this.micOn = true;
     await this.enqueue(() => this.syncMic());
     await this.refreshDevices();
@@ -610,6 +633,7 @@ export class ClassController {
     return {
       url: data.url,
       token: data.token,
+      code: this.code,
       crop: input.kind === 'region' ? cropFractions(input.region, input.display) : null,
       audio: !!input.systemAudio,
       fps,
@@ -617,7 +641,9 @@ export class ClassController {
     };
   }
 
-  private async tryNativeCapture(input: ShareRequest): Promise<{ track: MediaStreamTrack | null; abort: boolean; sidecar?: boolean }> {
+  private async tryNativeCapture(
+    input: ShareRequest
+  ): Promise<{ track: MediaStreamTrack | null; abort: boolean; sidecar?: boolean; helperFailed?: boolean }> {
     if (this.opts.plan.mode !== 'wgc-exclude' || this.opts.plan.mask) {
       this.notice = 'Screen share stays off until Windows.Graphics.Capture can leave the classroom panels out of the picture.';
       this.emit();
@@ -642,11 +668,14 @@ export class ClassController {
     if (!started.ok) {
       consumer.stop();
       this.wgcHandle = null;
-      this.notice = started.error.startsWith('Run Capture test')
-        ? started.error
-        : `Windows.Graphics.Capture did not start (${started.error}). Nothing was shared, and the panels were not painted black.`;
+      if (started.error.startsWith('Run Capture test') || started.error === 'denied') {
+        this.notice = started.error;
+        this.emit();
+        return { track: null, abort: true };
+      }
+      this.notice = `Windows.Graphics.Capture did not start (${started.error}). Trying the backup capture…`;
       this.emit();
-      return { track: null, abort: true };
+      return { track: null, abort: true, helperFailed: true };
     }
     this.opts.plan = {
       ...this.opts.plan,
@@ -685,7 +714,24 @@ export class ClassController {
       this.releaseCapture();
       return;
     }
-    if (native.abort) {
+    let backup = false;
+    if (native.abort && native.helperFailed) {
+      // Trial 2026-10-14 (150 % scaling): the WGC helper timed out. Fall back to
+      // Chromium desktop capture so the class still sees the screen.
+      raw = await chromiumDesktopTrack(input.source.id);
+      if (epoch !== this.shareEpoch) {
+        raw?.stop();
+        this.releaseCapture();
+        return;
+      }
+      if (!raw) {
+        this.releaseCapture();
+        this.notice = 'Screen share did not start: neither Windows.Graphics.Capture nor the backup capture worked. Nothing was shared.';
+        this.emit();
+        return;
+      }
+      backup = true;
+    } else if (native.abort) {
       this.releaseCapture();
       return;
     }
@@ -696,6 +742,8 @@ export class ClassController {
       this.screenTrack = null;
       this.previewTrack = null;
       this.sharing = true;
+      this.shareStopped = false;
+      this.lastShare = input;
       this.videoMode = { ...VIDEO_MODE_OFF };
       void desktop().annotationOpen(this.shareDisplayId || input.source.displayId);
       this.shareKind = input.kind;
@@ -709,7 +757,7 @@ export class ClassController {
       this.emit();
       return;
     }
-    raw = native.track;
+    if (!backup) raw = native.track;
     if (!raw) {
       this.releaseCapture();
       if (audioPromise) void this.discardAudio(audioPromise);
@@ -806,6 +854,10 @@ export class ClassController {
     this.screenTrack = published;
     this.previewTrack = media;
     this.sharing = true;
+    this.shareStopped = false;
+    this.lastShare = input;
+    if (backup) this.notice = 'Sharing with the backup capture (Windows.Graphics.Capture did not start). Classroom windows may show as black boxes to students.';
+    else if (this.notice.startsWith('Windows.Graphics.Capture did not start')) this.notice = '';
     if (this.lowPower) void this.applyVideoMode(false);
     this.videoMode = { ...VIDEO_MODE_OFF };
     void desktop().annotationOpen(this.shareDisplayId || input.source.displayId);
@@ -989,6 +1041,7 @@ export class ClassController {
   }
 
   private async leave(): Promise<void> {
+    resumeShare = this.sharing && this.lastShare && this.code ? { code: this.code, input: this.lastShare } : null;
     this.expectDisconnect = true;
     await this.roomApi('POST', '/leave');
     await this.stopRoom();
@@ -1006,6 +1059,7 @@ export class ClassController {
     if (!ok) return;
     this.expectDisconnect = true;
     await this.roomApi('POST', '/end');
+    resumeShare = null;
     this.ended = true;
     await this.stopRoom();
     desktop().setClassActive(false);
@@ -1260,7 +1314,9 @@ export class ClassController {
     this.mosaic = picked.mosaic;
     this.lastTick = picked.lastTick;
     const live = new Set(pool);
-    const admitted = this.studentIdentities();
+    // Students who left (no longer in the LiveKit room) never take a "camera off" tile.
+    const inRoom = new Set(this.room ? [...this.room.remoteParticipants.keys()] : []);
+    const admitted = presentStudents(this.studentIdentities(), inRoom);
     const visible = (this.snap?.visibleIdentities ?? []).filter((id) => admitted.has(id) && !live.has(id));
     const others = [...admitted].filter((id) => !live.has(id) && !visible.includes(id));
     const students = fillStudentSlots(picked.tiles, [...visible, ...others], cap);
@@ -1638,6 +1694,32 @@ export class ClassController {
     }
   }
 
+  /** Capture or recovery failed for good: clear every "sharing" state and offer a one-click restart. */
+  private async shareFailed(reason: string): Promise<void> {
+    if (!this.sharing) return;
+    const last = this.lastShare;
+    await this.stopShare();
+    this.lastShare = last;
+    this.shareStopped = !!last;
+    this.notice = `Share stopped${reason ? ` (${reason})` : ''}. Students no longer see your screen. Click "Restart share" to share again.`;
+    desktop().restoreMain();
+    desktop().notify('Share stopped', 'Students no longer see your screen. Click to restart.');
+    this.emit();
+  }
+
+  /** "Share stopped — click to restart". */
+  async restartShare(): Promise<void> {
+    const last = this.lastShare;
+    this.shareStopped = false;
+    if (!last || this.sharing) {
+      this.emit();
+      return;
+    }
+    this.notice = 'Restarting the screen share…';
+    this.emit();
+    await this.beginShare(last);
+  }
+
   private async stopShare(): Promise<void> {
     if (!this.sharing && !this.screenTrack && !this.shareRaw) return;
     this.shareEpoch += 1;
@@ -1724,15 +1806,11 @@ export class ClassController {
 
   private onDrawPacket(payload: Uint8Array): void {
     if (!this.sharing) return;
-    try {
-      const p = decodePacket(JSON.parse(new TextDecoder().decode(payload)));
-      if (!p) return;
-      this.drawStrokes = applyPacket(this.drawStrokes, p);
-      this.pushInk();
-      if (p.t !== 'pts') this.emit();
-    } catch {
-      /* ignore malformed packets */
-    }
+    const res = applyDrawBytes(this.drawStrokes, payload);
+    if (!res.changed) return;
+    this.drawStrokes = res.strokes;
+    this.pushInk();
+    if (res.kind !== 'pts') this.emit();
   }
 
   /** Teacher erased (eraser over a stroke) or cleared student ink on the desktop. */
@@ -2084,5 +2162,22 @@ export class ClassController {
       };
       tick();
     });
+  }
+}
+
+/** Backup capture: Chromium desktop capture of the chosen source (no user gesture needed in Electron). */
+async function chromiumDesktopTrack(sourceId: string): Promise<MediaStreamTrack | null> {
+  if (!sourceId) return null;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId, maxWidth: 1920, maxHeight: 1080, maxFrameRate: 15 },
+      } as unknown as MediaTrackConstraints,
+    });
+    return stream.getVideoTracks()[0] ?? null;
+  } catch (err) {
+    console.warn('backup capture failed', err);
+    return null;
   }
 }

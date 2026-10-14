@@ -115,6 +115,8 @@ export type ClassroomBridge = {
   annotationDrawMode: (on: boolean) => void;
   /** Annotate toolbar dock: resize its window (horizontal bar / vertical strip). */
   annotateToolsOrient?: (orient: 'horizontal' | 'vertical') => void;
+  /** Tools panel content size (one line) or "still overflowing", for main to fit the window. */
+  annotateToolsMeasure?: (m: { width: number; height: number; overflow: boolean }) => void;
   postVideoTile: (key: string, jpeg: Uint8Array) => void;
   onVideoTile: (cb: (key: string, jpeg: ArrayBuffer | Uint8Array) => void) => () => void;
   onAnnotateSurface: (cb: (surface: { dip: DipBox; physical: PhysicalMonitor; scale: number }) => void) => () => void;

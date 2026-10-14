@@ -25,7 +25,49 @@ export type SidecarInit = {
   audio: boolean;
 };
 
-export type SidecarRequest = { url: string; token: string; crop?: SidecarCrop | null; audio?: boolean; fps?: number; videoFps?: number };
+export type SidecarRequest = {
+  url: string;
+  token: string;
+  crop?: SidecarCrop | null;
+  audio?: boolean;
+  fps?: number;
+  videoFps?: number;
+  /** Class code: main fetches a fresh screen token before every sidecar (re)connect. */
+  code?: string;
+};
+
+/** Room code → the screen-token path, or null when the code is not a plain room code. */
+export function screenTokenPath(code: unknown): string | null {
+  if (typeof code !== 'string' || !/^[A-Za-z0-9]{3,16}$/.test(code)) return null;
+  return `/api/rooms/${code.toUpperCase()}/screen-token`;
+}
+
+/** A POST /screen-token response → the token (and url) or null. Never logs the token. */
+export function parseScreenToken(res: { status: number; data: unknown } | null | undefined): { token: string; url: string } | null {
+  if (!res || res.status < 200 || res.status >= 300 || !res.data || typeof res.data !== 'object') return null;
+  const d = res.data as { token?: unknown; url?: unknown };
+  if (typeof d.token !== 'string' || d.token.length < 20 || d.token.length > 4096) return null;
+  if (typeof d.url !== 'string' || !/^wss?:\/\//.test(d.url)) return null;
+  return { token: d.token, url: d.url };
+}
+
+/**
+ * The init line with a fresh token (and the current fps / audio choice), so a
+ * restarted sidecar never reconnects with an expired LiveKit token
+ * (trial 2026-10-14: "401 Unauthorized … token is expired" after a restart).
+ */
+export function refreshInitLine(line: string, fresh: { token: string; url: string }, state?: { audio?: boolean }): string | null {
+  let init: SidecarInit;
+  try {
+    init = JSON.parse(line) as SidecarInit;
+  } catch {
+    return null;
+  }
+  if (!init || typeof init !== 'object') return null;
+  const next: SidecarInit = { ...init, token: fresh.token, url: fresh.url };
+  if (state && typeof state.audio === 'boolean') next.audio = state.audio;
+  return JSON.stringify(next);
+}
 
 export function isSidecarIdentity(identity: string): boolean {
   return identity.startsWith('teacher_') && identity.endsWith(SIDECAR_SUFFIX);

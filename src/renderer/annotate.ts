@@ -12,6 +12,7 @@
  * This page has no buttons. Committed shapes are cached in a second canvas,
  * so a pointer move only redraws the shape being drawn.
  */
+import { inkPoint } from '../shared/studentInk';
 import { studentStrokesHit, withoutStrokes } from '../shared/studentErase';
 import { newStrokeId, type Pt } from '../shared/annotate';
 import {
@@ -272,8 +273,8 @@ function drawStudentInk(g: CanvasRenderingContext2D): void {
   if (!(picW > 0) || !(picH > 0)) return;
   const sentW = Math.min(1280, picW);
   const lw = strokeWidthFor(sentW) * (picW / sentW);
-  const X = (x: number) => (r.x + x * r.w) * canvas.width;
-  const Y = (y: number) => (r.y + y * r.h) * canvas.height;
+  const X = (x: number) => inkPoint(x, 0, r, canvas.width, canvas.height).x;
+  const Y = (y: number) => inkPoint(0, y, r, canvas.width, canvas.height).y;
   g.save();
   g.lineCap = 'round';
   g.lineJoin = 'round';

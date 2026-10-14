@@ -281,7 +281,10 @@ export function ChatView({ snap, send }: { snap: PanelSnapshot; send: Send }) {
   const [text, setText] = useState('');
   const students = useMemo(() => snap.admitted.filter((p) => p.role === 'STUDENT'), [snap.admitted]);
   const ids = useMemo(() => new Set(students.map((p) => p.id)), [students]);
-  const to = resolveChatRecipient(snap.chatTo === 'all' ? 'all' : snap.chatTo, ids);
+  // Reply target chosen here wins until the class view catches up (no race with Enter).
+  const [replyPick, setReplyPick] = useState<string | null>(null);
+  const to = resolveChatRecipient(replyPick ?? (snap.chatTo === 'all' ? 'all' : snap.chatTo), ids);
+  const focusReply = useRef(false);
   const toName = to === 'all' ? null : students.find((s) => s.id === to)?.displayName ?? null;
   const hands = useMemo(() => sortRoster(students.filter((p) => p.handRaised)), [students]);
   const searching = !!normalizeQuery(query);
@@ -297,9 +300,29 @@ export function ChatView({ snap, send }: { snap: PanelSnapshot; send: Send }) {
     [searching, snap.messages, query, sidById]
   );
   const replyTo = (id: string) => {
+    setReplyPick(id);
     send({ type: 'chat-to', to: id });
+    focusReply.current = true;
     input.current?.focus();
   };
+  const pickTo = (id: string) => {
+    setReplyPick(id);
+    send({ type: 'chat-to', to: id });
+  };
+  useEffect(() => {
+    if (replyPick !== null && snap.chatTo === replyPick) setReplyPick(null);
+  }, [snap.chatTo, replyPick]);
+  // "Reply privately": the reply box gets focus after the re-render, never the search box.
+  useEffect(() => {
+    if (!focusReply.current) return;
+    focusReply.current = false;
+    const el = input.current;
+    if (!el) return;
+    el.focus();
+    window.requestAnimationFrame(() => {
+      if (document.activeElement !== el) el.focus();
+    });
+  }, [to]);
   const last = shown.length ? shown[shown.length - 1]?.id : '';
   useEffect(() => {
     const el = log.current;
@@ -425,12 +448,12 @@ export function ChatView({ snap, send }: { snap: PanelSnapshot; send: Send }) {
         <div className="chat-to-row">
           <label htmlFor="chat-to">To</label>
           {toName && (
-            <button type="button" className="chat-back" onClick={() => send({ type: 'chat-to', to: 'all' })} title="Send the next message to everyone">
+            <button type="button" className="chat-back" onClick={() => pickTo('all')} title="Send the next message to everyone">
               Back to Everyone
             </button>
           )}
         </div>
-        <select id="chat-to" className={toName ? 'dm' : ''} value={to} onChange={(e) => send({ type: 'chat-to', to: e.target.value })} aria-label="Send to">
+        <select id="chat-to" className={toName ? 'dm' : ''} value={to} onChange={(e) => pickTo(e.target.value)} aria-label="Send to">
           <option value="all">Everyone</option>
           {toOptions.map((s) => (
             <option key={s.id} value={s.id}>
@@ -443,6 +466,11 @@ export function ChatView({ snap, send }: { snap: PanelSnapshot; send: Send }) {
             </option>
           )}
         </select>
+        {toName && (
+          <p className="chat-replying" role="status" aria-live="polite">
+            Replying privately to <strong>{toName}</strong>
+          </p>
+        )}
         <div className="chat-send-row">
           <input
             ref={input}

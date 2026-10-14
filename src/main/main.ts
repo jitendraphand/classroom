@@ -15,9 +15,9 @@
  * would replace it.
  */
 
-import { SIDECAR_PUBLISH_TIMEOUT_MS, controlLine, inkMessage, sidecarInit, type Publisher, type SidecarRequest } from '../shared/sidecar';
+import { SIDECAR_PUBLISH_TIMEOUT_MS, controlLine, inkMessage, parseScreenToken, refreshInitLine, screenTokenPath, sidecarInit, type Publisher, type SidecarRequest } from '../shared/sidecar';
 import { VIDEO_MODE_SHARE as SIDECAR_VIDEO } from '../shared/capture';
-import { parseOrient, toolbarSize } from '../shared/toolbarLayout';
+import { clampToArea, fitToolbar, parseOrient, toolbarSize } from '../shared/toolbarLayout';
 import { HW_ENCODE_FEATURES } from '../shared/hwEncode';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -212,6 +212,48 @@ let sidecarInitLine: string | null = null;
 let sidecarPublished = false;
 const sidecarWaiters = new Set<(ok: boolean, why: string) => void>();
 const sidecarActive = () => sidecarInitLine !== null;
+/** POST path for a fresh sidecar token (set while the sidecar publishes). */
+let sidecarTokenPath: string | null = null;
+/** Last Video-mode / share-sound choice, re-sent to a restarted sidecar. */
+let sidecarVideoMode = false;
+let sidecarAudioOn = false;
+
+/** Fetch a fresh screen token into the init line before the sidecar (re)connects. */
+async function refreshSidecarToken(): Promise<boolean> {
+  if (!sidecarInitLine || !sidecarTokenPath) return false;
+  const res = await api.call('POST', sidecarTokenPath).catch(() => null);
+  const fresh = parseScreenToken(res);
+  if (!fresh) {
+    logCapture(`[sidecar] screen token refresh failed (status ${res ? res.status : 'none'})`);
+    return false;
+  }
+  const next = refreshInitLine(sidecarInitLine, fresh, { audio: sidecarAudioOn });
+  if (!next || !sidecarInitLine) return false;
+  sidecarInitLine = next;
+  logCapture('[sidecar] fresh screen token for reconnect');
+  return true;
+}
+
+/**
+ * Every supervisor restart (display change, no-frames, helper/sidecar exit)
+ * goes through here: with the sidecar it reconnects with a fresh token and only
+ * counts as recovered once the sidecar has published again.
+ */
+async function supervisedStart(args: string[]): Promise<Awaited<ReturnType<typeof wgc.start>>> {
+  if (!sidecarActive()) return wgc.start(args);
+  if (!(await refreshSidecarToken())) return { ok: false, error: 'screen-token' };
+  sidecarPublished = false;
+  const result = await wgc.start(args);
+  if (!result.ok) return result;
+  const pub = await waitSidecarPublished(SIDECAR_PUBLISH_TIMEOUT_MS);
+  if (!pub.ok) {
+    wgc.stop();
+    return { ok: false, error: `sidecar ${pub.why || 'not published'}` };
+  }
+  if (sidecarVideoMode) wgc.send(controlLine({ op: 'mode', videoMode: true }));
+  if (inkLayer) wgc.send(inkMessage(inkLayer));
+  return result;
+}
 
 function onSidecarEvent(msg: { state: string; why: string }): void {
   logCapture(`[sidecar] ${msg.state}${msg.why ? ` ${msg.why}` : ''}`);
@@ -341,7 +383,7 @@ function physicalDisplays(): { id: string; rect: { x: number; y: number; w: numb
 let captureTarget: CaptureTarget | null = null;
 
 const supervisor = createCaptureSupervisor({
-  start: (args) => wgc.start(args),
+  start: (args) => supervisedStart(args),
   argsFor: (target, fps) => {
     if (target.kind === 'window') {
       return ['capture-window', target.hwnd, String(SCREEN_SHARE.capture.width), String(SCREEN_SHARE.capture.height), String(fps)];
@@ -727,7 +769,9 @@ function openAnnotateTools(): void {
     raiseControls();
     return;
   }
-  const { width: w, height: h } = toolbarSize(parseOrient(config.annotateToolsOrient));
+  const initial = toolbarSize(parseOrient(config.annotateToolsOrient));
+  const w = initial.width;
+  const h = Math.min(initial.height, workAreaFor(mainWindow).height);
   const tb = toolbar && !toolbar.isDestroyed() && toolbar.isVisible() ? toolbar.getBounds() : null;
   const area = workAreaFor(tb ? toolbar : mainWindow);
   let x = tb ? tb.x + tb.width - w : area.x + area.width - w - 16;
@@ -766,9 +810,20 @@ function openAnnotateTools(): void {
   watch(win, 'annotate-tools');
   win.on('moved', () => {
     if (win.isDestroyed()) return;
+    // Never partly off-screen: clamp into the work area of the display it was dropped on.
     const b = win.getBounds();
-    config.annotateTools = { x: b.x, y: b.y };
+    const c = clampToArea(b, screen.getDisplayMatching(b).workArea);
+    if (c.x !== b.x || c.y !== b.y || c.width !== b.width || c.height !== b.height) win.setBounds(c);
+    config.annotateTools = { x: c.x, y: c.y };
     saveConfig();
+  });
+  const refit = () => {
+    if (!win.isDestroyed()) fitAnnotateTools(win);
+  };
+  screen.on('display-metrics-changed', refit);
+  win.on('closed', () => {
+    toolsExtraLines = 0;
+    screen.removeListener('display-metrics-changed', refit);
   });
   win.webContents.on('did-finish-load', () => {
     if (win.isDestroyed()) return;
@@ -785,18 +840,49 @@ function openAnnotateTools(): void {
   void win.loadURL('app://classroom/tools.html');
 }
 
+/** Annotate panel: measured one-line content size and the extra wrap lines it asked for. */
+let toolsNatural: { width: number; height: number } | null = null;
+let toolsExtraLines = 0;
+
+function fitAnnotateTools(win: BrowserWindow): void {
+  const o = parseOrient(config.annotateToolsOrient);
+  const natural = toolsNatural ?? toolbarSize(o);
+  const b = win.getBounds();
+  const area = screen.getDisplayMatching(b).workArea;
+  const fit = fitToolbar(o, natural, area, { x: b.x, y: b.y }, toolsExtraLines);
+  if (fit.x !== b.x || fit.y !== b.y || fit.width !== b.width || fit.height !== b.height) {
+    win.setBounds({ x: fit.x, y: fit.y, width: fit.width, height: fit.height });
+  }
+}
+
 ipcMain.on('annotate-tools-orient', (event, orient: unknown) => {
   const win = chrome.get('annotate-tools');
   if (!win || win.isDestroyed() || event.sender !== win.webContents) return;
   const o = parseOrient(orient);
-  config.annotateToolsOrient = o;
-  saveConfig();
-  const size = toolbarSize(o);
-  const b = win.getBounds();
-  const area = screen.getDisplayMatching(b).workArea;
-  const x = Math.min(Math.max(area.x, b.x), area.x + area.width - size.width);
-  const y = Math.min(Math.max(area.y, b.y), area.y + area.height - size.height);
-  win.setBounds({ x, y, width: size.width, height: size.height });
+  if (config.annotateToolsOrient !== o) {
+    config.annotateToolsOrient = o;
+    saveConfig();
+    toolsNatural = null;
+    toolsExtraLines = 0;
+  }
+  fitAnnotateTools(win);
+});
+
+ipcMain.on('annotate-tools-measure', (event, m: unknown) => {
+  const win = chrome.get('annotate-tools');
+  if (!win || win.isDestroyed() || event.sender !== win.webContents || !m || typeof m !== 'object') return;
+  const r = m as { width?: unknown; height?: unknown; overflow?: unknown };
+  if (r.overflow === true) {
+    if (toolsExtraLines >= 3) return; // the panel scrolls from here on
+    toolsExtraLines += 1;
+  } else {
+    const width = Number(r.width);
+    const height = Number(r.height);
+    if (!(width > 0 && width < 8000 && height > 0 && height < 8000)) return;
+    toolsNatural = { width, height };
+    toolsExtraLines = 0;
+  }
+  fitAnnotateTools(win);
 });
 
 function closeAnnotateTools(): void {
@@ -1884,16 +1970,27 @@ function installIpc(): void {
     let result: Awaited<ReturnType<typeof wgc.start>>;
     if (init) {
       sidecarInitLine = JSON.stringify(init);
+      sidecarTokenPath = screenTokenPath(sideReq?.code);
+      sidecarVideoMode = false;
+      sidecarAudioOn = init.audio;
       sidecarPublished = false;
       result = await wgc.start(args);
       const pub = result.ok ? await waitSidecarPublished(SIDECAR_PUBLISH_TIMEOUT_MS) : { ok: false, why: result.error };
       if (result.ok && pub.ok) {
         publisher = 'sidecar';
       } else {
-        logCapture(`[sidecar] fallback to Electron publishing (${pub.why})`);
         sidecarInitLine = null;
+        sidecarTokenPath = null;
         wgc.stop();
-        result = await wgc.start(args);
+        if (result.ok) {
+          // The helper captured but the sidecar did not publish: helper → Electron publishing.
+          logCapture(`[sidecar] fallback to Electron publishing (${pub.why})`);
+          result = await wgc.start(args);
+        } else {
+          // The helper itself failed (e.g. 150 % scaling timeout): retrying it would only
+          // burn another 8 s, so the class window falls back to Chromium capture now.
+          logCapture(`[sidecar] helper failed (${result.error}); class window falls back to Chromium capture`);
+        }
       }
     } else {
       sidecarInitLine = null;
@@ -1948,6 +2045,7 @@ function installIpc(): void {
       sidecarInitLine = null;
       sidecarPublished = false;
     }
+    sidecarTokenPath = null;
     wgc.stop();
     return { ok: true };
   });
@@ -2044,8 +2142,13 @@ function installIpc(): void {
   ipcMain.on('sidecar-control', (event, msg: unknown) => {
     if (!mainWindow || event.sender !== mainWindow.webContents || !sidecarActive()) return;
     const m = msg as { op?: unknown; videoMode?: unknown; on?: unknown } | null;
-    if (m?.op === 'mode') wgc.send(controlLine({ op: 'mode', videoMode: m.videoMode === true }));
-    else if (m?.op === 'audio') wgc.send(controlLine({ op: 'audio', on: m.on === true }));
+    if (m?.op === 'mode') {
+      sidecarVideoMode = m.videoMode === true;
+      wgc.send(controlLine({ op: 'mode', videoMode: sidecarVideoMode }));
+    } else if (m?.op === 'audio') {
+      sidecarAudioOn = m.on === true;
+      wgc.send(controlLine({ op: 'audio', on: sidecarAudioOn }));
+    }
   });
 
   ipcMain.on('annotation-command', (_event, cmd: unknown) => {

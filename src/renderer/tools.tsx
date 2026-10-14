@@ -8,7 +8,7 @@
  * undo / redo / clear | draw ↔ click-through | dock | close. Horizontal by
  * default, optional vertical dock. Tooltips show the keyboard shortcuts.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ANNOTATE_COLORS } from '../shared/annotate';
 import { THICKNESS_MAX, THICKNESS_MIN, toolWidth, type AnnotateStatus, type OverlayTool } from '../shared/annotateOverlay';
@@ -50,6 +50,35 @@ function Tools() {
     }
     desktop().annotateToolsOrient?.(orient);
   }, [orient]);
+  // Size the window to the content; main clamps it to the display's work area
+  // and wraps to more columns/rows when it does not fit.
+  const barRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = barRef.current;
+    if (!el) return;
+    const report = (withNatural: boolean) => {
+      let natural = { width: 0, height: 0 };
+      if (withNatural) {
+        el.classList.add('atb-measure');
+        natural = { width: el.scrollWidth + 2, height: el.scrollHeight + 2 };
+        el.classList.remove('atb-measure');
+      }
+      const overflow = el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1;
+      if (withNatural || overflow) desktop().annotateToolsMeasure?.({ ...natural, overflow: !withNatural && overflow });
+    };
+    const first = window.setTimeout(() => report(true), 40);
+    let pending = 0;
+    const onResize = () => {
+      window.clearTimeout(pending);
+      pending = window.setTimeout(() => report(false), 120);
+    };
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.clearTimeout(first);
+      window.clearTimeout(pending);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [orient]);
   const setMode = (on: boolean) => {
     setDrawing(on);
     desktop().annotationDrawMode(on);
@@ -83,7 +112,7 @@ function Tools() {
   }, []);
 
   return (
-    <div className={`atb atb-${orient}`} role="toolbar" aria-label="Annotate tools" aria-orientation={orient}>
+    <div ref={barRef} className={`atb atb-${orient}`} role="toolbar" aria-label="Annotate tools" aria-orientation={orient}>
       <span className="atb-grip" title="Drag to move" aria-hidden="true">
         ⋮⋮
       </span>

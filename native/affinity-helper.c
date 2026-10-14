@@ -116,12 +116,26 @@ static void set_per_monitor_dpi(void) {
   if (fn) fn((HANDLE)(intptr_t)-4);
 }
 
+static DWORD WINAPI dwm_flush_thread(LPVOID p) {
+  typedef HRESULT(WINAPI *DwmFlushFn)(void);
+  ((DwmFlushFn)p)();
+  return 0;
+}
+
 /* Wait until DWM has composed the frame that includes content protection. */
 static void compose_flush(void) {
   typedef HRESULT(WINAPI *DwmFlushFn)(void);
   HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
   DwmFlushFn fn = dwm ? (DwmFlushFn)GetProcAddress(dwm, "DwmFlush") : NULL;
-  if (fn) fn();
+  /* DwmFlush can block for a long time (seen at 150 % scaling on a basic display
+   * adapter, where the helper then never reported "ready"). Bound it. */
+  if (fn) {
+    HANDLE th = CreateThread(NULL, 0, dwm_flush_thread, (LPVOID)fn, 0, NULL);
+    if (th) {
+      WaitForSingleObject(th, 400);
+      CloseHandle(th);
+    }
+  }
   Sleep(100);
 }
 
@@ -456,6 +470,9 @@ static void blit_rgba(const uint8_t *src, int srcW, int srcH, int srcStride, uin
 typedef struct {
   LONG left, top, right, bottom;
   HMONITOR found;
+  /* Fallback at high DPI scaling: the monitor overlapping the requested rect most. */
+  HMONITOR best;
+  LONGLONG bestArea;
 } MonMatch;
 
 static BOOL CALLBACK match_mon(HMONITOR hmon, HDC hdc, LPRECT rc, LPARAM lp) {
@@ -478,6 +495,15 @@ static BOOL CALLBACK match_mon(HMONITOR hmon, HDC hdc, LPRECT rc, LPARAM lp) {
   if (dl <= 8 && dt <= 8 && dr <= 8 && db <= 8) {
     m->found = hmon;
     return FALSE;
+  }
+  {
+    LONG ow = (info.rcMonitor.right < m->right ? info.rcMonitor.right : m->right) - (info.rcMonitor.left > m->left ? info.rcMonitor.left : m->left);
+    LONG oh = (info.rcMonitor.bottom < m->bottom ? info.rcMonitor.bottom : m->bottom) - (info.rcMonitor.top > m->top ? info.rcMonitor.top : m->top);
+    LONGLONG area = (ow > 0 && oh > 0) ? (LONGLONG)ow * (LONGLONG)oh : 0;
+    if (area > m->bestArea) {
+      m->bestArea = area;
+      m->best = hmon;
+    }
   }
   return TRUE;
 }
@@ -1185,6 +1211,13 @@ static int cmd_capture_monitor(const char *leftS, const char *topS, const char *
   match.right = strtol(rightS, NULL, 10);
   match.bottom = strtol(bottomS, NULL, 10);
   EnumDisplayMonitors(NULL, NULL, match_mon, (LPARAM)&match);
+  if (!match.found && match.best) {
+    /* 125-200 % scaling: Electron's DIP→physical rounding can miss by more than
+     * 8 px (or report a DIP-sized rect); take the monitor it overlaps most. */
+    fprintf(stderr, "{\"event\":\"log\",\"step\":\"monitor-overlap-match\"}\n");
+    fflush(stderr);
+    match.found = match.best;
+  }
   if (!match.found) {
     fprintf(stderr, "{\"event\":\"error\",\"step\":\"monitor-not-found\",\"left\":%ld,\"top\":%ld,\"right\":%ld,\"bottom\":%ld}\n",
             (long)match.left, (long)match.top, (long)match.right, (long)match.bottom);
