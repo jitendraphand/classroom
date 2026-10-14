@@ -16,10 +16,20 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<{ title: string; body: string } | null>(null);
   const [next, setNext] = useState<string | null>(null);
+  const [hydrated, setHydrated] = useState(false);
 
   // Read on the client (no useSearchParams, so the page stays static).
   useEffect(() => {
+    setHydrated(true);
     const q = new URLSearchParams(window.location.search);
+    // Never leave credentials in the address bar (old GET form / bad links).
+    if (q.has('password') || q.has('email')) {
+      q.delete('password');
+      q.delete('email');
+      const qs = q.toString();
+      window.history.replaceState(null, '', window.location.pathname + (qs ? `?${qs}` : '') + window.location.hash);
+    }
+    if (q.get('error')) setError('Invalid email or password');
     const reason = q.get('reason');
     if (isEndedReason(reason)) setNotice(endedSessionCopy(reason));
     setNext(safeNextPath(q.get('next')));
@@ -27,6 +37,7 @@ export default function LoginPage() {
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (loading) return;
     setLoading(true);
     setError('');
     const res = await fetch('/api/auth/login', {
@@ -34,7 +45,7 @@ export default function LoginPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     setLoading(false);
     if (!res.ok) {
       setError(data.error || 'Login failed');
@@ -60,7 +71,7 @@ export default function LoginPage() {
         <p className="mt-2 text-xs text-slate-500">
           Signing in here signs this account out on any other device.
         </p>
-        <form onSubmit={onSubmit} className="mt-6 space-y-4">
+        <form method="post" action="/api/auth/login" onSubmit={onSubmit} className="mt-6 space-y-4">
           <Input
             label="Email"
             type="email"
@@ -84,7 +95,7 @@ export default function LoginPage() {
               {error}
             </p>
           )}
-          <Button type="submit" fullWidth className="py-3" disabled={loading}>
+          <Button type="submit" fullWidth className="py-3" disabled={loading || !hydrated}>
             {loading ? 'Signing in…' : 'Sign in'}
           </Button>
         </form>

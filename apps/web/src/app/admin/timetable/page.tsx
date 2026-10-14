@@ -368,7 +368,7 @@ function TimetableEditor() {
           </label>
           <div className="block sm:col-span-2 lg:col-span-1">
             <span className="label">Divisions</span>
-            <DivisionsPicker grade={slotForm.grade} value={slotForm.divisions} onChange={(d) => setSlotForm({ ...slotForm, divisions: d })} options={gradeOptions} />
+            <DivisionsPicker grade={slotForm.grade} value={slotForm.divisions} onChange={(d) => setSlotForm((f) => ({ ...f, divisions: d }))} options={gradeOptions} />
           </div>
           <label className="block">
             <span className="label">Subject</span>
@@ -520,7 +520,7 @@ function TimetableEditor() {
                   </label>
                   <div className="block sm:col-span-2 lg:col-span-1">
                     <span className="label">Divisions</span>
-                    <DivisionsPicker grade={ov.grade} value={ov.divisions} onChange={(d) => setOv({ ...ov, divisions: d })} options={gradeOptions} />
+                    <DivisionsPicker grade={ov.grade} value={ov.divisions} onChange={(d) => setOv((o) => ({ ...o, divisions: d }))} options={gradeOptions} />
                   </div>
                 </>
               )}

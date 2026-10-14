@@ -28,8 +28,43 @@ const DUMMY_HASH = '$2a$12$9ch9jf0ccnDYc4FooYI0XeG5B5bsHNgFt4jhfGjE2fFQmQa.RtAzO
  * per account and per IP in Redis.
  */
 export async function POST(req: Request) {
+  const ct = req.headers.get('content-type') || '';
+  if (ct.includes('application/x-www-form-urlencoded') || ct.includes('multipart/form-data')) {
+    return formPost(req);
+  }
+  return handleLogin(req, await req.json().catch(() => ({})));
+}
+
+/**
+ * No-JS / pre-hydration fallback: the /login form posts here natively
+ * (method=post, so credentials are only ever in the request body). Answer with
+ * a 303 redirect, never echoing the credentials into a URL.
+ */
+async function formPost(req: Request) {
+  const fd = await req.formData().catch(() => null);
+  const res = await handleLogin(req, {
+    email: String(fd?.get('email') ?? ''),
+    password: String(fd?.get('password') ?? ''),
+  });
+  const data = (await res.clone().json().catch(() => ({}))) as {
+    role?: string;
+    mustChangePassword?: boolean;
+  };
+  let to = '/login?error=1';
+  if (res.ok) {
+    to = data.mustChangePassword ? '/account/password' : data.role === 'admin' ? '/admin' : '/teacher/dashboard';
+  }
+  const out = new Response(null, { status: 303, headers: { Location: to } });
+  // Carry the session cookies set by handleLogin onto the redirect.
+  res.headers.forEach((v, k) => {
+    if (k.toLowerCase() === 'set-cookie') out.headers.append('set-cookie', v);
+  });
+  return out;
+}
+
+async function handleLogin(req: Request, raw: unknown) {
   try {
-    const body = schema.parse(await req.json());
+    const body = schema.parse(raw);
     const email = body.email.trim().toLowerCase();
     const ip = clientIp(req);
 

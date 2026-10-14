@@ -263,30 +263,38 @@ export function DivisionsPicker({ grade, value, onChange, options, allowAll = tr
     );
   }
   const sel = parseDivisionsText(value);
-  const list = divisionsOf(options, grade).filter((d) => !only || only.includes(d.name));
-  const extra = sel.divisions.filter((d) => !list.some((x) => x.name === d));
-  const toggle = (d: string) => {
-    const set = new Set(sel.divisions);
-    if (set.has(d)) set.delete(d);
-    else set.add(d);
-    onChange(formatDivisionsText(false, [...set]));
+  // Compare on the canonical form (same normaliser the text parser uses) and
+  // de-duplicate by it, so one chip maps to exactly one selection entry and a
+  // click can never toggle a sibling with the same/overlapping key.
+  const seenNames = new Set<string>();
+  const list = divisionsOf(options, grade)
+    .map((d) => ({ ...d, key: normalizeDivision(d.name) }))
+    .filter((d) => d.key && (!only || only.includes(d.name) || only.includes(d.key)))
+    .filter((d) => (seenNames.has(d.key) ? false : (seenNames.add(d.key), true)));
+  const extra = sel.divisions.filter((d) => !list.some((x) => x.key === d));
+  const toggle = (e: React.MouseEvent, d: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const cur = parseDivisionsText(value).divisions;
+    const next = cur.includes(d) ? cur.filter((x) => x !== d) : [...cur, d];
+    onChange(formatDivisionsText(false, next));
   };
   if (!grade) return <p className={cn('input text-slate-500', className)}>Choose a grade first</p>;
   return (
     <div className={cn('flex min-h-[42px] flex-wrap items-center gap-1.5 rounded-xl border border-white/10 bg-black/20 p-1.5', className)} role="group" aria-label="Divisions">
       {allowAll && (
-        <Chip active={sel.all} onClick={() => onChange(sel.all ? '' : 'ALL')}>
+        <Chip active={sel.all} onClick={(e) => { e.preventDefault(); e.stopPropagation(); onChange(sel.all ? '' : 'ALL'); }}>
           All divisions
         </Chip>
       )}
       {list.map((d) => (
-        <Chip key={d.name} active={!sel.all && sel.divisions.includes(d.name)} disabled={sel.all} onClick={() => toggle(d.name)}>
+        <Chip key={d.key} active={!sel.all && sel.divisions.includes(d.key)} disabled={sel.all} onClick={(e) => toggle(e, d.key)}>
           {d.label}
         </Chip>
       ))}
       {!sel.all &&
         extra.map((d) => (
-          <Chip key={d} active onClick={() => toggle(d)} title="Not in Grades & divisions (or inactive)">
+          <Chip key={`extra-${d}`} active onClick={(e) => toggle(e, d)} title="Not in Grades & divisions (or inactive)">
             {displayDivision(d)} ⚠
           </Chip>
         ))}
@@ -304,7 +312,7 @@ function Chip({
 }: {
   active: boolean;
   disabled?: boolean;
-  onClick: () => void;
+  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
   children: React.ReactNode;
   title?: string;
 }) {

@@ -1,14 +1,15 @@
 'use client';
 
 import {
-  isTrackReference,
+  type TrackReference,
   useRemoteParticipants,
   useRoomContext,
-  useTracks,
   VideoTrack,
 } from '@livekit/components-react';
 import { RoomEvent, Track, VideoQuality, type RemoteParticipant } from 'livekit-client';
-import { useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+/** Mirrors SCREEN_SIDECAR_SUFFIX in lib/livekit (server-only module). */
+const SCREEN_SIDECAR_SUFFIX = '__screen';
 import { IconScreen } from '@/components/ui/Icons';
 import { cn } from '@/lib/cn';
 import { isTeacherParticipant, TeacherScreenStage } from './ClassroomRoom';
@@ -31,14 +32,38 @@ export type StudentViewMode = 'preview' | 'observe';
 
 const NO_TEACHERS = new Set<string>();
 
+/** Share publisher: the teacher's own screen track, or the Windows sidecar `teacher_<id>__screen`. */
+function isShareParticipant(identity: string) {
+  return identity.startsWith('teacher_') && identity.endsWith(SCREEN_SIDECAR_SUFFIX);
+}
+
+function isVideoPub(pub: { source: Track.Source; kind: Track.Kind }) {
+  return (
+    pub.source === Track.Source.Camera ||
+    pub.source === Track.Source.ScreenShare ||
+    // Native publishers may leave the source unset; a sidecar only ever shares the screen.
+    (pub.source === Track.Source.Unknown && pub.kind === Track.Kind.Video)
+  );
+}
+
+function isSharePub(p: { identity: string }, pub: { source: Track.Source; kind: Track.Kind }) {
+  return (
+    pub.source === Track.Source.ScreenShare ||
+    (isShareParticipant(p.identity) && pub.kind === Track.Kind.Video && pub.source !== Track.Source.Camera)
+  );
+}
+
 function useTeacherOnlySubscriptions(mode: StudentViewMode) {
   const room = useRoomContext();
+  // Bumped on every relevant room event so the stage re-reads publications
+  // (a published-but-not-yet-subscribed share must not read as "camera off").
+  const [version, setVersion] = useState(0);
   useEffect(() => {
     const sync = () => {
       room.remoteParticipants.forEach((p: RemoteParticipant) => {
         const teacher = isTeacherParticipant(p, NO_TEACHERS);
         p.trackPublications.forEach((pub) => {
-          const video = pub.source === Track.Source.Camera || pub.source === Track.Source.ScreenShare;
+          const video = isVideoPub(pub);
           const audio =
             pub.source === Track.Source.Microphone || pub.source === Track.Source.ScreenShareAudio;
           const want = teacher && (video || (audio && mode === 'observe'));
@@ -46,21 +71,28 @@ function useTeacherOnlySubscriptions(mode: StudentViewMode) {
           if (want && video && mode === 'preview') pub.setVideoQuality(VideoQuality.LOW);
         });
       });
+      setVersion((v) => v + 1);
     };
     sync();
     const events = [
       RoomEvent.Connected,
       RoomEvent.Reconnected,
       RoomEvent.ParticipantConnected,
+      RoomEvent.ParticipantDisconnected,
       RoomEvent.ParticipantMetadataChanged,
       RoomEvent.TrackPublished,
+      RoomEvent.TrackUnpublished,
       RoomEvent.TrackSubscribed,
+      RoomEvent.TrackUnsubscribed,
+      RoomEvent.TrackMuted,
+      RoomEvent.TrackUnmuted,
     ] as const;
     events.forEach((e) => room.on(e, sync));
     return () => {
       events.forEach((e) => room.off(e, sync));
     };
   }, [room, mode]);
+  return version;
 }
 
 export function StudentViewStage({
@@ -72,28 +104,46 @@ export function StudentViewStage({
   mode: StudentViewMode;
   className?: string;
 }) {
+  void code;
   useTeacherOnlySubscriptions(mode);
+  const room = useRoomContext();
   const compact = mode === 'preview';
   const remotes = useRemoteParticipants();
-  const teacherHere = remotes.some((p) => isTeacherParticipant(p, NO_TEACHERS));
-  const tracks = useTracks(
-    [
-      { source: Track.Source.ScreenShare, withPlaceholder: false },
-      { source: Track.Source.Camera, withPlaceholder: false },
-    ],
-    { onlySubscribed: true }
-  );
-  const teacherTracks = tracks.filter(isTrackReference).filter(
-    (t) => !t.participant.isLocal && isTeacherParticipant(t.participant, NO_TEACHERS) && !t.publication?.isMuted
-  );
-  const screen = teacherTracks.find((t) => t.source === Track.Source.ScreenShare);
-  const camera = teacherTracks.find((t) => t.source === Track.Source.Camera);
+  const teachers = Array.from(room.remoteParticipants.values()).filter((p) => isTeacherParticipant(p, NO_TEACHERS));
+  const teacherHere = teachers.length > 0 || remotes.some((p) => isTeacherParticipant(p, NO_TEACHERS));
+
+  // Pick tracks straight from the teacher participants (incl. the share sidecar):
+  // screen share first (sidecar or the teacher's own), camera as fallback.
+  let screen: TrackReference | undefined;
+  let camera: TrackReference | undefined;
+  let sharePublished = false;
+  for (const p of teachers) {
+    p.trackPublications.forEach((pub) => {
+      if (!isVideoPub(pub) || pub.isMuted) return;
+      const share = isSharePub(p, pub);
+      if (share) sharePublished = true;
+      if (!pub.isSubscribed || !pub.track) return;
+      const ref: TrackReference = { participant: p, publication: pub, source: pub.source };
+      if (share) {
+        if (!screen || isShareParticipant(p.identity)) screen = ref;
+      } else if (pub.source === Track.Source.Camera && !camera && !isShareParticipant(p.identity)) camera = ref;
+    });
+  }
+  const placeholder = sharePublished
+    ? 'Teacher is sharing the screen…'
+    : teacherHere
+      ? 'Teacher camera off'
+      : 'Waiting for teacher…';
 
   return (
     <div className={cn('relative h-full w-full overflow-hidden bg-ink-950', className)}>
       {screen ? (
         <>
-          <TeacherScreenStage teacherIdentities={[]} />
+          {screen.source === Track.Source.ScreenShare && !compact ? (
+            <TeacherScreenStage teacherIdentities={[]} />
+          ) : (
+            <VideoTrack trackRef={screen} className="h-full w-full bg-black object-contain" />
+          )}
           {!compact && camera && (
             <ObserverCameraFloat>
               <VideoTrack trackRef={camera} className="pointer-events-none h-full w-full object-cover" />
@@ -105,7 +155,7 @@ export function StudentViewStage({
       ) : (
         <div className="flex h-full w-full flex-col items-center justify-center gap-2 px-3 text-center text-slate-400">
           <IconScreen size={compact ? 22 : 32} />
-          <p className={compact ? 'text-xs' : 'text-sm'}>{teacherHere ? 'Teacher camera off' : 'Waiting for teacher…'}</p>
+          <p className={compact ? 'text-xs' : 'text-sm'}>{placeholder}</p>
         </div>
       )}
     </div>
