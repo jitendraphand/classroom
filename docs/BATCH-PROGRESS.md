@@ -20,3 +20,4 @@ Items: 1 sync+batch erase, 2 native sidecar publisher (Option A), 3 annotate too
 - [x] 5 Rotation tiles: only admitted students still in the LiveKit room (presentStudents).
 - [x] 6 Student ink → overlay: path verified by reading (server data packet topic `draw`, participant undefined → classSession → student-ink IPC → overlay drawStudentInk → ink layer composited/sent to sidecar); extracted shared/studentInk.ts and covered bytes→strokes→canvas pixels in tests. No bug found. Gap noted: window shares map ink to the whole monitor.
 - Tests: tests/round6.test.ts (13); full suite passes.
+- [x] Build: setup 97,153,035 B / portable 96,946,246 B (helper rebuilt with mingw; share-sidecar.exe reused, Rust unchanged — rustup has no default toolchain on the box now). Release windows-debug-20261014 published (pre-release), asset sizes verified.
