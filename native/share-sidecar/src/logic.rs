@@ -1,6 +1,25 @@
 //! Pure helpers (unit-tested on Linux with `cargo test`).
 use std::time::{Duration, Instant};
 
+/// Encoder profile for one share mode.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub struct ShareProfile {
+    /// WebRTC screen content (text detail, screenshare rate control) vs motion.
+    pub screencast: bool,
+    pub max_fps: u32,
+    pub max_bitrate: u64,
+}
+
+/// Slides: screen content at the slide rate. Video mode: motion (not
+/// screencast) at the video rate (≤30) and the video bitrate.
+pub fn share_profile(video: bool, slides_fps: u32, video_fps: u32, max_bitrate: u64, video_bitrate: u64) -> ShareProfile {
+    if video {
+        ShareProfile { screencast: false, max_fps: video_fps.clamp(1, 30), max_bitrate: video_bitrate.max(max_bitrate) }
+    } else {
+        ShareProfile { screencast: true, max_fps: slides_fps.clamp(1, 30), max_bitrate }
+    }
+}
+
 pub struct InkLayer {
     pub fw: u32,
     pub fh: u32,
@@ -91,6 +110,15 @@ impl Pacer {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn slides_are_screen_content_video_is_motion_30() {
+        let slides = share_profile(false, 8, 30, 700_000, 1_500_000);
+        assert_eq!(slides, ShareProfile { screencast: true, max_fps: 8, max_bitrate: 700_000 });
+        let video = share_profile(true, 8, 30, 700_000, 1_500_000);
+        assert_eq!(video, ShareProfile { screencast: false, max_fps: 30, max_bitrate: 1_500_000 });
+        assert_eq!(share_profile(true, 8, 60, 1, 1).max_fps, 30);
+    }
+
     use super::*;
 
     #[test]

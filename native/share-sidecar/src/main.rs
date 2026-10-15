@@ -27,7 +27,7 @@ use livekit::webrtc::prelude::{AudioFrame, I420Buffer, VideoFrame, VideoRotation
 use livekit::webrtc::rtp_sender::VideoEncoderBackend;
 use livekit::webrtc::video_source::native::NativeVideoSource;
 use livekit::webrtc::video_source::{RtcVideoSource, VideoResolution};
-use logic::{composite_ink, crop_rect, even, InkLayer, Pacer};
+use logic::{composite_ink, crop_rect, even, share_profile, InkLayer, Pacer};
 use serde::Deserialize;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
@@ -363,41 +363,51 @@ async fn main() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     };
     let (_, _, cw0, ch0) = crop_rect(fw, fh, cfg.crop.map(|c| (c.x, c.y, c.w, c.h)));
-    let source = NativeVideoSource::new(VideoResolution { width: cw0, height: ch0 }, true);
-    let track = LocalVideoTrack::create_video_track("screen", RtcVideoSource::Native(source.clone()));
     let backend = match cfg.encoder.as_deref() {
         Some("software") => VideoEncoderBackend::Software,
         _ => VideoEncoderBackend::Hardware, // falls back to software when no hardware encoder exists
     };
     let vp9 = cfg.codec.as_deref() != Some("vp8");
-    let publish = |codec: VideoCodec, svc: Option<String>| TrackPublishOptions {
-        source: TrackSource::Screenshare,
-        video_codec: codec,
-        simulcast: false,
-        scalability_mode: svc,
-        video_encoder: backend,
-        video_encoding: Some(VideoEncoding { max_bitrate: cfg.max_bitrate.max(cfg.video_bitrate), max_framerate: cfg.video_fps.max(cfg.fps) as f64 }),
-        ..Default::default()
-    };
     let lp = room.local_participant();
-    let mut published = None;
-    if vp9 {
-        match lp.publish_track(LocalTrack::Video(track.clone()), publish(VideoCodec::VP9, Some("L1T3".into()))).await {
-            Ok(p) => published = Some(p),
-            Err(e) => event("vp9-failed", &e.to_string()),
-        }
-    }
-    if published.is_none() {
-        match lp.publish_track(LocalTrack::Video(track.clone()), publish(VideoCodec::VP8, None)).await {
-            Ok(p) => published = Some(p),
-            Err(e) => {
-                event("error", &format!("publish: {e}"));
-                let _ = child.kill();
-                std::process::exit(6);
+    // Slides: screen content (detail) at the slide rate. Video mode: a
+    // non-screencast source (WebRTC's "motion" content type: camera-like rate
+    // control, no screenshare frame dropping) at the video rate. The content
+    // type is fixed when a source is created and the LiveKit SDK does not
+    // expose the RTP sender, so a mode switch republishes the track.
+    let publish_profile = |video: bool| {
+        let lp = lp.clone();
+        let prof = share_profile(video, cfg.fps, cfg.video_fps, cfg.max_bitrate, cfg.video_bitrate);
+        async move {
+            let source = NativeVideoSource::new(VideoResolution { width: cw0, height: ch0 }, prof.screencast);
+            let track = LocalVideoTrack::create_video_track("screen", RtcVideoSource::Native(source.clone()));
+            let opts = |codec: VideoCodec, svc: Option<String>| TrackPublishOptions {
+                source: TrackSource::Screenshare,
+                video_codec: codec,
+                simulcast: false,
+                scalability_mode: svc,
+                video_encoder: backend,
+                video_encoding: Some(VideoEncoding { max_bitrate: prof.max_bitrate, max_framerate: prof.max_fps as f64 }),
+                ..Default::default()
+            };
+            if vp9 {
+                match lp.publish_track(LocalTrack::Video(track.clone()), opts(VideoCodec::VP9, Some("L1T3".into()))).await {
+                    Ok(p) => return Ok((source, p, "vp9")),
+                    Err(e) => event("vp9-failed", &e.to_string()),
+                }
             }
+            lp.publish_track(LocalTrack::Video(track), opts(VideoCodec::VP8, None)).await.map(|p| (source, p, "vp8"))
         }
-    }
-    event("published", if vp9 { "vp9" } else { "vp8" });
+    };
+    let (mut source, mut published, codec) = match publish_profile(false).await {
+        Ok(v) => v,
+        Err(e) => {
+            event("error", &format!("publish: {e}"));
+            let _ = child.kill();
+            std::process::exit(6);
+        }
+    };
+    let mut cur_video = false;
+    event("published", codec);
 
     // 3. Share audio (published once; frames flow only while on).
     #[cfg(windows)]
@@ -431,6 +441,27 @@ async fn main() {
     while !shared.stop.load(Ordering::Acquire) {
         let fps = shared.fps.load(Ordering::Acquire).max(1);
         tokio::time::sleep(Duration::from_millis(5)).await;
+        let want_video = shared.video_mode.load(Ordering::Acquire);
+        if want_video != cur_video {
+            // Publish the new profile first, then drop the old track: students
+            // switch to the new screen-share track with only a short gap.
+            match publish_profile(want_video).await {
+                Ok((s2, p2, c2)) => {
+                    let old = std::mem::replace(&mut published, p2);
+                    let _ = lp.unpublish_track(&old.sid()).await;
+                    source = s2;
+                    cur_video = want_video;
+                    pacer = Pacer::new();
+                    shared.fresh.store(true, Ordering::Release);
+                    event("republished", &format!("{} {}", if want_video { "video" } else { "slides" }, c2));
+                }
+                Err(e) => {
+                    // Keep the current track; retry only on the next switch.
+                    event("mode-failed", &e.to_string());
+                    cur_video = want_video;
+                }
+            }
+        }
         let now = Instant::now();
         let fresh = shared.fresh.load(Ordering::Acquire);
         let ink = shared.dirty_ink.load(Ordering::Acquire);
@@ -469,9 +500,7 @@ async fn main() {
         }
     }
     let _ = child.kill();
-    if let Some(p) = published {
-        let _ = lp.unpublish_track(&p.sid()).await;
-    }
+    let _ = lp.unpublish_track(&published.sid()).await;
     let _ = room.close().await;
     event("stopped", "");
     let _ = even(0);
