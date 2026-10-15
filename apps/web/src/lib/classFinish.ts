@@ -28,3 +28,10 @@ export function finishCopy(r: FinishReason): { title: string; body: string } {
       return { title: 'Class ended', body: 'Your teacher has ended this class. You can close this tab.' };
   }
 }
+
+/** The "class ended" screen (teacher: finished screen after End class, instead of jumping to the dashboard). */
+export function classEndedCopy(isTeacher: boolean): { title: string; body: string } {
+  return isTeacher
+    ? { title: 'Class finished', body: 'The class has ended for everyone and attendance is saved. You can go back to your dashboard.' }
+    : { title: 'Class ended', body: 'Your teacher has ended this class. You can leave this page.' };
+}

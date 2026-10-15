@@ -9,7 +9,8 @@ import { ensureRedis, keys } from '@/lib/redis';
 import { audienceIncludes, formatAudience } from '@/lib/grades';
 import { manualStudentJoinAllowed } from '@/lib/schoolConfig';
 import { decodeFocus } from '@/lib/focusStatus';
-import { currentHolder, drawRequests } from '@/lib/drawServer';
+import { currentHolders, drawRequests } from '@/lib/drawServer';
+import { goneStudentIdentities } from '@/lib/studentPresence';
 
 export const dynamic = 'force-dynamic';
 
@@ -139,7 +140,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   await ensureSampleFresh(code);
   const redis = await ensureRedis();
   // Independent reads, issued together (ioredis pipelines them on one socket).
-  const [{ visible }, mutedIds, handList, handTimes, stageRaw, focusRaw, drawHolder, drawReqs, desktopInkRaw, panelRaw] = await Promise.all([
+  const [{ visible }, mutedIds, handList, handTimes, stageRaw, focusRaw, drawHolders, drawReqs, desktopInkRaw, panelRaw] = await Promise.all([
     getVisibleSample(code),
     redis.smembers(keys.muted(code)),
     redis.smembers(keys.hands(code)),
@@ -147,11 +148,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     redis.get(keys.stage(code)),
     // Students' fullscreen / focus status, teacher only.
     isTeacher ? redis.hgetall(keys.focus(code)) : Promise.resolve({} as Record<string, string>),
-    currentHolder(code, redis),
+    currentHolders(code, redis),
     drawRequests(code, redis),
     redis.get(keys.desktopInk(code)),
     redis.get(keys.videoPanel(code)),
   ]);
+  const drawingIds = new Set(drawHolders.map((h) => h.participantId));
+  // Back-compat single holder: a drawing student sees their own allow (timer).
+  const drawHolder = drawHolders.find((h) => !isTeacher && h.participantId === access.student?.id) || drawHolders[0] || null;
   const drawReqAt = new Map(drawReqs.map((d) => [d.id, d.at]));
   const handSet = handList.map(String);
   const handAt = (id: string) => (handTimes[id] ? Number(handTimes[id]) : null);
@@ -205,7 +209,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       adHocClass: !!classSession?.adHoc,
     };
   };
-  const admitted = room.participants.filter((p) => p.status === 'ADMITTED');
+  // Students whose tab closed / connection died drop off the roster after a
+  // short grace (LiveKit webhook, lib/studentPresence), even without /leave.
+  const gone = isTeacher ? await goneStudentIdentities(code) : new Set<string>();
+  const admitted = room.participants.filter(
+    (p) => p.status === 'ADMITTED' && !(p.role === 'STUDENT' && gone.has(p.livekitIdentity))
+  );
 
   const me = isTeacher
     ? room.participants.find((p) => p.role === 'TEACHER')
@@ -231,7 +240,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
         camWanted: camWanted({ isTeacher, inSample: canPublishVideo, panelRaw }),
         handRaised: raisedHands.includes(me.id),
         drawRequested: drawReqAt.has(me.id),
-        canDraw: drawHolder?.participantId === me.id,
+        canDraw: drawingIds.has(me.id),
       }
     : null;
 
@@ -278,7 +287,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
             drawRequestedAt: drawReqAt.get(p.id) ?? null,
           }
         : {}),
-      drawing: p.role === 'STUDENT' && drawHolder?.participantId === p.id,
+      drawing: p.role === 'STUDENT' && drawingIds.has(p.id),
       ...rosterInfo(p),
       ...focusOf(p),
     })),
@@ -289,10 +298,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     /** The share already shows student ink (drawn on the teacher's desktop): skip the stroke overlay. */
     desktopInk: stageMode === 'screen' && desktopInkRaw === '1',
     videoPanelOpen: panelRaw !== '0',
-    /** Student allowed to draw on the share now (one at a time), for everyone. */
+    /** Student allowed to draw on the share now (back-compat: first one, or me), for everyone. */
     drawHolder: drawHolder
       ? { participantId: drawHolder.participantId, identity: drawHolder.identity, name: drawHolder.name, until: drawHolder.until }
       : null,
+    /** Every student drawing now (several at once). */
+    drawHolders: drawHolders.map((h) => ({ participantId: h.participantId, identity: h.identity, name: h.name, until: h.until })),
     drawRequestCount: isTeacher ? drawReqs.length : undefined,
     /** Teacher: students whose newer device took over their seat (toast). */
     takeovers: isTeacher ? await recentTakeovers(code) : undefined,

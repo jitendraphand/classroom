@@ -79,6 +79,40 @@ export type DrawPacket =
   | { v: 1; t: 'del'; id: string }
   | { v: 1; t: 'clear' };
 
+/** How many students may draw at the same time. */
+export const MAX_DRAWERS = 6;
+
+/**
+ * Active holders from the stored hash values (participantId -> JSON), earliest
+ * allow first. Returns the active list and the ids that expired / are corrupt.
+ */
+export function parseHolders(raw: Record<string, string>, now = Date.now()): { active: DrawHolder[]; expired: string[] } {
+  const active: DrawHolder[] = [];
+  const expired: string[] = [];
+  for (const [id, json] of Object.entries(raw)) {
+    let h: DrawHolder | null = null;
+    try {
+      const v = JSON.parse(json) as DrawHolder;
+      if (v && typeof v.identity === 'string' && typeof v.until === 'number') h = v;
+    } catch {
+      /* corrupt */
+    }
+    if (h && holderActive(h, now)) active.push(h);
+    else expired.push(id);
+  }
+  active.sort((a, b) => a.until - b.until || a.name.localeCompare(b.name));
+  return { active, expired };
+}
+
+/** "A is drawing" / "A and B are drawing" / "A, B and 2 more are drawing". */
+export function drawersLabel(names: readonly string[]): string {
+  if (!names.length) return '';
+  if (names.length === 1) return `${names[0]} is drawing`;
+  if (names.length === 2) return `${names[0]} and ${names[1]} are drawing`;
+  if (names.length === 3) return `${names[0]}, ${names[1]} and ${names[2]} are drawing`;
+  return `${names[0]}, ${names[1]} and ${names.length - 2} more are drawing`;
+}
+
 export function holderActive(h: DrawHolder | null | undefined, now = Date.now()): h is DrawHolder {
   return !!h && h.until > now;
 }

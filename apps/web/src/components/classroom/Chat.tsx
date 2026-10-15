@@ -331,6 +331,11 @@ export function ChatView({
             To <span className="font-medium text-slate-200">teacher</span>
           </p>
         )}
+        {!ended && isTeacher && toName && (
+          <p className="chat-replying text-2xs font-semibold text-sky-300" aria-live="polite" data-replying-to={to}>
+            Replying privately to {toName}
+          </p>
+        )}
         {!ended && (
           <div className="flex gap-2">
             <input

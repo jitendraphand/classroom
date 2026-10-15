@@ -364,11 +364,12 @@ body {
   .roster-row-raised {
     @apply border-amber-400/30 bg-amber-500/10;
   }
+  /* The name wraps instead of being cut off; the campus/division meta gives way first. */
   .roster-name {
-    @apply min-w-0 truncate font-medium text-slate-100;
+    @apply min-w-[4.5rem] flex-1 break-words font-medium leading-tight text-slate-100;
   }
   .roster-meta {
-    @apply shrink-0 text-[10px] text-slate-400;
+    @apply min-w-0 max-w-[40%] shrink truncate text-[10px] text-slate-400;
   }
   .roster-hand {
     @apply inline-flex shrink-0 text-amber-300;

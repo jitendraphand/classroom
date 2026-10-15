@@ -12,6 +12,7 @@ import { Card } from '@/components/ui/Card';
 import { markSchoolStudentTab, rememberClassroomRole } from '@/lib/classroomClient';
 import { PageLoading } from '@/components/ui/Skeleton';
 import { SchoolAppOnly } from '@/components/join/SchoolAppOnly';
+import { lobbyEndedFor } from '@/lib/lobbyState';
 
 type State = {
   code?: string;
@@ -24,6 +25,7 @@ type State = {
   teacherSessionActive?: boolean;
   teacherSessionName?: string;
   actingAsStudent?: boolean;
+  meLeft?: boolean;
 };
 
 export default function JoinRoomPage() {
@@ -36,6 +38,11 @@ export default function JoinRoomPage() {
   const [loading, setLoading] = useState(false);
   const [waiting, setWaiting] = useState(search.get('waiting') === '1');
   const [roomInfo, setRoomInfo] = useState<State | null>(null);
+  // The name from the last answer that had it: once the class ends the state
+  // answer no longer says who this is, and the greeting must keep the name.
+  const [myName, setMyName] = useState('');
+  // The class ended (or this seat was closed) while waiting in the lobby.
+  const [lobbyEnded, setLobbyEnded] = useState(false);
   const [teacherSession, setTeacherSession] = useState<{ name: string | null } | null>(null);
   const [continueAsStudent, setContinueAsStudent] = useState(
     search.get('as') === 'student' || search.get('as') === '1'
@@ -49,6 +56,8 @@ export default function JoinRoomPage() {
       return;
     }
     setRoomInfo(data);
+    if (data.me?.displayName) setMyName(data.me.displayName);
+    if (lobbyEndedFor(data)) setLobbyEnded(true);
     if (data.me?.viaSchoolApp) markSchoolStudentTab();
     if (data.teacherSessionActive) {
       setTeacherSession({ name: data.teacherSessionName || null });
@@ -79,12 +88,12 @@ export default function JoinRoomPage() {
 
   const hidden = usePageHidden();
   useEffect(() => {
-    if (!waiting) return;
+    if (!waiting || lobbyEnded) return;
     // Back off while the tab is hidden; check at once when it comes back.
     if (!hidden) void poll();
     const t = setInterval(poll, waitingPollMs(hidden));
     return () => clearInterval(t);
-  }, [waiting, poll, hidden]);
+  }, [waiting, poll, hidden, lobbyEnded]);
 
   async function enableStudentMode() {
     await fetch('/api/auth/act-as', {
@@ -138,6 +147,27 @@ export default function JoinRoomPage() {
 
   // Until the first poll says who this is (or while an admitted student is
   // being sent into the class), show a neutral state, not a nameless lobby.
+  if (waiting && lobbyEnded) {
+    return (
+      <main className="mx-auto flex min-h-screen max-w-lg flex-col items-center justify-center px-5 py-10 text-center sm:px-6">
+        <Card className="w-full p-10 text-center">
+          <h1 className="font-display text-2xl font-semibold tracking-tight">Class ended</h1>
+          <p className="mt-3 text-slate-300">
+            {myName ? `Sorry, ${myName} — ` : ''}
+            <strong className="text-white">{roomInfo?.name || code}</strong> has ended before you were let in.
+          </p>
+          <p className="mt-2 text-sm text-slate-400">You can close this tab.</p>
+        </Card>
+        <Link
+          href={roomInfo?.me?.viaSchoolApp ? '/student' : '/'}
+          className="mt-6 text-sm text-slate-500 transition hover:text-slate-300"
+        >
+          Back
+        </Link>
+      </main>
+    );
+  }
+
   if (waiting && !error && (!roomInfo || roomInfo.me?.status === 'ADMITTED')) {
     return <PageLoading label={roomInfo ? 'Entering class…' : 'Joining class…'} />;
   }
@@ -153,7 +183,7 @@ export default function JoinRoomPage() {
           </div>
           <h1 className="font-display text-2xl font-semibold tracking-tight">Waiting room</h1>
           <p className="mt-3 text-slate-300">
-            Hi{roomInfo?.me?.displayName ? `, ${roomInfo.me.displayName}` : ''} — you&apos;re in the
+            Hi{(roomInfo?.me?.displayName || myName) ? `, ${roomInfo?.me?.displayName || myName}` : ''} — you&apos;re in the
             lobby for <strong className="text-white">{roomInfo?.name || code}</strong>.
           </p>
           <p className="mt-2 text-sm text-slate-400">

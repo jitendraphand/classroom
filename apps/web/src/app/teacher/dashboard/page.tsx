@@ -12,6 +12,7 @@ import { PageLoading } from '@/components/ui/Skeleton';
 import { claimTeacherTab } from '@/lib/classroomClient';
 import { api } from '@/lib/clientFetch';
 import { loginHref } from '@/lib/sessionClient';
+import { adhocProblem } from '@/lib/adhocForm';
 
 type Me = { role: string; name?: string; email?: string; permanentCode?: string; mustChangePassword?: boolean };
 type ClassItem = {
@@ -62,6 +63,7 @@ export default function TeacherDashboard() {
   const [maxVisible, setMaxVisible] = useState(6);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [lastStart, setLastStart] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [adhoc, setAdhoc] = useState({ campus: '', grade: '', divisions: [] as string[], all: false, extra: '', subject: '' });
 
@@ -112,6 +114,15 @@ export default function TeacherDashboard() {
   useEffect(() => {
     if ((!adhoc.grade || !grades.includes(adhoc.grade)) && grades.length) setAdhoc((a) => ({ ...a, grade: grades[0]!, divisions: [], all: false }));
   }, [grades, adhoc.grade]);
+  // Tick the first division of the chosen grade by default (Start used to do
+  // nothing visible with every box unticked).
+  useEffect(() => {
+    const first = gradeDivs[0]?.name;
+    if (first && !adhoc.all && adhoc.divisions.length === 0 && !adhoc.extra)
+      setAdhoc((a) => (a.divisions.length || a.all ? a : { ...a, divisions: [first] }));
+    // Only when the grade (and so its divisions) changes.
+  }, [adhoc.campus, adhoc.grade, gradeDivs.length]);
+  const [adhocError, setAdhocError] = useState('');
 
   async function go(code: string) {
     await claimTeacherTab(code);
@@ -119,6 +130,7 @@ export default function TeacherDashboard() {
   }
 
   async function start(body: Record<string, unknown>, id: string) {
+    setLastStart(id);
     setBusy(id);
     setError('');
     const { ok, data } = await api<{ code: string }>('/api/teacher/sessions/start', {
@@ -140,10 +152,9 @@ export default function TeacherDashboard() {
       .map((d) => d.trim())
       .filter(Boolean);
     const divisions = [...adhoc.divisions.filter((d) => d !== '*'), ...extra];
-    if (!adhoc.all && !divisions.length) {
-      setError('Pick at least one division.');
-      return;
-    }
+    const problem = adhocProblem({ campus: adhoc.campus, grade: adhoc.grade, all: adhoc.all, divisions });
+    setAdhocError(problem ?? '');
+    if (problem) return;
     void start(
       { kind: 'adhoc', campus: adhoc.campus, grade: adhoc.grade, divisions, allDivisions: adhoc.all, subject: adhoc.subject || undefined },
       'adhoc'
@@ -326,19 +337,23 @@ export default function TeacherDashboard() {
                       type="checkbox"
                       disabled={adhoc.all}
                       checked={adhoc.divisions.includes(d.name)}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        setAdhocError('');
                         setAdhoc({
                           ...adhoc,
                           divisions: e.target.checked ? [...adhoc.divisions, d.name] : adhoc.divisions.filter((x) => x !== d.name),
-                        })
-                      }
+                        });
+                      }}
                     />
                     {adhoc.grade}-{d.label}
                   </label>
                 ))}
                 {wholeGrade && (
                   <label className="flex items-center gap-2 text-sm">
-                    <input type="checkbox" checked={adhoc.all} onChange={(e) => setAdhoc({ ...adhoc, all: e.target.checked })} />
+                    <input type="checkbox" checked={adhoc.all} onChange={(e) => {
+                        setAdhocError('');
+                        setAdhoc({ ...adhoc, all: e.target.checked });
+                      }} />
                     All divisions of grade {adhoc.grade}
                   </label>
                 )}
@@ -363,6 +378,11 @@ export default function TeacherDashboard() {
               onChange={(e) => setMaxVisible(Number(e.target.value))}
               hint="Only this many student camera streams reach you. Others stay local-only on their devices."
             />
+            {(adhocError || (busy !== 'adhoc' && error && lastStart === 'adhoc')) && (
+              <p className="rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-2 text-sm text-danger-fg" role="alert">
+                {adhocError || error}
+              </p>
+            )}
             <Button type="submit" disabled={busy === 'adhoc'}>
               {busy === 'adhoc' ? 'Starting…' : 'Start ad-hoc class'}
             </Button>

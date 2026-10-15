@@ -10,7 +10,8 @@ import {
   allowDraw,
   appendPoints,
   clearDrawing,
-  currentHolder,
+  currentHolders,
+  holderFor,
   deleteOwnStroke,
   deleteStroke,
   deleteStrokes,
@@ -65,8 +66,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   const studentOk = access.mode === 'student' && access.student?.status === 'ADMITTED';
   if (!access.isTeacher && !studentOk && !(await getAdminSession())) return jsonError('Unauthorized', 401);
   const redis = await ensureRedis();
-  const [holder, strokes] = await Promise.all([currentHolder(code, redis), listStrokes(code, redis)]);
-  return jsonOk({ holder, strokes });
+  const [holders, strokes] = await Promise.all([currentHolders(code, redis), listStrokes(code, redis)]);
+  return jsonOk({ holder: holders[0] ?? null, holders, strokes });
 }
 
 export async function POST(req: Request, { params }: { params: Promise<{ code: string }> }) {
@@ -100,7 +101,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
         return jsonOk({ ok: true });
       }
       if (body.action === 'revoke') {
-        await revokeDraw(code, { clear: true });
+        // With participantId: only that student stops (their strokes go); without: everyone.
+        await revokeDraw(code, { clear: true, participantId: body.participantId });
         if (body.participantId) await setDrawRequest(code, body.participantId, false);
         return jsonOk({ ok: true });
       }
@@ -125,10 +127,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
       return jsonOk({ ok: true });
     }
 
-    const holder = await currentHolder(code);
-    const mine = !!holder && holder.participantId === me.id;
+    const holder = await holderFor(code, me.id);
+    const mine = !!holder;
     if (body.action === 'release') {
-      if (mine) await revokeDraw(code, { clear: false });
+      if (mine) await revokeDraw(code, { clear: false, participantId: me.id });
       return jsonOk({ ok: true });
     }
     if (!mine || !holder) return jsonError('Not allowed to draw', 403);

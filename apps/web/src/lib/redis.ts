@@ -54,9 +54,13 @@ export const keys = {
   drawRequests: (code: string) => `room:${code}:draw-req`,
   /** JSON DrawHolder: the ONE student allowed to draw now (with its end time). */
   drawHolder: (code: string) => `room:${code}:draw-holder`,
+  /** Hash participantId -> DrawHolder JSON (several students may draw at once). */
+  drawHolders: (code: string) => `room:${code}:draw-holders`,
   /** Hash stroke id -> JSON Stroke, and the drawing order (list of ids). */
   drawStrokes: (code: string) => `room:${code}:draw-strokes`,
   drawOrder: (code: string) => `room:${code}:draw-order`,
+  /** Student LiveKit presence: hash identity -> JSON {sid, gone?: ms} (lib/studentPresence). */
+  studentLive: (code: string) => `room:${code}:student-live`,
   /** JSON {s: sessionId, p: boolean}: is the teacher connected to the LiveKit room (webhook / probe) */
   teacherPresent: (code: string) => `room:${code}:teacher-present`,
   /** '1': this student session token was taken over by another device (lib/deviceTakeover). */

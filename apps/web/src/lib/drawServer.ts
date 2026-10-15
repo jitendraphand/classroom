@@ -1,6 +1,6 @@
 /**
  * Server side of student drawing on the shared screen (see lib/drawLogic.ts
- * for the overview). Redis holds the requests, the single holder and the
+ * for the overview). Redis holds the requests, the holders (several at once) and the
  * strokes; packets to clients go out as server-originated LiveKit data.
  */
 import { ensureRedis, keys } from './redis';
@@ -10,8 +10,9 @@ import {
   DRAW_ALLOW_MS,
   DRAW_TOPIC,
   MAX_STROKE_POINTS,
+  MAX_DRAWERS,
   MAX_STROKES,
-  holderActive,
+  parseHolders,
   type DrawColor,
   type DrawHolder,
   type DrawPacket,
@@ -27,28 +28,28 @@ async function send(code: string, packet: DrawPacket) {
   if (name) await sendRoomData(name, packet, { topic: DRAW_TOPIC });
 }
 
-function parseHolder(raw: string | null): DrawHolder | null {
-  if (!raw) return null;
-  try {
-    const h = JSON.parse(raw) as DrawHolder;
-    return h && typeof h.identity === 'string' && typeof h.until === 'number' ? h : null;
-  } catch {
-    return null;
+/**
+ * Students allowed to draw now (several at once, up to MAX_DRAWERS), earliest
+ * allow first. Expired allows are removed here (the state route calls this on
+ * every poll), and everyone is told.
+ */
+export async function currentHolders(code: string, redis?: R): Promise<DrawHolder[]> {
+  const r = redis ?? (await ensureRedis());
+  const { active, expired } = parseHolders(await r.hgetall(keys.drawHolders(code)));
+  if (expired.length) {
+    await r.hdel(keys.drawHolders(code), ...expired);
+    nudgeRoomState(code, 'all');
   }
+  return active;
 }
 
-/**
- * The current holder, or null. An expired allow is removed here (the state
- * route calls this on every poll), and everyone is told.
- */
+/** The first holder (back-compat for older clients), or null. */
 export async function currentHolder(code: string, redis?: R): Promise<DrawHolder | null> {
-  const r = redis ?? (await ensureRedis());
-  const h = parseHolder(await r.get(keys.drawHolder(code)));
-  if (!h) return null;
-  if (holderActive(h)) return h;
-  await r.del(keys.drawHolder(code));
-  nudgeRoomState(code, 'all');
-  return null;
+  return (await currentHolders(code, redis))[0] ?? null;
+}
+
+export async function holderFor(code: string, participantId: string, redis?: R): Promise<DrawHolder | null> {
+  return (await currentHolders(code, redis)).find((h) => h.participantId === participantId) ?? null;
 }
 
 /** Request ids with request time, earliest first. */
@@ -70,27 +71,51 @@ export async function setDrawRequest(code: string, participantId: string, on: bo
   nudgeRoomState(code, { participantIds: [participantId] });
 }
 
-/** Allow ONE student (replaces any other holder; their strokes stay). */
+/**
+ * Allow a student to draw. Other students who are drawing keep drawing (up to
+ * MAX_DRAWERS at once); allowing the same student again extends the time.
+ */
 export async function allowDraw(code: string, p: { id: string; livekitIdentity: string; displayName: string }, now = Date.now()) {
   const r = await ensureRedis();
+  const others = (await currentHolders(code, r)).filter((h) => h.participantId !== p.id);
+  if (others.length >= MAX_DRAWERS) {
+    throw new DrawError(`Up to ${MAX_DRAWERS} students can draw at once. Revoke someone first.`, 409);
+  }
   const holder: DrawHolder = { participantId: p.id, identity: p.livekitIdentity, name: p.displayName, until: now + DRAW_ALLOW_MS };
   await r
     .multi()
-    .set(keys.drawHolder(code), JSON.stringify(holder), 'PX', DRAW_ALLOW_MS + 60_000)
+    .hset(keys.drawHolders(code), p.id, JSON.stringify(holder))
+    .expire(keys.drawHolders(code), TTL_S)
     .hdel(keys.drawRequests(code), p.id)
     .exec();
   nudgeRoomState(code, 'all');
   return holder;
 }
 
-/** End the allow. `clear` also wipes every stroke (teacher Revoke, share stopped). */
-export async function revokeDraw(code: string, opts: { clear: boolean; clearRequests?: boolean }) {
+/**
+ * End allows. With `participantId` only that student stops (and with `clear`
+ * only their strokes go); without it everyone stops (and `clear` wipes every
+ * stroke: teacher Revoke all, share stopped).
+ */
+export async function revokeDraw(code: string, opts: { clear: boolean; clearRequests?: boolean; participantId?: string }) {
   const r = await ensureRedis();
-  const m = r.multi().del(keys.drawHolder(code));
-  if (opts.clearRequests) m.del(keys.drawRequests(code));
-  await m.exec();
-  if (opts.clear) await clearDrawing(code);
+  if (opts.participantId) {
+    const h = await holderFor(code, opts.participantId, r);
+    await r.hdel(keys.drawHolders(code), opts.participantId);
+    if (opts.clear && h) await deleteStrokesBy(code, h.identity);
+  } else {
+    const m = r.multi().del(keys.drawHolders(code), keys.drawHolder(code));
+    if (opts.clearRequests) m.del(keys.drawRequests(code));
+    await m.exec();
+    if (opts.clear) await clearDrawing(code);
+  }
   nudgeRoomState(code, 'all');
+}
+
+/** Remove every stroke of one student (their allow was revoked). */
+export async function deleteStrokesBy(code: string, identity: string) {
+  const ids = (await listStrokes(code)).filter((s) => s.by === identity).map((s) => s.id);
+  if (ids.length) await deleteStrokes(code, ids);
 }
 
 export async function clearDrawing(code: string) {

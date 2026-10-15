@@ -987,7 +987,7 @@ function HudDrawing({
     <div className="tsh-draw" style={{ marginBottom: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
         <span className="tsh-panel-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-          <IconPen size={12} /> {holderName ? `${holderName} is drawing` : 'Drawing'}
+          <IconPen size={12} /> {holderName ? `${holderName} ${holderName.includes(', ') ? 'are' : 'is'} drawing` : 'Drawing'}
         </span>
         <span style={{ flex: 1 }} />
         {onClear && d.strokes.length > 0 && (

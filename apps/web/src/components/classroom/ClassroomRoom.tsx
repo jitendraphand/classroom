@@ -1,6 +1,7 @@
 'use client';
 
-import { finishCopy, finishFromState, type FinishReason } from '@/lib/classFinish';
+import { selfTileLabel } from '@/lib/rosterLabels';
+import { classEndedCopy, finishCopy, finishFromState, type FinishReason } from '@/lib/classFinish';
 import { freshTakeovers, takeoverToastText } from '@/lib/deviceTakeover';
 import { CLASS_FINISHED_EVENT } from '@/lib/classFinishEvent';
 import dynamic from 'next/dynamic';
@@ -386,7 +387,7 @@ function EntireShareDrawingPreview() {
     <div className="mt-3 text-left">
       <p className="mb-1 inline-flex items-center gap-1 text-2xs font-semibold text-slate-300">
         <IconPen size={12} />
-        {d.holder ? `${d.holder.name} is drawing` : 'Student drawing'} (what students see over your screen)
+        {d.holder ? `${d.holder.name} ${d.holder.name.includes(', ') ? 'are' : 'is'} drawing` : 'Student drawing'} (what students see over your screen)
       </p>
       <div className="draw-preview" style={{ aspectRatio: String(aspect) }}>
         <DrawOverlay aspect={aspect} interactive={false} />
@@ -407,7 +408,7 @@ function EntireShareDrawingPreview() {
             className="rounded-lg border border-red-400/30 bg-red-500/10 px-2.5 py-1 text-2xs font-semibold text-red-200 hover:bg-red-500/20"
             onClick={() => void d.post({ action: 'revoke' })}
           >
-            Revoke {d.holder.name}
+            Revoke {d.holder.name.includes(', ') ? 'all' : d.holder.name}
           </button>
         )}
       </div>
@@ -1561,7 +1562,7 @@ function TeacherPeersFloat({
               return (
                 <PeerCamTile
                   key="self"
-                  name={`${selfName} (you)`}
+                  name={selfTileLabel(selfName)}
                   mediaTrack={selfTrack}
                   speaking={false}
                   pinned={false}
@@ -3171,8 +3172,9 @@ function RoomInner({
     if (!confirm('End class for everyone?')) return;
     await roomFetch(code, '/end', { method: 'POST' });
     room?.disconnect();
+    // Teacher: stay on the "Class finished" screen (it has a Dashboard button)
+    // instead of jumping straight back to the dashboard.
     onClassEnded();
-    router.push('/teacher/dashboard');
   }
 
   async function rotateSample() {
@@ -3478,7 +3480,13 @@ function RoomInner({
   }
   // —— Student drawing on the shared screen (ShareDrawing.tsx, lib/drawLogic.ts) ——
   const drawActions = useDrawingActions(code);
-  const drawHolder = state?.drawHolder ?? null;
+  const drawHolders = state?.drawHolders ?? (state?.drawHolder ? [state.drawHolder] : []);
+  const drawHolderNames = drawHolders.map((h) => h.name);
+  // Teacher views label every drawer; a student keeps their own allow (timer).
+  const drawHolder =
+    isTeacher && drawHolders.length > 1 && drawHolders[0]
+      ? { ...drawHolders[0], name: drawHolderNames.join(', ') }
+      : (state?.drawHolder ?? null);
   const sharingNow = isTeacher ? screenOn || stageMode === 'screen' : effectiveStage === 'screen';
   const [drawOverride, setDrawOverride] = useState<'off' | 'requested' | 'drawing' | null>(null);
   const serverDrawState: 'off' | 'requested' | 'drawing' = state?.me?.canDraw
@@ -3490,6 +3498,16 @@ function RoomInner({
     if (drawOverride !== null && drawOverride === serverDrawState) setDrawOverride(null);
   }, [drawOverride, serverDrawState]);
   const myDrawState = drawOverride ?? serverDrawState;
+  // Tell a student when their drawing stops without them asking (teacher
+  // revoked it, the time ran out, or the share stopped).
+  const prevServerDraw = useRef(serverDrawState);
+  useEffect(() => {
+    const prev = prevServerDraw.current;
+    prevServerDraw.current = serverDrawState;
+    if (isTeacher || prev !== 'drawing' || serverDrawState === 'drawing') return;
+    if (drawOverride === 'off') return; // I pressed Stop drawing myself.
+    setHudNotice('Your teacher stopped your drawing.');
+  }, [isTeacher, serverDrawState, drawOverride]);
   async function toggleDraw() {
     if (isTeacher) return;
     const prev = myDrawState;
@@ -3955,7 +3973,7 @@ function RoomInner({
                   {shownWaiting.map((p) => (
                     <li key={p.id} className="roster-row" title={rosterLabel(p)}>
                       <Avatar name={p.displayName} size="xs" />
-                      <span className="roster-name">{p.displayName}</span>
+                      <span className="roster-name" title={p.displayName}>{p.displayName}</span>
                       {p.gradeDivision && <span className="roster-meta">{p.gradeDivision}</span>}
                       {p.late && <span className="roster-chip roster-chip-red">Late</span>}
                       <span className="roster-actions">
@@ -4051,7 +4069,7 @@ function RoomInner({
                       </span>
                     )}
                     <Avatar name={p.displayName} size="xs" />
-                    <span className="roster-name">{p.displayName}</span>
+                    <span className="roster-name" title={p.displayName}>{p.displayName}</span>
                     {p.gradeDivision && <span className="roster-meta">{p.gradeDivision}</span>}
                     {focus && (
                       <span
@@ -4586,13 +4604,12 @@ export function ClassroomRoom({ code }: { code: string }) {
   }
 
   if (classEnded) {
+    const endCopy = classEndedCopy(isTeacher);
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center gap-4 px-6">
+      <main className="flex min-h-screen flex-col items-center justify-center gap-4 px-6" data-finished="ended">
         <div className="max-w-md rounded-2xl border border-white/10 bg-surface-1 p-8 text-center shadow-lift">
-          <p className="font-display text-2xl font-semibold tracking-tight">Class ended</p>
-          <p className="mt-2 text-sm text-slate-400">
-            Your teacher has ended this class. You can leave this page.
-          </p>
+          <p className="font-display text-2xl font-semibold tracking-tight">{endCopy.title}</p>
+          <p className="mt-2 text-sm text-slate-400">{endCopy.body}</p>
           <Button className="mt-6" variant="secondary" onClick={() => void goHomeAfterEnd()}>
             {isTeacher ? 'Dashboard' : 'Home'}
           </Button>

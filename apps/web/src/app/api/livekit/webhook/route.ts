@@ -10,7 +10,8 @@ import {
   recordTeacherGrace,
   recordTeacherPresence,
 } from '@/lib/teacherPresence';
-import { handlePresenceEvent } from '@/lib/teacherPresenceLogic';
+import { handlePresenceEvent, parseLivekitRoomName } from '@/lib/teacherPresenceLogic';
+import { recordStudentConnection } from '@/lib/studentPresence';
 import { recordConnectionEvent } from '@/lib/attendanceService';
 
 /** Event time from the webhook (seconds, int64), falling back to now if absent/odd. */
@@ -28,6 +29,7 @@ function eventTime(createdAt: unknown): Date {
  */
 async function recordAttendance(event: {
   event?: string;
+  room?: { name?: string } | null;
   createdAt?: unknown;
   participant?: { identity?: string; sid?: string } | null;
 }) {
@@ -41,6 +43,12 @@ async function recordAttendance(event: {
         ? 'left'
         : null;
   if (!kind) return;
+  try {
+    const room = parseLivekitRoomName(event.room?.name);
+    if (room) await recordStudentConnection(room.code, identity, kind, sid);
+  } catch (e) {
+    console.error('student presence webhook', event.event, e instanceof Error ? e.message : e);
+  }
   try {
     await recordConnectionEvent(kind, identity, sid, eventTime(event.createdAt));
   } catch (e) {

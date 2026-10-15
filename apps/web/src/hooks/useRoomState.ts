@@ -83,6 +83,8 @@ export type RoomState = {
   /** Teacher's student-video panel shown (cameras on demand). */
   videoPanelOpen?: boolean;
   drawHolder?: import('@/lib/drawLogic').DrawHolder | null;
+  /** Every student drawing now (several may draw at once). */
+  drawHolders?: import('@/lib/drawLogic').DrawHolder[];
   drawRequestCount?: number;
   /** Public answer: this tab's student seat moved to another device. */
   replaced?: boolean;
