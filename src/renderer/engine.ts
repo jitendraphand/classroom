@@ -413,6 +413,19 @@ function adHocForm(grades: GradeChoice[], gradesConfigured: boolean, err: HTMLEl
     campus.append(opt);
   }
   const choice = () => grades.find((g) => g.campus === state.campus && g.grade === state.grade);
+  // Tick the first division by default (Start used to do nothing visible with every box unticked).
+  const defaultDivisions = () => {
+    const first = choice()?.divisions?.[0]?.name;
+    return first ? [first] : [];
+  };
+  // Validation / start errors right next to the Start button, not only at the page top.
+  const formErr = el('p', 'err form-error');
+  formErr.setAttribute('role', 'alert');
+  formErr.hidden = true;
+  const showErr = (msg: string) => {
+    formErr.textContent = msg;
+    formErr.hidden = !msg;
+  };
   const paintDivs = () => {
     const g = choice();
     divRow.replaceChildren();
@@ -423,6 +436,7 @@ function adHocForm(grades: GradeChoice[], gradesConfigured: boolean, err: HTMLEl
       box.disabled = state.all;
       box.checked = state.divisions.includes(d.name);
       box.addEventListener('change', () => {
+        showErr('');
         state.divisions = box.checked ? [...state.divisions, d.name] : state.divisions.filter((x) => x !== d.name);
       });
       lab.append(box, document.createTextNode(`${state.grade}-${d.label}`));
@@ -452,7 +466,7 @@ function adHocForm(grades: GradeChoice[], gradesConfigured: boolean, err: HTMLEl
     }
     state.grade = list[0]?.grade ?? '';
     grade.value = state.grade;
-    state.divisions = [];
+    state.divisions = defaultDivisions();
     state.all = false;
     state.extra = '';
     extra.value = '';
@@ -466,7 +480,7 @@ function adHocForm(grades: GradeChoice[], gradesConfigured: boolean, err: HTMLEl
   });
   grade.addEventListener('change', () => {
     state.grade = grade.value;
-    state.divisions = [];
+    state.divisions = defaultDivisions();
     state.all = false;
     state.extra = '';
     extra.value = '';
@@ -483,19 +497,21 @@ function adHocForm(grades: GradeChoice[], gradesConfigured: boolean, err: HTMLEl
       freeTextExtra: !!g?.whole && !gradesConfigured,
     });
     if ('error' in built) {
-      err.textContent = built.error;
+      showErr(built.error);
       return;
     }
+    showErr('');
     const maxVisible = Math.min(6, Math.max(1, Math.round(Number(max.value)) || 3));
     go.disabled = true;
     go.textContent = 'Starting…';
     void startClass({ ...built.body, maxVisibleVideos: maxVisible }, err).finally(() => {
       if (!go.isConnected) return;
+      if (err.textContent) showErr(err.textContent);
       go.disabled = false;
       go.textContent = 'Start ad-hoc class';
     });
   });
-  form.append(grid, fs, maxField, go);
+  form.append(grid, fs, maxField, formErr, go);
   box.body.append(form);
   return box.root;
 }

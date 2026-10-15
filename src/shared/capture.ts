@@ -391,16 +391,28 @@ export type ShareKind = 'screen' | 'window' | 'region';
 
 /**
  * Video mode (the website's share "Video" toggle, shared/web/videoQuality.ts
- * SCREEN_SHARE_VIDEO_MODE): manual only, 720p / 24 fps, `motion` hint,
+ * SCREEN_SHARE_VIDEO_MODE): manual only, 720p / 30 fps (the toolbar promises
+ * "smooth 30 fps"; run 3 measured 4-8 fps, see SIDECAR_HELPER_FPS), `motion` hint,
  * resolution kept under pressure (maintain-resolution). The picture stays 1280x720 (this app's single layer),
  * so the bitrate sits between the web's 720p30 layer (1 Mbps) and its 1080p30
  * top layer (2.5 Mbps). The helper's capture rate is raised to 30 for as long
  * as video mode is on; that is ~3.7x the slide readback, see REPORT.md.
  */
 export const VIDEO_MODE_SHARE = {
-  capture: { width: 1280, height: 720, frameRate: 24 },
-  encoding: { maxBitrate: 1_500_000, maxFramerate: 24 },
+  capture: { width: 1280, height: 720, frameRate: 30 },
+  encoding: { maxBitrate: 1_500_000, maxFramerate: 30 },
 } as const;
+
+/**
+ * Capture rate the WGC helper is started with when the native sidecar
+ * publishes. The helper's rate is fixed at spawn (its stdin is not wired
+ * through the sidecar), and the sidecar only paces what it gets: the helper
+ * used to start at the slide rate (8 fps), so Video mode could never exceed
+ * 8 fps (run 3: 4-8 fps). The helper now runs at the Video mode rate and the
+ * sidecar pacer keeps slides at 8 fps. WGC only delivers changed frames, so a
+ * still slide still costs nothing; a moving pointer costs more readbacks.
+ */
+export const SIDECAR_HELPER_FPS = VIDEO_MODE_SHARE.capture.frameRate;
 
 /** Sender encodings for slides (this app's SCREEN_SHARE) or video mode. Other fields are kept. */
 export function windowsShareEncodings<E extends { maxBitrate?: number; maxFramerate?: number }>(encodings: E[], videoMode: boolean): E[] {

@@ -96,6 +96,31 @@ export function fitToolbar(
   return { ...clampToArea({ x: pos.x, y: pos.y, width, height: nh * lines }, area), lines };
 }
 
+/**
+ * Measured content size with hysteresis: a re-measure within `tol` px of the
+ * previous one keeps the previous size. Every drag re-measured the panel and
+ * the +2 px slack (plus DPI rounding at 125/150 %) fed back into the window
+ * width, so the vertical toolbar crept 132 -> 137 px over repeated drags.
+ */
+export function stableNatural(
+  prev: { width: number; height: number } | null,
+  next: { width: number; height: number },
+  tol = 4
+): { width: number; height: number } {
+  if (prev && Math.abs(prev.width - next.width) <= tol && Math.abs(prev.height - next.height) <= tol) return prev;
+  return next;
+}
+
+/**
+ * Bounds after a drag: keep the FIXED size the layout chose (never the size
+ * Windows reports back, which can be a DIP rounding step larger) and only
+ * clamp the position into the work area.
+ */
+export function movedBounds(b: Rect, fixed: { width: number; height: number } | null, area: Rect): Rect {
+  const size = fixed ?? { width: b.width, height: b.height };
+  return clampToArea({ x: b.x, y: b.y, width: size.width, height: size.height }, area);
+}
+
 export function parseOrient(v: unknown): ToolbarOrient {
   return v === 'vertical' ? 'vertical' : 'horizontal';
 }

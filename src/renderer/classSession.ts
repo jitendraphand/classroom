@@ -41,6 +41,7 @@ import { resolveChatRecipient } from '../shared/chatReply';
 import {
   SCREEN_SHARE,
   TEACHER_CAMERA,
+  VIDEO_MODE_SHARE,
   dockGridStyle,
   inkRectFor,
   screenShareSimulcastFor,
@@ -70,7 +71,7 @@ import {
   type SlotCount,
 } from '../shared/classLogic';
 import { ShareMirror, type MirrorPainter } from './videoMirror';
-import { attentionEvents, countFocusAlerts, decideHandoff, endedSessionCopy, isEndedReason } from '../shared/session';
+import { attentionEvents, countFocusAlerts, decideHandoff, endedSessionCopy, isEndedReason, settledShareNotice } from '../shared/session';
 import { oldestWaiting } from '../shared/waiting';
 import { desktop } from './bridge';
 import { cropTrack, type CropHandle } from './cropTrack';
@@ -159,6 +160,15 @@ function errorText(data: unknown, fallback: string): string {
 function isHidden(identity: string): boolean {
   return HIDDEN.test(identity);
 }
+
+/** "A" or "A, B": every student drawing now. */
+function drawHolderNames(snap: { drawHolders?: { name: string }[]; drawHolder?: { name: string } | null } | null): string | null {
+  const names = (snap?.drawHolders?.length ? snap.drawHolders : snap?.drawHolder ? [snap.drawHolder] : []).map((h) => h.name);
+  return names.length ? names.join(', ') : null;
+}
+
+const RESUMING_NOTICE = 'Resuming your screen share…';
+const RESTARTING_NOTICE = 'Restarting the screen share…';
 
 export class ClassController {
   private room: Room | null = null;
@@ -415,9 +425,9 @@ export class ClassController {
       // Teacher left while sharing and rejoined: share the same source again.
       window.setTimeout(() => {
         if (this.gen === gen && !this.sharing && this.room) {
-          this.notice = 'Resuming your screen share…';
+          this.notice = RESUMING_NOTICE;
           this.emit();
-          void this.beginShare(resume.input);
+          void this.beginShare(resume.input).finally(() => this.settleProgressNotice(RESUMING_NOTICE));
         }
       }, 1500);
     }
@@ -629,7 +639,7 @@ export class ClassController {
     const res = await this.roomApi('POST', '/screen-token').catch(() => null);
     const data = res && res.status < 300 ? (res.data as { token?: unknown; url?: unknown }) : null;
     if (!data || typeof data.token !== 'string' || typeof data.url !== 'string') return null;
-    const fps = shareFps({ videoMode: false, lowPower: this.lowPower, slidesFps: SCREEN_SHARE.capture.frameRate, videoFps: 24 });
+    const fps = shareFps({ videoMode: false, lowPower: this.lowPower, slidesFps: SCREEN_SHARE.capture.frameRate, videoFps: VIDEO_MODE_SHARE.capture.frameRate });
     return {
       url: data.url,
       token: data.token,
@@ -637,7 +647,7 @@ export class ClassController {
       crop: input.kind === 'region' ? cropFractions(input.region, input.display) : null,
       audio: !!input.systemAudio,
       fps,
-      videoFps: shareFps({ videoMode: true, lowPower: this.lowPower, slidesFps: fps, videoFps: 24 }),
+      videoFps: shareFps({ videoMode: true, lowPower: this.lowPower, slidesFps: fps, videoFps: VIDEO_MODE_SHARE.capture.frameRate }),
     };
   }
 
@@ -1715,9 +1725,23 @@ export class ClassController {
       this.emit();
       return;
     }
-    this.notice = 'Restarting the screen share…';
+    this.notice = RESTARTING_NOTICE;
     this.emit();
     await this.beginShare(last);
+    this.settleProgressNotice(RESTARTING_NOTICE);
+  }
+
+  /**
+   * A "Resuming / Restarting your screen share…" notice is progress, not
+   * news: hide it once the share is back (it used to stay up after the
+   * resume had worked). A failure keeps whatever beginShare reported.
+   */
+  private settleProgressNotice(progress: string): void {
+    const next = settledShareNotice(this.notice, progress, this.sharing);
+    if (next !== this.notice) {
+      this.notice = next;
+      this.emit();
+    }
   }
 
   private async stopShare(): Promise<void> {
@@ -1843,7 +1867,7 @@ export class ClassController {
   }
 
   /**
-   * Video mode, like the website's share Video toggle: capture 24 fps (helper
+   * Video mode, like the website's share Video toggle: capture 30 fps (helper
    * restarted with the new rate), encoder hint `motion`, keep the resolution
    * under pressure, and the web's video bitrates. Off returns to this app's
    * slide settings. Share audio uses the system loopback stream.
@@ -1851,7 +1875,7 @@ export class ClassController {
   private async applyVideoMode(on: boolean): Promise<void> {
     this.videoMode = { on, auto: false };
     const profile = shareProfile(on);
-    const fps = shareFps({ videoMode: on, lowPower: this.lowPower, slidesFps: SCREEN_SHARE.capture.frameRate, videoFps: profile.capture.frameRate.max });
+    const fps = shareFps({ videoMode: on, lowPower: this.lowPower, slidesFps: SCREEN_SHARE.capture.frameRate, videoFps: VIDEO_MODE_SHARE.capture.frameRate });
     const raw = this.shareRaw;
     try {
       if (raw) raw.contentHint = profile.contentHint;
@@ -2121,7 +2145,7 @@ export class ClassController {
         shareAudio: this.viaSidecar ? this.sidecarAudio : !!this.screenAudio,
         shareAudioAuto: this.audioChoice === 'auto',
         drawRequests: this.snap?.drawRequestCount ?? 0,
-        drawHolderName: this.snap?.drawHolder?.name ?? null,
+        drawHolderName: drawHolderNames(this.snap),
         drawStrokes: this.drawStrokes.length,
         notice: this.notice,
       },
@@ -2172,7 +2196,7 @@ async function chromiumDesktopTrack(sourceId: string): Promise<MediaStreamTrack 
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: {
-        mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId, maxWidth: 1920, maxHeight: 1080, maxFrameRate: 15 },
+        mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId, maxWidth: 1920, maxHeight: 1080, maxFrameRate: 30 },
       } as unknown as MediaTrackConstraints,
     });
     return stream.getVideoTracks()[0] ?? null;

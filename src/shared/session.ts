@@ -125,3 +125,13 @@ export function focusLabel(status: string | null | undefined, iphone = false): s
 export function countFocusAlerts(list: readonly { focus?: string | null }[]): number {
   return list.reduce((n, p) => n + (isFocusAlert(p.focus) ? 1 : 0), 0);
 }
+
+/**
+ * Notice after a "Resuming / Restarting your screen share…" attempt: the
+ * progress text goes once the share is back; any other notice (an error from
+ * beginShare, a newer message) is kept.
+ */
+export function settledShareNotice(current: string, progress: string, sharing: boolean): string {
+  if (current !== progress) return current;
+  return sharing ? '' : 'Could not resume the screen share. Click Share to share again.';
+}

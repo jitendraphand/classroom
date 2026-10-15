@@ -98,7 +98,7 @@ test('media settings match the web upgrade (673b46b)', () => {
   assert.equal(TEACHER_CAMERA.simulcast, false);
   assert.equal(SCREEN_SHARE.capture.height, 720);
   assert.ok(SCREEN_SHARE.capture.frameRate <= 8);
-  assert.equal(VIDEO_MODE_SHARE.capture.frameRate, 24);
+  assert.equal(VIDEO_MODE_SHARE.capture.frameRate, 30);
   assert.equal(VIDEO_MODE_SHARE.capture.height, 720);
   assert.equal(shareProfile(false).contentHint, 'detail');
   assert.equal(shareProfile(true).degradationPreference, 'maintain-resolution');

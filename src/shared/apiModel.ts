@@ -169,7 +169,7 @@ export function adhocBody(input: {
     .filter(Boolean);
   const divisions = [...input.divisions.filter((d) => d !== '*'), ...extra];
   if (!input.grade) return { error: 'Choose a grade.' };
-  if (!input.all && !divisions.length) return { error: 'Pick at least one division.' };
+  if (!input.all && !divisions.length) return { error: 'Tick at least one division (or "All divisions") to start the class.' };
   const subject = input.subject.trim();
   return {
     body: {
@@ -320,6 +320,8 @@ export type RoomSnapshot = {
   admitted: AdmittedPerson[];
   classLabel: string;
   drawHolder: DrawHolderInfo | null;
+  /** Every student drawing now (the server allows several at once). */
+  drawHolders: DrawHolderInfo[];
   drawRequestCount: number;
   desktopInk: boolean;
 };
@@ -383,6 +385,11 @@ export function parseRoomState(data: unknown): RoomSnapshot | null {
     admitted,
     classLabel,
     drawHolder: parseHolder(d.drawHolder),
+    drawHolders: Array.isArray(d.drawHolders)
+      ? d.drawHolders.map(parseHolder).filter((h): h is DrawHolderInfo => !!h)
+      : parseHolder(d.drawHolder)
+        ? [parseHolder(d.drawHolder)!]
+        : [],
     drawRequestCount: typeof d.drawRequestCount === 'number' ? d.drawRequestCount : admitted.filter((p) => p.drawRequested).length,
     desktopInk: d.desktopInk === true,
   };

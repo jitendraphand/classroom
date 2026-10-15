@@ -61,7 +61,7 @@ test('ad-hoc: campus first, then grades, divisions and the web request body', ()
   assert.equal(c.opensAt, 'Z');
 
   const common = { campus: 'CC', grade: '7', subject: ' Revision ', extra: 'C, D', freeTextExtra: true };
-  assert.deepEqual(adhocBody({ ...common, divisions: [], all: false, freeTextExtra: false, extra: '' }), { error: 'Pick at least one division.' });
+  assert.deepEqual(adhocBody({ ...common, divisions: [], all: false, freeTextExtra: false, extra: '' }), { error: 'Tick at least one division (or "All divisions") to start the class.' });
   assert.deepEqual(adhocBody({ ...common, divisions: ['A'], all: false }), {
     body: { kind: 'adhoc', campus: 'CC', grade: '7', divisions: ['A', 'C', 'D'], allDivisions: false, subject: 'Revision' },
   });
@@ -91,10 +91,10 @@ test('room snapshot carries the draw and desktop-ink fields', () => {
 
 type Enc = { maxBitrate?: number; maxFramerate?: number };
 
-test('share encodings: video mode is 24 fps, slides keep the 8 fps layer', () => {
-  assert.equal(VIDEO_MODE_SHARE.encoding.maxFramerate, 24);
+test('share encodings: video mode is 30 fps, slides keep the 8 fps layer', () => {
+  assert.equal(VIDEO_MODE_SHARE.encoding.maxFramerate, 30);
   const video = windowsShareEncodings<Enc>([{}, {}], true);
-  assert.ok(video.every((e) => e.maxFramerate === 24 && e.maxBitrate === VIDEO_MODE_SHARE.encoding.maxBitrate));
+  assert.ok(video.every((e) => e.maxFramerate === 30 && e.maxBitrate === VIDEO_MODE_SHARE.encoding.maxBitrate));
   // Slides: this app's single 720p / 8 fps layer.
   const slides = windowsShareEncodings<Enc>([{}], false);
   assert.equal(slides[0]?.maxBitrate, SCREEN_SHARE.encoding.maxBitrate);

@@ -744,3 +744,4 @@ html:has(body.tools), body.tools { background: #0d1219; overflow: hidden; }
 .atb-vertical .atb-thick input { width: 48px; }
 .atb-dot { display: inline-block; border-radius: 50%; }
 .chat-replying { margin: 4px 0 2px; font-size: 12px; color: #a5b4fc; }
+.adhoc-form .form-error { margin: 8px 0; }

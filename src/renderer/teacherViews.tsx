@@ -155,7 +155,7 @@ export function RosterView({ snap, send, showLayout = false }: { snap: PanelSnap
       {sharing && (holder || snap.hud.drawStrokes > 0) && (
         <div className="draw-strip" role="status">
           <Icon name="pen" size={13} />
-          <span className="draw-strip-text">{holder ? `${holder} is drawing` : 'Student drawing on screen'}</span>
+          <span className="draw-strip-text">{holder ? `${holder} ${holder.includes(', ') ? 'are' : 'is'} drawing` : 'Student drawing on screen'}</span>
           {snap.hud.drawStrokes > 0 && (
             <button type="button" className="roster-chip" onClick={() => send({ type: 'draw-clear' })}>
               Clear drawing

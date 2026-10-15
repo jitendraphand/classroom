@@ -16,8 +16,8 @@
  */
 
 import { SIDECAR_PUBLISH_TIMEOUT_MS, controlLine, inkMessage, parseScreenToken, refreshInitLine, screenTokenPath, sidecarInit, type Publisher, type SidecarRequest } from '../shared/sidecar';
-import { VIDEO_MODE_SHARE as SIDECAR_VIDEO } from '../shared/capture';
-import { clampToArea, fitToolbar, parseOrient, toolbarSize } from '../shared/toolbarLayout';
+import { SIDECAR_HELPER_FPS, VIDEO_MODE_SHARE as SIDECAR_VIDEO } from '../shared/capture';
+import { fitToolbar, movedBounds, parseOrient, stableNatural, toolbarSize } from '../shared/toolbarLayout';
 import { HW_ENCODE_FEATURES } from '../shared/hwEncode';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -469,6 +469,13 @@ function saveConfig(): void {
   }
 }
 
+/** Helper capture args with a different frame rate (the last argument). */
+function withCaptureFps(args: string[], fps: number): string[] {
+  const out = [...args];
+  out[out.length - 1] = String(Math.max(1, Math.min(30, Math.round(fps))));
+  return out;
+}
+
 function sidecarExe(): string {
   if (app.isPackaged) return path.join(process.resourcesPath, 'share-sidecar.exe');
   return path.join(__dirname, '..', 'native', 'share-sidecar.exe');
@@ -812,7 +819,7 @@ function openAnnotateTools(): void {
     if (win.isDestroyed()) return;
     // Never partly off-screen: clamp into the work area of the display it was dropped on.
     const b = win.getBounds();
-    const c = clampToArea(b, screen.getDisplayMatching(b).workArea);
+    const c = movedBounds(b, toolsFixed, screen.getDisplayMatching(b).workArea);
     if (c.x !== b.x || c.y !== b.y || c.width !== b.width || c.height !== b.height) win.setBounds(c);
     config.annotateTools = { x: c.x, y: c.y };
     saveConfig();
@@ -823,6 +830,7 @@ function openAnnotateTools(): void {
   screen.on('display-metrics-changed', refit);
   win.on('closed', () => {
     toolsExtraLines = 0;
+    toolsFixed = null;
     screen.removeListener('display-metrics-changed', refit);
   });
   win.webContents.on('did-finish-load', () => {
@@ -843,6 +851,8 @@ function openAnnotateTools(): void {
 /** Annotate panel: measured one-line content size and the extra wrap lines it asked for. */
 let toolsNatural: { width: number; height: number } | null = null;
 let toolsExtraLines = 0;
+/** The size fitAnnotateTools chose: drags keep exactly this size (no creep). */
+let toolsFixed: { width: number; height: number } | null = null;
 
 function fitAnnotateTools(win: BrowserWindow): void {
   const o = parseOrient(config.annotateToolsOrient);
@@ -850,6 +860,7 @@ function fitAnnotateTools(win: BrowserWindow): void {
   const b = win.getBounds();
   const area = screen.getDisplayMatching(b).workArea;
   const fit = fitToolbar(o, natural, area, { x: b.x, y: b.y }, toolsExtraLines);
+  toolsFixed = { width: fit.width, height: fit.height };
   if (fit.x !== b.x || fit.y !== b.y || fit.width !== b.width || fit.height !== b.height) {
     win.setBounds({ x: fit.x, y: fit.y, width: fit.width, height: fit.height });
   }
@@ -864,6 +875,7 @@ ipcMain.on('annotate-tools-orient', (event, orient: unknown) => {
     saveConfig();
     toolsNatural = null;
     toolsExtraLines = 0;
+    toolsFixed = null;
   }
   fitAnnotateTools(win);
 });
@@ -879,7 +891,9 @@ ipcMain.on('annotate-tools-measure', (event, m: unknown) => {
     const width = Number(r.width);
     const height = Number(r.height);
     if (!(width > 0 && width < 8000 && height > 0 && height < 8000)) return;
-    toolsNatural = { width, height };
+    const next = stableNatural(toolsNatural, { width, height });
+    if (next === toolsNatural) return; // same size within rounding: nothing to refit
+    toolsNatural = next;
     toolsExtraLines = 0;
   }
   fitAnnotateTools(win);
@@ -1968,6 +1982,10 @@ function installIpc(): void {
           })
         : null;
     let result: Awaited<ReturnType<typeof wgc.start>>;
+    // Sidecar: the helper's capture rate cannot change later, so start it at
+    // the Video mode rate; the sidecar paces slides down to their own rate.
+    const electronArgs = args;
+    if (init) args = withCaptureFps(args, SIDECAR_HELPER_FPS);
     if (init) {
       sidecarInitLine = JSON.stringify(init);
       sidecarTokenPath = screenTokenPath(sideReq?.code);
@@ -1985,6 +2003,7 @@ function installIpc(): void {
         if (result.ok) {
           // The helper captured but the sidecar did not publish: helper → Electron publishing.
           logCapture(`[sidecar] fallback to Electron publishing (${pub.why})`);
+          args = electronArgs;
           result = await wgc.start(args);
         } else {
           // The helper itself failed (e.g. 150 % scaling timeout): retrying it would only
