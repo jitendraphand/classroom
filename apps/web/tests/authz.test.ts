@@ -37,9 +37,9 @@ test('student outside the sample and teacher-muted can publish nothing', () => {
   assert.deepEqual(g.canPublishSources, []);
 });
 
-test('teacher grant: all sources, no data channel publishing', () => {
+test('teacher grant: all sources, data publishing for the whiteboard', () => {
   const g = classroomGrant({ role: 'TEACHER', roomName: 'r' });
-  assert.equal(g.canPublishData, false);
+  assert.equal(g.canPublishData, true);
   assert.deepEqual(g.canPublishSources, [
     TrackSource.CAMERA,
     TrackSource.MICROPHONE,

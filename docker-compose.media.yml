@@ -1,0 +1,32 @@
+# Standalone LiveKit MEDIA NODE (multi-server, see docs/MULTI-SERVER.md).
+# Runs only LiveKit (+ Caddy for its TLS certificate) on an extra VM; the web,
+# Postgres and Redis stay on the main server. Start on the media VM with:
+#   docker compose -f docker-compose.media.yml --profile media up -d
+# Needs infra/livekit-media.yaml (copy infra/livekit-media.example.yaml) and
+# MEDIA_DOMAIN in .env (DNS A record to this VM).
+services:
+  livekit-media:
+    image: livekit/livekit-server:v1.13.9
+    profiles: ["media"]
+    restart: unless-stopped
+    network_mode: host
+    command: ["--config", "/etc/livekit.yaml"]
+    volumes:
+      - ./infra/livekit-media.yaml:/etc/livekit.yaml:ro
+      - media_caddy_data:/caddy-data:ro
+
+  caddy-media:
+    image: caddy:2-alpine
+    profiles: ["media"]
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      MEDIA_DOMAIN: ${MEDIA_DOMAIN:?MEDIA_DOMAIN must be set in .env}
+    volumes:
+      - ./infra/Caddyfile.media:/etc/caddy/Caddyfile:ro
+      - media_caddy_data:/data
+      - media_caddy_config:/config
+
+volumes:
+  media_caddy_data:
+  media_caddy_config:

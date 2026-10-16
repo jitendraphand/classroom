@@ -1,0 +1,25 @@
+# LiveKit config for a standalone media node. Copy to infra/livekit-media.yaml
+# (untracked) and fill in the keys. Each node may use its own key pair; list it
+# in LIVEKIT_SERVERS on the web server.
+port: 7880
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 60000
+  use_external_ip: true
+keys:
+  # REPLACE: api key: secret (never commit real values)
+  APIxxxxxxxx: change-me-to-a-long-random-secret
+# Webhooks go to the ONE web server (presence / attendance / mic lock).
+webhook:
+  api_key: APIxxxxxxxx
+  urls:
+    - https://WEB_DOMAIN/api/livekit/webhook
+# Optional embedded TURN/TLS (same as the main server's infra/livekit.yaml):
+# turn:
+#   enabled: true
+#   domain: MEDIA_DOMAIN
+#   tls_port: 5349
+#   udp_port: 3478
+#   cert_file: /caddy-data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/MEDIA_DOMAIN/MEDIA_DOMAIN.crt
+#   key_file: /caddy-data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/MEDIA_DOMAIN/MEDIA_DOMAIN.key

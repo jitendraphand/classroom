@@ -71,7 +71,26 @@ function toLiveClass(room: RoomWithTeacher, cs: ClassSession, p: Awaited<ReturnT
   };
 }
 
+/**
+ * Short shared cache (run 4: the admin page took 9.4 s with many classes,
+ * because every admin poll asked LiveKit once per class). Every admin tab and
+ * poll within LIVE_LIST_CACHE_MS shares one computation.
+ */
+const LIVE_LIST_CACHE_MS = 4_000;
+let liveListCache: { at: number; p: Promise<LiveClass[]> } | null = null;
+
 export async function listLiveClasses(): Promise<LiveClass[]> {
+  const hit = liveListCache;
+  if (hit && Date.now() - hit.at < LIVE_LIST_CACHE_MS) return hit.p;
+  const p = computeLiveClasses();
+  liveListCache = { at: Date.now(), p };
+  p.catch(() => {
+    if (liveListCache?.p === p) liveListCache = null;
+  });
+  return p;
+}
+
+async function computeLiveClasses(): Promise<LiveClass[]> {
   const pairs = await ongoingPairs();
   const out = await Promise.all(pairs.map(async ({ room, cs }) => toLiveClass(room, cs, await presence(room, cs))));
   return out.sort((a, b) => a.startedAt.localeCompare(b.startedAt));

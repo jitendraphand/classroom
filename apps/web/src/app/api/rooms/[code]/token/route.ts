@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db';
 import { endedSessionReason, resolveRoomAccess } from '@/lib/auth';
-import { createParticipantToken, getPublicLiveKitUrl, livekitRoomName } from '@/lib/livekit';
+import { createParticipantToken, livekitRoomName, mediaUrlForRoom } from '@/lib/livekit';
+import { noteRoomLoad } from '@/lib/mediaServers';
 import { jsonError, jsonOk } from '@/lib/response';
 import { ensureSampleFresh } from '@/lib/sample';
 import { ensureRedis, keys } from '@/lib/redis';
@@ -50,19 +51,22 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   }
   if (participant.status === 'LEFT') return jsonError('You have left the class', 403);
 
-  const sample = await ensureSampleFresh(code);
   const isTeacher = participant.role === 'TEACHER';
-  const canPublishVideo = isTeacher || sample.visible.includes(participant.livekitIdentity);
-
   const redis = await ensureRedis();
-  const mutedIds = await redis.smembers(keys.muted(code));
-  const mutedByTeacher =
-    !isTeacher && (participant.mutedByTeacher || mutedIds.includes(participant.id));
-
+  // Run-4 join profiling: these three were sequential round trips (Redis,
+  // Redis, Redis-or-LiveKit). They are independent, so run them together;
+  // SISMEMBER instead of SMEMBERS keeps the muted lookup O(1) in big classes.
   // Students joining while the teacher is not connected to the SFU get a token
   // without microphone publish; the LiveKit webhook grants it when the teacher
   // connects (and revokes it again when the teacher leaves).
-  const teacherPresent = isTeacher ? true : await isTeacherPresent(code, room);
+  const [sample, mutedFlag, teacherPresent] = await Promise.all([
+    ensureSampleFresh(code),
+    isTeacher ? Promise.resolve(0) : redis.sismember(keys.muted(code), participant.id),
+    isTeacher ? Promise.resolve(true) : isTeacherPresent(code, room),
+  ]);
+  const canPublishVideo = isTeacher || sample.visible.includes(participant.livekitIdentity);
+  const mutedByTeacher = !isTeacher && (participant.mutedByTeacher || mutedFlag === 1);
+
   if (isTeacher) {
     // The teacher is (re)connecting: drop any cached presence so a missed
     // webhook cannot keep the class locked. Checks until the webhook confirms
@@ -96,9 +100,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     },
   });
 
+  if (!isTeacher) {
+    // Multi-server load accounting (no-op with one media node).
+    void redis.scard(keys.admitted(code)).then((n) => noteRoomLoad(roomName, n)).catch(() => undefined);
+  }
+
   return jsonOk({
     token,
-    url: getPublicLiveKitUrl(req),
+    url: await mediaUrlForRoom(roomName, req),
     roomName,
     identity: participant.livekitIdentity,
     canPublishVideo,

@@ -1,3 +1,4 @@
+import { rememberWaitingRoomChoice } from '@/lib/waitingRoomPref';
 import { z } from 'zod';
 import { nudgeRoomState } from '@/lib/roomNudge';
 import { prisma } from '@/lib/db';
@@ -32,6 +33,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ code: 
         ...(body.waitingRoomOn !== undefined ? { waitingRoomOn: body.waitingRoomOn } : {}),
       },
     });
+    if (body.waitingRoomOn !== undefined) await rememberWaitingRoomChoice(teacher.id, body.waitingRoomOn);
     let admitted = 0;
     if (body.waitingRoomOn === false && updated.status !== 'ENDED') {
       // Waiting room off: everyone already waiting comes in now.

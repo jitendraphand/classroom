@@ -3,7 +3,7 @@ import { ensureRedis, keys } from './redis';
 import { prisma } from './db';
 import { setParticipantCameraAllowed } from './livekit';
 import { nudgeRoomState } from './roomNudge';
-import { allocateSample, type PinnedStudent } from './classSlots';
+import { allocateSample, freshSpeakerPins, type PinnedStudent } from './classSlots';
 
 /** Hard ceiling: server never selects/publishes more than this many student videos. */
 export const HARD_MAX_VISIBLE_STUDENT_VIDEOS = 6;
@@ -134,6 +134,10 @@ async function getPinnedSpeakers(roomCode: string): Promise<Set<string>> {
   return new Set(Object.keys(raw));
 }
 
+/** Speaker pins expire this long after the student last spoke (pinSpeaker refreshes it). */
+const SPEAKER_PIN_TTL_MS = Math.max(5, Number(process.env.SPEAKER_PIN_TTL_SECONDS || 18)) * 1000;
+
+
 export async function unpinSpeaker(roomCode: string, identity: string) {
   const redis = await ensureRedis();
   await redis.hdel(keys.pinnedSpeakers(roomCode), identity);
@@ -203,7 +207,19 @@ export async function rotateVisibleSample(roomCode: string, maxVisible?: number)
 
   // Teacher-pinned students first (oldest pin first), then sticky speakers
   // (random subset if more than fit), then random rotation among the rest.
-  const sample = allocateSample({ identities, teacherPins, speakerPins: pinned, max: n, shuffle });
+  const pinTimes = await redis.hgetall(keys.pinnedSpeakers(roomCode));
+  const expired = Object.entries(pinTimes)
+    .filter(([, at]) => Date.now() - Number(at || 0) > SPEAKER_PIN_TTL_MS)
+    .map(([id]) => id);
+  if (expired.length) {
+    await redis.hdel(keys.pinnedSpeakers(roomCode), ...expired);
+    for (const id of expired) delete pinTimes[id];
+  }
+  const speakerPins = freshSpeakerPins(
+    Object.fromEntries(Object.entries(pinTimes).filter(([id]) => pinned.has(id))),
+    { now: Date.now(), ttlMs: SPEAKER_PIN_TTL_MS, max: n, admitted: identities.length, teacherPinned: teacherPins.length }
+  );
+  const sample = allocateSample({ identities, teacherPins, speakerPins, max: n, shuffle });
 
   const previous = await redis.smembers(keys.visible(roomCode));
 

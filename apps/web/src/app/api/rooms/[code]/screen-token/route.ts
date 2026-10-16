@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/db';
 import { getTeacherSession } from '@/lib/auth';
-import { createScreenSidecarToken, getPublicLiveKitUrl, livekitRoomName } from '@/lib/livekit';
+import { createScreenSidecarToken, mediaUrlForRoom, livekitRoomName } from '@/lib/livekit';
 import { jsonError, jsonOk } from '@/lib/response';
 
 export const dynamic = 'force-dynamic';
@@ -30,5 +30,5 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     name: participant.displayName,
     participantId: participant.id,
   });
-  return jsonOk({ token, identity, url: getPublicLiveKitUrl(req), roomName });
+  return jsonOk({ token, identity, url: await mediaUrlForRoom(roomName, req), roomName });
 }

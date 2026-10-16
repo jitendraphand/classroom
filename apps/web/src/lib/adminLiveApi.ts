@@ -53,7 +53,7 @@ export async function handleObserverToken(
       adminName: string;
       mode: ObserverMode;
     }) => Promise<{ token: string; identity: string }>;
-    serverUrl: () => string;
+    serverUrl: (roomName: string) => string | Promise<string>;
   }
 ) {
   const g = await deps.guard();
@@ -68,7 +68,7 @@ export async function handleObserverToken(
     adminName: g.admin.name || g.admin.email,
     mode,
   });
-  return json({ token, identity, serverUrl: deps.serverUrl(), mode, class: d.liveClass });
+  return json({ token, identity, serverUrl: await deps.serverUrl(d.roomName), mode, class: d.liveClass });
 }
 
 function normalizeCode(code: string) {

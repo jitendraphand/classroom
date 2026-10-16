@@ -185,8 +185,10 @@ export function openSideWindow(
 /** Render `children` into a side window (styles copied from the classroom tab). */
 export function SideWindowPortal({ win, title, children }: { win: Window; title: string; children: ReactNode }) {
   const [mount, setMount] = useState<HTMLElement | null>(null);
+  const [retry, setRetry] = useState(0);
   useEffect(() => {
     let cancelled = false;
+    let mounted = false;
     setMount(null);
     void waitForWindow(win).then((ready) => {
       if (cancelled || !ready || ready.closed) return;
@@ -203,15 +205,29 @@ export function SideWindowPortal({ win, title, children }: { win: Window; title:
         }
         const m = mountIn(ready);
         m.style.height = '100%';
+        mounted = true;
         setMount(m);
       } catch {
         /* window navigated away or closed */
       }
     });
+    // Run-4 T7 fix: the pop-up page can replace its body after we mounted
+    // (late load / navigation), leaving an empty student-video window. Re-mount
+    // whenever our root is no longer in the window's document.
+    const watch = window.setInterval(() => {
+      if (cancelled || !mounted || win.closed) return;
+      try {
+        const root = win.document.getElementById('share-controls-root');
+        if (!root || !root.isConnected) setRetry((n) => n + 1);
+      } catch {
+        /* cross-origin while navigating */
+      }
+    }, 1000);
     return () => {
       cancelled = true;
+      window.clearInterval(watch);
     };
-  }, [win]);
+  }, [win, retry]);
   useEffect(() => {
     if (!mount) return;
     try {

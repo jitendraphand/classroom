@@ -1,3 +1,4 @@
+import { mediaServers } from '@/lib/mediaServers';
 import { WebhookReceiver } from 'livekit-server-sdk';
 import { prisma } from '@/lib/db';
 import { jsonError, jsonOk } from '@/lib/response';
@@ -67,20 +68,24 @@ export const runtime = 'nodejs';
  * while the teacher is not connected" rule.
  */
 export async function POST(req: Request) {
-  const apiKey = process.env.LIVEKIT_API_KEY;
-  const apiSecret = process.env.LIVEKIT_API_SECRET;
-  if (!apiKey || !apiSecret) return jsonError('Webhook not configured', 503);
+  // Any registered media node may call (multi-server); each signs with its own key.
+  const signers = mediaServers().filter((s) => s.apiKey && s.apiSecret);
+  if (!signers.length) return jsonError('Webhook not configured', 503);
 
   const body = await req.text();
   const auth = req.headers.get('authorization') ?? undefined;
 
   let event;
-  try {
-    event = await new WebhookReceiver(apiKey, apiSecret).receive(body, auth);
-  } catch {
-    // Never echo why: bad signature, wrong key, tampered body.
-    return jsonError('Invalid webhook signature', 401);
+  for (const s of signers) {
+    try {
+      event = await new WebhookReceiver(s.apiKey, s.apiSecret).receive(body, auth);
+      break;
+    } catch {
+      /* try the next node's key */
+    }
   }
+  // Never echo why: bad signature, wrong key, tampered body.
+  if (!event) return jsonError('Invalid webhook signature', 401);
 
   try {
     const outcome = await handlePresenceEvent(

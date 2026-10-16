@@ -23,9 +23,10 @@ const TTL_S = 6 * 60 * 60;
 
 type R = Awaited<ReturnType<typeof ensureRedis>>;
 
-async function send(code: string, packet: DrawPacket) {
+const WB_TOPIC_NAME = 'wb';
+async function send(code: string, packet: DrawPacket, topic: string = DRAW_TOPIC) {
   const name = await livekitRoomNameForCode(code);
-  if (name) await sendRoomData(name, packet, { topic: DRAW_TOPIC });
+  if (name) await sendRoomData(name, packet, { topic });
 }
 
 /**
@@ -102,7 +103,11 @@ export async function revokeDraw(code: string, opts: { clear: boolean; clearRequ
   if (opts.participantId) {
     const h = await holderFor(code, opts.participantId, r);
     await r.hdel(keys.drawHolders(code), opts.participantId);
-    if (opts.clear && h) await deleteStrokesBy(code, h.identity);
+    if (opts.clear && h) {
+      await deleteStrokesBy(code, h.identity);
+      // Whiteboard: the student's strokes go too (every device incl. the teacher's applies it).
+      await send(code, { v: 1, t: 'ops', ops: [{ k: 'delBy', by: h.identity }] } as unknown as DrawPacket, WB_TOPIC_NAME);
+    }
   } else {
     const m = r.multi().del(keys.drawHolders(code), keys.drawHolder(code));
     if (opts.clearRequests) m.del(keys.drawRequests(code));

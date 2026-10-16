@@ -1,7 +1,7 @@
 import { requireAdminApi } from '@/lib/adminGuard';
 import { handleObserverToken } from '@/lib/adminLiveApi';
 import { getLiveClass } from '@/lib/liveClasses';
-import { createObserverToken, getPublicLiveKitUrl } from '@/lib/livekit';
+import { createObserverToken, mediaUrlForRoom } from '@/lib/livekit';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -17,6 +17,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     guard: requireAdminApi,
     get: getLiveClass,
     mint: createObserverToken,
-    serverUrl: () => getPublicLiveKitUrl(req),
+    serverUrl: (roomName) => mediaUrlForRoom(roomName, req),
   });
 }

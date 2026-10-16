@@ -66,6 +66,9 @@ export type TeacherShareHudProps = {
   waitingCount?: number;
   onAdmit?: (participantId: string) => void;
   onAdmitAll?: () => void;
+  /** Waiting room switch (same setting as the roster and the Windows app). */
+  waitingRoomOn?: boolean;
+  onWaitingRoom?: (on: boolean) => void;
   teacherMicOn: boolean;
   onToggleTeacherMic: () => void;
   onStopSharing: () => void;
@@ -327,6 +330,8 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     waitingCount = 0,
     onAdmit,
     onAdmitAll,
+    waitingRoomOn,
+    onWaitingRoom,
     teacherMicOn,
     onToggleTeacherMic,
     onStopSharing,
@@ -554,6 +559,19 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
               <button type="button" className="tsh-btn" onClick={() => onMuteAll(false)}>
                 Unmute all
               </button>
+              {onWaitingRoom && (
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={waitingRoomOn !== false}
+                  data-testid="hud-waiting-toggle"
+                  className={waitingRoomOn !== false ? 'tsh-btn is-warn' : 'tsh-btn'}
+                  onClick={() => onWaitingRoom(waitingRoomOn === false)}
+                  title={waitingRoomOn !== false ? 'Waiting room on: click to let students in directly' : 'Direct entry: click to turn the waiting room on'}
+                >
+                  {waitingRoomOn !== false ? 'Waiting room' : 'Direct entry'}
+                </button>
+              )}
             </div>
             {students.length === 0 ? (
               <p className="tsh-empty">No students yet.</p>

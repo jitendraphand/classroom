@@ -22,8 +22,13 @@ export type Layer = { width: number; height: number; maxBitrate: number; maxFram
 export const TEACHER_CAMERA = {
   capture: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 15, max: 15 } },
   encoding: { maxBitrate: 300_000, maxFramerate: 15 },
-  simulcast: false,
-  layers: [] as Layer[],
+  /**
+   * 2026-10-16 (bandwidth): a 180p ~90 kbps lower layer. While a share is on,
+   * students subscribe to this small layer only (the camera is a corner tile
+   * next to the share); dynacast stops encoding it when nobody wants it.
+   */
+  simulcast: true,
+  layers: [{ width: 320, height: 180, maxBitrate: 90_000, maxFramerate: 12 }] as Layer[],
 } as const;
 
 export const STUDENT_CAMERA = {
@@ -46,7 +51,7 @@ export const SCREEN_SHARE = {
    * small text). Received by small viewports, data-saver students and admin
    * tiles; large viewports keep the top layer.
    */
-  layers: [{ width: 1280, height: 720, maxBitrate: 500_000, maxFramerate: 8 }] satisfies Layer[],
+  layers: [{ width: 1280, height: 720, maxBitrate: 450_000, maxFramerate: 8 }] satisfies Layer[],
 } as const;
 
 /**
@@ -62,9 +67,17 @@ export const SCREEN_SHARE = {
  * single and dual peer connection): phones therefore still receive the one
  * VP9 1080p layer. lib/subscriberCodecs keeps the decision logic for later.
  */
+/*
+ * 2026-10-16 (bandwidth): L2T3_KEY = two spatial layers (full + half
+ * resolution) x three temporal layers. Phones and small viewports (adaptiveStream
+ * with pixelDensity 1) now receive the half-resolution layer (~400-500 kbps
+ * in slides mode) instead of the 1080p layer; big screens keep the top layer.
+ * _KEY: the layers only depend on each other at key frames, which the SFU
+ * needs to switch a subscriber between them.
+ */
 export const SHARE_CODEC = {
   codec: 'vp9',
-  scalabilityMode: 'L1T3',
+  scalabilityMode: 'L2T3_KEY',
   backupCodec: 'vp8',
 } as const;
 

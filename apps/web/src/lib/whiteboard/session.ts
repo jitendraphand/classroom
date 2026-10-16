@@ -1,0 +1,74 @@
+/**
+ * A whiteboard document plus its change feed, and the packet handling shared
+ * by every side (teacher host, student viewer, admin preview).
+ */
+import { decodeSnapshot, encodeSnapshot } from './codec';
+import { applyOp, ChunkAssembler, decodePacket, emptyDoc, encodePacket, type Doc, type Op, type Packet } from './model';
+
+export class WhiteboardSession {
+  doc: Doc;
+  version = 0;
+  /** True once we have the teacher's state (snapshot or teacher-created). */
+  ready: boolean;
+  private listeners = new Set<() => void>();
+  private chunks = new ChunkAssembler();
+
+  constructor(doc?: Doc, ready = !!doc) {
+    this.doc = doc ?? emptyDoc();
+    this.ready = ready;
+  }
+
+  subscribe(fn: () => void): () => void {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+
+  private emit() {
+    this.version++;
+    this.listeners.forEach((fn) => fn());
+  }
+
+  apply(ops: Op[]): boolean {
+    let changed = false;
+    for (const op of ops) if (applyOp(this.doc, op)) changed = true;
+    if (changed) this.emit();
+    return changed;
+  }
+
+  replace(doc: Doc) {
+    this.doc = doc;
+    this.ready = true;
+    this.emit();
+  }
+
+  /**
+   * Feed one received data packet. Returns what the caller must act on:
+   * `req` (someone asked for a snapshot), `end` (board closed), or null.
+   */
+  async receive(bytes: Uint8Array): Promise<Packet | null> {
+    let p = decodePacket(bytes);
+    if (!p) return null;
+    if (p.t === 'chunk') {
+      p = this.chunks.add(p);
+      if (!p) return null;
+    }
+    if (p.t === 'ops' && Array.isArray(p.ops)) {
+      this.apply(p.ops);
+      return null;
+    }
+    if (p.t === 'snap') {
+      const doc = await decodeSnapshot(p);
+      if (doc) this.replace(doc);
+      return null;
+    }
+    return p;
+  }
+
+  async snapshotPackets(): Promise<Uint8Array[]> {
+    return encodePacket(await encodeSnapshot(this.doc));
+  }
+}
+
+export function opsPackets(ops: Op[]): Uint8Array[] {
+  return encodePacket({ v: 1, t: 'ops', ops });
+}

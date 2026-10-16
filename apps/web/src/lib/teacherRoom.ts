@@ -1,3 +1,6 @@
+import { releaseRoom } from './mediaServers';
+import { roomServiceFor } from './livekit';
+import { waitingRoomDefaultFor } from './waitingRoomPref';
 import { prisma } from '@/lib/db';
 import { generateRoomCode, generateIdentity, generateSessionToken } from '@/lib/codes';
 import { ensureRedis, keys, legacyKeys } from '@/lib/redis';
@@ -70,6 +73,7 @@ export async function clearRoomRedis(code: string) {
     keys.drawRequests(code),
     keys.drawHolder(code),
     keys.drawHolders(code),
+    `room:${code}:wb`,
     keys.studentLive(code),
     keys.drawStrokes(code),
     keys.drawOrder(code),
@@ -132,7 +136,7 @@ export async function startOrReopenTeacherRoom(
         // class (same permanent code) no longer name this room.
         sessionId: newSessionId(),
         // Every class starts with the waiting room on.
-        waitingRoomOn: true,
+        waitingRoomOn: await waitingRoomDefaultFor(teacher.id),
         name: opts.name?.trim() || room.name,
         maxVisibleVideos: clampMaxVisible(opts.maxVisibleVideos ?? room.maxVisibleVideos),
       },
@@ -246,7 +250,9 @@ export async function endRoom(room: { id: string; code: string; sessionId: strin
   }
   await clearRoomRedis(room.code);
   try {
-    await roomService().deleteRoom(livekitRoomName(room.code, room.sessionId));
+    const rn = livekitRoomName(room.code, room.sessionId);
+    await (await roomServiceFor(rn)).deleteRoom(rn);
+    await releaseRoom(rn);
   } catch (e) {
     console.warn('LiveKit deleteRoom', e instanceof Error ? e.message : e);
   }

@@ -160,3 +160,55 @@ export function teacherTabTitle(base: string, hands: number, unread: number): st
   if (unread > 0) parts.push(`${unread > 9 ? '9+' : unread} new`);
   return parts.length ? `(${parts.join(' · ')}) ${base}` : base;
 }
+
+/** A speaker stays "sticky" in the mosaic this long after they last spoke. */
+export const STICKY_SPEAKER_TTL_MS = 18_000;
+
+/**
+ * Client mosaic (run-4 fix): which sticky speakers keep a tile. Before, a
+ * speaker stayed sticky until muted, so a class where several students keep
+ * their mic open (or a noisy mic) filled every tile and the mosaic never
+ * rotated. Now:
+ * - a speaker is sticky only for `ttlMs` after they last spoke;
+ * - when more students publish than there are tiles, speakers + pins never
+ *   take the LAST tile, so at least one tile always rotates.
+ * Most recent speakers win. Pure for tests.
+ */
+export function activeStickySpeakers(input: {
+  lastSpoke: ReadonlyMap<string, number>;
+  now: number;
+  pool: readonly string[];
+  pins: readonly string[];
+  speakingId?: string | null;
+  studentSlots: number;
+  ttlMs?: number;
+}): string[] {
+  const ttl = input.ttlMs ?? STICKY_SPEAKER_TTL_MS;
+  const inPool = new Set(input.pool);
+  const pins = new Set(input.pins);
+  const fresh = Array.from(input.lastSpoke.entries())
+    .filter(([id, at]) => inPool.has(id) && !pins.has(id) && id !== input.speakingId && input.now - at <= ttl)
+    .sort((a, b) => b[1] - a[1])
+    .map(([id]) => id);
+  const used = input.pins.filter((id) => inPool.has(id)).length + (input.speakingId && inPool.has(input.speakingId) ? 1 : 0);
+  const overflow = input.pool.length > input.studentSlots;
+  const room = Math.max(0, input.studentSlots - used - (overflow ? 1 : 0));
+  return fresh.slice(0, room);
+}
+
+/**
+ * Run-4 fix: pins used to last until mute, so open mics filled every slot and
+ * the sample never rotated. Pure: pins still fresh, most recent first, capped
+ * so at least one slot rotates when more students are admitted than fit.
+ */
+export function freshSpeakerPins(
+  raw: Record<string, string>,
+  opts: { now: number; ttlMs: number; max: number; admitted: number; teacherPinned: number }
+): string[] {
+  const fresh = Object.entries(raw)
+    .filter(([, at]) => opts.now - Number(at || 0) <= opts.ttlMs)
+    .sort((a, b) => Number(b[1]) - Number(a[1]))
+    .map(([id]) => id);
+  const overflow = opts.admitted > opts.max;
+  return fresh.slice(0, Math.max(0, opts.max - opts.teacherPinned - (overflow ? 1 : 0)));
+}

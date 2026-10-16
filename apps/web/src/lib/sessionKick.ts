@@ -1,5 +1,7 @@
+import { mediaServers } from './mediaServers';
+import { roomServiceFor, roomServiceOn } from './livekit';
 import { prisma } from './db';
-import { livekitRoomName, roomService } from './livekit';
+import { livekitRoomName } from './livekit';
 import { ensureRedis, keys } from './redis';
 
 /**
@@ -39,8 +41,9 @@ export async function kickReplacedTeacher(teacherId: string): Promise<void> {
       // The old device's screen share ends with it: no stale "Teacher screen" stage.
       await clearStage(room.code);
       for (const t of teachers) {
-        await roomService()
-          .removeParticipant(livekitRoomName(room.code, room.sessionId), t.livekitIdentity)
+        const rn = livekitRoomName(room.code, room.sessionId);
+        await (await roomServiceFor(rn))
+          .removeParticipant(rn, t.livekitIdentity)
           .catch((e) => {
             if (!notFound(e)) console.warn('kickReplacedTeacher', room.code, e instanceof Error ? e.message : e);
           });
@@ -59,8 +62,9 @@ export function isAdminObserverOf(identity: string, adminId: string): boolean {
 /** Stop the admin's open class viewers/previews in every live class. */
 export async function kickReplacedAdmin(adminId: string): Promise<void> {
   try {
-    const svc = roomService();
-    const rooms = await svc.listRooms();
+    for (const node of mediaServers()) {
+    const svc = roomServiceOn(node);
+    const rooms = await svc.listRooms().catch(() => []);
     for (const r of rooms) {
       if (!r.name.startsWith('classroom_')) continue;
       const participants = await svc.listParticipants(r.name).catch(() => []);
@@ -68,6 +72,7 @@ export async function kickReplacedAdmin(adminId: string): Promise<void> {
         if (!isAdminObserverOf(p.identity, adminId)) continue;
         await svc.removeParticipant(r.name, p.identity).catch(() => undefined);
       }
+    }
     }
   } catch (e) {
     console.warn('kickReplacedAdmin failed', e instanceof Error ? e.message : e);

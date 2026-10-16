@@ -11,11 +11,13 @@ import {
   shareProfile,
 } from '../src/lib/videoQuality';
 
-test('teacher camera: 360p single layer, 15 fps, ≤300 kbps', () => {
+test('teacher camera: 360p top, 180p small layer, 15 fps, ≤300 kbps', () => {
   assert.equal(TEACHER_CAMERA.capture.width.ideal, 640);
   assert.equal(TEACHER_CAMERA.capture.height.ideal, 360);
   assert.equal(TEACHER_CAMERA.capture.frameRate.max, 15);
-  assert.equal(TEACHER_CAMERA.simulcast, false);
+  assert.equal(TEACHER_CAMERA.simulcast, true);
+  assert.equal(TEACHER_CAMERA.layers.length, 1);
+  assert.ok(TEACHER_CAMERA.layers[0]!.maxBitrate <= 120_000);
   assert.ok(TEACHER_CAMERA.encoding.maxBitrate <= 300_000);
 });
 
@@ -35,9 +37,9 @@ test('screen share: slides ≤8 fps, 1080p top, 720p floor layer', () => {
   assert.ok(Math.min(SCREEN_SHARE.layers[0].width, SCREEN_SHARE.layers[0].height) >= 720);
 });
 
-test('share codec: VP9 L1T3 (frame rate degrades, never resolution) with VP8 backup on Chromium only', () => {
+test('share codec: VP9 L2T3_KEY (half-res layer for phones) with VP8 backup on Chromium only', () => {
   assert.equal(SHARE_CODEC.codec, 'vp9');
-  assert.equal(SHARE_CODEC.scalabilityMode, 'L1T3');
+  assert.equal(SHARE_CODEC.scalabilityMode, 'L2T3_KEY');
   assert.equal(SHARE_CODEC.backupCodec, 'vp8');
   const chrome = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
   const edge = chrome + ' Edg/130.0';

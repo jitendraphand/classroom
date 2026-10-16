@@ -6,6 +6,7 @@ import {
   useRoomContext,
   VideoTrack,
 } from '@livekit/components-react';
+import { WhiteboardViewer } from './Whiteboard';
 import { RoomEvent, Track, VideoQuality, type RemoteParticipant } from 'livekit-client';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 /** Mirrors SCREEN_SIDECAR_SUFFIX in lib/livekit (server-only module). */
@@ -104,9 +105,9 @@ export function StudentViewStage({
   mode: StudentViewMode;
   className?: string;
 }) {
-  void code;
   useTeacherOnlySubscriptions(mode);
   const room = useRoomContext();
+  const wbOn = useAdminWhiteboardFlag(code);
   const compact = mode === 'preview';
   const remotes = useRemoteParticipants();
   const teachers = Array.from(room.remoteParticipants.values()).filter((p) => isTeacherParticipant(p, NO_TEACHERS));
@@ -134,6 +135,20 @@ export function StudentViewStage({
     : teacherHere
       ? 'Teacher camera off'
       : 'Waiting for teacher…';
+
+  if (wbOn) {
+    const ask = () =>
+      void fetch(`/api/admin/live/${encodeURIComponent(code)}/whiteboard`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identity: room.localParticipant.identity }),
+      }).catch(() => undefined);
+    return (
+      <div className={cn('relative h-full w-full overflow-hidden bg-ink-950', className)} data-admin-whiteboard="1">
+        <WhiteboardViewer identity={room.localParticipant.identity} canAnnotate={false} requestSnapshot={ask} />
+      </div>
+    );
+  }
 
   return (
     <div className={cn('relative h-full w-full overflow-hidden bg-ink-950', className)}>
@@ -178,4 +193,30 @@ function ObserverCameraFloat({ children }: { children: ReactNode }) {
       {children}
     </div>
   );
+}
+
+/** Admin viewers: is the class whiteboard open? (polled; the board itself arrives over LiveKit data). */
+function useAdminWhiteboardFlag(code: string): boolean {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    let stop = false;
+    const check = () =>
+      fetch(`/api/admin/live/${encodeURIComponent(code)}/whiteboard`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (!stop && d) setOn(!!d.on);
+        })
+        .catch(() => undefined);
+    void check();
+    const iv = window.setInterval(check, 8000);
+    return () => {
+      stop = true;
+      window.clearInterval(iv);
+    };
+  }, [code]);
+  return on;
 }

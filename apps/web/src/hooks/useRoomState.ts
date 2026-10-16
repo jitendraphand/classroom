@@ -78,6 +78,8 @@ export type RoomState = {
   visibleCount: number;
   raisedHands?: string[];
   stageMode?: 'idle' | 'screen';
+  /** Teacher's whiteboard is open (students show it instead of the stage). */
+  whiteboard?: boolean;
   /** Student ink is drawn on the teacher's real desktop (inside the share picture). */
   desktopInk?: boolean;
   /** Teacher's student-video panel shown (cameras on demand). */

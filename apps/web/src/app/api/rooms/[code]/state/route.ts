@@ -1,3 +1,4 @@
+import { whiteboardOn } from '@/lib/whiteboardServer';
 import { camWanted } from '@/lib/camOnDemand';
 import { prisma } from '@/lib/db';
 import { endedSessionReason, getStudentSessionToken, resolveRoomAccess } from '@/lib/auth';
@@ -297,6 +298,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     stageMode,
     /** The share already shows student ink (drawn on the teacher's desktop): skip the stroke overlay. */
     desktopInk: stageMode === 'screen' && desktopInkRaw === '1',
+    whiteboard: await whiteboardOn(code),
     videoPanelOpen: panelRaw !== '0',
     /** Student allowed to draw on the share now (back-compat: first one, or me), for everyone. */
     drawHolder: drawHolder

@@ -1,3 +1,4 @@
+import { wbKey } from '@/lib/whiteboardServer';
 import { ERASE_BATCH_MAX } from '@/lib/eraseBatch';
 import { z } from 'zod';
 import { prisma } from '@/lib/db';
@@ -49,8 +50,11 @@ async function loadRoom(code: string) {
   return prisma.room.findUnique({ where: { code }, select: { id: true, code: true, teacherId: true, status: true } });
 }
 
+/** Screen share or whiteboard on (students may draw on either). */
 async function sharing(code: string) {
-  return (await (await ensureRedis()).get(keys.stage(code))) === 'screen';
+  const r = await ensureRedis();
+  const [stage, wb] = await Promise.all([r.get(keys.stage(code)), r.get(wbKey(code))]);
+  return stage === 'screen' || wb === '1';
 }
 
 function wantsStudent(req: Request) {

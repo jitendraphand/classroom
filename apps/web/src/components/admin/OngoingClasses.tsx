@@ -14,6 +14,30 @@ import { normalizeCampus } from '@/lib/grades';
 
 /** How often the list (counts, new/ended classes) is refreshed. */
 const POLL_MS = 5_000;
+/** Tiles per page (run 4: 30 classes at once made the page take 9.4 s). */
+export const PAGE_SIZE = 12;
+/** Preview connections opened at the same time (the rest wait their turn). */
+const MAX_CONCURRENT_CONNECTS = 3;
+
+let connectSlots = MAX_CONCURRENT_CONNECTS;
+const connectQueue: (() => void)[] = [];
+/** Wait for a free preview-connect slot; call the returned release when connected (or failed). */
+function acquireConnectSlot(): Promise<() => void> {
+  return new Promise((resolve) => {
+    const grant = () => {
+      connectSlots--;
+      let released = false;
+      resolve(() => {
+        if (released) return;
+        released = true;
+        connectSlots++;
+        connectQueue.shift()?.();
+      });
+    };
+    if (connectSlots > 0) grant();
+    else connectQueue.push(grant);
+  });
+}
 
 /** Ticking "now" for the elapsed-time overlays (one timer for all tiles). */
 export function useNow(intervalMs = 1_000) {
@@ -32,7 +56,11 @@ export function OngoingClasses() {
   const now = useNow();
   const gradeOptions = useGradeOptions();
   const [campus, setCampus] = useState('');
-  const shown = classes && campus ? classes.filter((c) => normalizeCampus(c.campus ?? '') === campus) : classes;
+  const filtered = classes && campus ? classes.filter((c) => normalizeCampus(c.campus ?? '') === campus) : classes;
+  const [page, setPage] = useState(0);
+  const pages = filtered ? Math.max(1, Math.ceil(filtered.length / PAGE_SIZE)) : 1;
+  const safePage = Math.min(page, pages - 1);
+  const shown = filtered ? filtered.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE) : filtered;
 
   // Signed out / replaced (StaffSessionGuard shows why): stop polling.
   const sessionEnded = useSessionEnded();
@@ -67,7 +95,7 @@ export function OngoingClasses() {
     <section aria-labelledby="ongoing-heading" className="space-y-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 id="ongoing-heading" className="font-display text-lg font-semibold">
-          Live now {shown ? `(${shown.length})` : ''}
+          Live now {filtered ? `(${filtered.length})` : ''}
         </h2>
         {(gradeOptions.campuses.length > 1 || campus) && (
           <CampusSelect className="w-44 py-1.5 text-sm" value={campus} onChange={setCampus} options={gradeOptions} emptyLabel="All campuses" />
@@ -98,6 +126,19 @@ export function OngoingClasses() {
           ))}
         </ul>
       )}
+      {pages > 1 && (
+        <nav className="flex items-center justify-center gap-3 text-sm" aria-label="Pages">
+          <button type="button" className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40" disabled={safePage === 0} onClick={() => setPage(safePage - 1)}>
+            Previous
+          </button>
+          <span className="tabular-nums text-slate-400">
+            Page {safePage + 1} of {pages}
+          </span>
+          <button type="button" className="rounded-lg border border-white/10 px-3 py-1 disabled:opacity-40" disabled={safePage >= pages - 1} onClick={() => setPage(safePage + 1)}>
+            Next
+          </button>
+        </nav>
+      )}
     </section>
   );
 }
@@ -119,7 +160,7 @@ function useInView<T extends Element>() {
       setInView(true);
       return;
     }
-    const io = new IntersectionObserver(([e]) => setInView(!!e?.isIntersecting), { rootMargin: '200px' });
+    const io = new IntersectionObserver(([e]) => setInView(!!e?.isIntersecting), { rootMargin: '0px' });
     io.observe(el);
     return () => io.disconnect();
   }, []);
@@ -140,17 +181,25 @@ function LiveClassTile({ c, now }: { c: LiveClass; now: number }) {
       return;
     }
     let cancelled = false;
-    void api<{ token: string; serverUrl: string }>(`/api/admin/live/${encodeURIComponent(c.code)}/token`, {
-      body: { mode: 'preview' },
-    }).then(({ ok, data }) => {
-      if (cancelled) return;
-      if (ok) {
-        setConn({ token: data.token, serverUrl: data.serverUrl });
-        setFailed(false);
-      } else setFailed(true);
+    let release: (() => void) | null = null;
+    void acquireConnectSlot().then((rel) => {
+      release = rel;
+      if (cancelled) return rel();
+      // Free the slot once the connection had time to come up.
+      window.setTimeout(rel, 2_500);
+      return api<{ token: string; serverUrl: string }>(`/api/admin/live/${encodeURIComponent(c.code)}/token`, {
+        body: { mode: 'preview' },
+      }).then(({ ok, data }) => {
+        if (cancelled) return;
+        if (ok) {
+          setConn({ token: data.token, serverUrl: data.serverUrl });
+          setFailed(false);
+        } else setFailed(true);
+      });
     });
     return () => {
       cancelled = true;
+      release?.();
     };
   }, [inView, c.code, c.sessionId, attempt, sessionEnded]);
 

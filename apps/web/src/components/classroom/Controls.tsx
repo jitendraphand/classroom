@@ -25,6 +25,9 @@ type Props = {
   onToggleMic: () => void;
   onToggleCam: () => void;
   onToggleScreen: () => void;
+  /** Teacher: open/close the whiteboard (shared with students over data channels). */
+  onToggleWhiteboard?: () => void;
+  whiteboardOn?: boolean;
   onLeave: () => void;
   isTeacher?: boolean;
   onEnd?: () => void;
@@ -86,6 +89,8 @@ export function Controls({
   onToggleMic,
   onToggleCam,
   onToggleScreen,
+  onToggleWhiteboard,
+  whiteboardOn,
   onLeave,
   isTeacher,
   onEnd,
@@ -185,6 +190,12 @@ export function Controls({
             onClick={onToggleScreen}
           >
             <IconScreen />
+          </IconButton>
+        )}
+
+        {onToggleWhiteboard && (
+          <IconButton label={whiteboardOn ? 'Close whiteboard' : 'Whiteboard'} active={!!whiteboardOn} onClick={onToggleWhiteboard}>
+            <span aria-hidden style={{ fontSize: 16, lineHeight: 1 }}>✎</span>
           </IconButton>
         )}
 

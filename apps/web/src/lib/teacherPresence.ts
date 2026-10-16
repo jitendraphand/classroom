@@ -1,3 +1,4 @@
+import { roomServiceFor } from './livekit';
 import { prisma } from './db';
 import { ensureRedis, keys } from './redis';
 import { livekitRoomName, roomService, setParticipantPublishPermissions } from './livekit';
@@ -77,7 +78,8 @@ export async function recordTeacherGrace(room: RoomRef) {
 /** Participants the SFU currently has in this class's LiveKit room ([] if the room does not exist yet). */
 export async function listRoomParticipants(room: RoomRef): Promise<PresenceParticipant[]> {
   try {
-    const list = await roomService().listParticipants(livekitRoomName(room.code, room.sessionId));
+    const rn = livekitRoomName(room.code, room.sessionId);
+    const list = await (await roomServiceFor(rn)).listParticipants(rn);
     return list.map((p) => ({
       identity: p.identity,
       sid: p.sid,
@@ -104,6 +106,8 @@ async function probe(room: RoomRef): Promise<boolean> {
   }
 }
 
+const inflightProbes = new Map<string, Promise<boolean>>();
+
 /** Is the teacher connected to this class's LiveKit room right now? */
 export async function isTeacherPresent(code: string, known?: RoomRef | null): Promise<boolean> {
   const room =
@@ -112,7 +116,15 @@ export async function isTeacherPresent(code: string, known?: RoomRef | null): Pr
   if (!room) return false;
   const cached = await readRecord(room);
   if (cached !== null) return cached;
-  return probe(room);
+  // Single flight per room and process: a burst of joins (run 4: hundreds of
+  // students at once) made one LiveKit listParticipants call EACH.
+  const k = timerKey(room);
+  let p = inflightProbes.get(k);
+  if (!p) {
+    p = probe(room).finally(() => inflightProbes.delete(k));
+    inflightProbes.set(k, p);
+  }
+  return p;
 }
 
 /**

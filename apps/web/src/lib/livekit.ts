@@ -9,6 +9,7 @@ import { prisma } from './db';
 import { resolvePublicLiveKitUrl } from './url';
 import { isTeacherPresent } from './teacherPresence';
 import { studentMicAllowed } from './teacherPresenceLogic';
+import { mediaServers, serverForRoom, type MediaServer } from './mediaServers';
 
 /**
  * LiveKit access-token lifetime. Short on purpose: LiveKit refreshes the token
@@ -33,6 +34,34 @@ export function roomService() {
   const key = process.env.LIVEKIT_API_KEY!;
   const secret = process.env.LIVEKIT_API_SECRET!;
   return new RoomServiceClient(getLiveKitHttpUrl(), key, secret);
+}
+
+const services = new Map<string, RoomServiceClient>();
+/** RoomServiceClient for one media node (cached). */
+export function roomServiceOn(server: MediaServer): RoomServiceClient {
+  if (mediaServers().length === 1 && server.id === 'default') return roomService();
+  let svc = services.get(server.id);
+  if (!svc) {
+    svc = new RoomServiceClient(server.httpUrl, server.apiKey, server.apiSecret);
+    services.set(server.id, svc);
+  }
+  return svc;
+}
+
+/** RoomServiceClient for the media node that hosts this LiveKit room. */
+export async function roomServiceFor(roomName: string): Promise<RoomServiceClient> {
+  return roomServiceOn(await serverForRoom(roomName));
+}
+
+/** Browser URL of the media node hosting this room (N=1: unchanged request-based URL). */
+export async function mediaUrlForRoom(roomName: string, req?: Request): Promise<string> {
+  const s = await serverForRoom(roomName);
+  return s.url ?? resolvePublicLiveKitUrl(req);
+}
+
+async function signerFor(roomName: string): Promise<{ key: string; secret: string }> {
+  const s = await serverForRoom(roomName);
+  return { key: s.apiKey || process.env.LIVEKIT_API_KEY!, secret: s.apiSecret || process.env.LIVEKIT_API_SECRET! };
 }
 
 /**
@@ -85,8 +114,8 @@ export type ParticipantGrantInput = {
  * The LiveKit video grant for a classroom participant. Pure so it can be
  * unit-tested.
  *
- * - Teacher: publish every source; no data publishing (chat and room events
- *   are sent by the server).
+ * - Teacher: publish every source, plus data for the whiteboard only (chat
+ *   and room events are still sent by the server).
  * - Student: publish camera (only while in the sample) and microphone (only
  *   while not teacher-muted); **no data publishing** and **no screen share**.
  */
@@ -106,7 +135,10 @@ export function classroomGrant(input: ParticipantGrantInput) {
     room: input.roomName,
     canPublish: true,
     canSubscribe: true,
-    canPublishData: false,
+    // Teacher: may publish data for the whiteboard (vector ops, topic `wb`).
+    // Clients accept `wb` packets only from a teacher identity or the server.
+    // Students still publish no data.
+    canPublishData: isTeacher,
     canPublishSources: sources,
   };
 }
@@ -118,7 +150,8 @@ export async function createParticipantToken(
     metadata?: Record<string, unknown>;
   }
 ) {
-  const at = new AccessToken(process.env.LIVEKIT_API_KEY!, process.env.LIVEKIT_API_SECRET!, {
+  const signer = await signerFor(opts.roomName);
+  const at = new AccessToken(signer.key, signer.secret, {
     identity: opts.identity,
     name: opts.name,
     metadata: opts.metadata ? JSON.stringify(opts.metadata) : undefined,
@@ -176,7 +209,8 @@ export async function createObserverToken(opts: {
     opts.mode,
     opts.nonce ?? crypto.randomUUID().replace(/-/g, '').slice(0, 10)
   );
-  const at = new AccessToken(process.env.LIVEKIT_API_KEY!, process.env.LIVEKIT_API_SECRET!, {
+  const signer = await signerFor(opts.roomName);
+  const at = new AccessToken(signer.key, signer.secret, {
     identity,
     name: opts.mode === 'preview' ? 'Admin preview' : opts.adminName || 'School admin',
     metadata: JSON.stringify({ role: 'ADMIN', mode: opts.mode }),
@@ -211,7 +245,7 @@ export async function livekitRoomNameForCode(code: string): Promise<string | nul
  */
 export async function removeLiveKitParticipant(roomName: string, identity: string) {
   try {
-    await roomService().removeParticipant(roomName, identity);
+    await (await roomServiceFor(roomName)).removeParticipant(roomName, identity);
   } catch (e) {
     // NOT_FOUND when the participant is not connected — nothing to do.
     const msg = e instanceof Error ? e.message : String(e);
@@ -234,7 +268,7 @@ export async function sendRoomData(
 ) {
   const bytes = new TextEncoder().encode(JSON.stringify(payload));
   try {
-    await roomService().sendData(roomName, bytes, DataPacket_Kind.RELIABLE, {
+    await (await roomServiceFor(roomName)).sendData(roomName, bytes, DataPacket_Kind.RELIABLE, {
       topic: opts.topic,
       destinationIdentities: opts.destinationIdentities,
     });
@@ -260,9 +294,9 @@ export async function setParticipantPublishPermissions(
   requested: PublishPermissions,
   opts: { teacherPresent?: boolean } = {}
 ): Promise<void> {
-  const svc = roomService();
   const roomName = await livekitRoomNameForCode(code);
   if (!roomName) return;
+  const svc = await roomServiceFor(roomName);
   // Students are force-muted while the teacher is not connected, whatever the
   // caller asked for (sample rotation, "Unmute all", …). The teacher's own mute
   // state is already folded into requested.allowMic.
@@ -387,7 +421,8 @@ export function screenSidecarGrant(roomName: string) {
 
 export async function createScreenSidecarToken(opts: { roomName: string; teacherIdentity: string; name: string; participantId: string }) {
   const identity = screenSidecarIdentity(opts.teacherIdentity);
-  const at = new AccessToken(process.env.LIVEKIT_API_KEY!, process.env.LIVEKIT_API_SECRET!, {
+  const signer = await signerFor(opts.roomName);
+  const at = new AccessToken(signer.key, signer.secret, {
     identity,
     name: opts.name,
     metadata: JSON.stringify({ role: 'TEACHER', screenFor: opts.teacherIdentity, participantId: opts.participantId }),

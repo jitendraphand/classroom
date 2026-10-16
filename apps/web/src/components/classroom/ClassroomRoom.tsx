@@ -25,6 +25,7 @@ import {
   DisconnectReason,
   AudioPresets,
   VideoPreset,
+  VideoQuality,
   type LocalTrackPublication,
   type Participant,
   type ParticipantTrackPermission,
@@ -41,6 +42,7 @@ import {
 } from 'react';
 import { useRouter } from 'next/navigation';
 import { TEACHER_ABSENCE_GRACE_MS } from '@/lib/graceTimer';
+import { STUCK_RECONNECT_MS, rejoinDelayMs, rejoinOutcome, shouldAutoRejoin } from '@/lib/rejoinPolicy';
 import { SESSION_CHECK_EVENT, SESSION_ENDED_EVENT, isEndedReason, loginHref } from '@/lib/sessionClient';
 import { useRoomState, type RosterInfo } from '@/hooks/useRoomState';
 import { compactViewport, studentChatBox, usePseudoFullscreen, useViewport } from '@/hooks/useStudentLayout';
@@ -48,6 +50,7 @@ import { shortName } from '@/lib/displayNames';
 import { Controls } from './Controls';
 import { LocalPreview } from './LocalPreview';
 import { DrawOverlay, ShareDrawingProvider, useDrawingActions, useShareDrawing } from './ShareDrawing';
+import { WhiteboardHost, WhiteboardViewer, hasSavedBoard } from './Whiteboard';
 import { useChatThread } from './chatThread';
 // Chat UI loads on first open (the thread hook above keeps unread counts live).
 const ChatView = dynamic(() => import('./Chat').then((m) => m.ChatView), { ssr: false });
@@ -78,6 +81,7 @@ import { IconDoor, IconHand, IconHandDown, IconMic, IconMicOff, IconPen, IconPin
 import {
   panelSlotsForCap,
   pickTiles,
+  activeStickySpeakers,
   sortRoster,
   studentCapForSlots,
   teacherTabTitle,
@@ -1036,6 +1040,9 @@ function TeacherPeersFloat({
   const paneRef = useRef<HTMLDivElement | null>(null);
   const sizeRef = useRef({ w: 372, h: 250 });
   const stickySpeakersRef = useRef<Set<string>>(new Set());
+  /** identity → last time heard speaking (sticky pins expire, see activeStickySpeakers). */
+  const lastSpokeRef = useRef<Map<string, number>>(new Map());
+  const seenCamsRef = useRef<Set<string>>(new Set());
   const mosaicPoolRef = useRef<string[]>([]);
   const lastRotationTickRef = useRef(0);
   const [slotCount, setSlotCount] = useState<2 | 4 | 6>(() => {
@@ -1221,7 +1228,8 @@ function TeacherPeersFloat({
           if (sticky.delete(s.identity)) changed = true;
           continue;
         }
-        // Unmuted + speaking → sticky until muted
+        // Unmuted + speaking → sticky for STICKY_SPEAKER_TTL_MS after the last word
+        lastSpokeRef.current.set(s.identity, Date.now());
         if (!sticky.has(s.identity)) {
           sticky.add(s.identity);
           changed = true;
@@ -1256,14 +1264,12 @@ function TeacherPeersFloat({
       let changedAny = !fromTimer;
       for (const p of Array.from(room.remoteParticipants.values())) {
         if (isTeacherParticipant(p, teacherSet)) continue;
+        // Subscriptions follow the tiles actually shown (effect below);
+        // here we only notice cameras that appeared or went away.
         const pub = p.getTrackPublication(Track.Source.Camera);
-        if (pub && !pub.isSubscribed) {
+        if (pub && !seenCamsRef.current.has(pub.trackSid)) {
+          seenCamsRef.current.add(pub.trackSid);
           changedAny = true;
-          try {
-            pub.setSubscribed(true);
-          } catch (e) {
-            console.warn('subscribe peer cam', e);
-          }
         }
         // Keep sticky set in sync with mute state even without speak events
         if (stickySpeakersRef.current.has(p.identity) && isMicMuted(p)) {
@@ -1309,16 +1315,27 @@ function TeacherPeersFloat({
       if (!p || isTeacherParticipant(p, tSet)) return false;
       const pub = p.getTrackPublication(Track.Source.Camera);
       if (!pub || pub.isMuted) return false;
+      // Not subscribed yet (we only subscribe shown tiles) counts as live.
       const media = pub.track?.mediaStreamTrack;
-      return !!media && media.readyState !== 'ended';
+      return !media || media.readyState !== 'ended';
     };
     // Only cameras actually publishing in the sample. Everyone else stays a blank slot.
     const pool = visibleIdentities.filter(
       (id) => !tSet.has(id) && !id.startsWith('teacher_') && hasLiveCamera(id)
     );
-    const sticky = Array.from(stickySpeakersRef.current).filter((id) => pool.includes(id));
     const pins = pinnedIdentities.filter((id) => pool.includes(id));
     const studentSlots = Math.max(0, slotCount - 1);
+    for (const id of Array.from(lastSpokeRef.current.keys())) {
+      if (!stickySpeakersRef.current.has(id)) lastSpokeRef.current.delete(id);
+    }
+    const sticky = activeStickySpeakers({
+      lastSpoke: lastSpokeRef.current,
+      now: Date.now(),
+      pool,
+      pins,
+      speakingId,
+      studentSlots,
+    });
 
     // Rotation runs among everyone who is not pinned / speaking. Pinned
     // students (teacher), then the active speaker, then sticky speakers take
@@ -1369,6 +1386,34 @@ function TeacherPeersFloat({
     stickyVersion,
     pinnedIdentities,
   ]);
+
+  // Bandwidth: subscribe to a student camera only while its tile is shown
+  // and the panel is open, and at the lowest layer.
+  const shownKey = isMin ? '' : peerIds.join(',');
+  useEffect(() => {
+    if (!room) return;
+    const want = new Set(shownKey ? shownKey.split(',') : []);
+    const apply = () => {
+      for (const p of Array.from(room.remoteParticipants.values())) {
+        if (isTeacherParticipant(p, teacherSet)) continue;
+        const pub = p.getTrackPublication(Track.Source.Camera);
+        if (!pub) continue;
+        const w = want.has(p.identity);
+        try {
+          if (pub.isSubscribed !== w) pub.setSubscribed(w);
+          if (w) pub.setVideoQuality(VideoQuality.LOW);
+        } catch (e) {
+          console.warn('peer cam subscription', e);
+        }
+      }
+    };
+    apply();
+    room.on(RoomEvent.TrackPublished, apply);
+    return () => {
+      room.off(RoomEvent.TrackPublished, apply);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [room, shownKey, teacherIdentities.join(',')]);
 
   const cells: Array<string | null> = ['__self__'];
   for (let i = 0; i < slotCount - 1; i++) cells.push(peerIds[i] ?? null);
@@ -2165,10 +2210,25 @@ function StudentMediaPrivacy({
       const teachers = new Set<string>(teacherSet);
       const classmates = new Set<string>(rosterStudents);
 
+      // Bandwidth: while the teacher shares, their camera is a corner tile,
+      // so take its small simulcast layer only (≈90 kbps instead of ≈300).
+      const sharing = Array.from(room.remoteParticipants.values()).some(
+        (p) => isTeacherParticipant(p, teacherSet) && !!p.getTrackPublication(Track.Source.ScreenShare)
+      );
       for (const p of Array.from(room.remoteParticipants.values())) {
         const isTeacherP = isTeacherParticipant(p, teacherSet);
         if (isTeacherP) teachers.add(p.identity);
         else classmates.add(p.identity);
+        if (isTeacherP) {
+          const cam = p.getTrackPublication(Track.Source.Camera);
+          if (cam) {
+            try {
+              cam.setVideoQuality(sharing ? VideoQuality.LOW : VideoQuality.HIGH);
+            } catch {
+              /* not subscribed yet */
+            }
+          }
+        }
         for (const pub of Array.from(p.trackPublications.values())) {
           const want = isTeacherP || pub.source === Track.Source.Microphone;
           if (pub.isSubscribed !== want) {
@@ -2215,6 +2275,8 @@ function StudentMediaPrivacy({
     room.on(RoomEvent.ParticipantConnected, sync);
     room.on(RoomEvent.ParticipantDisconnected, sync);
     room.on(RoomEvent.TrackPublished, sync);
+    room.on(RoomEvent.TrackUnpublished, sync);
+    room.on(RoomEvent.TrackSubscribed, sync);
     room.on(RoomEvent.LocalTrackPublished, sync);
     room.on(RoomEvent.LocalTrackUnpublished, sync);
     const iv = window.setInterval(sync, 3000);
@@ -2223,6 +2285,8 @@ function StudentMediaPrivacy({
       room.off(RoomEvent.Reconnected, resync);
       room.off(RoomEvent.ParticipantConnected, sync);
       room.off(RoomEvent.ParticipantDisconnected, sync);
+      room.off(RoomEvent.TrackUnpublished, sync);
+      room.off(RoomEvent.TrackSubscribed, sync);
       room.off(RoomEvent.TrackPublished, sync);
       room.off(RoomEvent.LocalTrackPublished, sync);
       room.off(RoomEvent.LocalTrackUnpublished, sync);
@@ -3037,7 +3101,7 @@ function RoomInner({
       } catch {
         /* ignore */
       }
-      // VP9 L1T3 + VP8 backup (Chromium); VP8 simulcast elsewhere. See SHARE_CODEC.
+      // VP9 L2T3_KEY + VP8 backup (Chromium); VP8 simulcast elsewhere. See SHARE_CODEC.
       const vp9 = shareUsesVp9(navigator.userAgent || '');
       const shareOpts = (layered: boolean, useVp9 = vp9) => ({
         name: 'screen',
@@ -3248,6 +3312,22 @@ function RoomInner({
       );
     }
   }
+
+  // Whiteboard (teacher): exclusive with the screen share.
+  const [wbOpen, setWbOpen] = useState(false);
+  // Fresh teacher session: reopen a board this tab still has, or clear a stale flag.
+  const wbChecked = useRef(false);
+  useEffect(() => {
+    if (!isTeacher || !state || wbChecked.current) return;
+    wbChecked.current = true;
+    if (!state.whiteboard) return;
+    if (hasSavedBoard(code)) setWbOpen(true);
+    else void roomFetch(code, '/whiteboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'off' }) });
+  }, [isTeacher, state, code]);
+  const closeWhiteboard = useCallback(() => {
+    setWbOpen(false);
+    void roomFetch(code, '/whiteboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'off' }) });
+  }, [code]);
 
   // Waiting room toggle (per class session, saved on the server). Off admits
   // everyone waiting and lets new students straight in (still muted).
@@ -3487,7 +3567,9 @@ function RoomInner({
     isTeacher && drawHolders.length > 1 && drawHolders[0]
       ? { ...drawHolders[0], name: drawHolderNames.join(', ') }
       : (state?.drawHolder ?? null);
-  const sharingNow = isTeacher ? screenOn || stageMode === 'screen' : effectiveStage === 'screen';
+  const sharingNow = isTeacher
+    ? screenOn || stageMode === 'screen' || wbOpen
+    : effectiveStage === 'screen' || !!state?.whiteboard;
   const [drawOverride, setDrawOverride] = useState<'off' | 'requested' | 'drawing' | null>(null);
   const serverDrawState: 'off' | 'requested' | 'drawing' = state?.me?.canDraw
     ? 'drawing'
@@ -3579,7 +3661,19 @@ function RoomInner({
       setMicOn((v) => !v);
     },
     onToggleCam: () => setCamOn((v) => !v),
-    onToggleScreen: toggleScreen,
+    onToggleScreen: () => {
+      // Screen share and whiteboard are exclusive: starting a share closes the board.
+      if (!screenOn && wbOpen) closeWhiteboard();
+      void toggleScreen();
+    },
+    whiteboardOn: wbOpen,
+    onToggleWhiteboard: isTeacher
+      ? () => {
+          if (wbOpen) return closeWhiteboard();
+          if (screenOn) void toggleScreen();
+          setWbOpen(true);
+        }
+      : undefined,
     onLeave: leave,
     isTeacher,
     canPublishVideo: effectiveCanPublish,
@@ -3596,7 +3690,7 @@ function RoomInner({
   const withDrawing = (node: ReactNode) => (
     <ShareDrawingProvider
       code={code}
-      active={sharingNow}
+      active={isTeacher ? screenOn || stageMode === 'screen' : effectiveStage === 'screen' && !state?.whiteboard}
       holder={drawHolder}
       myIdentity={state?.me?.livekitIdentity ?? localParticipant.identity}
       canDraw={!isTeacher && myDrawState === 'drawing' && !!state?.me?.canDraw}
@@ -3672,7 +3766,18 @@ function RoomInner({
         )}
 
         <div className="absolute inset-0 z-10">
-          {covered ? null : showTeacherScreen ? (
+          {covered ? null : state?.whiteboard && !teacherGone ? (
+            <WhiteboardViewer
+              identity={state?.me?.livekitIdentity ?? localParticipant.identity}
+              canAnnotate={myDrawState === 'drawing' && !!state?.me?.canDraw}
+              requestSnapshot={() =>
+                void roomFetch(code, '/whiteboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'req' }) })
+              }
+              sendOps={(ops) =>
+                roomFetch(code, '/whiteboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'ops', ops }) })
+              }
+            />
+          ) : showTeacherScreen ? (
             <TeacherScreenStage teacherIdentities={teacherIdentities} />
           ) : (
             <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-ink-950 px-6 text-center text-slate-400">
@@ -3757,6 +3862,9 @@ function RoomInner({
         onCameraError={setCamError}
       />
       <RoomAudioRenderer />
+      {wbOpen && (
+        <WhiteboardHost code={code} identity={localParticipant.identity} onClose={() => setWbOpen(false)} />
+      )}
 
       {/* Top bar */}
       {/* Above every floating panel (z-60 > floats 34–55) and marked as the top
@@ -4242,6 +4350,8 @@ function RoomInner({
             waitingCount={waitingCount}
             onAdmit={(id) => void admitStudents([id])}
             onAdmitAll={() => void admitStudents(undefined, true)}
+            waitingRoomOn={waitingRoomOn}
+            onWaitingRoom={(on) => void setWaitingRoom(on)}
             teacherMicOn={micOn && !effectiveMuted}
             onToggleTeacherMic={() => setMicOn((v) => !v)}
             teacherCamOn={camOn}
@@ -4418,8 +4528,80 @@ export function ClassroomRoom({ code }: { code: string }) {
     return () => window.removeEventListener(SESSION_ENDED_EVENT, onEnded);
   }, []);
 
+  /** Remount key: a rejoin builds a brand-new Room (fresh peer connections). */
+  const [connKey, setConnKey] = useState(0);
+  const [rejoining, setRejoining] = useState(false);
+  const rejoinRef = useRef<{ running: boolean; unmounted: boolean }>({ running: false, unmounted: false });
+  useEffect(() => {
+    const r = rejoinRef.current;
+    r.unmounted = false;
+    return () => {
+      r.unmounted = true;
+    };
+  }, []);
+
+  /**
+   * Run-4 fix: rejoin after the SFU connection is lost for longer than
+   * LiveKit's own reconnect window (e.g. a 30 s network drop). Waits for the
+   * network, fetches a fresh token and mounts a new Room, retrying with
+   * backoff until it works or the class is over.
+   */
+  const rejoin = useCallback(async () => {
+    const r = rejoinRef.current;
+    if (r.running) return;
+    r.running = true;
+    setRejoining(true);
+    try {
+      for (let attempt = 0; !r.unmounted; attempt++) {
+        await new Promise((res) => window.setTimeout(res, rejoinDelayMs(attempt)));
+        if (r.unmounted) return;
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+          await new Promise<void>((res) => {
+            const done = () => {
+              window.removeEventListener('online', done);
+              res();
+            };
+            window.addEventListener('online', done);
+            window.setTimeout(done, 10_000);
+          });
+          continue;
+        }
+        let res: Response | null = null;
+        try {
+          res = await roomFetch(code, '/token');
+        } catch {
+          res = null;
+        }
+        if (!res) continue;
+        const outcome = rejoinOutcome(res.status);
+        if (outcome === 'retry') continue;
+        const body = await res.json().catch(() => ({}));
+        if (outcome === 'ended') {
+          setClassEnded(true);
+          setTokenData(null);
+          return;
+        }
+        if (outcome === 'stop') {
+          setError(body.error || 'Could not rejoin the class');
+          setTokenData(null);
+          return;
+        }
+        setTokenData(body);
+        setConnKey((k) => k + 1);
+        return;
+      }
+    } finally {
+      r.running = false;
+      setRejoining(false);
+    }
+  }, [code]);
+
   const onDisconnected = useCallback(
     (reason?: DisconnectReason) => {
+      if (shouldAutoRejoin(reason, { leaving: rejoinRef.current.unmounted || leavingNow() })) {
+        void rejoin();
+        return;
+      }
       if (!isTeacher && (reason === DisconnectReason.DUPLICATE_IDENTITY || reason === DisconnectReason.PARTICIPANT_REMOVED)) {
         // Students: the newer device took the seat, or the teacher removed them.
         setFinished((f) => f ?? (reason === DisconnectReason.DUPLICATE_IDENTITY ? 'replaced' : 'removed'));
@@ -4437,7 +4619,7 @@ export function ClassroomRoom({ code }: { code: string }) {
         window.dispatchEvent(new Event(SESSION_CHECK_EVENT));
       }
     },
-    [isTeacher]
+    [isTeacher, rejoin]
   );
 
   /**
@@ -4487,6 +4669,10 @@ export function ClassroomRoom({ code }: { code: string }) {
       }
     }
 
+    // Students: fetch the media token in parallel with the first /state
+    // (one round trip less on the join path; run-4 profiling). A waiting
+    // student's token request just fails with 403 and is ignored.
+    const tokEarly = tabRole === 'student' ? roomFetch(code, '/token').catch(() => null) : null;
     const stateRes = await roomFetch(code, '/state');
     const state = await stateRes.json();
     if (!stateRes.ok) {
@@ -4527,7 +4713,8 @@ export function ClassroomRoom({ code }: { code: string }) {
     setDisplayName(state.me?.displayName || 'You');
     setCanPublishVideo(!!state.me?.canPublishVideo);
 
-    const tokRes = await roomFetch(code, '/token');
+    const early = tokEarly ? await tokEarly : null;
+    const tokRes = early && early.ok ? early : await roomFetch(code, '/token');
     const tok = await tokRes.json();
     if (!tokRes.ok) {
       if (tokRes.status === 410 || tok.ended) {
@@ -4635,6 +4822,7 @@ export function ClassroomRoom({ code }: { code: string }) {
 
   return (
     <LiveKitRoom
+      key={connKey}
       token={tokenData.token}
       serverUrl={tokenData.url}
       connect
@@ -4674,6 +4862,12 @@ export function ClassroomRoom({ code }: { code: string }) {
       onError={(e) => console.error('LiveKit', e)}
       onDisconnected={onDisconnected}
     >
+      <ReconnectWatchdog onStuck={() => void rejoin()} />
+      {rejoining && (
+        <div className="pointer-events-none fixed left-1/2 top-2 z-[80] -translate-x-1/2 rounded-full bg-amber-500/90 px-3 py-1 text-xs font-semibold text-black" data-testid="rejoining">
+          Reconnecting to class…
+        </div>
+      )}
       <RoomInner
         code={code}
         isTeacher={isTeacher}
@@ -4687,6 +4881,53 @@ export function ClassroomRoom({ code }: { code: string }) {
       />
     </LiveKitRoom>
   );
+}
+
+/** Pages that are navigating away (Leave / End) mark this so the disconnect is not treated as a drop. */
+function leavingNow(): boolean {
+  try {
+    return (window as Window & { __classroomLeaving?: boolean }).__classroomLeaving === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Tears the room down when LiveKit is stuck reconnecting (peer connections
+ * left in "new" after a long drop) so the outer component rejoins with a new
+ * Room. Also rejoins when the browser comes back online while disconnected.
+ */
+function ReconnectWatchdog({ onStuck }: { onStuck: () => void }) {
+  const room = useRoomContext();
+  const cb = useRef(onStuck);
+  cb.current = onStuck;
+  useEffect(() => {
+    if (!room) return;
+    let since: number | null = null;
+    const iv = window.setInterval(() => {
+      const st = room.state;
+      const busy = st === ConnectionState.Reconnecting || st === ConnectionState.SignalReconnecting;
+      if (!busy) {
+        since = null;
+        return;
+      }
+      since ??= Date.now();
+      if (Date.now() - since > STUCK_RECONNECT_MS) {
+        since = null;
+        void room.disconnect(false).catch(() => undefined);
+        cb.current();
+      }
+    }, 2000);
+    const onOnline = () => {
+      if (room.state === ConnectionState.Disconnected) cb.current();
+    };
+    window.addEventListener('online', onOnline);
+    return () => {
+      window.clearInterval(iv);
+      window.removeEventListener('online', onOnline);
+    };
+  }, [room]);
+  return null;
 }
 
 /**
