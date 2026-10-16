@@ -19,6 +19,8 @@ import { SIDECAR_PUBLISH_TIMEOUT_MS, controlLine, inkMessage, parseScreenToken, 
 import { SIDECAR_HELPER_FPS, VIDEO_MODE_SHARE as SIDECAR_VIDEO } from '../shared/capture';
 import { fitToolbar, movedBounds, parseOrient, stableNatural, toolbarSize } from '../shared/toolbarLayout';
 import { HW_ENCODE_FEATURES } from '../shared/hwEncode';
+import { busyFraction, cpuTimes, initialState as adaptiveInitial, levelProfile, nextState as adaptiveNext, type AdaptiveState } from '../shared/adaptiveCapture';
+import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -239,6 +241,31 @@ async function refreshSidecarToken(): Promise<boolean> {
  * goes through here: with the sidecar it reconnects with a fresh token and only
  * counts as recovered once the sidecar has published again.
  */
+// Adaptive capture (item 4): busy / 2-core PCs share a smaller, slower picture.
+let adaptive: AdaptiveState = adaptiveInitial(os.cpus().length);
+let adaptiveSentLevel = -1;
+let requestedShareFps = 8;
+let lastCpu = cpuTimes(os.cpus());
+function adaptiveTick(): void {
+  const now = cpuTimes(os.cpus());
+  const busy = busyFraction(lastCpu, now);
+  lastCpu = now;
+  if (!sidecarActive() || !lastSnap?.hud.sharing) {
+    adaptiveSentLevel = -1;
+    return;
+  }
+  adaptive = adaptiveNext(adaptive, busy);
+  const prof = levelProfile(adaptive.level, requestedShareFps);
+  // Resend while reduced: a sidecar restart forgets the cap.
+  if (adaptive.level !== adaptiveSentLevel || adaptive.level > 0) {
+    wgc.send(controlLine({ op: 'maxHeight', maxHeight: prof.maxHeight }));
+    wgc.send(controlLine({ op: 'fps', fps: prof.fps }));
+    if (adaptive.level !== adaptiveSentLevel) logCapture(`[capture] adaptive level ${adaptive.level} (cpu ${Math.round(busy * 100)}%): ${prof.maxHeight || 'native'}p @ ${prof.fps} fps`);
+    adaptiveSentLevel = adaptive.level;
+  }
+}
+setInterval(adaptiveTick, 3000).unref?.();
+
 async function supervisedStart(args: string[]): Promise<Awaited<ReturnType<typeof wgc.start>>> {
   if (!sidecarActive()) return wgc.start(args);
   if (!(await refreshSidecarToken())) return { ok: false, error: 'screen-token' };
@@ -1239,13 +1266,29 @@ let pendingChild: { name: string; bounds: { x: number; y: number; w: number; h: 
 function attachChildWindows(win: Win): void {
   win.webContents.setWindowOpenHandler((details) => {
     const name = details.frameName || '';
-    if (!['classroom-videos', 'annotate-overlay', 'annotate-preview', 'region-picker'].includes(name)) {
+    if (!['classroom-videos', 'annotate-overlay', 'annotate-preview', 'region-picker', 'classroom-whiteboard'].includes(name)) {
       return { action: 'deny' };
     }
     const requested = parseFeatures(details.features);
     const bounds = name === 'classroom-videos' ? place('videos') : requested;
     pendingChild = { name, bounds };
     const transparent = name === 'annotate-overlay' || name === 'region-picker';
+    if (name === 'classroom-whiteboard') {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          x: Math.round(bounds.x),
+          y: Math.round(bounds.y),
+          width: Math.max(800, Math.round(bounds.w)),
+          height: Math.max(500, Math.round(bounds.h)),
+          title: 'Whiteboard',
+          backgroundColor: '#0f172a',
+          show: false,
+          autoHideMenuBar: true,
+          webPreferences: prefs(),
+        },
+      };
+    }
     return {
       action: 'allow',
       overrideBrowserWindowOptions: {
@@ -1273,8 +1316,10 @@ function attachChildWindows(win: Win): void {
     const name = details.frameName || `child-${child.id}`;
     const wanted = pendingChild && pendingChild.name === name ? pendingChild.bounds : null;
     if (wanted) child.setBounds({ x: wanted.x, y: wanted.y, width: wanted.w, height: wanted.h });
-    child.setAlwaysOnTop(true, 'pop-up-menu');
-    child.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    if (name !== 'classroom-whiteboard') {
+      child.setAlwaysOnTop(true, 'pop-up-menu');
+      child.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    }
     watch(child, name);
     child.once('ready-to-show', () => {
       if (wanted && !child.isDestroyed()) child.setBounds({ x: wanted.x, y: wanted.y, width: wanted.w, height: wanted.h });
@@ -2141,7 +2186,8 @@ function installIpc(): void {
     if (!mainWindow || event.sender.id !== mainWindow.webContents.id) return { ok: false };
     if (!lastWgcArgs || !lastSnap?.hud.sharing) return { ok: false };
     const rate = Math.max(1, Math.min(30, Math.round(Number(fps) || SCREEN_SHARE.capture.frameRate)));
-    if (sidecarActive()) return { ok: wgc.send(controlLine({ op: 'fps', fps: rate })) };
+    requestedShareFps = rate;
+    if (sidecarActive()) return { ok: wgc.send(controlLine({ op: 'fps', fps: levelProfile(adaptive.level, rate).fps })) };
     const args = [...lastWgcArgs];
     if (args[args.length - 1] === String(rate)) return { ok: true };
     args[args.length - 1] = String(rate);

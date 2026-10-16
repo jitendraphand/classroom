@@ -21,6 +21,8 @@ export type HudState = {
   camOn: boolean;
   annotateOn: boolean;
   videosOn: boolean;
+  /** Whiteboard window open (vector board sent to students). */
+  whiteboardOn?: boolean;
   waitingRoomOn: boolean;
   layout: SlotCount;
   classLabel: string;
@@ -66,6 +68,7 @@ export type TeacherAction =
   | { type: 'stop-share' }
   | { type: 'toggle-annotate' }
   | { type: 'toggle-videos' }
+  | { type: 'toggle-whiteboard' }
   | { type: 'toggle-video-mode' }
   | { type: 'toggle-low-power' }
   | { type: 'toggle-share-audio' }
@@ -104,6 +107,7 @@ export function isTeacherAction(v: unknown): v is TeacherAction {
     case 'stop-share':
     case 'toggle-annotate':
     case 'toggle-videos':
+    case 'toggle-whiteboard':
     case 'toggle-video-mode':
     case 'toggle-low-power':
     case 'toggle-share-audio':

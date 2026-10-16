@@ -108,8 +108,33 @@ impl Pacer {
     }
 }
 
+/// Adaptive capture height: 0 = off, else at least 360 (legible slides).
+pub fn clamp_max_height(h: u32) -> u32 {
+    if h == 0 { 0 } else { h.clamp(360, 1080) }
+}
+
+/// Target size when a frame is taller than `max_h` (even dimensions, aspect kept); None = no scaling.
+pub fn scaled_size(w: u32, h: u32, max_h: u32) -> Option<(u32, u32)> {
+    if max_h == 0 || h <= max_h || w == 0 || h == 0 {
+        return None;
+    }
+    let th = max_h & !1;
+    let tw = ((w as u64 * th as u64 / h as u64) as u32).max(2) & !1;
+    Some((tw, th))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn adaptive_scale_keeps_aspect_and_even_sizes() {
+        assert_eq!(super::scaled_size(1920, 1080, 0), None);
+        assert_eq!(super::scaled_size(1280, 720, 720), None);
+        assert_eq!(super::scaled_size(1920, 1080, 720), Some((1280, 720)));
+        assert_eq!(super::scaled_size(1366, 768, 541), Some((960, 540)));
+        assert_eq!(super::clamp_max_height(100), 360);
+        assert_eq!(super::clamp_max_height(0), 0);
+        assert_eq!(super::clamp_max_height(5000), 1080);
+    }
     #[test]
     fn slides_are_screen_content_video_is_motion_30() {
         let slides = share_profile(false, 8, 30, 700_000, 1_500_000);

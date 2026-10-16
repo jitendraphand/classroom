@@ -67,6 +67,17 @@ function Toolbar({ hud }: { hud: HudState }) {
         >
           <Icon name="video" />
         </button>
+        <button
+          type="button"
+          className="tsh-btn"
+          aria-pressed={!!hud.whiteboardOn}
+          onClick={() => send({ type: 'toggle-whiteboard' })}
+          aria-label={hud.whiteboardOn ? 'Close whiteboard' : 'Open whiteboard'}
+          title={hud.whiteboardOn ? 'Close whiteboard (students stop seeing it)' : 'Whiteboard: draw for the class (stops screen share)'}
+        >
+          <Icon name="pen" />
+          Board
+        </button>
         {hud.sharing ? (
           <button
             type="button"

@@ -68,6 +68,9 @@ struct Config {
     crop: Option<Crop>,
     #[serde(default)]
     audio: bool,
+    /// Adaptive capture (weak / busy CPU): scale frames down to this height (0 = off).
+    #[serde(default, rename = "maxHeight")]
+    max_height: u32,
 }
 fn d_fps() -> u32 { 8 }
 fn d_vfps() -> u32 { 24 }
@@ -97,6 +100,8 @@ struct Ctl {
     h: u32,
     #[serde(default)]
     bytes: usize,
+    #[serde(default, rename = "maxHeight")]
+    max_height: Option<u32>,
 }
 
 fn event(state: &str, why: &str) {
@@ -117,6 +122,7 @@ struct Shared {
     video_fps: AtomicU32,
     video_mode: AtomicBool,
     audio_on: AtomicBool,
+    max_height: AtomicU32,
     stop: AtomicBool,
     last_change: Mutex<Instant>,
 }
@@ -197,6 +203,7 @@ fn read_control(shared: Arc<Shared>, mut input: impl BufRead) {
                 shared.fps.store(f, Ordering::Release);
             }
             "audio" => shared.audio_on.store(ctl.on.unwrap_or(false), Ordering::Release),
+            "maxHeight" => shared.max_height.store(logic::clamp_max_height(ctl.max_height.unwrap_or(0)), Ordering::Release),
             "ink" => {
                 if ctl.bytes > 64 * 1024 * 1024 {
                     break;
@@ -296,6 +303,7 @@ async fn main() {
         video_fps: AtomicU32::new(cfg.video_fps.clamp(1, 30)),
         video_mode: AtomicBool::new(false),
         audio_on: AtomicBool::new(cfg.audio),
+        max_height: AtomicU32::new(logic::clamp_max_height(cfg.max_height)),
         stop: AtomicBool::new(false),
         last_change: Mutex::new(Instant::now()),
     });
@@ -492,6 +500,11 @@ async fn main() {
         let (dy, du, dv) = buf.data_mut();
         let off = ((cy * w + cx) * 4) as usize;
         livekit::webrtc::native::yuv_helper::abgr_to_i420(&work[off..], w * 4, dy, sy, du, su, dv, sv, cw as i32, ch as i32);
+        // Adaptive capture: weak or busy CPU → encode a smaller picture (libyuv scale).
+        let max_h = shared.max_height.load(Ordering::Acquire);
+        if let Some((tw, th)) = logic::scaled_size(cw, ch, max_h) {
+            buf = buf.scale(tw as i32, th as i32);
+        }
         let frame = VideoFrame { rotation: VideoRotation::VideoRotation0, timestamp_us: t0.elapsed().as_micros() as i64, frame_metadata: None, buffer: buf };
         source.capture_frame(&frame);
         if now.duration_since(last_hb) >= Duration::from_millis(1000) {

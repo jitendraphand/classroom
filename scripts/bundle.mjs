@@ -41,6 +41,7 @@ await esbuild.build({
     region: 'src/renderer/region.ts',
     captureTest: 'src/renderer/captureTest.tsx',
     tools: 'src/renderer/tools.tsx',
+    whiteboard: 'src/renderer/whiteboard.tsx',
   },
   outdir: 'dist/renderer',
   format: 'esm',

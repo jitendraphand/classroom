@@ -107,7 +107,7 @@ export function sidecarInit(req: SidecarRequest, media: { slidesFps: number; vid
 }
 
 /** One control line. */
-export function controlLine(msg: { op: 'mode'; videoMode: boolean } | { op: 'fps'; fps: number } | { op: 'audio'; on: boolean } | { op: 'ink-clear' } | { op: 'stop' }): string {
+export function controlLine(msg: { op: 'mode'; videoMode: boolean } | { op: 'fps'; fps: number } | { op: 'audio'; on: boolean } | { op: 'maxHeight'; maxHeight: number } | { op: 'ink-clear' } | { op: 'stop' }): string {
   return `${JSON.stringify(msg)}\n`;
 }
 

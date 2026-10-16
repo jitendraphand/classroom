@@ -6,6 +6,8 @@
  */
 
 import { cropFractions, type SidecarRequest } from '../shared/sidecar';
+import { WindowsWhiteboard } from './whiteboardHost';
+import { MEDIA_PREFS_KEY, parseMediaPrefs, serializeMediaPrefs } from '../shared/mediaPrefs';
 import { LOW_POWER_KEY, capEncodingFps, parseLowPower, shareFps, tileProfile } from '../shared/lowPower';
 import { freshTakeovers, takeoverToastText, type TakeoverNotice } from '../shared/web/deviceTakeover';
 import { createEraseBatcher } from '../shared/web/eraseBatch';
@@ -182,6 +184,7 @@ export class ClassController {
   private micOn = false;
   private camOn = false;
   private sharing = false;
+  private whiteboard: WindowsWhiteboard | null = null;
   /** Student videos open with a share, and stay closed after the teacher dismisses them. */
   private showStudentVideos = false;
   private shareKind: ShareKind | null = null;
@@ -431,8 +434,12 @@ export class ClassController {
         }
       }, 1500);
     }
-    this.micOn = true;
-    await this.enqueue(() => this.syncMic());
+    // 1c: restore the teacher's own mic/camera choice after a rejoin or restart.
+    const prefs = this.loadMediaPrefs();
+    this.micOn = prefs.mic;
+    this.camOn = prefs.cam;
+    if (this.micOn) await this.enqueue(() => this.syncMic());
+    if (this.camOn) void this.enqueue(async () => { await this.syncCam(); this.emit(); });
     await this.refreshDevices();
     await this.roomApi('PATCH', '/settings', { maxVisibleVideos: studentCapForLayout(this.opts.layout) });
     this.rotationTimer = window.setInterval(() => {
@@ -475,10 +482,27 @@ export class ClassController {
     this.emit();
   }
 
+  private loadMediaPrefs() {
+    try {
+      return parseMediaPrefs(localStorage.getItem(MEDIA_PREFS_KEY));
+    } catch {
+      return parseMediaPrefs(null);
+    }
+  }
+
+  private saveMediaPrefs(): void {
+    try {
+      localStorage.setItem(MEDIA_PREFS_KEY, serializeMediaPrefs({ mic: this.micOn, cam: this.camOn }));
+    } catch {
+      /* ignore */
+    }
+  }
+
   handle(action: { type: string; [key: string]: unknown }): void {
     switch (action.type) {
       case 'toggle-mic':
         this.micOn = !this.micOn;
+        this.saveMediaPrefs();
         void this.enqueue(async () => {
           if (this.micOn) await this.syncMic();
           else await this.dropMic();
@@ -488,6 +512,7 @@ export class ClassController {
         return;
       case 'toggle-cam':
         this.camOn = !this.camOn;
+        this.saveMediaPrefs();
         void this.enqueue(async () => {
           if (this.camOn) await this.syncCam();
           else await this.dropCam();
@@ -525,6 +550,9 @@ export class ClassController {
         return;
       case 'toggle-videos':
         void this.toggleVideos();
+        return;
+      case 'toggle-whiteboard':
+        void this.toggleWhiteboard();
         return;
       case 'toggle-low-power':
         this.lowPower = !this.lowPower;
@@ -706,6 +734,7 @@ export class ClassController {
   }
 
   async beginShare(input: ShareRequest): Promise<void> {
+    if (this.whiteboard) this.closeWhiteboard(false);
     const allowed = shareAllowed(this.opts.plan, input.kind);
     if (!allowed.ok) {
       this.notice = allowed.reason;
@@ -1105,6 +1134,7 @@ export class ClassController {
   }
 
   private async stopRoom(): Promise<void> {
+    if (this.whiteboard) this.closeWhiteboard(false);
     this.gen += 1;
     if (this.rotationTimer) window.clearInterval(this.rotationTimer);
     this.rotationTimer = 0;
@@ -1378,6 +1408,30 @@ export class ClassController {
     });
     this.videosGrid = grid;
     return grid;
+  }
+
+  /** Whiteboard and screen share are exclusive (students see one stage). */
+  private async toggleWhiteboard(): Promise<void> {
+    if (this.whiteboard) {
+      this.whiteboard.stop();
+      return;
+    }
+    const room = this.room;
+    if (!room) return;
+    if (this.sharing) await this.stopShare();
+    const wb = new WindowsWhiteboard(room, room.localParticipant.identity, (m, s, b) => this.roomApi(m, s, b), () => {
+      if (this.whiteboard === wb) this.whiteboard = null;
+      this.emit();
+    });
+    this.whiteboard = wb;
+    this.emit();
+    await wb.start();
+  }
+
+  private closeWhiteboard(clearSaved: boolean): void {
+    const wb = this.whiteboard;
+    this.whiteboard = null;
+    wb?.stop(clearSaved);
   }
 
   private async toggleVideos(): Promise<void> {
@@ -2130,6 +2184,7 @@ export class ClassController {
         camOn: this.camOn,
         annotateOn: this.annotateOn,
         videosOn: !!this.videosWin && !this.videosWin.closed,
+        whiteboardOn: !!this.whiteboard,
         waitingRoomOn: this.snap ? this.snap.waitingRoomOn : true,
         layout: this.opts.layout,
         classLabel: this.snap?.classLabel || this.code,
