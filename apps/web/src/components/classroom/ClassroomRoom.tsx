@@ -4388,7 +4388,8 @@ function RoomInner({
           setPanelSlots(panelSlotsForCap(studentSlots));
           void setStudentCameraCap(studentSlots);
         }}
-        dock={dockArea}
+        // Whiteboard: sit right of the board's left tool column (never over the tools).
+        dock={wbOpen ? { top: 8, left: 62, width: 520, height: Math.max(240, (typeof window !== 'undefined' ? window.innerHeight : 720) - 16) } : dockArea}
         sharing={shareLayout || wbOpen}
         onDockSpace={onDockSpace}
         focusAlerts={focusByIdentity}
