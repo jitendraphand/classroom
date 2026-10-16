@@ -24,3 +24,5 @@ infra/livekit.yaml
 # Admin bootstrap / reset password files (scripts/create-admin.sh). Never commit.
 secrets/
 apps/web/secrets/
+dump.rdb
+OPENCODE_*.txt
