@@ -68,6 +68,10 @@ struct Config {
     crop: Option<Crop>,
     #[serde(default)]
     audio: bool,
+    /// Process tree whose sound is LEFT OUT of the share audio (the Classroom
+    /// app itself: students' voices it plays). 0 = no share audio at all.
+    #[serde(default, rename = "excludePid")]
+    exclude_pid: u32,
     /// Adaptive capture (weak / busy CPU): scale frames down to this height (0 = off).
     #[serde(default, rename = "maxHeight")]
     max_height: u32,
@@ -227,23 +231,36 @@ fn read_control(shared: Arc<Shared>, mut input: impl BufRead) {
     shared.stop.store(true, Ordering::Release);
 }
 
-/// WASAPI loopback of the default output device, 48 kHz stereo s16, 10 ms frames.
+/// Share audio: WASAPI *process* loopback of everything EXCEPT the Classroom
+/// app's process tree (PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
+/// Windows 10 2004+). The old whole-device loopback also captured the
+/// students' voices the app was playing and sent them back to the class
+/// (echo). If process loopback is unavailable we send NO share audio rather
+/// than fall back to the echoing device loopback. 48 kHz stereo s16, 10 ms.
 #[cfg(windows)]
-fn loopback_thread(shared: Arc<Shared>, tx: tokio::sync::mpsc::Sender<Vec<i16>>) {
+fn loopback_thread(shared: Arc<Shared>, tx: tokio::sync::mpsc::Sender<Vec<i16>>, exclude_pid: u32) {
     use std::collections::VecDeque;
     use wasapi::*;
     let run = || -> Result<(), Box<dyn std::error::Error>> {
+        if exclude_pid == 0 {
+            return Err("no app process id: share audio disabled (would echo)".into());
+        }
         let _ = initialize_mta();
-        let device = get_default_device(&Direction::Render)?;
-        let mut client = device.get_iaudioclient()?;
+        let mut client = AudioClient::new_application_loopback_client(exclude_pid, false)
+            .map_err(|e| format!("process loopback unavailable (needs Windows 10 2004+): {e}"))?;
         let format = WaveFormat::new(16, 16, &SampleType::Int, 48_000, 2, None);
-        let (_def, min) = client.get_device_period()?;
-        client.initialize_client(&format, &Direction::Capture, &StreamMode::PollingShared { autoconvert: true, buffer_duration_hns: min.max(200_000) })?;
+        client.initialize_client(&format, &Direction::Capture, &StreamMode::EventsShared { autoconvert: true, buffer_duration_hns: 0 })?;
+        let h_event = client.set_get_eventhandle()?;
         let capture = client.get_audiocaptureclient()?;
         client.start_stream()?;
+        event("audio-mode", "process-loopback-exclude-app");
         let mut q: VecDeque<u8> = VecDeque::new();
         const CHUNK: usize = 480 * 2 * 2; // 10 ms
         while !shared.stop.load(Ordering::Acquire) {
+            // Silence produces no events: time out and keep checking stop.
+            if h_event.wait_for_event(100).is_err() {
+                continue;
+            }
             capture.read_from_device_to_deque(&mut q)?;
             while q.len() >= CHUNK {
                 let bytes: Vec<u8> = q.drain(..CHUNK).collect();
@@ -253,7 +270,6 @@ fn loopback_thread(shared: Arc<Shared>, tx: tokio::sync::mpsc::Sender<Vec<i16>>)
                 let samples: Vec<i16> = bytes.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
                 let _ = tx.try_send(samples);
             }
-            std::thread::sleep(Duration::from_millis(5));
         }
         let _ = client.stop_stream();
         Ok(())
@@ -428,7 +444,8 @@ async fn main() {
         } else {
             let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<i16>>(50);
             let s = shared.clone();
-            std::thread::spawn(move || loopback_thread(s, tx));
+            let pid = cfg.exclude_pid;
+            std::thread::spawn(move || loopback_thread(s, tx, pid));
             tokio::spawn(async move {
                 while let Some(samples) = rx.recv().await {
                     let frame = AudioFrame { data: samples.into(), sample_rate: 48_000, num_channels: 2, samples_per_channel: 480 };

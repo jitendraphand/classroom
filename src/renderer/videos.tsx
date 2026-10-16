@@ -105,11 +105,34 @@ function Videos() {
     for (const cb of waiters) cb();
   });
   const grid = videoGrid(model.slots, 'share');
+  // Minimise to a small strip (the window stays where it is; restore brings the old size back).
+  const [min, setMin] = useState<{ w: number; h: number } | null>(null);
+  const toggleMin = () => {
+    if (min) {
+      window.resizeTo(min.w, min.h);
+      setMin(null);
+    } else {
+      setMin({ w: window.outerWidth, h: window.outerHeight });
+      window.resizeTo(190, 34);
+    }
+  };
   return (
     <>
       <div className="grip" title="Drag">⋮⋮</div>
+      <button
+        type="button"
+        className="videos-min"
+        data-testid="videos-min"
+        onClick={toggleMin}
+        title={min ? 'Show student videos' : 'Minimise student videos'}
+        aria-label={min ? 'Show student videos' : 'Minimise student videos'}
+        style={{ position: 'fixed', top: 2, right: 4, zIndex: 10, height: 26, minWidth: 26, borderRadius: 6, border: '1px solid #ffffff33', background: '#1e293bcc', color: '#e2e8f0', cursor: 'pointer', fontWeight: 700 }}
+      >
+        {min ? `▢ Videos (${model.cells.filter((c) => !c.key.startsWith('blank-')).length})` : '—'}
+      </button>
       <div
         id="grid"
+        hidden={!!min}
         style={{
           gridTemplateColumns: `repeat(${grid.cols}, minmax(0, 1fr))`,
           gridTemplateRows: `repeat(${grid.rows}, minmax(0, 1fr))`,

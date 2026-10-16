@@ -53,7 +53,8 @@ import {
   type ShareKind,
 } from '../shared/capture';
 import { VIDEO_MODE_OFF, type VideoModeState } from '../shared/videoMode';
-import { desktopLoopbackConstraints, toggleShareAudio, wantShareAudio, type ShareAudioChoice } from '../shared/shareAudio';
+import { AudioRegistry, MIC_CAPTURE } from '../shared/web/audioPolicy';
+import { SHARE_AUDIO_ECHO_WARNING, desktopLoopbackConstraints, toggleShareAudio, wantShareAudio, type ShareAudioChoice } from '../shared/shareAudio';
 import { DRAW_TOPIC, applyPacket, decodePacket, isDrawColor, validStrokeId, type Stroke } from '../shared/web/drawLogic';
 import { SHARE_CODEC, shareProfile } from '../shared/web/videoQuality';
 import type { VideoCell, VideoModel } from '../shared/videoModel';
@@ -107,6 +108,7 @@ export type ClassView = {
   unread: number;
   annotateOn: boolean;
   videosOn: boolean;
+  whiteboardOn?: boolean;
   /** Share is in Video mode (30 fps, motion). */
   videoMode: boolean;
   /** Video mode follows the screen's motion (auto-detect) until the teacher toggles it. */
@@ -187,6 +189,35 @@ export class ClassController {
   private whiteboard: WindowsWhiteboard | null = null;
   /** Student videos open with a share, and stay closed after the teacher dismisses them. */
   private showStudentVideos = false;
+  /** Whiteboard window's meeting bar: re-rendered on every panel snapshot. */
+  private wbListeners = new Set<() => void>();
+  private wbSnap: PanelSnapshot | null = null;
+  /** Remote audio players, keyed by track sid (see AudioRegistry). */
+  private nextAudioTrack: RemoteTrack | null = null;
+  readonly audioEls = new AudioRegistry<{ el: HTMLMediaElement; track: RemoteTrack }>(
+    () => {
+      const track = this.nextAudioTrack!;
+      const el = track.attach();
+      el.dataset.audioSid = track.sid ?? '';
+      document.getElementById('audio')?.appendChild(el);
+      return { el, track };
+    },
+    ({ el, track }) => {
+      track.detach(el);
+      el.remove();
+    }
+  );
+
+  private pruneAudio(room: Room): void {
+    const live: string[] = [];
+    for (const p of room.remoteParticipants.values()) {
+      for (const pub of p.audioTrackPublications.values()) if (pub.isSubscribed && pub.track) live.push(pub.trackSid);
+    }
+    this.audioEls.prune(live);
+  }
+  private unsubSidecarAudio: (() => void) | null = null;
+  /** Sidecar reported process loopback that leaves out this app's sound. */
+  private sidecarAudioExcludes = false;
   private shareKind: ShareKind | null = null;
   private annotateOn = false;
   private connecting = false;
@@ -295,6 +326,15 @@ export class ClassController {
       this.panelWindows = { main: st?.main !== false, videos: st?.videos === true };
       this.emit();
     });
+    this.unsubSidecarAudio =
+      desktop().onSidecarAudio?.((m) => {
+        const r = (m ?? {}) as { ok?: boolean; why?: string };
+        this.sidecarAudioExcludes = r.ok === true;
+        if (r.ok !== true && this.sharing && this.sidecarAudio) {
+          this.notice = "Computer sound is not available on this PC (needs Windows 10 version 2004 or newer), so it was not sent. Your students' voices are never sent back.";
+          this.emit();
+        }
+      }) ?? null;
     this.unsubInkEdit = desktop().onStudentInkEdit((edit) => this.onStudentInkEdit(edit ?? {}));
     this.unsubWgcStatus = desktop().onWgcStatus((status) => {
       if (!this.sharing) return;
@@ -323,6 +363,7 @@ export class ClassController {
     else if (this.connecting) phase = 'connecting';
     return {
       phase,
+      whiteboardOn: !!this.whiteboard,
       handoff: this.handoff,
       notice: this.notice,
       code: this.code,
@@ -1012,6 +1053,7 @@ export class ClassController {
     this.unsubBounds?.();
     this.unsubWgcEnded?.();
     this.unsubWgcStatus?.();
+    this.unsubSidecarAudio?.();
     this.unsubInkEdit?.();
     this.unsubInkEdit = null;
     this.unsubPanels?.();
@@ -1047,7 +1089,7 @@ export class ClassController {
   /** The student-video panel the teacher can see right now (cameras on demand, tile pause). */
   private panelShownNow(): boolean {
     return panelShownWin({
-      sharing: this.sharing,
+      sharing: this.floatingVideos,
       showStudentVideos: this.showStudentVideos,
       videosOpen: this.videosOpen(),
       videosHidden: !this.panelWindows.videos,
@@ -1060,7 +1102,7 @@ export class ClassController {
     const videosHidden = !this.panelWindows.videos;
     this.panelReporter.update(
       panelShownWin({
-        sharing: this.sharing,
+        sharing: this.floatingVideos,
         showStudentVideos: this.showStudentVideos,
         videosOpen: this.videosOpen(),
         videosHidden,
@@ -1077,6 +1119,10 @@ export class ClassController {
     this.host.onView(this.view());
     this.paintTiles();
     this.pushHud();
+    if (this.wbListeners.size) {
+      this.wbSnap = this.panelSnapshot(); // cached: useSyncExternalStore needs a stable snapshot
+      for (const cb of this.wbListeners) cb();
+    }
   }
 
   private async leave(): Promise<void> {
@@ -1141,6 +1187,7 @@ export class ClassController {
     if (this.cameraTimer) window.clearInterval(this.cameraTimer);
     this.cameraTimer = 0;
     this.mirror.stop();
+    this.audioEls.clear();
     this.stopVideoWatch();
     if (this.emitTimer) window.clearTimeout(this.emitTimer);
     this.emitTimer = 0;
@@ -1179,8 +1226,11 @@ export class ClassController {
         return;
       }
       if (track.kind === Track.Kind.Audio) {
-        const el = track.attach();
-        document.getElementById('audio')?.appendChild(el);
+        // One <audio> per remote track sid: re-subscribes and reconnects never add a
+        // second player (a doubled element = the same voice twice, slightly offset).
+        this.nextAudioTrack = track;
+        this.audioEls.attach(pub.trackSid || track.sid || `${participant.identity}:${pub.source}`, participant.identity === room.localParticipant.identity);
+        this.nextAudioTrack = null;
       }
       if (track.kind === Track.Kind.Video) {
         this.ensureStudentCameras();
@@ -1192,10 +1242,12 @@ export class ClassController {
       this.emit();
     });
     room.on(RoomEvent.ParticipantDisconnected, () => this.emit());
-    room.on(RoomEvent.TrackUnsubscribed, (track) => {
-      track.detach();
+    room.on(RoomEvent.TrackUnsubscribed, (track, pub, participant) => {
+      if (track.kind === Track.Kind.Audio) this.audioEls.detach(pub.trackSid || track.sid || `${participant.identity}:${pub.source}`);
+      else track.detach();
       this.emit();
     });
+    room.on(RoomEvent.Reconnected, () => this.pruneAudio(room));
     room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => this.onSpeakers(speakers));
     room.on(RoomEvent.TrackMuted, (pub, participant) => {
       this.onMuted(pub.source, participant);
@@ -1374,8 +1426,13 @@ export class ClassController {
     );
   }
 
+  /** Students' videos float in their own window while the stage is a share or the whiteboard. */
+  private get floatingVideos(): boolean {
+    return this.sharing || !!this.whiteboard;
+  }
+
   private paintTiles(): void {
-    if (this.sharing) {
+    if (this.floatingVideos) {
       this.clearHost(this.dockHost);
       if (this.showStudentVideos) void this.paintVideos(this.lastCells);
       else this.closeVideos();
@@ -1386,9 +1443,9 @@ export class ClassController {
   }
 
   private async paintVideos(cells: { key: string; label: string }[]): Promise<void> {
-    if (!this.showStudentVideos || !this.sharing) return;
+    if (!this.showStudentVideos || !this.floatingVideos) return;
     const grid = await this.ensureVideos();
-    if (!this.showStudentVideos || !this.sharing || !grid) {
+    if (!this.showStudentVideos || !this.floatingVideos || !grid) {
       if (!this.showStudentVideos) this.closeVideos();
       return;
     }
@@ -1419,11 +1476,30 @@ export class ClassController {
     const room = this.room;
     if (!room) return;
     if (this.sharing) await this.stopShare();
-    const wb = new WindowsWhiteboard(room, room.localParticipant.identity, (m, s, b) => this.roomApi(m, s, b), () => {
-      if (this.whiteboard === wb) this.whiteboard = null;
-      this.emit();
-    });
+    const wb = new WindowsWhiteboard(
+      room,
+      room.localParticipant.identity,
+      (m, s, b) => this.roomApi(m, s, b),
+      () => {
+        if (this.whiteboard === wb) this.whiteboard = null;
+        if (!this.sharing) this.showStudentVideos = false;
+        this.paintTiles();
+        this.emit();
+      },
+      {
+        snapshot: () => (this.wbSnap ??= this.panelSnapshot()),
+        subscribe: (cb) => {
+          this.wbListeners.add(cb);
+          return () => this.wbListeners.delete(cb);
+        },
+        send: (a) => this.handle(a),
+        togglePanel: (k) => desktop().togglePanel(k),
+      }
+    );
     this.whiteboard = wb;
+    // Floating, draggable, minimisable student videos next to the board (like a share).
+    this.showStudentVideos = true;
+    this.paintTiles();
     this.emit();
     await wb.start();
   }
@@ -1529,7 +1605,7 @@ export class ClassController {
         api.setModel(this.tileModel(cells));
         const keys = cells.map((cell) => cell.key);
         api.whenPainted(() => {
-          if (host.isConnected && this.showStudentVideos && this.sharing) this.mirror.sync(keys);
+          if (host.isConnected && this.showStudentVideos && this.floatingVideos) this.mirror.sync(keys);
         });
         return;
       }
@@ -1659,9 +1735,9 @@ export class ClassController {
     let track: LocalAudioTrack;
     try {
       try {
-        track = await createLocalAudioTrack(this.opts.micId ? { deviceId: { exact: this.opts.micId } } : {});
+        track = await createLocalAudioTrack({ ...MIC_CAPTURE, ...(this.opts.micId ? { deviceId: { exact: this.opts.micId } } : {}) });
       } catch {
-        track = await createLocalAudioTrack();
+        track = await createLocalAudioTrack({ ...MIC_CAPTURE });
       }
     } catch {
       this.micOn = false;
@@ -1956,7 +2032,8 @@ export class ClassController {
   /** Publish or drop computer sound to match the Sound choice and Video mode. */
   private async syncShareAudio(): Promise<void> {
     if (this.viaSidecar) {
-      const want = this.sharing && wantShareAudio({ choice: this.audioChoice, videoMode: this.videoMode.on, askedAtStart: this.audioAskedAtStart });
+      // Sidecar: process loopback that leaves out this app's sound (never the echoing device loopback).
+      const want = this.sharing && wantShareAudio({ choice: this.audioChoice, videoMode: this.videoMode.on, askedAtStart: this.audioAskedAtStart, excludesOwnOutput: true });
       if (want !== this.sidecarAudio) {
         this.sidecarAudio = want;
         desktop().sidecarControl?.({ op: 'audio', on: want });
@@ -1968,12 +2045,15 @@ export class ClassController {
     this.audioSyncing = true;
     try {
       for (let i = 0; i < 3; i++) {
-        const want = this.sharing && wantShareAudio({ choice: this.audioChoice, videoMode: this.videoMode.on, askedAtStart: this.audioAskedAtStart });
+        // Electron fallback: desktop loopback = the WHOLE output incl. students' voices this app plays,
+        // so it is only sent when the teacher explicitly turns it on (and is warned).
+        const want = this.sharing && wantShareAudio({ choice: this.audioChoice, videoMode: this.videoMode.on, askedAtStart: this.audioAskedAtStart, excludesOwnOutput: false });
         const have = !!this.screenAudio || !!this.pendingAudio;
         if (want === have) break;
         if (want) {
           await this.publishSystemAudio(this.captureSystemAudio());
           if (!this.screenAudio) break; // could not capture: notice is set, do not loop
+          this.notice = SHARE_AUDIO_ECHO_WARNING;
         } else {
           const audio = this.screenAudio;
           this.screenAudio = null;

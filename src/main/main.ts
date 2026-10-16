@@ -17,7 +17,7 @@
 
 import { SIDECAR_PUBLISH_TIMEOUT_MS, controlLine, inkMessage, parseScreenToken, refreshInitLine, screenTokenPath, sidecarInit, type Publisher, type SidecarRequest } from '../shared/sidecar';
 import { SIDECAR_HELPER_FPS, VIDEO_MODE_SHARE as SIDECAR_VIDEO } from '../shared/capture';
-import { fitToolbar, movedBounds, parseOrient, stableNatural, toolbarSize } from '../shared/toolbarLayout';
+import { fitToolbar, flyoutBounds, movedBounds, parseOrient, stableNatural, toolbarSize } from '../shared/toolbarLayout';
 import { HW_ENCODE_FEATURES } from '../shared/hwEncode';
 import { busyFraction, cpuTimes, initialState as adaptiveInitial, levelProfile, nextState as adaptiveNext, type AdaptiveState } from '../shared/adaptiveCapture';
 import os from 'node:os';
@@ -289,6 +289,9 @@ function onSidecarEvent(msg: { state: string; why: string }): void {
     for (const fn of sidecarWaiters) fn(true, msg.why);
   } else if (msg.state === 'error') {
     for (const fn of sidecarWaiters) fn(false, msg.why);
+  } else if (msg.state === 'audio-error' || msg.state === 'audio-mode') {
+    // Share audio is process loopback excluding this app; when that is unavailable no sound is sent.
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('sidecar-audio', { ok: msg.state === 'audio-mode', why: msg.why });
   }
 }
 
@@ -845,9 +848,11 @@ function openAnnotateTools(): void {
   win.on('moved', () => {
     if (win.isDestroyed()) return;
     // Never partly off-screen: clamp into the work area of the display it was dropped on.
-    const b = win.getBounds();
+    const open = toolsFlyout.size > 0;
+    const b = open ? toolsBarRect(win) : win.getBounds();
     const c = movedBounds(b, toolsFixed, screen.getDisplayMatching(b).workArea);
-    if (c.x !== b.x || c.y !== b.y || c.width !== b.width || c.height !== b.height) win.setBounds(c);
+    if (open) applyToolsFlyout(win, toolsFlyout.size, toolsFlyout.along);
+    else if (c.x !== b.x || c.y !== b.y || c.width !== b.width || c.height !== b.height) win.setBounds(c);
     config.annotateTools = { x: c.x, y: c.y };
     saveConfig();
   });
@@ -856,6 +861,7 @@ function openAnnotateTools(): void {
   };
   screen.on('display-metrics-changed', refit);
   win.on('closed', () => {
+    toolsFlyout = { size: 0, along: 0, side: 'after' };
     toolsExtraLines = 0;
     toolsFixed = null;
     screen.removeListener('display-metrics-changed', refit);
@@ -884,9 +890,13 @@ let toolsFixed: { width: number; height: number } | null = null;
 function fitAnnotateTools(win: BrowserWindow): void {
   const o = parseOrient(config.annotateToolsOrient);
   const natural = toolsNatural ?? toolbarSize(o);
-  const b = win.getBounds();
+  const b = toolsBarRect(win);
   const area = screen.getDisplayMatching(b).workArea;
   const fit = fitToolbar(o, natural, area, { x: b.x, y: b.y }, toolsExtraLines);
+  if (toolsFlyout.size > 0) {
+    toolsFixed = { width: fit.width, height: fit.height };
+    toolsFlyout.size = 0; // re-opened by the panel's next report
+  }
   toolsFixed = { width: fit.width, height: fit.height };
   if (fit.x !== b.x || fit.y !== b.y || fit.width !== b.width || fit.height !== b.height) {
     win.setBounds({ x: fit.x, y: fit.y, width: fit.width, height: fit.height });
@@ -905,6 +915,38 @@ ipcMain.on('annotate-tools-orient', (event, orient: unknown) => {
     toolsFixed = null;
   }
   fitAnnotateTools(win);
+});
+
+/** Open flyout of the share toolbar: room across the bar (0 = closed), length along it, side used. */
+let toolsFlyout = { size: 0, along: 0, side: 'after' as 'after' | 'before' };
+
+/** Screen rect of the compact bar inside the tools window (excludes an open flyout). */
+function toolsBarRect(win: BrowserWindow): { x: number; y: number; width: number; height: number } {
+  const b = win.getBounds();
+  const size = toolsFixed ?? { width: b.width, height: b.height };
+  const o = parseOrient(config.annotateToolsOrient);
+  const shift = toolsFlyout.size > 0 && toolsFlyout.side === 'before' ? toolsFlyout.size : 0;
+  return { x: o === 'vertical' ? b.x + shift : b.x, y: o === 'horizontal' ? b.y + shift : b.y, width: size.width, height: size.height };
+}
+
+function applyToolsFlyout(win: BrowserWindow, size: number, along: number): void {
+  const bar = toolsBarRect(win);
+  const o = parseOrient(config.annotateToolsOrient);
+  const { rect, side } = flyoutBounds(o, bar, size, along, screen.getDisplayMatching(bar).workArea);
+  toolsFlyout = { size: size > 0 ? size : 0, along, side };
+  const b = win.getBounds();
+  if (rect.x !== b.x || rect.y !== b.y || rect.width !== b.width || rect.height !== b.height) win.setBounds(rect);
+  win.webContents.send('annotate-tools-flyout-side', side);
+}
+
+ipcMain.on('annotate-tools-flyout', (event, m: unknown) => {
+  const win = chrome.get('annotate-tools');
+  if (!win || win.isDestroyed() || event.sender !== win.webContents || !m || typeof m !== 'object') return;
+  const r = m as { size?: unknown; along?: unknown };
+  const size = Math.max(0, Math.min(2000, Number(r.size) || 0));
+  const along = Math.max(0, Math.min(4000, Number(r.along) || 0));
+  if (Math.abs(size - toolsFlyout.size) <= 2 && Math.abs(along - toolsFlyout.along) <= 2) return;
+  applyToolsFlyout(win, size, along);
 });
 
 ipcMain.on('annotate-tools-measure', (event, m: unknown) => {
@@ -1323,6 +1365,8 @@ function attachChildWindows(win: Win): void {
     watch(child, name);
     child.once('ready-to-show', () => {
       if (wanted && !child.isDestroyed()) child.setBounds({ x: wanted.x, y: wanted.y, width: wanted.w, height: wanted.h });
+      // Whiteboard: tools on the left, meeting bar on the right, full work area.
+      if (name === 'classroom-whiteboard' && !child.isDestroyed()) child.maximize();
       protectExcludedWindow(child, name);
       child.show();
       raiseToolbar();
@@ -2024,6 +2068,7 @@ function installIpc(): void {
             videoFps: SIDECAR_VIDEO.encoding.maxFramerate,
             maxBitrate: SCREEN_SHARE.encoding.maxBitrate,
             videoBitrate: SIDECAR_VIDEO.encoding.maxBitrate,
+            excludePid: process.pid, // share audio leaves out this app's own sound (no echo)
           })
         : null;
     let result: Awaited<ReturnType<typeof wgc.start>>;

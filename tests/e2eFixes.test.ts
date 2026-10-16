@@ -219,11 +219,11 @@ test('the overlay is hit-testable in draw mode and pushes its ink layer to main'
 // ---- (2) Computer sound in Video mode ----
 
 test('share audio follows Video mode unless the teacher chose', () => {
-  assert.equal(wantShareAudio({ choice: 'auto', videoMode: true, askedAtStart: false }), true);
-  assert.equal(wantShareAudio({ choice: 'auto', videoMode: false, askedAtStart: false }), false);
-  assert.equal(wantShareAudio({ choice: 'auto', videoMode: false, askedAtStart: true }), true);
-  assert.equal(wantShareAudio({ choice: 'off', videoMode: true, askedAtStart: true }), false);
-  assert.equal(wantShareAudio({ choice: 'on', videoMode: false, askedAtStart: false }), true);
+  assert.equal(wantShareAudio({ choice: 'auto', videoMode: true, askedAtStart: false, excludesOwnOutput: true }), true);
+  assert.equal(wantShareAudio({ choice: 'auto', videoMode: false, askedAtStart: false, excludesOwnOutput: true }), false);
+  assert.equal(wantShareAudio({ choice: 'auto', videoMode: false, askedAtStart: true, excludesOwnOutput: true }), true);
+  assert.equal(wantShareAudio({ choice: 'off', videoMode: true, askedAtStart: true, excludesOwnOutput: true }), false);
+  assert.equal(wantShareAudio({ choice: 'on', videoMode: false, askedAtStart: false, excludesOwnOutput: true }), true);
   assert.equal(toggleShareAudio(true), 'off');
   assert.equal(toggleShareAudio(false), 'on');
 });

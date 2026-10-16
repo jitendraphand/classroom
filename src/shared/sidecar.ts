@@ -23,6 +23,12 @@ export type SidecarInit = {
   encoder: 'hardware' | 'software';
   crop: SidecarCrop | null;
   audio: boolean;
+  /**
+   * Electron's main process id: the sidecar captures share audio with WASAPI
+   * process loopback EXCLUDING this process tree, so the students' voices the
+   * app plays never go back to the class (echo). 0 = no share audio.
+   */
+  excludePid: number;
 };
 
 export type SidecarRequest = {
@@ -88,7 +94,7 @@ export function cropFractions(
   };
 }
 
-export function sidecarInit(req: SidecarRequest, media: { slidesFps: number; videoFps: number; maxBitrate: number; videoBitrate: number }): SidecarInit | null {
+export function sidecarInit(req: SidecarRequest, media: { slidesFps: number; videoFps: number; maxBitrate: number; videoBitrate: number; excludePid?: number }): SidecarInit | null {
   if (typeof req.url !== 'string' || !/^wss?:\/\//.test(req.url)) return null;
   if (typeof req.token !== 'string' || req.token.length < 20 || req.token.length > 4096) return null;
   const fps = (v: unknown, d: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(1, Math.min(30, Math.round(v))) : d);
@@ -103,6 +109,7 @@ export function sidecarInit(req: SidecarRequest, media: { slidesFps: number; vid
     encoder: 'hardware',
     crop: req.crop ?? null,
     audio: !!req.audio,
+    excludePid: Number.isInteger(media.excludePid) && (media.excludePid ?? 0) > 0 ? (media.excludePid as number) : 0,
   };
 }
 

@@ -65,6 +65,9 @@ contextBridge.exposeInMainWorld('classroom', {
   annotationDrawMode: (on: boolean) => ipcRenderer.send('annotation-draw-mode', on),
   annotateToolsOrient: (orient: string) => ipcRenderer.send('annotate-tools-orient', orient),
   annotateToolsMeasure: (m: { width: number; height: number; overflow: boolean }) => ipcRenderer.send('annotate-tools-measure', m),
+  annotateToolsFlyout: (m: { size: number; along: number }) => ipcRenderer.send('annotate-tools-flyout', m),
+  onSidecarAudio: (cb: (m: unknown) => void) => listen('sidecar-audio', (m) => cb(m)),
+  onToolsFlyoutSide: (cb: (side: unknown) => void) => listen('annotate-tools-flyout-side', (s) => cb(s)),
   postVideoTile: (key: string, jpeg: Uint8Array) => {
     const copy = jpeg.byteOffset === 0 && jpeg.byteLength === jpeg.buffer.byteLength ? jpeg : jpeg.slice();
     ipcRenderer.send('video-tile', key, copy.buffer);

@@ -73,7 +73,8 @@ export function RosterView({ snap, send, showLayout = false }: { snap: PanelSnap
   const shown = useMemo(() => filterPeople(students, query), [students, query]);
   const waiting = useMemo(() => filterPeople(snap.waiting, query), [snap.waiting, query]);
   const waitingOn = snap.hud.waitingRoomOn;
-  const sharing = snap.hud.sharing;
+  // Students may draw on a shared screen or on the shared whiteboard.
+  const sharing = snap.hud.sharing || !!snap.hud.whiteboardOn;
   const holder = snap.hud.drawHolderName;
   return (
     <div className="roster-view">
@@ -258,15 +259,27 @@ function RosterRow({ p, send, sharing }: { p: AdmittedPerson; send: Send; sharin
             Revoke
           </button>
         ) : p.drawRequested ? (
-          <button
-            type="button"
-            className="roster-chip roster-chip-warn"
-            disabled={!sharing}
-            title={sharing ? `Let ${p.displayName} draw on your screen` : 'Share your screen first'}
-            onClick={() => send({ type: 'draw-allow', id: p.id })}
-          >
-            Allow
-          </button>
+          <>
+            <button
+              type="button"
+              className="roster-chip roster-chip-warn"
+              disabled={!sharing}
+              data-testid="draw-allow"
+              title={sharing ? `Let ${p.displayName} draw` : 'Share your screen or the whiteboard first'}
+              onClick={() => send({ type: 'draw-allow', id: p.id })}
+            >
+              Allow
+            </button>
+            <button
+              type="button"
+              className="roster-chip"
+              data-testid="draw-deny"
+              title={`Decline ${p.displayName}'s request to draw`}
+              onClick={() => send({ type: 'draw-revoke', id: p.id })}
+            >
+              Deny
+            </button>
+          </>
         ) : null}
       </span>
     </li>

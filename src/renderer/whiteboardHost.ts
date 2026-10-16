@@ -8,11 +8,20 @@
  */
 import { RoomEvent, type RemoteParticipant, type Room } from 'livekit-client';
 import { WhiteboardSession, opsPackets } from '../shared/web/whiteboard/session';
+import type { PanelSnapshot, TeacherAction } from '../shared/actions';
 import { WB_TOPIC, cleanDoc, studentOpAllowed, type Op, type Packet } from '../shared/web/whiteboard/model';
 
 export const WB_STORE_KEY = 'classroom.whiteboardDoc';
 
-type BoardApi = { mount: (session: WhiteboardSession, identity: string, onSend: (ops: Op[]) => void, onClose: () => void) => void };
+/** What the whiteboard window's right-hand meeting bar needs from the class (same renderer process). */
+export type WbMeeting = {
+  snapshot: () => PanelSnapshot;
+  subscribe: (cb: () => void) => () => void;
+  send: (action: TeacherAction) => void;
+  togglePanel: (kind: 'chat' | 'roster' | 'devices') => void;
+};
+
+type BoardApi = { mount: (session: WhiteboardSession, identity: string, onSend: (ops: Op[]) => void, onClose: () => void, meeting?: WbMeeting) => void };
 
 /** Relayed student ops carry `by`: keep only what that student may do. */
 export function filterRelayedOps(session: WhiteboardSession, p: Packet & { by?: string }): boolean {
@@ -42,7 +51,8 @@ export class WindowsWhiteboard {
     private room: Room,
     private identity: string,
     private api: (method: string, suffix: string, body?: unknown) => Promise<unknown>,
-    private onClosed: () => void
+    private onClosed: () => void,
+    private meeting?: WbMeeting
   ) {
     this.session = loadSavedBoard(localStorage);
   }
@@ -95,12 +105,12 @@ export class WindowsWhiteboard {
   }
 
   private async openWindow(): Promise<void> {
-    this.win = window.open('app://classroom/whiteboard.html', 'classroom-whiteboard', 'width=1100,height=700');
+    this.win = window.open('app://classroom/whiteboard.html', 'classroom-whiteboard', 'width=1280,height=760');
     if (!this.win) return;
     for (let i = 0; i < 100; i++) {
       const api = (this.win as unknown as { __board?: BoardApi } | null)?.__board;
       if (api) {
-        api.mount(this.session, this.identity, (ops) => void this.publish(opsPackets(ops)), () => this.stop());
+        api.mount(this.session, this.identity, (ops) => void this.publish(opsPackets(ops)), () => this.stop(), this.meeting);
         break;
       }
       await new Promise((r) => setTimeout(r, 50));

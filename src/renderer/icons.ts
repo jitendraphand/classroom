@@ -37,6 +37,7 @@ export const ICONS = {
   chat: WEB_ICONS.Chat,
   people: WEB_ICONS.Users,
   video: WEB_ICONS.Video,
+  board: WEB_ICONS.Board,
   film: WEB_ICONS.Film,
   hand: WEB_ICONS.Hand,
   handDown: WEB_ICONS.HandDown,

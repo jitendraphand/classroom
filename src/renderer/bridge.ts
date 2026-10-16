@@ -117,6 +117,11 @@ export type ClassroomBridge = {
   annotateToolsOrient?: (orient: 'horizontal' | 'vertical') => void;
   /** Tools panel content size (one line) or "still overflowing", for main to fit the window. */
   annotateToolsMeasure?: (m: { width: number; height: number; overflow: boolean }) => void;
+  /** Share toolbar flyout: room needed across the bar (0 = closed) and along it. */
+  annotateToolsFlyout?: (m: { size: number; along: number }) => void;
+  /** Sidecar share audio: process loopback (excluding this app) started, or unavailable. */
+  onSidecarAudio?: (cb: (m: unknown) => void) => () => void;
+  onToolsFlyoutSide?: (cb: (side: unknown) => void) => () => void;
   postVideoTile: (key: string, jpeg: Uint8Array) => void;
   onVideoTile: (cb: (key: string, jpeg: ArrayBuffer | Uint8Array) => void) => () => void;
   onAnnotateSurface: (cb: (surface: { dip: DipBox; physical: PhysicalMonitor; scale: number }) => void) => () => void;

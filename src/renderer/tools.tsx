@@ -1,27 +1,52 @@
 /**
- * Teacher annotation toolbar ("Annotate tools"): a compact floating bar in its
- * own small, opaque, capture-EXCLUDED window (see WINDOW_CAPTURE_DECISIONS in
+ * Teacher share toolbar ("Annotate tools"): one compact grouped bar in its own
+ * small, opaque, capture-EXCLUDED window (see WINDOW_CAPTURE_DECISIONS in
  * shared/capture.ts). Students see the marks on the captured overlay, never
  * this bar.
  *
- * Groups: draw tools | shapes | text / laser | colour swatches + thickness |
- * undo / redo / clear | draw ↔ click-through | dock | close. Horizontal by
- * default, optional vertical dock. Tooltips show the keyboard shortcuts.
+ * Groups (one button each; hover or tap opens the group's second row/column
+ * next to the bar, leaving closes it after a short grace period):
+ *   Draw (pen, highlighter, shapes, text, laser) | Erase / undo (eraser, undo,
+ *   redo, clear, clear student marks) | Colour / size | Meeting (mic, camera,
+ *   chat, people, hands, admit) | Share (stop, video ↔ slides, computer
+ *   sound) | Student drawing (requests allow / deny, stop all).
+ * The window grows by the flyout's size on the side that has room, so the
+ * compact bar itself never moves (main.ts `annotate-tools-flyout`).
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import type { PanelSnapshot, TeacherAction } from '../shared/actions';
 import { ANNOTATE_COLORS } from '../shared/annotate';
 import { THICKNESS_MAX, THICKNESS_MIN, toolWidth, type AnnotateStatus, type OverlayTool } from '../shared/annotateOverlay';
-import { TOOL_GROUPS, parseOrient, tip, toolForKey, type ToolbarOrient } from '../shared/toolbarLayout';
+import { ALL_TOOLS, parseOrient, tip, toolForKey, type ToolbarOrient } from '../shared/toolbarLayout';
+import { FlyoutBar, barBtn, useFlyout, type FlyoutGroup } from '../shared/web/whiteboard/FlyoutBar';
 import { desktop } from './bridge';
 import type { IconName } from './icons';
 import { Icon } from './teacherViews';
 
 const HEX = /^#[0-9a-f]{6}$/i;
 const ORIENT_KEY = 'classroom.annotateOrient';
+/** Tools in the Draw group (eraser lives in Erase / undo). */
+export const DRAW_TOOLS: OverlayTool[] = ['pen', 'highlight', 'line', 'arrow', 'rect', 'ellipse', 'text', 'laser'];
 
-function Sep() {
-  return <span className="atb-sep" aria-hidden="true" />;
+const send = (a: TeacherAction) => desktop().sendAction(a);
+const ic = (name: IconName) => <Icon name={name} size={18} />;
+
+function Opt({ on, label, onClick, children, disabled, danger, testId }: { on?: boolean; label: string; onClick: () => void; children: React.ReactNode; disabled?: boolean; danger?: boolean; testId?: string }) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      aria-pressed={on}
+      data-testid={testId}
+      disabled={disabled}
+      onClick={onClick}
+      style={barBtn(!!on, danger ? { background: '#b91c1c' } : disabled ? { opacity: 0.45, cursor: 'default' } : undefined)}
+    >
+      {children}
+    </button>
+  );
 }
 
 function Tools() {
@@ -29,6 +54,7 @@ function Tools() {
   const [color, setColor] = useState<string>(ANNOTATE_COLORS[0] ?? '#ef4444');
   const [thickness, setThickness] = useState(3);
   const [drawing, setDrawing] = useState(true);
+  const [snap, setSnap] = useState<PanelSnapshot | null>(null);
   const [orient, setOrient] = useState<ToolbarOrient>(() => {
     try {
       return parseOrient(localStorage.getItem(ORIENT_KEY));
@@ -36,9 +62,12 @@ function Tools() {
       return 'horizontal';
     }
   });
+  const [side, setSide] = useState<'after' | 'before'>('after');
   const [status, setStatus] = useState<AnnotateStatus>({ canUndo: false, canRedo: false, count: 0 });
   useEffect(() => desktop().onAnnotateStatus((next) => setStatus(next)), []);
   useEffect(() => desktop().onAnnotateMode((on) => setDrawing(on)), []);
+  useEffect(() => desktop().onHud((s: PanelSnapshot) => s?.hud && setSnap(s)), []);
+  useEffect(() => desktop().onToolsFlyoutSide?.((s) => setSide(s === 'before' ? 'before' : 'after')), []);
   useEffect(() => desktop().annotationCommand({ op: 'tool', tool }), [tool]);
   useEffect(() => desktop().annotationCommand({ op: 'color', color }), [color]);
   useEffect(() => desktop().annotationCommand({ op: 'width', width: toolWidth('pen', thickness) }), [thickness]);
@@ -50,35 +79,22 @@ function Tools() {
     }
     desktop().annotateToolsOrient?.(orient);
   }, [orient]);
-  // Size the window to the content; main clamps it to the display's work area
-  // and wraps to more columns/rows when it does not fit.
+  const flyout = useFlyout();
   const barRef = useRef<HTMLDivElement>(null);
+  // Report the compact bar's size once per orientation (main fits it to the work area).
   useEffect(() => {
-    const el = barRef.current;
+    const el = barRef.current?.firstElementChild as HTMLElement | null;
     if (!el) return;
-    const report = (withNatural: boolean) => {
-      let natural = { width: 0, height: 0 };
-      if (withNatural) {
-        el.classList.add('atb-measure');
-        natural = { width: el.scrollWidth + 2, height: el.scrollHeight + 2 };
-        el.classList.remove('atb-measure');
-      }
-      const overflow = el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1;
-      if (withNatural || overflow) desktop().annotateToolsMeasure?.({ ...natural, overflow: !withNatural && overflow });
-    };
-    const first = window.setTimeout(() => report(true), 40);
-    let pending = 0;
-    const onResize = () => {
-      window.clearTimeout(pending);
-      pending = window.setTimeout(() => report(false), 120);
-    };
-    window.addEventListener('resize', onResize);
-    return () => {
-      window.clearTimeout(first);
-      window.clearTimeout(pending);
-      window.removeEventListener('resize', onResize);
-    };
+    const t = window.setTimeout(() => desktop().annotateToolsMeasure?.({ width: Math.ceil(el.offsetWidth) + 2, height: Math.ceil(el.offsetHeight) + 2, overflow: false }), 40);
+    return () => window.clearTimeout(t);
   }, [orient]);
+  // Flyout open: tell main how much room the second row/column needs; closed: 0.
+  useLayoutEffect(() => {
+    const fly = barRef.current?.querySelector('[data-flyout-open]') as HTMLElement | null;
+    const size = fly ? (orient === 'horizontal' ? fly.offsetHeight + 8 : fly.offsetWidth + 8) : 0;
+    const along = fly ? (orient === 'horizontal' ? fly.offsetLeft + fly.offsetWidth + 6 : fly.offsetTop + fly.offsetHeight + 6) : 0;
+    desktop().annotateToolsFlyout?.({ size: Math.ceil(size), along: Math.ceil(along) });
+  });
   const setMode = (on: boolean) => {
     setDrawing(on);
     desktop().annotationDrawMode(on);
@@ -111,132 +127,240 @@ function Tools() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  return (
-    <div ref={barRef} className={`atb atb-${orient}`} role="toolbar" aria-label="Annotate tools" aria-orientation={orient}>
+  const hud = snap?.hud;
+  const choose = (t: OverlayTool) => {
+    setTool(t);
+    if (!drawing) setMode(true);
+  };
+  const toolIcon = (t: OverlayTool) => (ALL_TOOLS.find((d) => d.id === t)?.icon ?? 'pen') as IconName;
+  const requests = (snap?.admitted ?? []).filter((p) => p.drawRequested && !p.drawing);
+  const drawers = (snap?.admitted ?? []).filter((p) => p.drawing);
+  const waiting = hud?.waitingCount ?? 0;
+  const canStudentsDraw = !!hud && (hud.sharing || !!hud.whiteboardOn);
+
+  const groups: FlyoutGroup[] = [
+    {
+      id: 'draw',
+      label: 'Draw: pen, highlighter, shapes, text',
+      icon: ic(DRAW_TOOLS.includes(tool) ? toolIcon(tool) : 'pen'),
+      active: DRAW_TOOLS.includes(tool) && drawing,
+      testId: 'atb-g-draw',
+      content: DRAW_TOOLS.map((id) => {
+        const d = ALL_TOOLS.find((t) => t.id === id)!;
+        return (
+          <Opt key={id} on={tool === id} label={tip(d.label, d.key)} onClick={() => choose(id)}>
+            {ic(d.icon as IconName)}
+          </Opt>
+        );
+      }),
+    },
+    {
+      id: 'erase',
+      label: 'Erase and undo',
+      icon: ic('eraser'),
+      active: tool === 'eraser' && drawing,
+      testId: 'atb-g-erase',
+      content: (
+        <>
+          <Opt on={tool === 'eraser'} label={tip('Eraser (also removes student strokes)', 'E')} onClick={() => choose('eraser')}>
+            {ic('eraser')}
+          </Opt>
+          <Opt label={tip('Undo', 'Ctrl+Z')} disabled={!status.canUndo} onClick={() => desktop().annotationCommand({ op: 'undo' })}>
+            {ic('undo')}
+          </Opt>
+          <Opt label={tip('Redo', 'Ctrl+Y')} disabled={!status.canRedo} onClick={() => desktop().annotationCommand({ op: 'redo' })}>
+            {ic('redo')}
+          </Opt>
+          <Opt label="Clear student drawings (for everyone)" disabled={!status.students} onClick={() => desktop().clearStudentInk()}>
+            {ic('people')}
+          </Opt>
+          <Opt
+            label="Clear all marks: yours and the students'"
+            danger
+            disabled={!status.count && !status.students}
+            onClick={() => {
+              desktop().annotationCommand({ op: 'clear' });
+              if (status.students) desktop().clearStudentInk();
+            }}
+          >
+            {ic('trash')}
+          </Opt>
+        </>
+      ),
+    },
+    {
+      id: 'color',
+      label: 'Colour and size',
+      icon: <span aria-hidden="true" style={{ width: 8 + thickness, height: 8 + thickness, maxWidth: 22, maxHeight: 22, borderRadius: '50%', background: color, border: '1px solid #fff8' }} />,
+      testId: 'atb-g-color',
+      content: (
+        <>
+          {ANNOTATE_COLORS.map((c) => (
+            <button
+              key={c}
+              type="button"
+              aria-pressed={color.toLowerCase() === c.toLowerCase()}
+              title={`Colour ${c}`}
+              aria-label={`Colour ${c}`}
+              onClick={() => setColor(c)}
+              style={{ width: 28, height: 28, borderRadius: '50%', background: c, border: color.toLowerCase() === c.toLowerCase() ? '3px solid #fff' : '1px solid #fff6', cursor: 'pointer', flex: 'none' }}
+            />
+          ))}
+          <input type="color" value={color} title="Any colour" aria-label="Pick any colour" onChange={(e) => HEX.test(e.target.value) && setColor(e.target.value)} style={{ width: 32, height: 30, flex: 'none' }} />
+          <input
+            type="range"
+            min={THICKNESS_MIN}
+            max={THICKNESS_MAX}
+            step={1}
+            value={thickness}
+            aria-label="Thickness"
+            title={`Thickness ${thickness}`}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => setThickness(Number(e.target.value))}
+            style={orient === 'vertical' ? { writingMode: 'vertical-lr', height: 110 } : { width: 110 }}
+          />
+        </>
+      ),
+    },
+    {
+      id: 'meeting',
+      label: 'Meeting: mic, camera, chat, people, hands',
+      icon: ic(hud && !hud.micOn ? 'micOff' : 'mic'),
+      danger: !!hud && !hud.micOn,
+      badge: (hud?.unread ?? 0) + (hud?.hands ?? 0) + waiting,
+      testId: 'atb-g-meeting',
+      content: hud && (
+        <>
+          <Opt on={!hud.micOn} danger={!hud.micOn} label={hud.micOn ? 'Mute mic' : 'Unmute mic'} onClick={() => send({ type: 'toggle-mic' })}>
+            {ic(hud.micOn ? 'mic' : 'micOff')}
+          </Opt>
+          <Opt on={!hud.camOn} label={hud.camOn ? 'Turn camera off' : 'Turn camera on'} onClick={() => send({ type: 'toggle-cam' })}>
+            {ic(hud.camOn ? 'cam' : 'camOff')}
+          </Opt>
+          <Opt label={hud.unread ? `Chat (${hud.unread} unread)` : 'Chat'} onClick={() => desktop().togglePanel('chat')}>
+            {ic('chat')}
+            {hud.unread ? hud.unread : null}
+          </Opt>
+          <Opt label={hud.hands ? `Raised hands (${hud.hands})` : 'Raised hands'} onClick={() => desktop().togglePanel('roster')}>
+            {ic('hand')}
+            {hud.hands ? hud.hands : null}
+          </Opt>
+          <Opt label="People" onClick={() => desktop().togglePanel('roster')}>
+            {ic('people')}
+          </Opt>
+          <Opt
+            label={waiting > 1 ? `Admit all ${waiting} waiting` : waiting === 1 && hud.oldestWaitingName ? `Admit ${hud.oldestWaitingName}` : 'Nobody waiting'}
+            disabled={!waiting}
+            onClick={() => (waiting > 1 ? send({ type: 'admit-all' }) : hud.oldestWaitingId && send({ type: 'admit', id: hud.oldestWaitingId }))}
+          >
+            {ic('userPlus')}
+            {waiting ? waiting : null}
+          </Opt>
+          <Opt on={hud.videosOn} label={hud.videosOn ? 'Close student videos' : 'Student videos'} onClick={() => send({ type: 'toggle-videos' })}>
+            {ic('video')}
+          </Opt>
+        </>
+      ),
+    },
+    {
+      id: 'share',
+      label: 'Share: stop, video or slides mode, computer sound',
+      icon: ic('share'),
+      active: !!hud?.sharing,
+      testId: 'atb-g-share',
+      content: hud && (
+        <>
+          <Opt on={hud.videoMode} label={hud.videoMode ? 'Video mode on (click for sharp slides)' : 'Slides mode (click for smooth video)'} onClick={() => send({ type: 'toggle-video-mode' })}>
+            {ic('film')}
+            {hud.videoMode ? 'Video' : 'Slides'}
+          </Opt>
+          <Opt
+            on={hud.shareAudio}
+            label={hud.shareAudio ? "Students hear your computer's sound (the class's own voices are left out). Click to stop." : "Send your computer's sound (off by default)"}
+            onClick={() => send({ type: 'toggle-share-audio' })}
+          >
+            {ic(hud.shareAudio ? 'speaker' : 'speakerOff')}
+          </Opt>
+          <Opt label="Stop sharing" danger onClick={() => send({ type: 'stop-share' })} testId="atb-stop-share">
+            {ic('stop')}
+            Stop
+          </Opt>
+        </>
+      ),
+    },
+    {
+      id: 'perm',
+      label: requests.length ? `Student drawing (${requests.length} asking)` : 'Student drawing permissions',
+      icon: ic('pen'),
+      badge: requests.length,
+      active: drawers.length > 0,
+      testId: 'atb-g-perm',
+      content: (
+        <>
+          {!requests.length && !drawers.length ? <span style={{ color: '#94a3b8', fontSize: 12, padding: 6 }}>No requests. Students ask with their pen button.</span> : null}
+          {requests.map((p) => (
+            <span key={p.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#e2e8f0', fontSize: 12 }}>
+              {p.displayName}
+              <Opt label={`Let ${p.displayName} draw`} disabled={!canStudentsDraw} onClick={() => send({ type: 'draw-allow', id: p.id })} testId="atb-draw-allow">
+                {ic('check')}
+              </Opt>
+              <Opt label={`Decline ${p.displayName}`} onClick={() => send({ type: 'draw-revoke', id: p.id })} testId="atb-draw-deny">
+                {ic('close')}
+              </Opt>
+            </span>
+          ))}
+          {drawers.length ? (
+            <Opt label="Stop all student drawing" danger onClick={() => send({ type: 'draw-revoke' })}>
+              Stop {drawers.length}
+            </Opt>
+          ) : null}
+        </>
+      ),
+    },
+  ];
+
+  const head = (
+    <>
       <span className="atb-grip" title="Drag to move" aria-hidden="true">
         ⋮⋮
       </span>
       <button
         type="button"
-        className={drawing ? 'atb-btn atb-mode on' : 'atb-btn atb-mode'}
+        style={barBtn(drawing)}
         aria-pressed={drawing}
         onClick={() => setMode(!drawing)}
         title={tip(drawing ? 'Drawing: the mouse draws. Click for click-through' : 'Click-through: use your apps. Click to draw', 'M')}
         aria-label={drawing ? 'Drawing (switch to click-through)' : 'Click-through (switch to drawing)'}
       >
-        <Icon name={drawing ? 'pen' : 'pointer'} size={18} />
+        {ic(drawing ? 'pen' : 'pointer')}
       </button>
-      {TOOL_GROUPS.map((g) => (
-        <div key={g.id} className="atb-group" role="radiogroup" aria-label={g.label}>
-          <Sep />
-          {g.tools.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              role="radio"
-              aria-checked={tool === t.id}
-              className={tool === t.id ? 'atb-btn on' : 'atb-btn'}
-              title={tip(t.label, t.key)}
-              aria-label={t.label}
-              onClick={() => {
-                setTool(t.id);
-                if (!drawing) setMode(true);
-              }}
-            >
-              <Icon name={t.icon as IconName} size={18} />
-            </button>
-          ))}
-        </div>
-      ))}
-      <Sep />
-      <div className="atb-group atb-colors" role="radiogroup" aria-label="Colour">
-        {ANNOTATE_COLORS.map((c) => (
-          <button
-            key={c}
-            type="button"
-            role="radio"
-            aria-checked={color.toLowerCase() === c.toLowerCase()}
-            className={color.toLowerCase() === c.toLowerCase() ? 'atb-swatch on' : 'atb-swatch'}
-            style={{ background: c }}
-            title={`Colour ${c}`}
-            aria-label={`Colour ${c}`}
-            onClick={() => setColor(c)}
-          />
-        ))}
-        <input
-          type="color"
-          className="atb-picker"
-          value={color}
-          title="Any colour"
-          aria-label="Pick any colour"
-          onChange={(e) => {
-            if (HEX.test(e.target.value)) setColor(e.target.value);
-          }}
-        />
-      </div>
-      <label className="atb-thick" title={`Thickness ${thickness}`}>
-        <span className="atb-dot" style={{ width: 4 + thickness, height: 4 + thickness, background: color }} aria-hidden="true" />
-        <input
-          type="range"
-          min={THICKNESS_MIN}
-          max={THICKNESS_MAX}
-          step={1}
-          value={thickness}
-          aria-label="Thickness"
-          onChange={(e) => setThickness(Number(e.target.value))}
-        />
-      </label>
-      <Sep />
-      <div className="atb-group" aria-label="History">
-        <button type="button" className="atb-btn" disabled={!status.canUndo} onClick={() => desktop().annotationCommand({ op: 'undo' })} title={tip('Undo', 'Ctrl+Z')} aria-label="Undo">
-          <Icon name="undo" size={18} />
-        </button>
-        <button type="button" className="atb-btn" disabled={!status.canRedo} onClick={() => desktop().annotationCommand({ op: 'redo' })} title={tip('Redo', 'Ctrl+Y')} aria-label="Redo">
-          <Icon name="redo" size={18} />
-        </button>
-        <button
-          type="button"
-          className="atb-btn"
-          disabled={!status.students}
-          onClick={() => desktop().clearStudentInk()}
-          title="Clear student drawings (for everyone)"
-          aria-label="Clear student drawings"
-        >
-          <Icon name="people" size={18} />
-        </button>
-        <button
-          type="button"
-          className="atb-btn danger"
-          disabled={!status.count && !status.students}
-          onClick={() => {
-            desktop().annotationCommand({ op: 'clear' });
-            if (status.students) desktop().clearStudentInk();
-          }}
-          title="Clear all marks: yours and the students'"
-          aria-label="Clear all marks"
-        >
-          <Icon name="trash" size={18} />
-        </button>
-      </div>
-      <Sep />
+    </>
+  );
+  const tail = (
+    <>
       <button
         type="button"
-        className="atb-btn"
+        style={barBtn()}
         onClick={() => setOrient(orient === 'horizontal' ? 'vertical' : 'horizontal')}
         title={orient === 'horizontal' ? 'Dock vertically' : 'Dock horizontally'}
         aria-label={orient === 'horizontal' ? 'Dock vertically' : 'Dock horizontally'}
       >
         {orient === 'horizontal' ? '⇅' : '⇄'}
       </button>
-      <button
-        type="button"
-        className="atb-btn atb-close"
-        title="Stop annotating (removes your marks)"
-        aria-label="Stop annotating"
-        onClick={() => desktop().sendAction({ type: 'toggle-annotate' })}
-      >
-        <Icon name="close" size={18} />
+      <button type="button" style={barBtn()} title="Stop annotating (removes your marks)" aria-label="Stop annotating" onClick={() => send({ type: 'toggle-annotate' })}>
+        {ic('close')}
       </button>
+    </>
+  );
+  const vertical = orient === 'vertical';
+  // The bar sits on the window edge away from the flyout, so opening it never moves the bar.
+  return (
+    <div
+      ref={barRef}
+      className={`atb2 atb2-${orient}`}
+      style={{ position: 'fixed', inset: 0, display: 'flex', flexDirection: vertical ? 'row' : 'column', justifyContent: side === 'before' ? 'flex-end' : 'flex-start', alignItems: 'flex-start' }}
+    >
+      <FlyoutBar groups={groups} orient={orient} side={side} label="Share tools" head={head} tail={tail} flyout={flyout} style={{ borderRadius: 12, flexWrap: 'wrap', maxHeight: vertical ? '100vh' : undefined }} />
     </div>
   );
 }

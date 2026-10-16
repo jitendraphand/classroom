@@ -124,3 +124,23 @@ export function movedBounds(b: Rect, fixed: { width: number; height: number } | 
 export function parseOrient(v: unknown): ToolbarOrient {
   return v === 'vertical' ? 'vertical' : 'horizontal';
 }
+
+/**
+ * Window bounds while a toolbar group's flyout is open. The compact bar keeps
+ * its exact screen position; the window grows by `size` across the bar on the
+ * side with room ('after' = below a horizontal bar / right of a vertical one)
+ * and along it to `along` px when the second line is longer than the bar.
+ */
+export function flyoutBounds(orient: ToolbarOrient, bar: Rect, size: number, along: number, area: Rect): { rect: Rect; side: 'after' | 'before' } {
+  if (!(size > 0)) return { rect: bar, side: 'after' };
+  if (orient === 'horizontal') {
+    const after = area.y + area.height - (bar.y + bar.height) >= size || bar.y - area.y < size;
+    const width = Math.min(Math.max(bar.width, Math.ceil(along)), area.x + area.width - bar.x);
+    const y = after ? bar.y : bar.y - size;
+    return { rect: { x: bar.x, y, width: Math.max(bar.width, width), height: bar.height + size }, side: after ? 'after' : 'before' };
+  }
+  const after = area.x + area.width - (bar.x + bar.width) >= size || bar.x - area.x < size;
+  const height = Math.min(Math.max(bar.height, Math.ceil(along)), area.y + area.height - bar.y);
+  const x = after ? bar.x : bar.x - size;
+  return { rect: { x, y: bar.y, width: bar.width + size, height: Math.max(bar.height, height) }, side: after ? 'after' : 'before' };
+}

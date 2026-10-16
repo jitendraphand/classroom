@@ -657,16 +657,14 @@ function renderClass(view: ClassView): void {
   setGlyph('btn-cam', view.camOn ? 'cam' : 'camOff');
   setLabel('btn-mic', view.micOn ? 'Mute microphone' : 'Unmute microphone');
   setLabel('btn-cam', view.camOn ? 'Turn camera off' : 'Turn camera on');
-  setLabel('btn-videos', view.sharing ? (view.videosOn ? 'Close student videos window' : 'Show student videos') : 'Student videos');
   setLabel('btn-open-chat', activePane === 'pane-chat' ? 'Chat (open)' : 'Open chat');
   setLabel('btn-open-roster', hands > 0 ? `Open roster (${hands} raised ${hands === 1 ? 'hand' : 'hands'})` : 'Open roster');
-  setPressed('btn-pen', view.annotateOn);
-  const pen = document.getElementById('btn-pen');
-  if (pen) pen.toggleAttribute('disabled', !view.sharing);
+  // Home bar: the board button starts / stops whiteboard sharing.
+  setPressed('btn-board', !!view.whiteboardOn);
+  setLabel('btn-board', view.whiteboardOn ? 'Stop whiteboard sharing' : 'Share a whiteboard (students see it live)');
   document.getElementById('btn-share')?.toggleAttribute('hidden', view.sharing);
   document.getElementById('btn-stop')?.toggleAttribute('hidden', !view.sharing);
   document.getElementById('btn-end')?.toggleAttribute('hidden', view.sharing);
-  setPressed('btn-videos', view.sharing ? view.videosOn : true);
   for (const n of [2, 4, 6] as const) setPressed(`layout-${n}`, view.layout === n);
   const focusN = view.roster.filter((p) => isFocusAlert(p.focus)).length;
   const rosterN = hands + view.waiting.length + focusN;
@@ -688,7 +686,6 @@ function renderClass(view: ClassView): void {
 function buildClass(): void {
   dropPanes();
   activePane = 'pane-roster';
-  const penTitle = 'Draw on the screen. Students see the marks. Classroom windows stay out of the picture.';
   app.innerHTML = `
     <div class="screen" id="class-screen">
       <header class="top">
@@ -717,10 +714,9 @@ function buildClass(): void {
           ${sym('btn-cam', 'cam', 'Turn camera off')}
           ${sym('btn-share', 'share', 'Share screen')}
           ${sym('btn-stop', 'stop', 'Stop sharing screen', 'danger')}
-          ${sym('btn-pen', 'pen', penTitle)}
+          ${sym('btn-board', 'board', 'Share a whiteboard (students see it live)')}
           ${symCount('btn-open-chat', 'chat', 'Open chat', 'badge-chat')}
           ${symCount('btn-open-roster', 'people', 'Open roster', 'badge-roster')}
-          ${sym('btn-videos', 'video', 'Student videos')}
           <span class="bar-div"></span>
           <div class="seg" role="group" aria-label="Videos on screen">
             <button class="sym texty" id="layout-2" type="button" title="Show 2 videos, including you" aria-label="Show 2 videos, including you">2</button>
@@ -756,16 +752,9 @@ function buildClass(): void {
   document.getElementById('btn-share')?.addEventListener('click', () => void openShare());
   document.getElementById('btn-restart-share')?.addEventListener('click', () => void controller?.restartShare());
   document.getElementById('btn-stop')?.addEventListener('click', act('stop-share'));
-  document.getElementById('btn-pen')?.addEventListener('click', act('toggle-annotate'));
+  document.getElementById('btn-board')?.addEventListener('click', act('toggle-whiteboard'));
   document.getElementById('btn-open-chat')?.addEventListener('click', () => showPane('pane-chat', 'tab-chat'));
   document.getElementById('btn-open-roster')?.addEventListener('click', () => showPane('pane-roster', 'tab-roster'));
-  document.getElementById('btn-videos')?.addEventListener('click', () => {
-    if (controller?.view().sharing) {
-      controller.handle({ type: 'toggle-videos' });
-      return;
-    }
-    document.getElementById('dock-grid')?.scrollIntoView({ block: 'nearest' });
-  });
   document.getElementById('btn-hear')?.addEventListener('click', () => void controller?.hear());
   for (const [id, pane] of [
     ['tab-roster', 'pane-roster'],

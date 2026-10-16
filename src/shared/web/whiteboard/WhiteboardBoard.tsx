@@ -9,7 +9,10 @@
  *  - 'annotate' student allowed to draw: pen colours + erase own strokes
  *  - 'view'     student / admin preview: render only
  * The page always fits the viewport the same way on every device; zoom/pan is
- * a local teacher view aid only (students keep seeing the whole page).
+ * viewer-local (pinch / wheel / drag, Reset button): nothing is sent, and
+ * strokes map back through the transform so annotation stays exact.
+ * Tools: a grouped column docked on the LEFT (FlyoutBar: hover / tap a group
+ * for its options in a second column).
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import {
@@ -31,6 +34,8 @@ import {
 } from './model';
 import { fitView, renderPage, renderPageToCanvas, toPage, type View } from './render';
 import { jpegsToPdf } from './pdf';
+import { FlyoutBar, barBtn, type FlyoutGroup } from './FlyoutBar';
+import { ZP_IDENTITY, clampZP, isZoomed, panBy, pinchZP, wheelFactor, zoomAt, type ZoomPan } from '../zoomPan';
 import type { WhiteboardSession } from './session';
 
 export type Tool = 'pen' | 'hl' | 'eraser' | 'area' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'text' | 'hand';
@@ -45,11 +50,13 @@ type Props = {
   style?: CSSProperties;
   /** Small label shown in view mode while waiting for the first snapshot. */
   waitingLabel?: string;
+  /** Hide the Stop button in the tool column (the host shows it elsewhere). */
+  hideStop?: boolean;
 };
 
 const WIDTHS = [2, 4, 8, 14, 24];
 
-export function WhiteboardBoard({ session, mode, identity, onSend, onClose, style, waitingLabel }: Props) {
+export function WhiteboardBoard({ session, mode, identity, onSend, onClose, style, waitingLabel, hideStop }: Props) {
   const version = useSyncExternalStore(
     (fn) => session.subscribe(fn),
     () => session.version,
@@ -62,8 +69,10 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
   const page = currentPage(session.doc);
   const [color, setColor] = useState<string>(() => inkFor(page.bg));
   const [width, setWidth] = useState(4);
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
+  // Viewer-local zoom / pan on top of the fitted page (lib/zoomPan.ts).
+  const [zp, setZp] = useState<ZoomPan>(ZP_IDENTITY);
+  const minZoom = mode === 'edit' ? 0.5 : 1;
+  const pointers = useRef(new Map<number, [number, number]>());
   const [preview, setPreview] = useState<Item[]>([]);
   const [textAt, setTextAt] = useState<{ x: number; y: number; sx: number; sy: number } | null>(null);
   const [imgTick, setImgTick] = useState(0);
@@ -86,9 +95,10 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
 
   const view: View = useMemo(() => {
     const base = fitView(size.w, size.h);
-    if (mode !== 'edit') return base;
-    return { scale: base.scale * zoom, tx: base.tx * 1 + pan.x - (PAGE_W * base.scale * (zoom - 1)) / 2, ty: base.ty + pan.y - (PAGE_H * base.scale * (zoom - 1)) / 2 };
-  }, [size.w, size.h, zoom, pan.x, pan.y, mode]);
+    return { scale: base.scale * zp.s, tx: base.tx * zp.s + zp.x, ty: base.ty * zp.s + zp.y };
+  }, [size.w, size.h, zp]);
+  const zoomBy = (factor: number, sx = size.w / 2, sy = size.h / 2) => setZp((t) => zoomAt(t, factor, sx, sy, size.w, size.h, minZoom));
+  const resetZoom = () => setZp(ZP_IDENTITY);
 
   // Render on any change (doc, preview, size, images loading). No loop.
   useEffect(() => {
@@ -150,7 +160,7 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
     item?: Item;
     start?: { x: number; y: number };
     erased?: Set<string>;
-    panFrom?: { x: number; y: number; px: number; py: number };
+    panFrom?: { x: number; y: number; t: ZoomPan };
     timer?: number;
   } | null>(null);
 
@@ -180,15 +190,32 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
     act({ k: 'del', p: pg.id, ids });
   };
 
+  const local = (e: { clientX: number; clientY: number }): [number, number] => {
+    const r = canvasRef.current!.getBoundingClientRect();
+    return [e.clientX - r.left, e.clientY - r.top];
+  };
+
   const onDown = (e: React.PointerEvent) => {
-    if (!editing) return;
     if (textAt) return;
     (e.target as Element).setPointerCapture?.(e.pointerId);
+    pointers.current.set(e.pointerId, local(e));
+    if (pointers.current.size >= 2) {
+      // Second finger: pinch-zoom / two-finger pan (any mode). A stroke the
+      // first finger just started is kept as drawn so far.
+      const d = drag.current;
+      if (d?.batcher) {
+        window.clearInterval(d.timer);
+        flushPts();
+      }
+      setPreview([]);
+      drag.current = { kind: 'hand' };
+      return;
+    }
     const pt = pagePoint(e);
     const pg = currentPage(session.doc);
-    const t: Tool = mode === 'annotate' && !['pen', 'eraser'].includes(tool) ? 'pen' : e.button === 1 ? 'hand' : tool;
+    const t: Tool = !editing ? 'hand' : mode === 'annotate' && !['pen', 'eraser'].includes(tool) ? 'pen' : e.button === 1 ? 'hand' : tool;
     if (t === 'hand') {
-      drag.current = { kind: t, panFrom: { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y } };
+      drag.current = { kind: t, panFrom: { x: e.clientX, y: e.clientY, t: zp } };
       return;
     }
     if (t === 'pen' || t === 'hl') {
@@ -215,10 +242,19 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
   };
 
   const onMove = (e: React.PointerEvent) => {
+    const prev = pointers.current.get(e.pointerId);
+    if (prev && pointers.current.size >= 2) {
+      const next = local(e);
+      const other = [...pointers.current.entries()].find(([id]) => id !== e.pointerId)?.[1];
+      pointers.current.set(e.pointerId, next);
+      if (other) setZp((t) => pinchZP(t, prev, other, next, other, size.w, size.h, minZoom));
+      return;
+    }
+    if (prev) pointers.current.set(e.pointerId, local(e));
     const d = drag.current;
     if (!d) return;
-    if (d.kind === 'hand' && d.panFrom) {
-      setPan({ x: d.panFrom.px + e.clientX - d.panFrom.x, y: d.panFrom.py + e.clientY - d.panFrom.y });
+    if (d.kind === 'hand') {
+      if (d.panFrom) setZp(panBy(d.panFrom.t, e.clientX - d.panFrom.x, e.clientY - d.panFrom.y, size.w, size.h, minZoom));
       return;
     }
     const pt = pagePoint(e);
@@ -239,6 +275,14 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
   };
 
   const onUp = (e: React.PointerEvent) => {
+    const wasPinch = pointers.current.size >= 2;
+    pointers.current.delete(e.pointerId);
+    if (wasPinch) {
+      // Lift of one pinch finger: nothing to finish, wait for the other.
+      if (pointers.current.size === 0) drag.current = null;
+      else drag.current = { kind: 'hand' };
+      return;
+    }
     const d = drag.current;
     drag.current = null;
     if (!d) return;
@@ -274,9 +318,15 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
   };
 
   const onWheel = (e: React.WheelEvent) => {
-    if (mode !== 'edit' || !(e.ctrlKey || e.metaKey)) return;
-    setZoom((z) => Math.min(4, Math.max(0.5, z * (e.deltaY < 0 ? 1.1 : 1 / 1.1))));
+    // Teacher: Ctrl+wheel (plain wheel is free for the page). Viewers: wheel zooms.
+    if (mode === 'edit' && !(e.ctrlKey || e.metaKey)) return;
+    const [sx, sy] = local(e);
+    zoomBy(wheelFactor(e.deltaY, e.deltaMode), sx, sy);
   };
+  // Keep the transform valid when the box resizes.
+  useEffect(() => {
+    if (size.w && size.h) setZp((t) => clampZP(t, size.w, size.h, minZoom));
+  }, [size.w, size.h, minZoom]);
 
   // Keyboard shortcuts (edit).
   useEffect(() => {
@@ -364,28 +414,163 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
   };
 
-  const cursor = tool === 'hand' ? 'grab' : tool === 'text' ? 'text' : editing ? 'crosshair' : 'default';
-  const btn = (active: boolean): CSSProperties => ({
-    minWidth: 34,
-    height: 34,
-    padding: '0 8px',
-    borderRadius: 8,
-    border: '1px solid rgba(255,255,255,0.14)',
-    background: active ? '#2563eb' : 'rgba(255,255,255,0.06)',
-    color: '#e2e8f0',
-    fontSize: 12,
-    fontWeight: 600,
-    cursor: 'pointer',
-  });
+  const cursor = !editing ? (isZoomed(zp) ? 'grab' : 'default') : tool === 'hand' ? 'grab' : tool === 'text' ? 'text' : 'crosshair';
+  const btn = (active: boolean): CSSProperties => barBtn(active, { minWidth: 36, height: 36, fontSize: 14 });
   const toolBtn = (t: Tool, label: string, title: string) => (
     <button key={t} type="button" title={title} aria-label={title} data-wb-tool={t} style={btn(tool === t)} onClick={() => setTool(t)}>
       {label}
     </button>
   );
+  const isTool = (...ts: Tool[]) => ts.includes(tool);
+  const glyph = (g: string) => <span aria-hidden style={{ fontSize: 17, lineHeight: 1 }}>{g}</span>;
+  const colorGrid = (
+    <>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 26px)', gap: 6 }}>
+        {PALETTE.map((c) => (
+          <button
+            key={c}
+            type="button"
+            title={`Colour ${c}`}
+            aria-label={`Colour ${c}`}
+            onClick={() => setColor(c)}
+            style={{ width: 26, height: 26, borderRadius: 13, background: c, border: color === c ? '3px solid #60a5fa' : '1px solid #475569', cursor: 'pointer', padding: 0 }}
+          />
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }} role="radiogroup" aria-label="Thickness">
+        {WIDTHS.map((w) => (
+          <button key={w} type="button" role="radio" aria-checked={width === w} aria-label={`Thickness ${w}px`} title={`${w}px`} onClick={() => setWidth(w)} style={btn(width === w)}>
+            <span style={{ width: Math.min(18, w + 2), height: Math.min(18, w + 2), borderRadius: 9, background: color, display: 'block' }} />
+          </button>
+        ))}
+      </div>
+    </>
+  );
+  const undoRedo = (
+    <>
+      <button type="button" style={btn(false)} onClick={undo} title="Undo (Ctrl+Z)" aria-label="Undo" disabled={!undoRef.current.length}>
+        ↶
+      </button>
+      <button type="button" style={btn(false)} onClick={redo} title="Redo (Ctrl+Y)" aria-label="Redo" disabled={!redoRef.current.length}>
+        ↷
+      </button>
+    </>
+  );
+  const editGroups: FlyoutGroup[] = [
+    {
+      id: 'draw',
+      label: 'Draw: pen, highlighter, text',
+      icon: glyph(tool === 'hl' ? '▬' : tool === 'text' ? 'T' : '✎'),
+      active: isTool('pen', 'hl', 'text'),
+      testId: 'wb-group-draw',
+      content: (
+        <>
+          {toolBtn('pen', '✎', 'Pen')}
+          {toolBtn('hl', '▬', 'Highlighter')}
+          {toolBtn('text', 'T', 'Text')}
+        </>
+      ),
+    },
+    {
+      id: 'shapes',
+      label: 'Shapes: line, arrow, rectangle, ellipse',
+      icon: glyph(tool === 'line' ? '╱' : tool === 'arrow' ? '➚' : tool === 'ellipse' ? '◯' : '▭'),
+      active: isTool('line', 'arrow', 'rect', 'ellipse'),
+      content: (
+        <>
+          {toolBtn('line', '╱', 'Line')}
+          {toolBtn('arrow', '➚', 'Arrow')}
+          {toolBtn('rect', '▭', 'Rectangle')}
+          {toolBtn('ellipse', '◯', 'Ellipse')}
+        </>
+      ),
+    },
+    {
+      id: 'erase',
+      label: 'Erase and undo',
+      icon: glyph('⌫'),
+      active: isTool('eraser', 'area'),
+      content: (
+        <>
+          {toolBtn('eraser', '⌫', 'Eraser (strokes)')}
+          {toolBtn('area', '⬚', 'Eraser (area)')}
+          {undoRedo}
+          <button type="button" style={btn(false)} onClick={() => act({ k: 'clear', p: currentPage(session.doc).id })} title="Clear page" aria-label="Clear page">
+            Clear
+          </button>
+        </>
+      ),
+    },
+    {
+      id: 'color',
+      label: 'Colour and size',
+      icon: <span aria-hidden style={{ width: 18, height: 18, borderRadius: 9, background: color, border: '2px solid #e2e8f0', display: 'block' }} />,
+      content: colorGrid,
+    },
+    {
+      id: 'pages',
+      label: 'Pages and background',
+      icon: <span aria-hidden style={{ fontSize: 11 }} data-testid="wb-page">{session.doc.cur + 1}/{session.doc.pages.length}</span>,
+      content: (
+        <>
+          <button type="button" style={btn(false)} onClick={() => goPage(-1)} disabled={session.doc.cur === 0} aria-label="Previous page" title="Previous page (PgUp)">
+            ‹
+          </button>
+          <button type="button" style={btn(false)} onClick={() => goPage(1)} disabled={session.doc.cur >= session.doc.pages.length - 1} aria-label="Next page" title="Next page (PgDn)">
+            ›
+          </button>
+          <button type="button" style={btn(false)} onClick={newPage} aria-label="New page" title="New page">
+            +Page
+          </button>
+          {BACKGROUNDS.map((b) => (
+            <button key={b} type="button" style={btn(page.bg === b)} onClick={() => setBg(b)} aria-label={`Background ${b}`} title={`Background: ${b}`}>
+              {b[0]!.toUpperCase() + b.slice(1)}
+            </button>
+          ))}
+        </>
+      ),
+    },
+    {
+      id: 'view',
+      label: 'Zoom, pan, image and export',
+      icon: glyph('⌕'),
+      active: isTool('hand'),
+      content: (
+        <>
+          {toolBtn('hand', '✋', 'Pan')}
+          <button type="button" style={btn(false)} onClick={() => zoomBy(1 / 1.25)} aria-label="Zoom out" title="Zoom out (Ctrl+wheel)">
+            −
+          </button>
+          <button type="button" style={btn(false)} onClick={resetZoom} aria-label="Fit page" title="Fit page">
+            {Math.round(zp.s * 100)}%
+          </button>
+          <button type="button" style={btn(false)} onClick={() => zoomBy(1.25)} aria-label="Zoom in" title="Zoom in">
+            +
+          </button>
+          <button type="button" style={btn(false)} onClick={() => fileRef.current?.click()} aria-label="Insert image" title="Insert image">
+            🖼
+          </button>
+          <button type="button" style={btn(false)} onClick={exportPng} aria-label="Export PNG" title="Export this page as PNG">
+            PNG
+          </button>
+          <button type="button" style={btn(false)} onClick={() => void exportPdf()} aria-label="Export PDF" title="Export all pages as PDF">
+            PDF
+          </button>
+        </>
+      ),
+    },
+  ];
+  const annotateGroups: FlyoutGroup[] = [
+    { id: 'pen', label: 'Pen', icon: glyph('✎'), active: tool !== 'eraser', onClick: () => setTool('pen') },
+    { id: 'eraser', label: 'Erase my drawing', icon: glyph('⌫'), active: tool === 'eraser', onClick: () => setTool('eraser') },
+    { id: 'color', label: 'Colour and size', icon: <span aria-hidden style={{ width: 18, height: 18, borderRadius: 9, background: color, border: '2px solid #e2e8f0', display: 'block' }} />, content: colorGrid },
+    { id: 'undo', label: 'Undo / redo', icon: glyph('↶'), content: undoRedo },
+  ];
+  const barW = 54;
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', background: '#0b0f14', overflow: 'hidden', ...style }} data-whiteboard={mode}>
-      <div ref={wrapRef} style={{ position: 'absolute', inset: 0, bottom: mode === 'view' ? 0 : 52 }}>
+      <div ref={wrapRef} style={{ position: 'absolute', inset: 0, left: mode === 'view' ? 0 : barW }}>
         <canvas
           ref={canvasRef}
           data-testid="wb-canvas"
@@ -398,6 +583,11 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
         />
         {mode === 'view' && !session.ready && (
           <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: '#94a3b8', fontSize: 14 }}>{waitingLabel ?? 'Loading whiteboard…'}</div>
+        )}
+        {mode !== 'edit' && isZoomed(zp) && (
+          <button type="button" data-testid="wb-reset-zoom" onClick={resetZoom} style={{ ...btn(false), position: 'absolute', right: 10, bottom: 10, zIndex: 4, background: 'rgba(17,24,39,0.9)', padding: '0 12px' }}>
+            Reset zoom
+          </button>
         )}
         {textAt && (
           <textarea
@@ -415,98 +605,22 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
         )}
       </div>
       {mode !== 'view' && (
-        <div
-          role="toolbar"
-          aria-label="Whiteboard tools"
-          style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 52, display: 'flex', alignItems: 'center', gap: 4, padding: '0 8px', background: '#111827', borderTop: '1px solid rgba(255,255,255,0.1)', overflowX: 'auto', whiteSpace: 'nowrap' }}
-        >
-          {toolBtn('pen', '✎', 'Pen')}
-          {mode === 'edit' && toolBtn('hl', '▬', 'Highlighter')}
-          {toolBtn('eraser', '⌫', mode === 'edit' ? 'Eraser (strokes)' : 'Erase my drawing')}
-          {mode === 'edit' && toolBtn('area', '⬚', 'Eraser (area)')}
-          {mode === 'edit' && toolBtn('line', '╱', 'Line')}
-          {mode === 'edit' && toolBtn('arrow', '➚', 'Arrow')}
-          {mode === 'edit' && toolBtn('rect', '▭', 'Rectangle')}
-          {mode === 'edit' && toolBtn('ellipse', '◯', 'Ellipse')}
-          {mode === 'edit' && toolBtn('text', 'T', 'Text')}
-          {mode === 'edit' && toolBtn('hand', '✋', 'Pan')}
-          <span style={{ width: 8 }} />
-          {PALETTE.map((c) => (
-            <button
-              key={c}
-              type="button"
-              title={`Colour ${c}`}
-              aria-label={`Colour ${c}`}
-              onClick={() => setColor(c)}
-              style={{ width: 24, height: 24, borderRadius: 12, background: c, border: color === c ? '3px solid #60a5fa' : '1px solid #475569', cursor: 'pointer', flex: 'none' }}
-            />
-          ))}
-          <select aria-label="Thickness" value={width} onChange={(e) => setWidth(Number(e.target.value))} style={{ ...btn(false), height: 30 }}>
-            {WIDTHS.map((w) => (
-              <option key={w} value={w}>
-                {w}px
-              </option>
-            ))}
-          </select>
-          <button type="button" style={btn(false)} onClick={undo} title="Undo (Ctrl+Z)" aria-label="Undo" disabled={!undoRef.current.length}>
-            ↶
-          </button>
-          <button type="button" style={btn(false)} onClick={redo} title="Redo (Ctrl+Y)" aria-label="Redo" disabled={!redoRef.current.length}>
-            ↷
-          </button>
-          {mode === 'edit' && (
-            <>
-              <button type="button" style={btn(false)} onClick={() => act({ k: 'clear', p: currentPage(session.doc).id })} title="Clear page" aria-label="Clear page">
-                Clear
+        <FlyoutBar
+          label="Whiteboard tools"
+          orient="vertical"
+          side="after"
+          groups={mode === 'edit' ? editGroups : annotateGroups}
+          style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: barW, boxSizing: 'border-box', borderRight: '1px solid rgba(255,255,255,0.1)', zIndex: 4 }}
+          tail={
+            onClose && !hideStop ? (
+              <button type="button" style={{ ...btn(false), marginTop: 'auto', background: '#b91c1c' }} onClick={onClose} aria-label="Stop whiteboard" title="Stop whiteboard (students stop seeing it)">
+                ■
               </button>
-              <span style={{ width: 8 }} />
-              <button type="button" style={btn(false)} onClick={() => goPage(-1)} disabled={session.doc.cur === 0} aria-label="Previous page" title="Previous page (PgUp)">
-                ‹
-              </button>
-              <span style={{ color: '#cbd5e1', fontSize: 12, minWidth: 44, textAlign: 'center' }} data-testid="wb-page">
-                {session.doc.cur + 1}/{session.doc.pages.length}
-              </span>
-              <button type="button" style={btn(false)} onClick={() => goPage(1)} disabled={session.doc.cur >= session.doc.pages.length - 1} aria-label="Next page" title="Next page (PgDn)">
-                ›
-              </button>
-              <button type="button" style={btn(false)} onClick={newPage} aria-label="New page" title="New page">
-                +Page
-              </button>
-              <select aria-label="Background" value={page.bg} onChange={(e) => setBg(e.target.value as Background)} style={{ ...btn(false), height: 30 }}>
-                {BACKGROUNDS.map((b) => (
-                  <option key={b} value={b}>
-                    {b[0]!.toUpperCase() + b.slice(1)}
-                  </option>
-                ))}
-              </select>
-              <button type="button" style={btn(false)} onClick={() => setZoom((z) => Math.max(0.5, z / 1.25))} aria-label="Zoom out" title="Zoom out (Ctrl+wheel)">
-                −
-              </button>
-              <button type="button" style={btn(false)} onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }} aria-label="Fit page" title="Fit page">
-                {Math.round(zoom * 100)}%
-              </button>
-              <button type="button" style={btn(false)} onClick={() => setZoom((z) => Math.min(4, z * 1.25))} aria-label="Zoom in" title="Zoom in">
-                +
-              </button>
-              <button type="button" style={btn(false)} onClick={() => fileRef.current?.click()} aria-label="Insert image" title="Insert image">
-                🖼
-              </button>
-              <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) insertImage(f); e.target.value = ''; }} />
-              <button type="button" style={btn(false)} onClick={exportPng} aria-label="Export PNG" title="Export this page as PNG">
-                PNG
-              </button>
-              <button type="button" style={btn(false)} onClick={() => void exportPdf()} aria-label="Export PDF" title="Export all pages as PDF">
-                PDF
-              </button>
-            </>
-          )}
-          {onClose && (
-            <button type="button" style={{ ...btn(false), marginLeft: 'auto', background: '#b91c1c' }} onClick={onClose} aria-label="Stop whiteboard" title="Stop whiteboard">
-              Stop
-            </button>
-          )}
-        </div>
+            ) : undefined
+          }
+        />
       )}
+      <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) insertImage(f); e.target.value = ''; }} />
     </div>
   );
 }

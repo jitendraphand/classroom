@@ -15,11 +15,22 @@
 /** 'auto' = send while Video mode is on (or when ticked at share start). */
 export type ShareAudioChoice = 'auto' | 'on' | 'off';
 
-export function wantShareAudio(input: { choice: ShareAudioChoice; videoMode: boolean; askedAtStart: boolean }): boolean {
+/**
+ * Echo (round 5): whole-device loopback also records the students' voices
+ * this app is playing, so every student heard themselves ~0.5 s later. Share
+ * audio now follows Video mode automatically ONLY when the capture leaves out
+ * this app's own output (sidecar WASAPI process loopback, exclude mode). The
+ * Electron fallback (whole-device loopback) is sent only on an explicit choice.
+ */
+export function wantShareAudio(input: { choice: ShareAudioChoice; videoMode: boolean; askedAtStart: boolean; excludesOwnOutput: boolean }): boolean {
   if (input.choice === 'off') return false;
   if (input.choice === 'on') return true;
-  return input.videoMode || input.askedAtStart;
+  if (input.askedAtStart) return true;
+  return input.excludesOwnOutput && input.videoMode;
 }
+
+export const SHARE_AUDIO_ECHO_WARNING =
+  "Computer sound is on. This PC sends everything it plays, including your students' voices: use headphones, or students hear an echo.";
 
 /** The Sound button flips what is happening now into an explicit choice. */
 export function toggleShareAudio(sendingNow: boolean): ShareAudioChoice {
