@@ -15,6 +15,7 @@ import {
   IconHand,
   IconUsers,
   IconPen,
+  IconBoard,
 } from '@/components/ui/Icons';
 import { cn } from '@/lib/cn';
 
@@ -194,8 +195,8 @@ export function Controls({
         )}
 
         {onToggleWhiteboard && (
-          <IconButton label={whiteboardOn ? 'Close whiteboard' : 'Whiteboard'} active={!!whiteboardOn} onClick={onToggleWhiteboard}>
-            <span aria-hidden style={{ fontSize: 16, lineHeight: 1 }}>✎</span>
+          <IconButton label={whiteboardOn ? 'Stop whiteboard sharing' : 'Share a whiteboard (students see it live)'} active={!!whiteboardOn} onClick={onToggleWhiteboard}>
+            <IconBoard />
           </IconButton>
         )}
 

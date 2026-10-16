@@ -1,0 +1,45 @@
+/**
+ * Grouped toolbar with a second row/column of options ("flyout").
+ * Hover a group (mouse) → its options open after a short delay; moving away
+ * closes them after a grace period (no flicker). Tap / click toggles and pins
+ * (touch-friendly). Pure reducer + timing constants; the React hook lives in
+ * FlyoutBar.tsx (web + Windows whiteboard) and the Windows share tools window.
+ */
+export type FlyoutState = { open: string | null; pinned: boolean };
+export type FlyoutEvent =
+  | { t: 'enter'; g: string }
+  | { t: 'leave' }
+  | { t: 'tap'; g: string; touch: boolean }
+  | { t: 'pick'; touch: boolean }
+  | { t: 'close' };
+
+export const FLYOUT_CLOSED: FlyoutState = { open: null, pinned: false };
+/** Hover delay before a group opens (switching between groups is instant). */
+export const HOVER_OPEN_MS = 120;
+/** Grace period after the pointer leaves the bar + flyout. */
+export const HOVER_CLOSE_MS = 350;
+
+export function flyoutReduce(s: FlyoutState, e: FlyoutEvent): FlyoutState {
+  switch (e.t) {
+    case 'enter':
+      if (s.open === e.g) return s;
+      // Hovering another group while one is pinned switches to it (unpinned).
+      return { open: e.g, pinned: false };
+    case 'leave':
+      return s.pinned ? s : FLYOUT_CLOSED;
+    case 'tap':
+      if (s.open !== e.g) return { open: e.g, pinned: true };
+      // Mouse: the hover already opened it, so the click pins it; a second click closes.
+      if (!e.touch && !s.pinned) return { open: e.g, pinned: true };
+      return FLYOUT_CLOSED;
+    case 'pick':
+      return e.touch ? FLYOUT_CLOSED : s;
+    case 'close':
+      return FLYOUT_CLOSED;
+  }
+}
+
+/** Open delay for a hover: instant when another group is already open. */
+export function hoverOpenDelay(s: FlyoutState): number {
+  return s.open ? 0 : HOVER_OPEN_MS;
+}

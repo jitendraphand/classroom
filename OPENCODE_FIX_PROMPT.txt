@@ -1,0 +1,93 @@
+You are fixing bugs in the Classroom app at /workspace/classroom (commit b5c6c32, CODE_REVIEW.md in repo root). Work only in this repo. Do not push to GitHub. Do not run git filter-repo or force-push. Do not rotate secrets that require rewriting git history. Implement the fixes below end-to-end by editing code; run typecheck/lint if available; commit locally with a clear message when done. Prefer small, correct patches that match existing style.
+
+Read CODE_REVIEW.md for context, then implement ALL of the following (Critical + High product/correctness items from the prioritized list). Skip only what you cannot safely do without external secrets rotation or git history rewrite.
+
+## MUST FIX (implement all)
+
+### 1. F-01 — Enforce selective video sampling server-side (Critical)
+Files: apps/web/src/lib/livekit.ts, apps/web/src/app/api/rooms/[code]/token/route.ts, and wherever sample rotation updates membership (sample.ts / rotate route).
+
+- In createParticipantToken, when student is NOT allowed to publish camera, set canPublishSources to exclude CAMERA (keep MICROPHONE / SCREEN_SHARE / SCREEN_SHARE_AUDIO as appropriate). Teachers always may publish camera.
+- Add helper setParticipantCameraAllowed(roomCode, identity, allowed) using LiveKit updateParticipant permissions, mirroring setParticipantMicAllowed.
+- When rotateVisibleSample (or rotate API) changes who is in the visible sample, call setParticipantCameraAllowed for identities that entered or left the sample.
+- Keep client SelectivePublisher as UI nicety only; server grant is source of truth.
+
+### 2. F-38 — Fix broken migration SQL (Critical)
+File: apps/web/prisma/migrations/20260927153000_teacher_permanent_code/migration.sql
+- Cast ROW_NUMBER() bigint: use `d.rn::int` in SUBSTRING(..., d.rn::int, 1) so migrate deploy works on a clean DB.
+
+### 3. F-39 / F-44 / F-45 — Fail-closed entrypoint + CMD + signal handling
+Files: apps/web/docker-entrypoint.sh, apps/web/Dockerfile
+- Remove `|| npx prisma db push --accept-data-loss`. On migrate deploy failure: print clear error and exit 1.
+- Entrypoint: if args given, `exec "$@"`; else `exec node server.js`. Add trap for TERM/INT.
+- Dockerfile: add `CMD ["node", "server.js"]`.
+
+### 4. F-13 — Cap whiteboard PUT payload (High)
+File: apps/web/src/app/api/rooms/[code]/whiteboard/route.ts
+- Validate body with zod; reject if JSON stringified snapshot > ~512KB (or raw body > ~1MB).
+- try/catch JSON.parse on GET; return empty/safe response on corrupt Redis value.
+- Optionally clamp client persist in Whiteboard.tsx if easy.
+
+### 5. Security compose hardening (Critical from §4) — no secret rotation
+File: docker-compose.yml (and .env.example comments if needed)
+- Postgres: command listen_addresses=127.0.0.1 (plus reasonable 2GB-ish tunables if already discussed in review).
+- Remove hardcoded fallback default password in compose where it would silently boot with classroom_dev_password if unset — prefer requiring POSTGRES_PASSWORD from env (document in .env.example).
+- Redis: add --maxmemory 192mb --maxmemory-policy allkeys-lru --bind 127.0.0.1 (keep appendonly).
+- Do NOT put real secrets in tracked files. Do NOT rewrite git history.
+
+### 6. F-21 — Delete duplicate /state poller (High)
+File: apps/web/src/components/classroom/ClassroomRoom.tsx
+- Remove the outer setInterval ~2184-2217 that duplicates useRoomState's 2s /state poll. Keep useRoomState + ENDED handling in RoomInner.
+
+### 7. F-05 — Clear chat on room reopen (High)
+File: apps/web/src/lib/teacherRoom.ts
+- In startOrReopenTeacherRoom when flipping ENDED → WAITING, delete Message rows for that roomId (matches README intent that chat clears when session ends/reopens).
+
+### 8. F-02 — Unpin sticky speaker when student self-mutes (High)
+Files: ClassroomRoom.tsx (teacher TrackMuted), sample pin API / mute path as needed
+- When teacher client sees RoomEvent.TrackMuted for a remote student mic, POST unpin (pinned:false) for that identity.
+- Ensure server unpinSpeaker path works for that call (teacher-authorized).
+- Optional: bound max pins so stale pins cannot fill all 6 slots.
+
+### 9. F-23 — Rotation stampede lock (High)
+File: apps/web/src/lib/sample.ts
+- In ensureSampleFresh, take Redis SET NX PX lock before rotateVisibleSample; if lock not acquired, return getVisibleSample only.
+
+### 10. F-09 + F-30 chat query (Medium/High adjacent)
+File: apps/web/src/app/api/rooms/[code]/messages/route.ts
+- Return newest 500 messages (orderBy createdAt desc, take 500, reverse in JS).
+- For students, filter visibility in the Prisma where clause (BROADCAST / TEACHER from self / DIRECT to self) instead of loading all then filtering in JS.
+
+### 11. F-08 — Waiting students must not get full roster (Medium)
+File: apps/web/src/app/api/rooms/[code]/state/route.ts
+- If student status is WAITING, return only me + room status/name fields; omit admitted[], visibleIdentities[], raisedHands detail.
+
+### 7b. F-07 — Stage stuck on screen when teacher stops share via browser UI
+File: ClassroomRoom.tsx
+- Listen for LocalTrackUnpublished / LocalTrackUnsubscribed on ScreenShare; POST stage idle.
+
+### 12. F-12 / F-18 small consistency
+- leave route: filter role STUDENT when marking LEFT by participantId (unless intentional teacher leave path).
+- admit rebuild waiting set: add role: 'STUDENT'.
+
+### 13. F-55 cheap win
+- Bump next in apps/web/package.json to >=14.2.25 (stay on 14.x unless already easy). Run npm install in apps/web if lockfile needs update.
+
+### 14. F-15 / F-58 dead chromeVisible (Low, quick)
+- Remove or simplify chromeVisible / bumpChrome dead auto-hide if still no-op.
+
+## DO NOT DO
+- git filter-repo, force-push, or rewriting history for F-20
+- Changing Mumbai EC2 or deploying
+- Pushing to origin
+- Inventing new major features
+- Breaking teacher permanent meeting codes
+
+## DONE CRITERIA
+1. All MUST FIX items above applied (or explicitly noted in FIX_NOTES.md with why skipped).
+2. `npx tsc --noEmit` in apps/web passes, or list remaining errors.
+3. Migration SQL parses (cast fixed).
+4. Write FIX_NOTES.md summarizing what changed per finding ID.
+5. Commit locally: `fix: address CODE_REVIEW critical/high bugs (OpenCode)` — include CODE_REVIEW.md only if already untracked and you want it; prefer not to force-add secrets.
+
+Start by reading the cited files, then implement. Work until the list is done.

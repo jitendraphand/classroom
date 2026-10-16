@@ -11,7 +11,7 @@
  *   after every reconnect; students allowed to draw annotate through the
  *   server relay (same permission as drawing on the share).
  */
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { useRoomContext } from '@livekit/components-react';
 import { RoomEvent, type RemoteParticipant } from 'livekit-client';
 import { WhiteboardBoard } from '@/lib/whiteboard/WhiteboardBoard';
@@ -38,7 +38,7 @@ export function filterRelayed(session: WhiteboardSession, p: Packet & { by?: str
   return p.ops.length > 0;
 }
 
-export function WhiteboardHost({ code, identity, onClose }: { code: string; identity: string; onClose: () => void }) {
+export function WhiteboardHost({ code, identity, onClose, side, stopRef }: { code: string; identity: string; onClose: () => void; side?: ReactNode; stopRef?: { current: (() => void) | null } }) {
   const room = useRoomContext();
   const session = useMemo(() => {
     // Survive a reload / rejoin of the teacher tab (the board lives here).
@@ -123,9 +123,14 @@ export function WhiteboardHost({ code, identity, onClose }: { code: string; iden
     onClose();
   }, [code, onClose]);
 
+  if (stopRef) stopRef.current = stop;
+  // Teacher layout: tools docked left (inside the board), meeting controls docked right.
   return (
-    <div className="fixed inset-0 z-[95]" data-testid="wb-host">
-      <WhiteboardBoard session={session} mode="edit" identity={identity} onSend={(ops) => void publish(opsPackets(ops))} onClose={stop} />
+    <div className="fixed inset-0 z-[95] flex bg-[#0b0f14]" data-testid="wb-host">
+      <div className="relative min-w-0 flex-1">
+        <WhiteboardBoard session={session} mode="edit" identity={identity} onSend={(ops) => void publish(opsPackets(ops))} onClose={stop} hideStop={!!side} />
+      </div>
+      {side ? <div className="relative h-full shrink-0 border-l border-white/10" data-testid="wb-meeting">{side}</div> : null}
     </div>
   );
 }

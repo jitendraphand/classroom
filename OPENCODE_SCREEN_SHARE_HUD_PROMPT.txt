@@ -1,0 +1,99 @@
+You are implementing a product feature in /workspace/classroom (Next.js + LiveKit teaching app, current main). Work only in this repo. Do not push. Do not touch Mumbai EC2. Do not rewrite git history. Commit locally when done with a clear message. Match existing style (ClassroomRoom.tsx, Controls.tsx, FloatingPanel.tsx, Chat.tsx, Whiteboard.tsx, room APIs).
+
+# Product goal
+
+When the **teacher is screen sharing** and **minimizes / leaves the classroom window** to show other apps on their desktop (or uses a phone), they must still be able to:
+
+1. **Annotate** on top of what students see for the shared screen
+2. **View and reply to chat**
+3. **See and respond to hand raises** (lower hand, optionally focus)
+4. **Mute / unmute** individual students and mute-all / unmute-all
+5. Works on **desktop browsers** and **mobile** (best-effort; degrade gracefully where APIs are missing)
+
+Students keep seeing the teacher’s screen share as the stage. Teacher controls must remain usable without the main classroom tab being foregrounded.
+
+# UX design (implement this)
+
+## A. Teacher “Share HUD” (always-available while stage is screen)
+
+While teacher has screen sharing on (`screenOn` / `stageMode === 'screen'`):
+
+### Desktop (Chromium Document PiP preferred)
+- Open a **Document Picture-in-Picture** window (or a compact always-on-top `window.open` fallback if Document PiP is unavailable) titled something like “Class controls”.
+- The HUD must stay usable when the main classroom tab is minimized or covered.
+- HUD contents (compact, touch-friendly, dark translucent chrome):
+  - Mic mute/unmute (teacher’s own mic)
+  - Stop sharing
+  - Toggle **Annotate** on/off
+  - Chat panel (read + send broadcast; keep existing teacher chat rules)
+  - Hands list (who raised) with Lower hand action (reuse existing hand API)
+  - Roster snippet: mute / unmute per student + Mute all / Unmute all (reuse mute APIs)
+  - Optional: unread chat badge / raised-hand count when panels collapsed
+- Provide a toolbar button on the main classroom UI: **“Pop out controls”** / **“Open share HUD”** so the teacher can reopen the HUD if closed. Auto-open the HUD when screen share **starts** (once per share session); if PiP is blocked, show a clear toast/banner: “Allow pop-out controls to teach while sharing”.
+
+### Mobile / no Document PiP
+- Do **not** rely on PiP.
+- Show a **persistent compact bottom sheet / floating pill** over the classroom UI that expands to the same controls (chat, hands, mute, annotate).
+- When the mobile browser backgrounds the tab, full always-on-top is often impossible — document this limit in a short in-HUD tip (“Keep Classroom in split view / picture-in-picture of the browser if you leave the tab”). Still implement the in-page compact HUD so mobile teachers can use it while Classroom is visible.
+
+## B. Screen-share annotation layer
+
+Students currently see `TeacherScreenStage` (LiveKit ScreenShare track). Add an **annotation overlay** drawn by the teacher that students see **composited on top of the screen share** (not only on the teacher’s local machine).
+
+Requirements:
+- When Annotate is ON, teacher draws (pen / highlighter / eraser / clear-all) on a transparent canvas aligned to the screen-share video frame.
+- Annotations sync to all participants in near-real-time (reuse LiveKit data-channel patterns already used by Whiteboard.tsx / Chat.tsx if practical; otherwise a small Redis-backed room annotation snapshot with versioning — prefer LiveKit data messages for latency, with optional Redis backup for late joiners).
+- Students render the overlay absolutely positioned over the screen-share video, same aspect/letterboxing as the video.
+- Annotations clear when screen share stops or teacher hits Clear.
+- Annotation strokes must NOT require the main whiteboard stage (`stageMode` stays `screen`). Do not force-switch to whiteboard.
+- Keep payloads bounded (reuse the whiteboard size-cap discipline from F-13; don’t OOM Redis).
+
+## C. Keep existing share lifecycle working
+- `toggleScreen` / `stopScreenShare` / LocalTrackUnpublished → stage idle (already fixed) must still work.
+- Closing the HUD must NOT stop screen share.
+- Stopping screen share closes/tears down the HUD and clears annotations.
+
+# Implementation guidance (suggested shape — adapt as needed)
+
+1. New component e.g. `apps/web/src/components/classroom/TeacherShareHud.tsx`
+   - Renders HUD UI (controls + chat + hands + mute list).
+   - `openShareHud()` uses `window.documentPictureInPicture?.requestWindow({ width, height })` when available; move a portal root into the PiP window; on `pagehide`/`dispose` cleanup.
+   - Fallback: fixed position in-page drawer / bottom sheet.
+
+2. New component e.g. `ScreenAnnotator.tsx`
+   - Teacher: pointer drawing on overlay matching video rect.
+   - Student: read-only SVG/canvas overlay from synced strokes.
+   - Wire into `TeacherScreenStage` and any student screen stage view so overlay sits on the video.
+
+3. Sync protocol
+   - Prefer LiveKit room data messages: `{ type: 'screen-annotate', op: 'stroke'|'clear', ... }`
+   - Late joiners: teacher (or server) can send a compact snapshot once, or store last snapshot in Redis key `room:{code}:screen-annotate` with TTL and expose GET via existing room auth if needed.
+
+4. Hook from `ClassroomRoom.tsx`
+   - On successful start of screen share → open HUD.
+   - Pass mute/hand/chat callbacks already used by Controls / Chat / roster.
+   - Wire annotate toggle state.
+
+5. Mobile CSS
+   - Large tap targets (≥44px), safe-area insets, panels scroll independently, doesn’t cover the whole screen when collapsed.
+
+6. Docs
+   - Short note in README or docs: “Teach while sharing” — desktop Chromium PiP recommended; Safari/Firefox fallbacks; mobile limitations.
+
+# Out of scope
+- OS-level annotation outside the browser (Zoom native annotate).
+- Electron always-on-top.
+- Changing student selective-video sampling.
+- Pushing to GitHub / deploying EC2.
+- Secret rotation / git filter-repo.
+
+# Done criteria
+1. Teacher can start screen share, minimize/cover the main tab (Chromium), and still use HUD for chat, hands, mute/unmute, annotate.
+2. Students see annotations over the shared screen live.
+3. Mobile gets in-page compact HUD with same actions (graceful if no PiP).
+4. Stop share cleans up HUD + annotations; stage returns to idle.
+5. `npm run typecheck` passes in apps/web.
+6. Write `SHARE_HUD_NOTES.md` describing what was built, browser support matrix, and how to try it.
+7. Commit locally: `feat: teacher share HUD with chat, hands, mute, and screen annotations`
+
+Read the relevant files first, then implement. Prefer working end-to-end over speculative refactors.

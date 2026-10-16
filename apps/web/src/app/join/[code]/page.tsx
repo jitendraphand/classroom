@@ -28,6 +28,8 @@ type State = {
   meLeft?: boolean;
 };
 
+const leftKey = (code: string) => `waiting_left_${code}`;
+
 export default function JoinRoomPage() {
   const params = useParams();
   const search = useSearchParams();
@@ -44,6 +46,17 @@ export default function JoinRoomPage() {
   // The class ended (or this seat was closed) while waiting in the lobby.
   const [lobbyEnded, setLobbyEnded] = useState(false);
   const [teacherSession, setTeacherSession] = useState<{ name: string | null } | null>(null);
+  // Pressed Leave in the waiting room: stay out (no polling, no auto-rejoin) until "Rejoin".
+  const [left, setLeft] = useState(() => {
+    try {
+      // A reload keeps the "left" page for 10 minutes; a later class link starts fresh.
+      const at = typeof window !== 'undefined' ? Number(sessionStorage.getItem(leftKey(code)) || 0) : 0;
+      return at > 0 && Date.now() - at < 10 * 60_000;
+    } catch {
+      return false;
+    }
+  });
+  const [leftSchool, setLeftSchool] = useState(false);
   const [continueAsStudent, setContinueAsStudent] = useState(
     search.get('as') === 'student' || search.get('as') === '1'
   );
@@ -71,8 +84,8 @@ export default function JoinRoomPage() {
   }, [code, router]);
 
   useEffect(() => {
-    poll();
-  }, [poll]);
+    if (!left) poll();
+  }, [poll, left]);
 
   useEffect(() => {
     fetch('/api/auth/act-as')
@@ -88,12 +101,43 @@ export default function JoinRoomPage() {
 
   const hidden = usePageHidden();
   useEffect(() => {
-    if (!waiting || lobbyEnded) return;
+    if (!waiting || lobbyEnded || left) return;
     // Back off while the tab is hidden; check at once when it comes back.
     if (!hidden) void poll();
     const t = setInterval(poll, waitingPollMs(hidden));
     return () => clearInterval(t);
   }, [waiting, poll, hidden, lobbyEnded]);
+
+  async function leaveWaiting() {
+    const school = !!roomInfo?.me?.viaSchoolApp;
+    setLeftSchool(school);
+    setLeft(true);
+    try {
+      sessionStorage.setItem(leftKey(code), String(Date.now()));
+      sessionStorage.setItem(leftKey(code) + '_school', school ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+    // Cancel the waiting request (the teacher no longer sees this student waiting).
+    await fetch(`/api/rooms/${code}/leave`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => null);
+  }
+
+  function rejoin() {
+    let school = leftSchool;
+    try {
+      school = school || sessionStorage.getItem(leftKey(code) + '_school') === '1';
+      sessionStorage.removeItem(leftKey(code));
+      sessionStorage.removeItem(leftKey(code) + '_school');
+    } catch {
+      /* ignore */
+    }
+    // School-app students go back through their class route (it seats them again).
+    if (school) {
+      window.location.href = '/student';
+      return;
+    }
+    window.location.href = `/join/${code}`;
+  }
 
   async function enableStudentMode() {
     await fetch('/api/auth/act-as', {
@@ -143,6 +187,20 @@ export default function JoinRoomPage() {
     }
     setWaiting(true);
     poll();
+  }
+
+  if (left) {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center gap-4 px-6" data-finished="left" data-testid="left-page">
+        <div className="max-w-md rounded-2xl border border-white/10 bg-surface-1 p-8 text-center shadow-lift">
+          <p className="font-display text-2xl font-semibold tracking-tight">You left the class</p>
+          <p className="mt-2 text-sm text-slate-400">You are no longer waiting to be admitted. Rejoin when you are ready.</p>
+          <Button className="mt-6" onClick={rejoin} data-testid="rejoin">
+            Rejoin
+          </Button>
+        </div>
+      </main>
+    );
   }
 
   // Until the first poll says who this is (or while an admitted student is
@@ -198,12 +256,9 @@ export default function JoinRoomPage() {
             <p className="mt-8 font-display text-3xl tracking-[0.3em] text-brand-300">{code}</p>
           )}
         </Card>
-        <Link
-          href={roomInfo?.me?.viaSchoolApp ? '/student' : '/'}
-          className="mt-6 text-sm text-slate-500 transition hover:text-slate-300"
-        >
+        <button type="button" data-testid="waiting-leave" onClick={() => void leaveWaiting()} className="mt-6 text-sm text-slate-500 transition hover:text-slate-300">
           Leave
-        </Link>
+        </button>
       </main>
     );
   }

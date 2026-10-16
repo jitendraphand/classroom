@@ -42,6 +42,7 @@ import {
 } from 'react';
 import { useRouter } from 'next/navigation';
 import { TEACHER_ABSENCE_GRACE_MS } from '@/lib/graceTimer';
+import { MIC_CAPTURE, keepShareAudio } from '@/lib/audioPolicy';
 import { STUCK_RECONNECT_MS, rejoinDelayMs, rejoinOutcome, shouldAutoRejoin } from '@/lib/rejoinPolicy';
 import { SESSION_CHECK_EVENT, SESSION_ENDED_EVENT, isEndedReason, loginHref } from '@/lib/sessionClient';
 import { useRoomState, type RosterInfo } from '@/hooks/useRoomState';
@@ -50,6 +51,7 @@ import { shortName } from '@/lib/displayNames';
 import { Controls } from './Controls';
 import { LocalPreview } from './LocalPreview';
 import { DrawOverlay, ShareDrawingProvider, useDrawingActions, useShareDrawing } from './ShareDrawing';
+import { ZoomPanSurface } from './ZoomPanSurface';
 import { WhiteboardHost, WhiteboardViewer, hasSavedBoard } from './Whiteboard';
 import { useChatThread } from './chatThread';
 // Chat UI loads on first open (the thread hook above keeps unread counts live).
@@ -71,6 +73,7 @@ import {
   beginShareControls,
   preopenShareControls,
   type ShareControlSurface,
+  type TeacherShareHudProps,
 } from './TeacherShareHud';
 import { Avatar } from '@/components/ui/Avatar';
 import { Badge } from '@/components/ui/Badge';
@@ -489,7 +492,7 @@ function TeacherShareTile({ trackRef }: { trackRef: ReturnType<typeof useTracks>
   );
 }
 
-export function TeacherScreenStage({ teacherIdentities }: { teacherIdentities: string[] }) {
+export function TeacherScreenStage({ teacherIdentities, zoomable = false, drawing = false }: { teacherIdentities: string[]; zoomable?: boolean; drawing?: boolean }) {
   const tracks = useTracks(
     [{ source: Track.Source.ScreenShare, withPlaceholder: false }],
     { onlySubscribed: true }
@@ -514,17 +517,21 @@ export function TeacherScreenStage({ teacherIdentities }: { teacherIdentities: s
     <div className="relative h-full w-full bg-black">
       {screens.map((t) => (
         <div key={`${t.participant.identity}-${t.source}`} className="absolute inset-0">
-          <div className="relative h-full w-full">
-            <div className="relative h-full w-full">
-              {t.publication?.track ? (
-                <VideoTrack trackRef={t} className="h-full w-full object-contain" />
-              ) : (
-                <div className="flex h-full items-center justify-center text-slate-400">No screen</div>
-              )}
-              {/* Students' drawing (and the allowed student's drawing surface). */}
-              <DrawOverlay />
-            </div>
-          </div>
+          {(() => {
+            const content = (
+              <div className="relative h-full w-full">
+                {t.publication?.track ? (
+                  <VideoTrack trackRef={t} className="h-full w-full object-contain" />
+                ) : (
+                  <div className="flex h-full items-center justify-center text-slate-400">No screen</div>
+                )}
+                {/* Students' drawing (and the allowed student's drawing surface). */}
+                <DrawOverlay />
+              </div>
+            );
+            // Students: local pinch / wheel zoom (one finger draws while drawing is allowed).
+            return zoomable ? <ZoomPanSurface panWithOneFinger={!drawing}>{content}</ZoomPanSurface> : <div className="relative h-full w-full">{content}</div>;
+          })()}
         </div>
       ))}
     </div>
@@ -2111,7 +2118,7 @@ function SelectivePublisher({
       }
       try {
         if (!micTrackRef.current) {
-          const track = await createLocalAudioTrack();
+          const track = await createLocalAudioTrack({ ...MIC_CAPTURE });
           if (cancelled || mutedByTeacher) {
             safeStop(track);
             return;
@@ -2977,7 +2984,15 @@ function RoomInner({
 
     const media = stream.getVideoTracks()[0];
     // Keep the first audio track (tab / system audio); drop any extras.
-    const shareAudio = stream.getAudioTracks().find((t) => t.readyState === 'live') ?? null;
+    const firstAudio = stream.getAudioTracks().find((t) => t.readyState === 'live') ?? null;
+    // Echo guard (lib/audioPolicy): whole-screen system audio would include
+    // this tab's playback of students' voices unless the browser excludes it.
+    const audioSurface = String((media?.getSettings?.() as { displaySurface?: string } | undefined)?.displaySurface ?? '');
+    const shareAudio =
+      firstAudio && keepShareAudio(audioSurface, firstAudio.getSettings?.() as { restrictOwnAudio?: boolean }) ? firstAudio : null;
+    if (firstAudio && !shareAudio) {
+      setHudNotice('Computer sound was not sent: this browser cannot keep students\' voices out of a whole-screen share. Share a browser tab to send its sound.');
+    }
     const dropShareAudio = () =>
       stream.getAudioTracks().forEach((track) => {
         try {
@@ -3324,6 +3339,7 @@ function RoomInner({
     if (hasSavedBoard(code)) setWbOpen(true);
     else void roomFetch(code, '/whiteboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'off' }) });
   }, [isTeacher, state, code]);
+  const wbStopRef = useRef<(() => void) | null>(null);
   const closeWhiteboard = useCallback(() => {
     setWbOpen(false);
     void roomFetch(code, '/whiteboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'off' }) });
@@ -3766,7 +3782,9 @@ function RoomInner({
         )}
 
         <div className="absolute inset-0 z-10">
-          {covered ? null : state?.whiteboard && !teacherGone ? (
+          {/* The whiteboard stays mounted under the fullscreen cover (data only, no
+              video), so it is there at once when the student re-enters. */}
+          {state?.whiteboard && !teacherGone ? (
             <WhiteboardViewer
               identity={state?.me?.livekitIdentity ?? localParticipant.identity}
               canAnnotate={myDrawState === 'drawing' && !!state?.me?.canDraw}
@@ -3777,8 +3795,8 @@ function RoomInner({
                 roomFetch(code, '/whiteboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'ops', ops }) })
               }
             />
-          ) : showTeacherScreen ? (
-            <TeacherScreenStage teacherIdentities={teacherIdentities} />
+          ) : covered ? null : showTeacherScreen ? (
+            <TeacherScreenStage teacherIdentities={teacherIdentities} zoomable drawing={myDrawState === 'drawing'} />
           ) : (
             <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-ink-950 px-6 text-center text-slate-400">
               <IconVideo size={32} />
@@ -3849,6 +3867,65 @@ function RoomInner({
     );
   }
 
+  const shareHudEl = (over: Partial<TeacherShareHudProps>) => (
+          <TeacherShareHud
+            videoMode={videoMode}
+            onVideoModeChange={setVideoMode}
+            focusAlertCount={focusAlertCount}
+            host={shareMount}
+            hostWindow={shareWindow}
+            inline={!shareMount}
+            compact={hudCompact}
+            onCompactChange={setHudCompact}
+            admitted={state?.admitted ?? []}
+            waiting={(state?.waiting ?? []).map((w) => ({
+              id: w.id,
+              displayName: rosterLabel(w),
+              role: 'STUDENT',
+              sid: w.sid ?? null,
+            }))}
+            waitingCount={waitingCount}
+            onAdmit={(id) => void admitStudents([id])}
+            onAdmitAll={() => void admitStudents(undefined, true)}
+            waitingRoomOn={waitingRoomOn}
+            onWaitingRoom={(on) => void setWaitingRoom(on)}
+            teacherMicOn={micOn && !effectiveMuted}
+            onToggleTeacherMic={() => setMicOn((v) => !v)}
+            teacherCamOn={camOn}
+            onToggleTeacherCam={() => setCamOn((v) => !v)}
+            sideWindowsAllowed={sideWindowsAllowed}
+            sideWindowsNeedTrust={maskActive}
+            videosOpen={!!videosWin}
+            onToggleVideos={sideWindowsAllowed ? toggleVideosWindow : undefined}
+            onStopSharing={() => void toggleScreen()}
+            onMuteStudent={(id, muted) => void muteStudent(id, muted)}
+            onMuteAll={(muted) => void muteAllStudents(muted)}
+            onLowerHand={(id) => void lowerHand(id)}
+            onTogglePin={(id, on) => void togglePin(id, on)}
+            drawHolderName={drawHolder?.name ?? null}
+            onAllowDraw={(id) => void allowDrawing(id)}
+            onRevokeDraw={(id) => void revokeDrawing(id)}
+            onClearDrawing={() => void clearDrawing()}
+            drawPreview={sideWindowsAllowed && !!shareMount ? 'video' : 'strokes'}
+            chatUnread={chatUnread}
+            onChatOpenChange={setHudChatOpen}
+            chat={
+              <ChatView
+                thread={chatThread}
+                isTeacher
+                myParticipantId={myParticipantId}
+                students={chatStudents}
+                to={chatTo}
+                onToChange={setChatTo}
+                raisedHands={raisedHands}
+                onLowerHand={(id) => void lowerHand(id)}
+              />
+            }
+            notice={shareMount ? hudNotice || undefined : undefined}
+            {...over}
+          />
+  );
+
   return withDrawing(
     <div className="flex h-[100dvh] max-h-[100dvh] flex-col overflow-hidden bg-surface-0/40">
       <SelectivePublisher
@@ -3863,7 +3940,29 @@ function RoomInner({
       />
       <RoomAudioRenderer />
       {wbOpen && (
-        <WhiteboardHost code={code} identity={localParticipant.identity} onClose={() => setWbOpen(false)} />
+        <WhiteboardHost
+          code={code}
+          identity={localParticipant.identity}
+          onClose={() => setWbOpen(false)}
+          stopRef={wbStopRef}
+          side={shareHudEl({
+            vertical: true,
+            inline: true,
+            host: null,
+            hostWindow: null,
+            compact: false,
+            onCompactChange: undefined,
+            stopLabel: 'Stop whiteboard',
+            onStopSharing: () => wbStopRef.current?.(),
+            onEndClass: endClass,
+            videoMode: undefined,
+            onVideoModeChange: undefined,
+            sideWindowsAllowed: false,
+            onToggleVideos: undefined,
+            drawPreview: 'strokes',
+            notice: hudNotice || undefined,
+          })}
+        />
       )}
 
       {/* Top bar */}
@@ -4276,6 +4375,8 @@ function RoomInner({
         </FloatingPanel>
       </div>
 
+      {/* Whiteboard mode: the student video float stays above the board (z 96 > 95). */}
+      <div style={wbOpen ? { position: 'relative', zIndex: 96 } : undefined}>
       <TeacherPeersFloat
         roomCode={code}
         teacherIdentities={teacherIdentities}
@@ -4288,7 +4389,7 @@ function RoomInner({
           void setStudentCameraCap(studentSlots);
         }}
         dock={dockArea}
-        sharing={shareLayout}
+        sharing={shareLayout || wbOpen}
         onDockSpace={onDockSpace}
         focusAlerts={focusByIdentity}
         pinnedIdentities={pinnedIdentities}
@@ -4299,6 +4400,7 @@ function RoomInner({
           if (id) void togglePin(id, on);
         }}
       />
+      </div>
 
       {/* Share controls: in the floating window for window/tab captures; in
           this tab (draggable dock) for entire-screen captures or when no
@@ -4331,61 +4433,7 @@ function RoomInner({
             ) : undefined
           }
         >
-          <TeacherShareHud
-            videoMode={videoMode}
-            onVideoModeChange={setVideoMode}
-            focusAlertCount={focusAlertCount}
-            host={shareMount}
-            hostWindow={shareWindow}
-            inline={!shareMount}
-            compact={hudCompact}
-            onCompactChange={setHudCompact}
-            admitted={state?.admitted ?? []}
-            waiting={(state?.waiting ?? []).map((w) => ({
-              id: w.id,
-              displayName: rosterLabel(w),
-              role: 'STUDENT',
-              sid: w.sid ?? null,
-            }))}
-            waitingCount={waitingCount}
-            onAdmit={(id) => void admitStudents([id])}
-            onAdmitAll={() => void admitStudents(undefined, true)}
-            waitingRoomOn={waitingRoomOn}
-            onWaitingRoom={(on) => void setWaitingRoom(on)}
-            teacherMicOn={micOn && !effectiveMuted}
-            onToggleTeacherMic={() => setMicOn((v) => !v)}
-            teacherCamOn={camOn}
-            onToggleTeacherCam={() => setCamOn((v) => !v)}
-            sideWindowsAllowed={sideWindowsAllowed}
-            sideWindowsNeedTrust={maskActive}
-            videosOpen={!!videosWin}
-            onToggleVideos={sideWindowsAllowed ? toggleVideosWindow : undefined}
-            onStopSharing={() => void toggleScreen()}
-            onMuteStudent={(id, muted) => void muteStudent(id, muted)}
-            onMuteAll={(muted) => void muteAllStudents(muted)}
-            onLowerHand={(id) => void lowerHand(id)}
-            onTogglePin={(id, on) => void togglePin(id, on)}
-            drawHolderName={drawHolder?.name ?? null}
-            onAllowDraw={(id) => void allowDrawing(id)}
-            onRevokeDraw={(id) => void revokeDrawing(id)}
-            onClearDrawing={() => void clearDrawing()}
-            drawPreview={sideWindowsAllowed && !!shareMount ? 'video' : 'strokes'}
-            chatUnread={chatUnread}
-            onChatOpenChange={setHudChatOpen}
-            chat={
-              <ChatView
-                thread={chatThread}
-                isTeacher
-                myParticipantId={myParticipantId}
-                students={chatStudents}
-                to={chatTo}
-                onToChange={setChatTo}
-                raisedHands={raisedHands}
-                onLowerHand={(id) => void lowerHand(id)}
-              />
-            }
-            notice={shareMount ? hudNotice || undefined : undefined}
-          />
+          {shareHudEl({})}
         </ShareHudSlot>
       )}
 

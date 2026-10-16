@@ -1,3 +1,5 @@
+import { endDrawingSession } from '@/lib/drawServer';
+import { ensureRedis, keys } from '@/lib/redis';
 import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { resolveRoomAccess } from '@/lib/auth';
@@ -41,6 +43,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
   if (body.action === 'on' || body.action === 'off') {
     if (!access.isTeacher || student) return jsonError('Unauthorized', 401);
     await setWhiteboard(code, body.action === 'on');
+    // Board closed: nobody keeps a drawing permission (like a share stopping).
+    if (body.action === 'off') {
+      const stage = await (await ensureRedis()).get(keys.stage(code));
+      if (stage !== 'screen') await endDrawingSession(code);
+    }
     return jsonOk({ on: body.action === 'on' });
   }
   if (body.action === 'req') {

@@ -119,6 +119,12 @@ export type TeacherShareHudProps = {
   /** Student video window (2/4/6 tiles) beside the toolbar. */
   videosOpen?: boolean;
   onToggleVideos?: () => void;
+  /** Docked as a column on the right edge (whiteboard mode): panels open to its left. */
+  vertical?: boolean;
+  /** Label of the stop button (whiteboard mode: "Stop whiteboard"). */
+  stopLabel?: string;
+  /** End class button (whiteboard mode meeting column). */
+  onEndClass?: () => void;
 };
 
 type Panel = 'chat' | 'hands' | 'roster' | null;
@@ -319,6 +325,14 @@ background:var(--warn);color:#1a1206;font-size:9px;font-weight:800;display:inlin
 .tsh-inline .tsh-bar{flex-wrap:wrap;width:auto;min-width:0;position:static}
 .tsh-inline .tsh-panel{width:min(420px,calc(100vw - 16px));max-height:min(280px,45vh)}
 .tsh-inline .tsh-chat{height:min(220px,35vh)}
+.tsh-vertical{display:flex;flex-direction:row-reverse;align-items:stretch;height:100%;width:auto;max-width:none}
+.tsh-vertical .tsh-bar{flex-direction:column;flex-wrap:nowrap;width:auto;min-width:0;height:100%;overflow-y:auto;overflow-x:hidden;position:static;padding:6px 4px;gap:4px}
+.tsh-vertical .tsh-btn{height:34px;min-width:34px}
+.tsh-vertical .tsh-sep{width:20px;height:1px}
+.tsh-vertical .tsh-admit{max-width:34px}
+.tsh-vertical .tsh-panel{width:min(340px,40vw);max-height:none;height:100%;border-top:0;border-right:1px solid var(--line)}
+.tsh-vertical .tsh-chat{height:auto;flex:1 1 auto;min-height:0}
+.tsh-vertical .tsh-tip{white-space:normal;max-width:200px}
 `;
 
 export function TeacherShareHud(props: TeacherShareHudProps) {
@@ -627,9 +641,16 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                         Revoke
                       </button>
                     ) : s.drawRequested && onAllowDraw ? (
-                      <button type="button" className="tsh-btn is-on" onClick={() => onAllowDraw(s.id)} title={`Let ${s.displayName} draw on your shared screen`}>
-                        Allow
-                      </button>
+                      <>
+                        <button type="button" className="tsh-btn is-on" data-testid="hud-draw-allow" onClick={() => onAllowDraw(s.id)} title={`Let ${s.displayName} draw`}>
+                          Allow
+                        </button>
+                        {onRevokeDraw && (
+                          <button type="button" className="tsh-btn" data-testid="hud-draw-deny" onClick={() => onRevokeDraw(s.id)} title={`Turn down ${s.displayName}'s request to draw`}>
+                            Deny
+                          </button>
+                        )}
+                      </>
                     ) : null}
                     {s.handRaised && (
                       <button
@@ -652,7 +673,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
   const tree = (
     <div
       ref={rootRef}
-      className={inline ? 'tsh tsh-inline' : !panel && !notice && !sideNotice ? 'tsh tsh-fill' : 'tsh'}
+      className={props.vertical ? 'tsh tsh-inline tsh-vertical' : inline ? 'tsh tsh-inline' : !panel && !notice && !sideNotice ? 'tsh tsh-fill' : 'tsh'}
       role="region"
       aria-label="Share controls"
     >
@@ -850,10 +871,20 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
           <IconUserPlus size={14} />
         </button>
         <span className="tsh-sep" aria-hidden />
-        <button type="button" className="tsh-btn tsh-btn-danger" onClick={onStopSharing} title="Stop sharing">
+        {props.vertical && (
+          <button type="button" className="tsh-btn" onClick={() => onMuteAll(true)} title="Mute all students" aria-label="Mute all students">
+            <IconMicOff size={14} />
+          </button>
+        )}
+        <button type="button" className="tsh-btn tsh-btn-danger" data-testid="hud-stop" onClick={onStopSharing} title={props.stopLabel ?? 'Stop sharing'} aria-label={props.stopLabel ?? 'Stop sharing'}>
           <IconScreen size={14} />
-          Stop
+          {props.vertical ? null : 'Stop'}
         </button>
+        {props.onEndClass && (
+          <button type="button" className="tsh-btn tsh-btn-danger" onClick={props.onEndClass} title="End class for everyone" aria-label="End class">
+            End
+          </button>
+        )}
       </div>
       )}
       {(notice || sideNotice) && !compact ? <div className="tsh-tip">{sideNotice || notice}</div> : null}

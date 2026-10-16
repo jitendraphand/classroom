@@ -179,7 +179,9 @@ function usePictureRect(host: HTMLElement | null, aspect?: number) {
     const measure = () => {
       win.cancelAnimationFrame(raf);
       raf = win.requestAnimationFrame(() => {
-        const r = host.getBoundingClientRect();
+        // Layout size, not getBoundingClientRect: a student's local zoom
+        // (CSS transform on an ancestor) must not scale the picture box twice.
+        const r = { width: host.clientWidth, height: host.clientHeight };
         const v = host.querySelector('video');
         const vw = v?.videoWidth || (aspect ? aspect * 1000 : 0);
         const vh = v?.videoHeight || (aspect ? 1000 : 0);
