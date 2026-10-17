@@ -252,6 +252,19 @@ body {
   .stage-float-chrome.is-rail > .control-rail {
     pointer-events: auto;
   }
+  /* B5 (live test 2026-10-17): on a portrait phone the right-edge rail covered
+     the right edge of the 16:9 board/share. Portrait has free space below the
+     stage, so the same buttons sit in a row at the bottom there. */
+  @media (orientation: portrait) and (max-width: 700px) {
+    .stage-float-chrome.is-rail {
+      inset: auto 0 0 0;
+      justify-content: center;
+      padding: 0 0 max(0.5rem, env(safe-area-inset-bottom, 0px)) 0;
+    }
+    .stage-float-chrome.is-rail > .control-rail > div {
+      flex-direction: row;
+    }
+  }
   .control-rail {
     @apply flex flex-col items-center rounded-2xl p-1 shadow-dock backdrop-blur-xl;
     border: 1px solid var(--border);

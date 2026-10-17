@@ -186,3 +186,69 @@ export function renderPageToCanvas(page: Page, canvas: HTMLCanvasElement, onImag
   if (!ctx) return;
   renderPage(ctx, page, { scale: 1, tx: 0, ty: 0 }, { cssW: PAGE_W, cssH: PAGE_H, dpr: 1, onImage });
 }
+
+type LayerCanvas = HTMLCanvasElement | OffscreenCanvas;
+type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+
+/** Key of the cached static layer: page structure, view and canvas size. */
+export function layerKey(p: { pageId: string; bg: string; structVersion: number; hot: Iterable<string>; v: View; W: number; H: number }): string {
+  return `${p.pageId}|${p.bg}|${p.structVersion}|${[...p.hot].sort().join(',')}|${p.v.scale.toFixed(5)},${p.v.tx.toFixed(2)},${p.v.ty.toFixed(2)}|${p.W}x${p.H}`;
+}
+
+/**
+ * Layered page renderer (round 6: teacher whiteboard CPU ~50%). Everything
+ * except the strokes that are still growing is painted once into an
+ * (Offscreen)canvas layer; each frame while someone draws blits that layer and
+ * draws only the growing strokes and the local preview, instead of
+ * re-drawing every item of the page per pointer move.
+ */
+export class LayeredRenderer {
+  private layer: LayerCanvas | null = null;
+  private key = '';
+  rebuilds = 0;
+
+  render(
+    ctx: CanvasRenderingContext2D,
+    page: Page,
+    v: View,
+    opts: { cssW: number; cssH: number; dpr: number; extra?: Item[]; onImage?: () => void; outside?: string; structVersion: number; hot: Set<string> }
+  ) {
+    const W = ctx.canvas.width;
+    const H = ctx.canvas.height;
+    const key = layerKey({ pageId: page.id, bg: page.bg, structVersion: opts.structVersion, hot: opts.hot, v, W, H });
+    if (key !== this.key || !this.layer) {
+      if (!this.layer || this.layer.width !== W || this.layer.height !== H) this.layer = makeLayer(W, H, ctx.canvas);
+      const lctx = this.layer.getContext('2d') as Ctx2D | null;
+      if (!lctx) return renderPage(ctx, page, v, opts);
+      const still = opts.hot.size ? { ...page, items: page.items.filter((it) => !opts.hot.has(it.id)) } : page;
+      renderPage(lctx as CanvasRenderingContext2D, still, v, { ...opts, extra: undefined });
+      this.key = key;
+      this.rebuilds++;
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(this.layer as CanvasImageSource, 0, 0);
+    const live = opts.hot.size ? page.items.filter((it) => opts.hot.has(it.id)) : [];
+    if (!live.length && !opts.extra?.length) return;
+    ctx.setTransform(opts.dpr * v.scale, 0, 0, opts.dpr * v.scale, opts.dpr * v.tx, opts.dpr * v.ty);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, PAGE_W, PAGE_H);
+    ctx.clip();
+    for (const it of live) drawItem(ctx, it, opts.onImage);
+    for (const it of opts.extra ?? []) drawItem(ctx, it, opts.onImage);
+    ctx.restore();
+  }
+
+  invalidate() {
+    this.key = '';
+  }
+}
+
+function makeLayer(W: number, H: number, like: HTMLCanvasElement | OffscreenCanvas): LayerCanvas {
+  if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(W, H);
+  const doc = (like as HTMLCanvasElement).ownerDocument ?? document;
+  const c = doc.createElement('canvas');
+  c.width = W;
+  c.height = H;
+  return c;
+}

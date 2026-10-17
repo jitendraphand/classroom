@@ -1,0 +1,132 @@
+{
+ "rows": [
+  {
+   "noise": "white",
+   "snr_in": 0,
+   "pesq_raw": 1.03,
+   "pesq_dfn": 1.62,
+   "snr_raw": 0.0,
+   "snr_dfn": 13.6
+  },
+  {
+   "noise": "white",
+   "snr_in": 5,
+   "pesq_raw": 1.04,
+   "pesq_dfn": 1.93,
+   "snr_raw": 5.0,
+   "snr_dfn": 15.3
+  },
+  {
+   "noise": "white",
+   "snr_in": 10,
+   "pesq_raw": 1.07,
+   "pesq_dfn": 2.2,
+   "snr_raw": 10.0,
+   "snr_dfn": 16.6
+  },
+  {
+   "noise": "pink",
+   "snr_in": 0,
+   "pesq_raw": 1.02,
+   "pesq_dfn": 1.54,
+   "snr_raw": -0.0,
+   "snr_dfn": 10.4
+  },
+  {
+   "noise": "pink",
+   "snr_in": 5,
+   "pesq_raw": 1.04,
+   "pesq_dfn": 1.65,
+   "snr_raw": 5.0,
+   "snr_dfn": 11.3
+  },
+  {
+   "noise": "pink",
+   "snr_in": 10,
+   "pesq_raw": 1.09,
+   "pesq_dfn": 1.88,
+   "snr_raw": 10.0,
+   "snr_dfn": 12.8
+  },
+  {
+   "noise": "fan",
+   "snr_in": 0,
+   "pesq_raw": 1.06,
+   "pesq_dfn": 1.78,
+   "snr_raw": 0.0,
+   "snr_dfn": 8.9
+  },
+  {
+   "noise": "fan",
+   "snr_in": 5,
+   "pesq_raw": 1.16,
+   "pesq_dfn": 1.97,
+   "snr_raw": 5.0,
+   "snr_dfn": 10.0
+  },
+  {
+   "noise": "fan",
+   "snr_in": 10,
+   "pesq_raw": 1.39,
+   "pesq_dfn": 2.12,
+   "snr_raw": 10.0,
+   "snr_dfn": 11.1
+  },
+  {
+   "noise": "hum",
+   "snr_in": 0,
+   "pesq_raw": 1.18,
+   "pesq_dfn": 2.01,
+   "snr_raw": -0.0,
+   "snr_dfn": 11.4
+  },
+  {
+   "noise": "hum",
+   "snr_in": 5,
+   "pesq_raw": 1.33,
+   "pesq_dfn": 2.57,
+   "snr_raw": 5.0,
+   "snr_dfn": 12.5
+  },
+  {
+   "noise": "hum",
+   "snr_in": 10,
+   "pesq_raw": 1.82,
+   "pesq_dfn": 2.88,
+   "snr_raw": 10.0,
+   "snr_dfn": 13.3
+  },
+  {
+   "noise": "keyboard",
+   "snr_in": 0,
+   "pesq_raw": 1.04,
+   "pesq_dfn": 1.61,
+   "snr_raw": 0.0,
+   "snr_dfn": 12.4
+  },
+  {
+   "noise": "keyboard",
+   "snr_in": 5,
+   "pesq_raw": 1.05,
+   "pesq_dfn": 1.79,
+   "snr_raw": 5.0,
+   "snr_dfn": 13.1
+  },
+  {
+   "noise": "keyboard",
+   "snr_in": 10,
+   "pesq_raw": 1.08,
+   "pesq_dfn": 1.99,
+   "snr_raw": 10.0,
+   "snr_dfn": 13.7
+  },
+  {
+   "noise": "none",
+   "snr_in": null,
+   "pesq_raw": 4.64,
+   "pesq_dfn": 3.5
+  }
+ ],
+ "rtf_1thread": 0.03534426444667689,
+ "arch": "x86_64"
+}

@@ -31,7 +31,7 @@ import {
   type Item,
   type Op,
 } from './model';
-import { fitView, renderPage, renderPageToCanvas, toPage, type View } from './render';
+import { LayeredRenderer, fitView, renderPageToCanvas, toPage, type View } from './render';
 import { jpegsToPdf } from './pdf';
 import { FlyoutBar, barBtn, type FlyoutGroup } from './FlyoutBar';
 import { ZP_IDENTITY, clampZP, isZoomed, panBy, pinchZP, wheelFactor, zoomAt, type ZoomPan } from '../zoomPan';
@@ -99,8 +99,13 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
   const zoomBy = (factor: number, sx = size.w / 2, sy = size.h / 2) => setZp((t) => zoomAt(t, factor, sx, sy, size.w, size.h, minZoom));
   const resetZoom = () => setZp(ZP_IDENTITY);
 
-  // Render on any change (doc, preview, size, images loading). No loop.
-  useEffect(() => {
+  // Render on change only (doc, preview, size, images loading): no idle loop.
+  // At most one paint per animation frame, none while the window is hidden,
+  // and a cached layer for everything but the strokes still growing.
+  const layered = useRef(new LayeredRenderer());
+  const frame = useRef(0);
+  const paintRef = useRef<() => void>(() => undefined);
+  paintRef.current = () => {
     const c = canvasRef.current;
     if (!c || !size.w || !size.h) return;
     const dpr = Math.min(2, (c.ownerDocument.defaultView?.devicePixelRatio ?? 1) || 1);
@@ -109,8 +114,44 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
     if (c.height !== H) c.height = H;
     const ctx = c.getContext('2d');
     if (!ctx) return;
-    renderPage(ctx, currentPage(session.doc), view, { cssW: size.w, cssH: size.h, dpr, extra: preview, onImage: () => setImgTick((n) => n + 1) });
+    layered.current.render(ctx, currentPage(session.doc), view, {
+      cssW: size.w,
+      cssH: size.h,
+      dpr,
+      extra: preview,
+      onImage: () => {
+        layered.current.invalidate();
+        setImgTick((n) => n + 1);
+      },
+      structVersion: session.structVersion,
+      hot: session.hotIds(),
+    });
+  };
+  useEffect(() => {
+    const c = canvasRef.current;
+    const win = c?.ownerDocument.defaultView ?? null;
+    if (!win) return;
+    if (win.document.hidden) return; // repainted on visibilitychange
+    if (frame.current) return;
+    frame.current = win.requestAnimationFrame(() => {
+      frame.current = 0;
+      paintRef.current();
+    });
   }, [version, preview, size.w, size.h, view, imgTick, session]);
+  useEffect(() => {
+    const c = canvasRef.current;
+    const doc = c?.ownerDocument;
+    if (!doc) return;
+    const onVis = () => {
+      if (!doc.hidden) paintRef.current();
+    };
+    doc.addEventListener('visibilitychange', onVis);
+    return () => {
+      doc.removeEventListener('visibilitychange', onVis);
+      if (frame.current) doc.defaultView?.cancelAnimationFrame(frame.current);
+      frame.current = 0;
+    };
+  }, []);
 
   const send = useCallback(
     (ops: Op[], record?: { undo: Op[] }) => {

@@ -3,6 +3,7 @@
 import { selfTileLabel } from '@/lib/rosterLabels';
 import { classEndedCopy, finishCopy, finishFromState, type FinishReason } from '@/lib/classFinish';
 import { freshTakeovers, takeoverToastText } from '@/lib/deviceTakeover';
+import { useMicDuck } from './useMicDuck';
 import { CLASS_FINISHED_EVENT } from '@/lib/classFinishEvent';
 import dynamic from 'next/dynamic';
 import {
@@ -1000,6 +1001,7 @@ function TeacherPeersFloat({
   onSlotsChange,
   slots: slotsProp,
   dock = null,
+  minLeft = 0,
   sharing = false,
   onDockSpace,
   focusAlerts = {},
@@ -1038,6 +1040,8 @@ function TeacherPeersFloat({
    * starts minimized each share; otherwise the teacher's saved choice holds.
    */
   dock?: { top: number; left: number; width: number; height: number } | null;
+  /** Floating: keep the panel right of this x (whiteboard tool column). */
+  minLeft?: number;
   /** Teacher is screen sharing: the docked panel starts minimized each share. */
   sharing?: boolean;
   onDockSpace?: (space: { left: number; top: number }) => void;
@@ -1518,8 +1522,8 @@ function TeacherPeersFloat({
     : docked && dock
       ? { left: dock.left + PEER_DOCK_MARGIN, top: dock.top + PEER_DOCK_MARGIN }
       : pos
-        ? { left: pos.x, top: pos.y }
-        : { left: 12, top: PEER_TOP_RESERVE };
+        ? { left: Math.max(minLeft, pos.x), top: pos.y }
+        : { left: Math.max(12, minLeft), top: PEER_TOP_RESERVE };
   if (!isMin && !portal) {
     // Size is the selected slot layout, even when some tiles are blank.
     style.width = layout.paneW;
@@ -2390,6 +2394,8 @@ function RoomInner({
   const rawShareRef = useRef<MediaStreamTrack | null>(null);
   /** Published screen-share audio (tab / system audio), if the teacher ticked "Share audio". */
   const screenAudioRef = useRef<{ track: LocalAudioTrack; owner: { unpublishTrack: (t: LocalAudioTrack, stop?: boolean) => Promise<unknown> } } | null>(null);
+  // B1: duck the mic while the share's computer sound is loud (speaker bleed).
+  useMicDuck(isTeacher, localParticipant, () => screenAudioRef.current?.track ?? null, (t) => setHudNotice(t));
   const [maskActive, setMaskActive] = useState(false);
   const [maskFallback, setMaskFallback] = useState<MaskFallback>('');
   /** Share controls start as the compact pill on every share. */
@@ -3794,6 +3800,11 @@ function RoomInner({
               sendOps={(ops) =>
                 roomFetch(code, '/whiteboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'ops', ops }) })
               }
+              fetchStored={async () => {
+                const res = await roomFetch(code, '/whiteboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'stored' }) });
+                const j = res.ok ? ((await res.json().catch(() => null)) as { packets?: unknown } | null) : null;
+                return j?.packets ?? [];
+              }}
             />
           ) : covered ? null : showTeacherScreen ? (
             <TeacherScreenStage teacherIdentities={teacherIdentities} zoomable drawing={myDrawState === 'drawing'} />
@@ -4388,8 +4399,10 @@ function RoomInner({
           setPanelSlots(panelSlotsForCap(studentSlots));
           void setStudentCameraCap(studentSlots);
         }}
-        // Whiteboard: sit right of the board's left tool column (never over the tools).
-        dock={wbOpen ? { top: 8, left: 62, width: 520, height: Math.max(240, (typeof window !== 'undefined' ? window.innerHeight : 720) - 16) } : dockArea}
+        // Whiteboard: the same floating panel as a screen share (drag, resize,
+        // minimise, 2/4/6, pins, hands first), starting right of the board's tools.
+        dock={wbOpen ? null : dockArea}
+        minLeft={wbOpen ? 62 : 0}
         sharing={shareLayout || wbOpen}
         onDockSpace={onDockSpace}
         focusAlerts={focusByIdentity}

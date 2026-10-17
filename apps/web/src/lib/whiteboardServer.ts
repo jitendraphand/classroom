@@ -15,6 +15,29 @@ import { prisma } from './db';
 
 const TTL_S = 6 * 60 * 60;
 export const wbKey = (code: string) => `room:${code}:wb`;
+/** Latest teacher snapshot (base64 packets, JSON list): shared by every web instance. */
+export const wbSnapKey = (code: string) => `room:${code}:wbsnap`;
+export const WB_SNAP_MAX_PACKETS = 64;
+export const WB_SNAP_MAX_B64 = 96_000;
+export const WB_SNAP_MAX_TOTAL = 2_000_000;
+
+export async function storeSnapshot(code: string, packets: string[]) {
+  await (await ensureRedis()).set(wbSnapKey(code), JSON.stringify(packets), 'EX', TTL_S);
+}
+
+export async function storedSnapshot(code: string): Promise<string[]> {
+  try {
+    const raw = await (await ensureRedis()).get(wbSnapKey(code));
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function clearStoredSnapshot(code: string) {
+  await (await ensureRedis()).del(wbSnapKey(code));
+}
 
 export async function whiteboardOn(code: string): Promise<boolean> {
   try {

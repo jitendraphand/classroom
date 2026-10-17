@@ -449,3 +449,13 @@ export function inkFor(bg: Background): string {
 }
 
 export const PALETTE = ['#111111', '#ffffff', '#e53935', '#fb8c00', '#fdd835', '#43a047', '#1e88e5', '#8e24aa'];
+
+/**
+ * A relayed student packet (`by` = author) that this device itself sent. The
+ * author already applied those ops locally; applying the relayed copy again
+ * appends the same `pts` twice, so the stroke looked doubled on the drawing
+ * student's screen (round 6, item 4). Drop it.
+ */
+export function isOwnRelayEcho(p: { t?: string; by?: string } | null | undefined, me: string | null | undefined): boolean {
+  return !!p && p.t === 'ops' && !!p.by && !!me && p.by === me;
+}

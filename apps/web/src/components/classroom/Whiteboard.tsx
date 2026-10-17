@@ -15,8 +15,8 @@ import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { useRoomContext } from '@livekit/components-react';
 import { RoomEvent, type RemoteParticipant } from 'livekit-client';
 import { WhiteboardBoard } from '@/lib/whiteboard/WhiteboardBoard';
-import { WhiteboardSession, opsPackets } from '@/lib/whiteboard/session';
-import { WB_TOPIC, cleanDoc, studentOpAllowed, type Op, type Packet } from '@/lib/whiteboard/model';
+import { SNAP_STORE_MS, WhiteboardSession, b64ToPackets, opsPackets, packetsToB64 } from '@/lib/whiteboard/session';
+import { WB_TOPIC, cleanDoc, isOwnRelayEcho, studentOpAllowed, type Op, type Packet } from '@/lib/whiteboard/model';
 import { roomFetch } from '@/lib/classroomClient';
 
 export const wbStoreKey = (code: string) => `wb_doc_${code.toUpperCase()}`;
@@ -82,6 +82,26 @@ export function WhiteboardHost({ code, identity, onClose, side, stopRef }: { cod
   );
   const sendSnapshot = useCallback(async (to?: string[]) => publish(await session.snapshotPackets(), to), [publish, session]);
 
+  // Keep the latest snapshot on the server too (Redis): a student whose request the
+  // teacher's device cannot answer (teacher reconnecting, other web instance /
+  // media node) still gets the board. At most once per SNAP_STORE_MS while it changes.
+  useEffect(() => {
+    let t: number | null = null;
+    const store = async () => {
+      t = null;
+      const packets = packetsToB64(await session.snapshotPackets());
+      void roomFetch(code, '/whiteboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'snap', packets }) }).catch(() => undefined);
+    };
+    const off = session.subscribe(() => {
+      if (t === null) t = window.setTimeout(() => void store(), SNAP_STORE_MS);
+    });
+    t = window.setTimeout(() => void store(), 1500);
+    return () => {
+      off();
+      if (t !== null) window.clearTimeout(t);
+    };
+  }, [session, code]);
+
   useEffect(() => {
     void roomFetch(code, '/whiteboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'on' }) });
     void sendSnapshot();
@@ -143,17 +163,24 @@ export function WhiteboardViewer({
   identity,
   canAnnotate,
   requestSnapshot,
+  fetchStored,
   sendOps,
 }: {
   identity: string;
   canAnnotate: boolean;
   requestSnapshot: () => void;
+  /** Server-kept snapshot (base64 packets) when the teacher's device does not answer. */
+  fetchStored?: () => Promise<unknown>;
   sendOps?: (ops: Op[]) => Promise<unknown>;
 }) {
   const room = useRoomContext();
   const session = useMemo(() => new WhiteboardSession(), []);
   const reqRef = useRef(requestSnapshot);
   reqRef.current = requestSnapshot;
+  const identityRef = useRef(identity);
+  identityRef.current = identity;
+  const storedRef = useRef(fetchStored);
+  storedRef.current = fetchStored;
 
   useEffect(() => {
     const onData = (payload: Uint8Array, participant?: RemoteParticipant, _k?: unknown, topic?: string) => {
@@ -167,6 +194,7 @@ export function WhiteboardViewer({
           return;
         }
         if (!p || p.t === 'req') return;
+        if (isOwnRelayEcho(p, identityRef.current)) return; // my own stroke, already drawn locally
         if (p.t === 'ops' && !filterRelayed(session, p)) return;
         await session.receive(new TextEncoder().encode(JSON.stringify(p)));
       })();
@@ -180,6 +208,11 @@ export function WhiteboardViewer({
     const iv = window.setInterval(() => {
       if (session.ready || ++tries > 6) return window.clearInterval(iv);
       ask();
+      // The teacher's device did not answer: use the copy the server keeps.
+      void storedRef.current?.().then(async (list) => {
+        if (session.ready) return;
+        for (const bytes of b64ToPackets(list)) await session.receive(bytes);
+      });
     }, 5000);
     return () => {
       room.off(RoomEvent.DataReceived, onData);
