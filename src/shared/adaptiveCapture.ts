@@ -11,7 +11,14 @@ export interface AdaptiveState {
   cool: number; // consecutive idle samples
 }
 
-export const HIGH_CPU = 0.85;
+/**
+ * Live test 2026-10-17: a 4-core PC sat at 75–100% (mean ~81%) during shares
+ * and capture never stepped down: 85% for 2 consecutive samples was rarely
+ * met, and even when it was, the fixed 900p / 720p caps did nothing for a
+ * 768p screen that students already got at 1280x720. Now: 80% over a smoothed
+ * window, and caps relative to the captured height.
+ */
+export const HIGH_CPU = 0.8;
 export const LOW_CPU = 0.55;
 export const HOT_SAMPLES = 2; // ~6 s busy → step down
 export const COOL_SAMPLES = 5; // ~15 s calm → step up
@@ -37,11 +44,24 @@ export function nextState(s: AdaptiveState, cpu: number): AdaptiveState {
 }
 
 /** Sidecar settings for a level. maxHeight 0 = native resolution. */
-export function levelProfile(level: CaptureLevel, requestedFps: number): { maxHeight: number; fps: number } {
+export function levelProfile(level: CaptureLevel, requestedFps: number, srcHeight = 1080): { maxHeight: number; fps: number } {
   const fps = Math.max(1, Math.min(30, Math.round(requestedFps) || 8));
-  if (level === 2) return { maxHeight: 720, fps: Math.max(4, Math.min(fps, Math.round(fps / 2))) };
-  if (level === 1) return { maxHeight: 900, fps: Math.max(5, Math.min(fps, Math.round(fps * 0.75))) };
+  const h = srcHeight > 0 ? srcHeight : 1080;
+  if (level === 2) return { maxHeight: Math.max(360, Math.round((h * 0.5) / 2) * 2), fps: Math.max(4, Math.min(fps, Math.round(fps / 2))) };
+  if (level === 1) return { maxHeight: Math.max(480, Math.round((h * 0.75) / 2) * 2), fps: Math.max(5, Math.min(fps, Math.round(fps * 0.75))) };
   return { maxHeight: 0, fps };
+}
+
+/** Exponential smoothing of CPU samples (one 100% spike does not step down, a busy minute does). */
+export function smoothCpu(prev: number, sample: number, alpha = 0.5): number {
+  if (!Number.isFinite(sample)) return prev;
+  if (!Number.isFinite(prev)) return sample;
+  return prev + alpha * (sample - prev);
+}
+
+/** Toolbar label for the capture level (visible indicator). */
+export function levelLabel(level: CaptureLevel): string {
+  return level === 2 ? 'Low quality (busy PC)' : level === 1 ? 'Reduced quality (busy PC)' : '';
 }
 
 export interface CpuTimes { idle: number; total: number }

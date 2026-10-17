@@ -120,6 +120,10 @@ export type ClassroomBridge = {
   /** Share toolbar flyout: room needed across the bar (0 = closed) and along it. */
   annotateToolsFlyout?: (m: { size: number; along: number }) => void;
   /** Sidecar share audio: process loopback (excluding this app) started, or unavailable. */
+  /** Computer-sound level from the sidecar (dBFS, 10x/s while it is sent). */
+  onSidecarAudioLevel?: (cb: (db: unknown) => void) => () => void;
+  /** Adaptive capture level for the share toolbar indicator. */
+  onAdaptiveStatus?: (cb: (st: unknown) => void) => () => void;
   onSidecarAudio?: (cb: (m: unknown) => void) => () => void;
   onToolsFlyoutSide?: (cb: (side: unknown) => void) => () => void;
   postVideoTile: (key: string, jpeg: Uint8Array) => void;

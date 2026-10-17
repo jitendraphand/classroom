@@ -7,7 +7,7 @@
  * (whiteboard.html) in this same renderer process, so it shares the session object.
  */
 import { RoomEvent, type RemoteParticipant, type Room } from 'livekit-client';
-import { WhiteboardSession, opsPackets } from '../shared/web/whiteboard/session';
+import { SNAP_STORE_MS, WhiteboardSession, opsPackets, packetsToB64 } from '../shared/web/whiteboard/session';
 import type { PanelSnapshot, TeacherAction } from '../shared/actions';
 import { WB_TOPIC, cleanDoc, studentOpAllowed, type Op, type Packet } from '../shared/web/whiteboard/model';
 
@@ -97,9 +97,24 @@ export class WindowsWhiteboard {
           } catch {
             /* quota */
           }
-        }, 1000);
+        }, 3000); // full-doc JSON: at most every 3 s while drawing (round 6 CPU)
       })
     );
+    // Server copy of the board (Redis) for students whose request this device cannot answer.
+    let snapTimer: number | null = null;
+    const storeSnap = async () => {
+      snapTimer = null;
+      void this.api('POST', '/whiteboard', { action: 'snap', packets: packetsToB64(await this.session.snapshotPackets()) });
+    };
+    this.offs.push(
+      this.session.subscribe(() => {
+        if (snapTimer === null) snapTimer = window.setTimeout(() => void storeSnap(), SNAP_STORE_MS);
+      })
+    );
+    this.offs.push(() => {
+      if (snapTimer !== null) window.clearTimeout(snapTimer);
+    });
+    snapTimer = window.setTimeout(() => void storeSnap(), 1500);
     void this.sendSnapshot();
     await this.openWindow();
   }

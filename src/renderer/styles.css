@@ -625,11 +625,11 @@ body.region #actions {
 .roster-row { display: flex; min-height: 30px; align-items: center; gap: 6px; border: 1px solid transparent; border-radius: 8px; padding: 4px 6px; font-size: 12px; }
 .roster-row:hover { background: rgba(255, 255, 255, 0.04); }
 .roster-row-raised { border-color: rgba(251, 191, 36, 0.3); background: rgba(245, 158, 11, 0.1); }
-.roster-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; color: #f1f5f9; }
+.roster-name { flex: 1 1 auto; min-width: 72px; /* B5: never collapses to '(' next to chips */ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; color: #f1f5f9; }
 .roster-meta { flex: none; font-size: 10px; color: var(--muted); }
 .roster-hand { display: inline-flex; flex: none; color: #fcd34d; }
 .roster-hand.is-drawing { color: #7dd3fc; }
-.roster-chip { flex: none; max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 0; border-radius: 4px; background: rgba(255, 255, 255, 0.1); padding: 0 4px; font-size: 10px; font-weight: 600; line-height: 16px; color: #cbd5e1; }
+.roster-chip { flex: 0 1 auto; min-width: 0; max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 0; border-radius: 4px; background: rgba(255, 255, 255, 0.1); padding: 0 4px; font-size: 10px; font-weight: 600; line-height: 16px; color: #cbd5e1; }
 button.roster-chip:hover:not(:disabled) { filter: brightness(1.2); }
 .roster-chip-warn { background: rgba(245, 158, 11, 0.2); color: #fde68a; }
 .roster-chip-red { background: rgba(239, 68, 68, 0.15); color: #fecaca; }

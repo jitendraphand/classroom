@@ -9,6 +9,8 @@ import { cropFractions, type SidecarRequest } from '../shared/sidecar';
 import { WindowsWhiteboard } from './whiteboardHost';
 import { MEDIA_PREFS_KEY, parseMediaPrefs, serializeMediaPrefs } from '../shared/mediaPrefs';
 import { LOW_POWER_KEY, capEncodingFps, parseLowPower, shareFps, tileProfile } from '../shared/lowPower';
+/** B6: how long the 'joined from another device' notice stays up. */
+export const TAKEOVER_NOTICE_MS = 8000;
 import { freshTakeovers, takeoverToastText, type TakeoverNotice } from '../shared/web/deviceTakeover';
 import { createEraseBatcher } from '../shared/web/eraseBatch';
 import { createPanelReporter, panelShownWin } from '../shared/panelReport';
@@ -54,6 +56,7 @@ import {
 } from '../shared/capture';
 import { VIDEO_MODE_OFF, type VideoModeState } from '../shared/videoMode';
 import { AudioRegistry, MIC_CAPTURE } from '../shared/web/audioPolicy';
+import { DUCK_IDLE, HEADPHONES_HINT, MicDuckProcessor, duckStep, trackLevelMeter, type DuckState } from '../shared/web/micDuck';
 import { SHARE_AUDIO_ECHO_WARNING, desktopLoopbackConstraints, toggleShareAudio, wantShareAudio, type ShareAudioChoice } from '../shared/shareAudio';
 import { DRAW_TOPIC, applyPacket, decodePacket, isDrawColor, validStrokeId, type Stroke } from '../shared/web/drawLogic';
 import { SHARE_CODEC, shareProfile } from '../shared/web/videoQuality';
@@ -66,6 +69,8 @@ import {
   selectStudentTiles,
   sortRoster,
   studentCapForLayout,
+  sampleCapForLayout,
+  readyPool,
   fillStudentSlots,
   presentStudents,
   dockTileSize,
@@ -216,6 +221,20 @@ export class ClassController {
     this.audioEls.prune(live);
   }
   private unsubSidecarAudio: (() => void) | null = null;
+  private unsubSidecarLevel: (() => void) | null = null;
+  /** B1: mic ducking while the share's computer sound plays (see micDuck.ts). */
+  private duck: {
+    on: boolean;
+    busy: boolean;
+    proc: MicDuckProcessor | null;
+    ctx: AudioContext | null;
+    meter: { db: () => number; stop: () => void } | null;
+    timer: number;
+    state: DuckState;
+    sysDb: number;
+    sysAt: number;
+    track: LocalAudioTrack | null;
+  } = { on: false, busy: false, proc: null, ctx: null, meter: null, timer: 0, state: DUCK_IDLE, sysDb: -120, sysAt: 0, track: null };
   /** Sidecar reported process loopback that leaves out this app's sound. */
   private sidecarAudioExcludes = false;
   private shareKind: ShareKind | null = null;
@@ -333,6 +352,14 @@ export class ClassController {
         if (r.ok !== true && this.sharing && this.sidecarAudio) {
           this.notice = "Computer sound is not available on this PC (needs Windows 10 version 2004 or newer), so it was not sent. Your students' voices are never sent back.";
           this.emit();
+        }
+      }) ?? null;
+    this.unsubSidecarLevel =
+      desktop().onSidecarAudioLevel?.((db) => {
+        const n = Number(db);
+        if (Number.isFinite(n)) {
+          this.duck.sysDb = n;
+          this.duck.sysAt = performance.now();
         }
       }) ?? null;
     this.unsubInkEdit = desktop().onStudentInkEdit((edit) => this.onStudentInkEdit(edit ?? {}));
@@ -482,7 +509,7 @@ export class ClassController {
     if (this.micOn) await this.enqueue(() => this.syncMic());
     if (this.camOn) void this.enqueue(async () => { await this.syncCam(); this.emit(); });
     await this.refreshDevices();
-    await this.roomApi('PATCH', '/settings', { maxVisibleVideos: studentCapForLayout(this.opts.layout) });
+    await this.roomApi('PATCH', '/settings', { maxVisibleVideos: sampleCapForLayout(this.opts.layout) });
     this.rotationTimer = window.setInterval(() => {
       this.rotationTick += 1;
       this.ensureStudentCameras();
@@ -627,7 +654,7 @@ export class ClassController {
         if (action.slots === 2 || action.slots === 4 || action.slots === 6) {
           this.opts.layout = action.slots;
           void desktop().saveLayout(action.slots);
-          void this.roomApi('PATCH', '/settings', { maxVisibleVideos: studentCapForLayout(action.slots) });
+          void this.roomApi('PATCH', '/settings', { maxVisibleVideos: sampleCapForLayout(action.slots) });
           this.emit();
         }
         return;
@@ -1054,6 +1081,7 @@ export class ClassController {
     this.unsubWgcEnded?.();
     this.unsubWgcStatus?.();
     this.unsubSidecarAudio?.();
+    this.unsubSidecarLevel?.();
     this.unsubInkEdit?.();
     this.unsubInkEdit = null;
     this.unsubPanels?.();
@@ -1111,7 +1139,64 @@ export class ClassController {
     );
   }
 
+  /** Computer sound is being sent with the share (sidecar or Electron path). */
+  private sendingShareAudio(): boolean {
+    return this.sharing && (this.viaSidecar ? this.sidecarAudio : !!this.screenAudio);
+  }
+
+  /** B1: attach / detach the mic ducker to match "computer sound is being sent". */
+  private async syncDuck(): Promise<void> {
+    const d = this.duck;
+    if (d.busy) return;
+    const want = this.sendingShareAudio() && !!this.micTrack;
+    if (want === d.on && (!want || d.track === this.micTrack)) return;
+    d.busy = true;
+    try {
+      if (d.on) {
+        window.clearInterval(d.timer);
+        d.timer = 0;
+        d.meter?.stop();
+        d.meter = null;
+        await d.track?.stopProcessor().catch(() => undefined);
+        await d.ctx?.close().catch(() => undefined);
+        d.proc = null;
+        d.ctx = null;
+        d.track = null;
+        d.on = false;
+        d.state = { ...DUCK_IDLE, everDucked: d.state.everDucked };
+      }
+      if (want && this.micTrack) {
+        const track = this.micTrack;
+        const ctx = new AudioContext({ latencyHint: 'interactive' });
+        track.setAudioContext(ctx);
+        const proc = new MicDuckProcessor();
+        await track.setProcessor(proc as never);
+        d.ctx = ctx;
+        d.proc = proc;
+        d.track = track;
+        d.meter = !this.viaSidecar && this.screenAudio ? trackLevelMeter(ctx, this.screenAudio.mediaStreamTrack) : null;
+        d.on = true;
+        d.timer = window.setInterval(() => {
+          const now = performance.now();
+          const sys = d.meter ? d.meter.db() : now - d.sysAt < 400 ? d.sysDb : -120;
+          const next = duckStep(d.state, sys, proc.micDb(), now);
+          if (next.gain !== d.state.gain) proc.setGain(next.gain);
+          if (next.everDucked && !d.state.everDucked) {
+            this.notice = HEADPHONES_HINT;
+            this.emit();
+          }
+          d.state = next;
+        }, 50);
+      }
+    } catch (e) {
+      console.warn('mic duck', e); // never block the mic: it just is not ducked
+    } finally {
+      d.busy = false;
+    }
+  }
+
   private emitNow(): void {
+    void this.syncDuck();
     this.syncPanelReport();
     this.chatTo = resolveChatRecipient(this.chatTo === 'all' ? 'all' : this.chatTo, this.studentIds());
     this.lastCells = this.computeCells();
@@ -1324,11 +1409,20 @@ export class ClassController {
     for (const p of this.room.remoteParticipants.values()) {
       if (this.mediaStreamFor(p.identity)) live.push(p.identity);
     }
-    return liveStudentPool({
+    const pool = liveStudentPool({
       visibleIdentities: this.snap?.visibleIdentities ?? [],
       admittedStudentIds: [...this.studentIdentities()],
       liveCameraIds: live,
     });
+    const shown = this.lastCells.map((c) => c.key);
+    return readyPool(
+      pool,
+      (id) => {
+        const t = this.room?.remoteParticipants.get(id)?.getTrackPublication(Track.Source.Camera)?.track as { dimensions?: { width: number } } | undefined;
+        return !!t?.dimensions?.width;
+      },
+      shown
+    );
   }
 
   /**
@@ -2139,7 +2233,15 @@ export class ClassController {
     const fresh = freshTakeovers((res.data as { takeovers?: TakeoverNotice[] })?.takeovers, this.takeoverSeen);
     if (fresh.length) {
       this.takeoverSeen = Math.max(...fresh.map((t) => t.at));
-      this.notice = takeoverToastText(fresh[fresh.length - 1]!);
+      const text = takeoverToastText(fresh[fresh.length - 1]!);
+      this.notice = text;
+      // B6: a toast, not a banner: clear it after a few seconds unless something replaced it.
+      window.setTimeout(() => {
+        if (this.notice === text) {
+          this.notice = '';
+          this.emit();
+        }
+      }, TAKEOVER_NOTICE_MS);
     }
     if (snap.ended) {
       this.markEnded();

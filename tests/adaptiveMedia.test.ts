@@ -33,8 +33,10 @@ test('middle load resets counters (hysteresis)', () => {
 
 test('level profiles', () => {
   assert.deepEqual(levelProfile(0, 8), { maxHeight: 0, fps: 8 });
-  assert.deepEqual(levelProfile(1, 8), { maxHeight: 900, fps: 6 });
-  assert.deepEqual(levelProfile(2, 30), { maxHeight: 720, fps: 15 });
+  assert.deepEqual(levelProfile(1, 8), { maxHeight: 810, fps: 6 });
+  assert.deepEqual(levelProfile(2, 30), { maxHeight: 540, fps: 15 });
+  assert.deepEqual(levelProfile(1, 8, 768), { maxHeight: 576, fps: 6 }, 'relative to a 768p screen');
+  assert.deepEqual(levelProfile(2, 8, 768).maxHeight, 384);
   assert.equal(levelProfile(2, 8).fps, 4);
 });
 

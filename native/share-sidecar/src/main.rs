@@ -256,6 +256,9 @@ fn loopback_thread(shared: Arc<Shared>, tx: tokio::sync::mpsc::Sender<Vec<i16>>,
         event("audio-mode", "process-loopback-exclude-app");
         let mut q: VecDeque<u8> = VecDeque::new();
         const CHUNK: usize = 480 * 2 * 2; // 10 ms
+        // Level of the computer sound, 10x per second: the app ducks the teacher mic
+        // while it is loud (speaker bleed into the mic, B1).
+        let (mut lvl_sum, mut lvl_n, mut lvl_chunks) = (0f64, 0u64, 0u32);
         while !shared.stop.load(Ordering::Acquire) {
             // Silence produces no events: time out and keep checking stop.
             if h_event.wait_for_event(100).is_err() {
@@ -268,6 +271,20 @@ fn loopback_thread(shared: Arc<Shared>, tx: tokio::sync::mpsc::Sender<Vec<i16>>,
                     continue;
                 }
                 let samples: Vec<i16> = bytes.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
+                for v in &samples {
+                    let f = *v as f64 / 32768.0;
+                    lvl_sum += f * f;
+                }
+                lvl_n += samples.len() as u64;
+                lvl_chunks += 1;
+                if lvl_chunks >= 10 {
+                    let rms = (lvl_sum / lvl_n.max(1) as f64).sqrt();
+                    let db = if rms > 0.0 { (20.0 * rms.log10()).max(-120.0) } else { -120.0 };
+                    event("audio-level", &format!("{:.1}", db));
+                    lvl_sum = 0.0;
+                    lvl_n = 0;
+                    lvl_chunks = 0;
+                }
                 let _ = tx.try_send(samples);
             }
         }

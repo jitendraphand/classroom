@@ -149,6 +149,24 @@ export function studentCapForLayout(slots: SlotCount): number {
   return Math.min(HARD_MAX_STUDENT_VIDEOS, Math.max(1, slots - 1));
 }
 
+/**
+ * B4 (live test 2026-10-17): with "Show 2" the server's camera sample was
+ * exactly the one tile, so every speaker switch / rotation ejected the shown
+ * student and waited for the next one to start publishing: a black or
+ * "camera off" tile for a whole rotation period. Ask for one warm spare
+ * camera so the next student is already live before they rotate in.
+ */
+export function sampleCapForLayout(slots: SlotCount): number {
+  return Math.min(HARD_MAX_STUDENT_VIDEOS, studentCapForLayout(slots) + 1);
+}
+
+/** Tiles only rotate in students whose camera already delivered a frame (the shown ones stay). */
+export function readyPool(pool: string[], hasFrame: (id: string) => boolean, shown: Iterable<string>): string[] {
+  const keep = new Set(shown);
+  const ready = pool.filter((id) => keep.has(id) || hasFrame(id));
+  return ready.length ? ready : pool;
+}
+
 export function isSlotCount(n: number): n is SlotCount {
   return n === 2 || n === 4 || n === 6;
 }

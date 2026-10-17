@@ -22,6 +22,9 @@ function Count({ n, blue }: { n: number; blue?: boolean }) {
 
 function Toolbar({ hud }: { hud: HudState }) {
   const bar = useRef<HTMLDivElement>(null);
+  // Adaptive capture indicator: visible whenever a busy PC made the share smaller / slower.
+  const [adaptive, setAdaptive] = useState<{ level: number; label: string; cpu: number }>({ level: 0, label: '', cpu: 0 });
+  useEffect(() => desktop().onAdaptiveStatus?.((st) => st && typeof st === 'object' && setAdaptive(st as { level: number; label: string; cpu: number })), []);
   useLayoutEffect(() => {
     const r = bar.current?.getBoundingClientRect();
     if (!r) return;
@@ -37,6 +40,11 @@ function Toolbar({ hud }: { hud: HudState }) {
       <div className="tsh-bar" role="toolbar" aria-label="Share tools">
         <span className="grip" title="Drag">⋮⋮</span>
         {hud.sharing ? <span className="tsh-live">Live</span> : null}
+        {hud.sharing && adaptive.level > 0 ? (
+          <span className="tsh-live" data-testid="tsh-adaptive" style={{ background: '#b45309' }} title={`${adaptive.label}: CPU ${adaptive.cpu}%. Students get a smaller, slower picture until the PC is less busy.`}>
+            {adaptive.level === 2 ? 'Low' : 'Reduced'}
+          </span>
+        ) : null}
         <button
           type="button"
           className="tsh-btn"
@@ -125,11 +133,16 @@ function Toolbar({ hud }: { hud: HudState }) {
           type="button"
           className="tsh-btn"
           onClick={() => desktop().togglePanel('roster')}
-          aria-label={hud.drawRequests ? `Roster (${hud.drawRequests} asking to draw)` : 'Roster'}
+          aria-label={[hud.drawRequests ? `${hud.drawRequests} asking to draw` : '', hud.focusAlerts ? `${hud.focusAlerts} left fullscreen` : ''].filter(Boolean).join(', ') ? `Roster (${[hud.drawRequests ? `${hud.drawRequests} asking to draw` : '', hud.focusAlerts ? `${hud.focusAlerts} left fullscreen` : ''].filter(Boolean).join(', ')})` : 'Roster'}
           title={hud.drawRequests ? `Roster: ${hud.drawRequests} asking to draw` : 'Roster'}
         >
           <Icon name="people" />
           <Count n={waiting} />
+          {hud.focusAlerts > 0 ? (
+            <span className="tsh-count tsh-focus" data-testid="tsh-focus-alert" title={`${hud.focusAlerts} left fullscreen`} style={{ background: '#dc2626', color: '#fff', left: -4, right: 'auto' }}>
+              ⛶{hud.focusAlerts}
+            </span>
+          ) : null}
           {hud.drawRequests > 0 ? <span className="tsh-pen-dot" aria-hidden="true" /> : null}
         </button>
         {/* Always present (fixed width), like the website: nothing appears or disappears on its own. */}

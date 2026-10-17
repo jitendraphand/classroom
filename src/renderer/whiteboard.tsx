@@ -30,7 +30,15 @@ export function MeetingBar({ meeting, onStop }: { meeting: WbMeeting; onStop: ()
     { id: 'mic', label: hud.micOn ? 'Mute mic' : 'Unmute mic', icon: ic(hud.micOn ? 'mic' : 'micOff'), danger: !hud.micOn, onClick: () => send({ type: 'toggle-mic' }), testId: 'wbm-mic' },
     { id: 'cam', label: hud.camOn ? 'Turn camera off' : 'Turn camera on', icon: ic(hud.camOn ? 'cam' : 'camOff'), onClick: () => send({ type: 'toggle-cam' }), testId: 'wbm-cam' },
     { id: 'chat', label: 'Chat (reply to students)', icon: ic('chat'), badge: hud.unread, onClick: () => meeting.togglePanel('chat'), testId: 'wbm-chat' },
-    { id: 'people', label: hud.hands ? `People (${hud.hands} raised hands)` : 'People and raised hands', icon: ic(hud.hands ? 'hand' : 'people'), badge: hud.hands, onClick: () => meeting.togglePanel('roster'), testId: 'wbm-people' },
+    {
+      id: 'people',
+      label: [hud.hands ? `${hud.hands} raised hands` : '', hud.focusAlerts ? `${hud.focusAlerts} left fullscreen` : ''].filter(Boolean).join(', ') || 'People and raised hands',
+      icon: ic(hud.hands ? 'hand' : 'people'),
+      badge: hud.hands + hud.focusAlerts,
+      danger: hud.focusAlerts > 0, // B3: fullscreen-exit alert visible on the whiteboard too
+      onClick: () => meeting.togglePanel('roster'),
+      testId: 'wbm-people',
+    },
     {
       id: 'admit',
       label: waiting > 1 ? `Admit all ${waiting} waiting` : waiting === 1 && hud.oldestWaitingName ? `Admit ${hud.oldestWaitingName}` : 'Nobody waiting',

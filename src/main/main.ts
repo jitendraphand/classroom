@@ -19,7 +19,7 @@ import { SIDECAR_PUBLISH_TIMEOUT_MS, controlLine, inkMessage, parseScreenToken, 
 import { SIDECAR_HELPER_FPS, VIDEO_MODE_SHARE as SIDECAR_VIDEO } from '../shared/capture';
 import { fitToolbar, flyoutBounds, movedBounds, parseOrient, stableNatural, toolbarSize } from '../shared/toolbarLayout';
 import { HW_ENCODE_FEATURES } from '../shared/hwEncode';
-import { busyFraction, cpuTimes, initialState as adaptiveInitial, levelProfile, nextState as adaptiveNext, type AdaptiveState } from '../shared/adaptiveCapture';
+import { busyFraction, cpuTimes, initialState as adaptiveInitial, levelLabel, levelProfile, nextState as adaptiveNext, smoothCpu, type AdaptiveState } from '../shared/adaptiveCapture';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -246,16 +246,27 @@ let adaptive: AdaptiveState = adaptiveInitial(os.cpus().length);
 let adaptiveSentLevel = -1;
 let requestedShareFps = 8;
 let lastCpu = cpuTimes(os.cpus());
+let cpuSmooth = NaN;
+/** Last adaptive status for the toolbars: level, label, smoothed CPU %. */
+let adaptiveStatus = { level: 0, label: '', cpu: 0 };
 function adaptiveTick(): void {
   const now = cpuTimes(os.cpus());
   const busy = busyFraction(lastCpu, now);
   lastCpu = now;
+  cpuSmooth = smoothCpu(cpuSmooth, busy);
   if (!sidecarActive() || !lastSnap?.hud.sharing) {
     adaptiveSentLevel = -1;
+    if (adaptiveStatus.level !== 0) publishAdaptive(0);
     return;
   }
-  adaptive = adaptiveNext(adaptive, busy);
-  const prof = levelProfile(adaptive.level, requestedShareFps);
+  // Log the sampling itself every minute while sharing (verifies os.cpus() on this PC).
+  if (Date.now() - lastCpuLog > 60_000) {
+    lastCpuLog = Date.now();
+    logCapture(`[capture] cpu sample ${Math.round(busy * 100)}% smoothed ${Math.round(cpuSmooth * 100)}% cores ${os.cpus().length} level ${adaptive.level}`);
+  }
+  adaptive = adaptiveNext(adaptive, cpuSmooth);
+  const prof = levelProfile(adaptive.level, requestedShareFps, layerSize.h || 1080);
+  if (adaptive.level !== adaptiveStatus.level) publishAdaptive(adaptive.level);
   // Resend while reduced: a sidecar restart forgets the cap.
   if (adaptive.level !== adaptiveSentLevel || adaptive.level > 0) {
     wgc.send(controlLine({ op: 'maxHeight', maxHeight: prof.maxHeight }));
@@ -263,6 +274,12 @@ function adaptiveTick(): void {
     if (adaptive.level !== adaptiveSentLevel) logCapture(`[capture] adaptive level ${adaptive.level} (cpu ${Math.round(busy * 100)}%): ${prof.maxHeight || 'native'}p @ ${prof.fps} fps`);
     adaptiveSentLevel = adaptive.level;
   }
+}
+let lastCpuLog = 0;
+function publishAdaptive(level: number): void {
+  adaptiveStatus = { level, label: levelLabel(level as 0 | 1 | 2), cpu: Math.round((Number.isFinite(cpuSmooth) ? cpuSmooth : 0) * 100) };
+  for (const win of chrome.values()) if (!win.isDestroyed()) win.webContents.send('adaptive-status', adaptiveStatus);
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('adaptive-status', adaptiveStatus);
 }
 setInterval(adaptiveTick, 3000).unref?.();
 
@@ -283,6 +300,11 @@ async function supervisedStart(args: string[]): Promise<Awaited<ReturnType<typeo
 }
 
 function onSidecarEvent(msg: { state: string; why: string }): void {
+  if (msg.state === 'audio-level') {
+    // 10x/s computer-sound level → class window (mic ducking, B1). Not logged.
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('sidecar-audio-level', Number(msg.why));
+    return;
+  }
   logCapture(`[sidecar] ${msg.state}${msg.why ? ` ${msg.why}` : ''}`);
   if (msg.state === 'published') {
     sidecarPublished = true;
@@ -1344,7 +1366,7 @@ function attachChildWindows(win: Win): void {
         backgroundColor: transparent ? '#00000000' : '#0f172a',
         alwaysOnTop: true,
         skipTaskbar: true,
-        resizable: name === 'annotate-preview',
+        resizable: name === 'annotate-preview' || name === 'classroom-videos', // videos: drag-resize like the web panel
         movable: true,
         minimizable: false,
         maximizable: false,
@@ -2232,7 +2254,7 @@ function installIpc(): void {
     if (!lastWgcArgs || !lastSnap?.hud.sharing) return { ok: false };
     const rate = Math.max(1, Math.min(30, Math.round(Number(fps) || SCREEN_SHARE.capture.frameRate)));
     requestedShareFps = rate;
-    if (sidecarActive()) return { ok: wgc.send(controlLine({ op: 'fps', fps: levelProfile(adaptive.level, rate).fps })) };
+    if (sidecarActive()) return { ok: wgc.send(controlLine({ op: 'fps', fps: levelProfile(adaptive.level, rate, layerSize.h || 1080).fps })) };
     const args = [...lastWgcArgs];
     if (args[args.length - 1] === String(rate)) return { ok: true };
     args[args.length - 1] = String(rate);
@@ -2332,7 +2354,9 @@ function installIpc(): void {
   );
 
   ipcMain.handle('confirm-end', async () => {
-    if (lastSnap?.hud.sharing) return false;
+    // B2 (live test 2026-10-17): this used to bail out on lastSnap.hud.sharing, a HUD
+    // snapshot that lags a few seconds behind Stop sharing, so End class was ignored.
+    // The class window already refuses End while it is really sharing.
     if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();

@@ -224,10 +224,10 @@ function Tools() {
     },
     {
       id: 'meeting',
-      label: 'Meeting: mic, camera, chat, people, hands',
       icon: ic(hud && !hud.micOn ? 'micOff' : 'mic'),
-      danger: !!hud && !hud.micOn,
-      badge: (hud?.unread ?? 0) + (hud?.hands ?? 0) + waiting,
+      danger: !!hud && (!hud.micOn || hud.focusAlerts > 0),
+      label: hud?.focusAlerts ? `Meeting: ${hud.focusAlerts} student(s) left fullscreen` : 'Meeting: mic, camera, chat, people, hands',
+      badge: (hud?.unread ?? 0) + (hud?.hands ?? 0) + waiting + (hud?.focusAlerts ?? 0),
       testId: 'atb-g-meeting',
       content: hud && (
         <>
@@ -245,8 +245,9 @@ function Tools() {
             {ic('hand')}
             {hud.hands ? hud.hands : null}
           </Opt>
-          <Opt label="People" onClick={() => desktop().togglePanel('roster')}>
+          <Opt label={hud.focusAlerts ? `People: ${hud.focusAlerts} left fullscreen` : 'People'} danger={hud.focusAlerts > 0} onClick={() => desktop().togglePanel('roster')} testId="atb-focus-people">
             {ic('people')}
+            {hud.focusAlerts ? `⛶${hud.focusAlerts}` : null}
           </Opt>
           <Opt
             label={waiting > 1 ? `Admit all ${waiting} waiting` : waiting === 1 && hud.oldestWaitingName ? `Admit ${hud.oldestWaitingName}` : 'Nobody waiting'}

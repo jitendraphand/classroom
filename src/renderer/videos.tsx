@@ -130,6 +130,23 @@ function Videos() {
       >
         {min ? `▢ Videos (${model.cells.filter((c) => !c.key.startsWith('blank-')).length})` : '—'}
       </button>
+      {!min ? (
+        <div className="videos-layout" role="group" aria-label="Layout" style={{ position: 'fixed', top: 2, right: 36, zIndex: 10, display: 'flex', gap: 2 }}>
+          {([2, 4, 6] as const).map((n) => (
+            <button
+              key={n}
+              type="button"
+              data-testid={`videos-layout-${n}`}
+              aria-pressed={model.slots === n}
+              title={`Show ${n}`}
+              onClick={() => desktop().sendAction({ type: 'layout', slots: n })}
+              style={{ height: 26, minWidth: 26, borderRadius: 6, border: '1px solid #ffffff33', background: model.slots === n ? '#2563eb' : '#1e293bcc', color: '#e2e8f0', cursor: 'pointer', fontWeight: 700 }}
+            >
+              {n}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div
         id="grid"
         hidden={!!min}

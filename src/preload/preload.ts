@@ -66,6 +66,8 @@ contextBridge.exposeInMainWorld('classroom', {
   annotateToolsOrient: (orient: string) => ipcRenderer.send('annotate-tools-orient', orient),
   annotateToolsMeasure: (m: { width: number; height: number; overflow: boolean }) => ipcRenderer.send('annotate-tools-measure', m),
   annotateToolsFlyout: (m: { size: number; along: number }) => ipcRenderer.send('annotate-tools-flyout', m),
+  onSidecarAudioLevel: (cb: (db: unknown) => void) => listen('sidecar-audio-level', (db) => cb(db)),
+  onAdaptiveStatus: (cb: (st: unknown) => void) => listen('adaptive-status', (st) => cb(st)),
   onSidecarAudio: (cb: (m: unknown) => void) => listen('sidecar-audio', (m) => cb(m)),
   onToolsFlyoutSide: (cb: (side: unknown) => void) => listen('annotate-tools-flyout-side', (s) => cb(s)),
   postVideoTile: (key: string, jpeg: Uint8Array) => {

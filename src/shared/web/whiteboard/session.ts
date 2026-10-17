@@ -6,11 +6,22 @@
 import { decodeSnapshot, encodeSnapshot } from './codec';
 import { applyOp, ChunkAssembler, decodePacket, emptyDoc, encodePacket, type Doc, type Op, type Packet } from './model';
 
+/** A stroke counts as growing for this long after its last points. */
+export const HOT_MS = 1500;
+
 export class WhiteboardSession {
   doc: Doc;
   version = 0;
   /** True once we have the teacher's state (snapshot or teacher-created). */
   ready: boolean;
+  /**
+   * Bumped by every change except `pts` (points appended to a growing
+   * stroke). The renderer keeps the rest of the page in a cached layer while
+   * only strokes in `hot` grow (round 6: whiteboard CPU).
+   */
+  structVersion = 0;
+  /** Stroke id → last time (ms) it received points. */
+  readonly hot = new Map<string, number>();
   private listeners = new Set<() => void>();
   private chunks = new ChunkAssembler();
 
@@ -29,14 +40,33 @@ export class WhiteboardSession {
     this.listeners.forEach((fn) => fn());
   }
 
-  apply(ops: Op[]): boolean {
+  apply(ops: Op[], now = Date.now()): boolean {
     let changed = false;
-    for (const op of ops) if (applyOp(this.doc, op)) changed = true;
+    let structural = false;
+    for (const op of ops) {
+      if (!applyOp(this.doc, op)) continue;
+      changed = true;
+      if (op.k === 'pts') this.hot.set(op.id, now);
+      else structural = true;
+    }
+    if (structural) this.structVersion++;
     if (changed) this.emit();
     return changed;
   }
 
+  /** Strokes that grew within `ms` (they are drawn live, above the cached layer). */
+  hotIds(now = Date.now(), ms = HOT_MS): Set<string> {
+    const out = new Set<string>();
+    for (const [id, t] of this.hot) {
+      if (now - t <= ms) out.add(id);
+      else this.hot.delete(id);
+    }
+    return out;
+  }
+
   replace(doc: Doc) {
+    this.structVersion++;
+    this.hot.clear();
     this.doc = doc;
     this.ready = true;
     this.emit();
@@ -73,3 +103,32 @@ export class WhiteboardSession {
 export function opsPackets(ops: Op[]): Uint8Array[] {
   return encodePacket({ v: 1, t: 'ops', ops });
 }
+
+/** Packets ↔ base64 (the server keeps the latest snapshot in Redis: /whiteboard `snap` / `stored`). */
+export function packetsToB64(packets: Uint8Array[]): string[] {
+  return packets.map((p) => {
+    let bin = '';
+    for (let i = 0; i < p.length; i += 0x8000) bin += String.fromCharCode(...p.subarray(i, i + 0x8000));
+    return btoa(bin);
+  });
+}
+
+export function b64ToPackets(list: unknown): Uint8Array[] {
+  if (!Array.isArray(list)) return [];
+  const out: Uint8Array[] = [];
+  for (const s of list) {
+    if (typeof s !== 'string') continue;
+    try {
+      const bin = atob(s);
+      const u = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+      out.push(u);
+    } catch {
+      /* skip */
+    }
+  }
+  return out;
+}
+
+/** Debounce for storing the teacher's snapshot on the server while the board changes. */
+export const SNAP_STORE_MS = 5000;
