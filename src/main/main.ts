@@ -555,7 +555,7 @@ function readProbe(): CapturePlan {
     logCapture(`[capture] probe skipped: ${probeSkipReason}`);
     return next;
   }
-  const run = spawnSync(exe, ['probe'], { windowsHide: true, timeout: 4000, encoding: 'utf8' });
+  const run = spawnSync(exe, ['probe'], { windowsHide: true, timeout: 15000, encoding: 'utf8' });
   const stdout = (run.stdout || '').trim();
   const stderr = (run.stderr || '').trim();
   const classified = classifyProbeLaunch('win32', true, {
@@ -2039,7 +2039,15 @@ function installIpc(): void {
   ipcMain.handle('start-wgc', async (event, req: unknown): Promise<WgcStartResult> => {
     if (!mainWindow || event.sender.id !== mainWindow.webContents.id) return { ok: false, error: 'denied' };
     if (process.platform !== 'win32') return { ok: false, error: 'not-windows' };
-    if (plan.mode !== 'wgc-exclude' || plan.mask) return { ok: false, error: 'capture-unavailable' };
+    if (plan.mode !== 'wgc-exclude' || plan.mask) {
+      // 2026-10-18: the startup probe can time out or misreport (fresh portable
+      // extraction scanned by Defender, slow first WinRT activation). Probe again
+      // here; if Graphics Capture is still unavailable the class window falls
+      // back to Chromium desktop capture instead of refusing the share.
+      plan = readProbe();
+      logCapture(`[capture] re-probe at share: mode=${plan.mode}`);
+      if (plan.mode !== 'wgc-exclude' || plan.mask) return { ok: false, error: 'capture-unavailable' };
+    }
     if (!req || typeof req !== 'object') return { ok: false, error: 'bad request' };
     const body = req as { kind?: unknown; sourceId?: unknown; displayId?: unknown };
     if (typeof body.sourceId !== 'string' || !body.sourceId) return { ok: false, error: 'bad request' };

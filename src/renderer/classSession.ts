@@ -750,11 +750,10 @@ export class ClassController {
   private async tryNativeCapture(
     input: ShareRequest
   ): Promise<{ track: MediaStreamTrack | null; abort: boolean; sidecar?: boolean; helperFailed?: boolean }> {
-    if (this.opts.plan.mode !== 'wgc-exclude' || this.opts.plan.mask) {
-      this.notice = 'Screen share stays off until Windows.Graphics.Capture can leave the classroom panels out of the picture.';
-      this.emit();
-      return { track: null, abort: true };
-    }
+    // 2026-10-18: no fail-closed gate here. If the startup probe said Graphics
+    // Capture is unavailable, main re-probes in start-wgc; when it still fails,
+    // helperFailed below drops to the Chromium backup capture (the pre-round-6
+    // behaviour) so the share always starts.
     let consumer: WgcHandle;
     try {
       consumer = openWgcTrack();

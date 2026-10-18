@@ -489,19 +489,14 @@ export function isOfferedShareWindow(name: string): boolean {
 }
 
 /**
- * Share only when Windows.Graphics.Capture can omit the protected classroom windows.
- * Any other path is refused so a DXGI capture cannot paint those windows black.
+ * Sharing is never refused on capability grounds (2026-10-18). When
+ * Windows.Graphics.Capture can exclude the classroom panels it is used; when it
+ * cannot, the share falls back to Chromium desktop capture, which may show the
+ * protected panels as black boxes, rather than sharing nothing.
  */
 export function shareAllowed(
-  plan: CapturePlan,
+  _plan: CapturePlan,
   _kind: ShareKind
 ): { ok: true } | { ok: false; reason: string } {
-  if (plan.mode !== 'wgc-exclude' || plan.mask || plan.affinity !== WDA_EXCLUDEFROMCAPTURE) {
-    return {
-      ok: false,
-      reason:
-        'Screen share stays off until Windows.Graphics.Capture can leave the classroom panels out of the picture. Nothing was shared, and the panels were not painted black.',
-    };
-  }
   return { ok: true };
 }

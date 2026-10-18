@@ -112,11 +112,11 @@ test('the share picker does not offer classroom windows', () => {
   assert.equal(isOfferedShareWindow('capture-test-notepad - Notepad'), true);
 });
 
-test('share is refused unless Graphics Capture can exclude the panels', () => {
+test('share is never refused; without Graphics Capture it falls back', () => {
   const blocked = capturePlan(null);
-  assert.equal(shareAllowed(blocked, 'window').ok, false);
-  assert.equal(shareAllowed(blocked, 'screen').ok, false);
-  assert.equal(shareAllowed(blocked, 'region').ok, false);
+  assert.equal(shareAllowed(blocked, 'window').ok, true);
+  assert.equal(shareAllowed(blocked, 'screen').ok, true);
+  assert.equal(shareAllowed(blocked, 'region').ok, true);
   const modern = capturePlan({ build: 19045, wgc: true });
   assert.equal(shareAllowed(modern, 'window').ok, true);
   assert.equal(shareAllowed(modern, 'screen').ok, true);
