@@ -7,6 +7,7 @@ import { canTeachAudience, formatAudience, normalizeCampus, normalizeGrade, pars
 import { campusUnknownMessage } from './campusMaster';
 import { findOccurrence, occurrencesForDate } from './scheduleService';
 import { dateValue, formatHHMM, localDateOf, phaseOf, type Occurrence } from './schedule';
+import { nextOccurrenceRunKey, occurrenceBaseKey, pickSessionForOccurrence } from './occurrenceRuns';
 import { appTimeZone, earlyWindowMinutes } from './schoolConfig';
 import { endRoom, ensureTeacherPermanentCode, startOrReopenTeacherRoom } from './teacherRoom';
 import { getTeacherAssignments } from './teachers';
@@ -25,9 +26,8 @@ export function sessionTitle(s: { subject: string; campus: string; grade: string
   return `${s.subject} · ${formatAudience(s.campus, s.grade, s.divisions, s.allDivisions)}`;
 }
 
-/** ClassSession row for a timetable occurrence (created on first use; refreshed from overrides). */
-export async function upsertOccurrenceSession(occ: Occurrence): Promise<ClassSession> {
-  const data = {
+function occurrenceSessionData(occ: Occurrence) {
+  return {
     slotId: occ.slotId,
     overrideId: occ.overrideId,
     sessionDate: dateValue(occ.date),
@@ -41,12 +41,28 @@ export async function upsertOccurrenceSession(occ: Occurrence): Promise<ClassSes
     scheduledEnd: occ.end,
     academicYear: occ.academicYear || academicYearForDate(occ.date),
   };
+}
+
+async function sessionsForOccurrence(key: string) {
+  const base = occurrenceBaseKey(key);
+  return prisma.classSession.findMany({
+    where: { OR: [{ occurrenceKey: base }, { occurrenceKey: { startsWith: `${base}#` } }] },
+    orderBy: { createdAt: 'asc' },
+  });
+}
+
+/** ClassSession row for a timetable occurrence (created on first use; refreshed from overrides). */
+export async function upsertOccurrenceSession(occ: Occurrence): Promise<ClassSession> {
+  const data = occurrenceSessionData(occ);
+  const priors = await sessionsForOccurrence(occ.key);
+  const open = priors.find((s) => !s.endedAt);
+  if (open) {
+    return prisma.classSession.update({ where: { id: open.id }, data });
+  }
+  // Ended runs keep their times and feedback. A re-run is started by the teacher.
+  if (priors.length) return priors[priors.length - 1]!;
   try {
-    return await prisma.classSession.upsert({
-      where: { occurrenceKey: occ.key },
-      create: { occurrenceKey: occ.key, adHoc: false, ...data },
-      update: data,
-    });
+    return await prisma.classSession.create({ data: { occurrenceKey: occ.key, adHoc: false, ...data } });
   } catch (e) {
     // Concurrent create of the same occurrence (teacher + first student at once).
     if ((e as { code?: string }).code === 'P2002') {
@@ -55,6 +71,20 @@ export async function upsertOccurrenceSession(occ: Occurrence): Promise<ClassSes
     }
     throw e;
   }
+}
+
+async function createOccurrenceRun(occ: Occurrence, existingKeys: Array<string | null>) {
+  const data = occurrenceSessionData(occ);
+  for (let i = 0; i < 8; i++) {
+    const occurrenceKey = nextOccurrenceRunKey(occ.key, existingKeys);
+    try {
+      return await prisma.classSession.create({ data: { occurrenceKey, adHoc: false, ...data } });
+    } catch (e) {
+      if ((e as { code?: string }).code !== 'P2002') throw e;
+      existingKeys = [...existingKeys, occurrenceKey];
+    }
+  }
+  throw new SessionError('Could not start another run of this class.', 500);
 }
 
 /**
@@ -89,7 +119,7 @@ async function openRoomForSession(
 /** Start (or re-enter / reopen the same day) a timetabled class. */
 export async function startScheduledClass(teacher: TeacherRef, key: string, opts: StartOpts = {}) {
   const tz = appTimeZone();
-  const occ = await findOccurrence(key, tz);
+  const occ = await findOccurrence(occurrenceBaseKey(key), tz);
   if (!occ) throw new SessionError('This class is not on the timetable (it may have been cancelled).', 404);
   if (occ.teacherId !== teacher.id) throw new SessionError('This class is assigned to another teacher.', 403);
   const now = new Date();
@@ -101,12 +131,23 @@ export async function startScheduledClass(teacher: TeacherRef, key: string, opts
       409
     );
   }
+  const priors = await sessionsForOccurrence(occ.key);
+  const live = priors.find((s) => s.startedAt && !s.endedAt);
   if (phase === 'past') {
-    const prior = await prisma.classSession.findUnique({ where: { occurrenceKey: occ.key } });
     // Re-entering a class that was started and is still running past its end is fine.
-    if (!prior?.startedAt || prior.endedAt) {
+    if (!live) {
       throw new SessionError('This class time is over. Start an ad-hoc class instead.', 409);
     }
+    return openRoomForSession(teacher, live, opts);
+  }
+  if (live) return openRoomForSession(teacher, live, opts);
+  const current = pickSessionForOccurrence(priors, occ.key);
+  if (current?.endedAt) {
+    const cs = await createOccurrenceRun(
+      occ,
+      priors.map((s) => s.occurrenceKey)
+    );
+    return openRoomForSession(teacher, cs, opts);
   }
   const cs = await upsertOccurrenceSession(occ);
   return openRoomForSession(teacher, cs, opts);

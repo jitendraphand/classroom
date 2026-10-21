@@ -4,6 +4,7 @@ import { attendanceStatus, STATUS_LABEL, totalConnectedMs, type AttendanceStatus
 import { toCsv, type Cell } from './csv';
 import { audienceIncludes, formatAudience, normalizeCampus, normalizeDivision, normalizeGrade } from './grades';
 import { isAcademicYearLabel } from './academicYear';
+import { occurrenceBaseKey } from './occurrenceRuns';
 import { addDays, dateOnly, dateValue, daysBetween, formatHHMM, isLocalDate, localDateOf, localMinuteOf } from './schedule';
 import { occurrencesForRange } from './scheduleService';
 import { appTimeZone } from './schoolConfig';
@@ -166,12 +167,12 @@ export async function sessionSummary(f: ReportFilter): Promise<SessionRow[]> {
     const today = localDateOf(now, tz);
     const to = f.to < today ? f.to : today;
     if (f.from <= to) {
-      const have = new Set(sessions.map((s) => s.occurrenceKey).filter(Boolean));
+      const have = new Set(sessions.map((s) => s.occurrenceKey && occurrenceBaseKey(s.occurrenceKey)).filter(Boolean));
       const allKeys = new Set(
         (await prisma.classSession.findMany({
           where: { sessionDate: { gte: dateValue(f.from), lte: dateValue(to) }, occurrenceKey: { not: null } },
           select: { occurrenceKey: true },
-        })).map((s) => s.occurrenceKey)
+        })).map((s) => s.occurrenceKey && occurrenceBaseKey(s.occurrenceKey)).filter((k): k is string => !!k)
       );
       const occs = await occurrencesForRange(f.from, to, tz);
       // A slot/extra class added today must not report its past weeks as "Not held".

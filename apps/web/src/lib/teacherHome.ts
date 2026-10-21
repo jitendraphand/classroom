@@ -5,6 +5,7 @@ import { classTone, TONE_LABEL, type ClassTone } from './capacity';
 import { averageStars, presentStars } from './feedbackText';
 import { formatAudience } from './grades';
 import { latestRank, ensureWeeklySnapshots } from './rankingService';
+import { occurrenceBaseKey, pickSessionForOccurrence } from './occurrenceRuns';
 import { formatHHMM, isLocalDate, localDateOf, localMinuteOf } from './schedule';
 import { occurrencesForRange } from './scheduleService';
 import { attendanceRatio, averageAttendance, enrolledStudents } from './sessionStats';
@@ -97,7 +98,13 @@ export async function buildTeacherHome(teacherId: string, url: URL) {
     starsBySession.set(f.classSessionId, list);
   }
 
-  const byKey = new Map(sessions.filter((s) => s.occurrenceKey).map((s) => [s.occurrenceKey!, s]));
+  const byKey = new Map<string, SessionRow>();
+  for (const s of sessions) {
+    if (!s.occurrenceKey) continue;
+    const base = occurrenceBaseKey(s.occurrenceKey);
+    const picked = pickSessionForOccurrence(sessions, base);
+    if (picked) byKey.set(base, picked);
+  }
 
   function starsOf(cs: SessionRow) {
     const present = new Set(cs.attendance.filter((a) => a.admittedAt).map((a) => a.studentId));
@@ -187,7 +194,7 @@ export async function buildTeacherHome(teacherId: string, url: URL) {
       started: !!cs.startedAt,
       ended: !!cs.endedAt,
     });
-    if (cs.occurrenceKey) seen.add(cs.occurrenceKey);
+    if (cs.occurrenceKey) seen.add(occurrenceBaseKey(cs.occurrenceKey));
     table.push({
       id: cs.id,
       date,

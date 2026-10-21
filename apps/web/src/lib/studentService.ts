@@ -9,6 +9,7 @@ import { audienceIncludes, formatAudience, normalizeCampus, normalizeDivision, n
 import { ensureRedis, keys } from './redis';
 import { recordArrival } from './attendanceService';
 import { upsertOccurrenceSession } from './classSessions';
+import { prismaOccurrenceKeys, pickSessionForOccurrence } from './occurrenceRuns';
 import { occurrencesForRange } from './scheduleService';
 import { addDays, forAudience, formatHHMM, localDateOf, type Occurrence } from './schedule';
 import { appTimeZone, earlyWindowMinutes } from './schoolConfig';
@@ -219,12 +220,16 @@ export async function decideStudentRoute(student: Student) {
   const occurrences = forAudience(await occurrencesForRange(addDays(today, -1), addDays(today, 7), tz), who);
 
   const [sessions, liveRooms] = await Promise.all([
-    prisma.classSession.findMany({ where: { occurrenceKey: { in: occurrences.map((o) => o.key) } }, include: { room: true } }),
+    prisma.classSession.findMany({
+      where: prismaOccurrenceKeys(occurrences.map((o) => o.key)),
+      include: { room: true },
+    }),
     prisma.room.findMany({ where: { status: { not: 'ENDED' }, classSessionId: { not: null } }, select: { classSessionId: true } }),
   ]);
   const states = new Map<string, SessionState>();
-  for (const s of sessions) {
-    states.set(s.occurrenceKey!, { id: s.id, live: roomRuns(s.room, s), startedAt: s.startedAt, endedAt: s.endedAt });
+  for (const o of occurrences) {
+    const s = pickSessionForOccurrence(sessions, o.key);
+    if (s) states.set(o.key, { id: s.id, live: roomRuns(s.room, s), startedAt: s.startedAt, endedAt: s.endedAt });
   }
   const liveIds = liveRooms.map((r) => r.classSessionId!);
   const adHoc = (
@@ -268,7 +273,11 @@ async function payloadFor(
     return room ? { kind: 'room', waitingUrl: roomEntryUrl(room.code, participant?.status), cls: info } : { kind: 'waiting_for_teacher', cls: info };
   }
   if (decision.kind === 'scheduled') {
-    const cs = await upsertOccurrenceSession(decision.occurrence);
+    const existing = decision.session?.id
+      ? await prisma.classSession.findUnique({ where: { id: decision.session.id } })
+      : null;
+    const cs =
+      existing && !existing.endedAt ? existing : await upsertOccurrenceSession(decision.occurrence);
     const { room, participant } = await arrive(student, cs);
     const info = await occInfo(decision.occurrence);
     return room ? { kind: 'room', waitingUrl: roomEntryUrl(room.code, participant?.status), cls: info } : { kind: 'waiting_for_teacher', cls: info };

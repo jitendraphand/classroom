@@ -4,6 +4,7 @@ import { listAcademicYears } from './academicYears';
 import { todayTag, type TodayTag } from './capacity';
 import { averageStars, presentStars } from './feedbackText';
 import { formatAudience } from './grades';
+import { prismaOccurrenceKeys, pickSessionForOccurrence } from './occurrenceRuns';
 import { formatHHMM, localDateOf, localMinuteOf } from './schedule';
 import { occurrencesForDate } from './scheduleService';
 import { attendanceRatio, averageAttendance, enrolledStudents } from './sessionStats';
@@ -26,11 +27,11 @@ export async function adminToday(url: URL) {
   const keys = occs.map((o) => o.key);
   const sessions = keys.length
     ? await prisma.classSession.findMany({
-        where: { occurrenceKey: { in: keys } },
+        where: prismaOccurrenceKeys(keys),
         select: { id: true, occurrenceKey: true, startedAt: true, endedAt: true, roomId: true },
       })
     : [];
-  const byKey = new Map(sessions.map((s) => [s.occurrenceKey, s]));
+  const byKey = new Map(keys.map((k) => [k, pickSessionForOccurrence(sessions, k)]).filter((e): e is [string, (typeof sessions)[number]] => !!e[1]));
   const sessionIds = sessions.map((s) => s.id);
   const rooms = sessionIds.length
     ? await prisma.room.findMany({

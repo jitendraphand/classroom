@@ -3,6 +3,7 @@ import { getTeacherSession } from '@/lib/auth';
 import { displayAssignment, formatAudience } from '@/lib/grades';
 import { jsonError, jsonOk } from '@/lib/response';
 import { isAcademicYearLabel } from '@/lib/academicYear';
+import { prismaOccurrenceKeys, pickSessionForOccurrence } from '@/lib/occurrenceRuns';
 import { addDays, formatHHMM, localDateOf, opensAt, phaseOf } from '@/lib/schedule';
 import { occurrencesForRange } from '@/lib/scheduleService';
 import { appTimeZone, earlyWindowMinutes } from '@/lib/schoolConfig';
@@ -28,12 +29,12 @@ export async function GET(req: Request) {
   );
 
   const [sessions, room, assignments, master] = await Promise.all([
-    prisma.classSession.findMany({ where: { occurrenceKey: { in: occs.map((o) => o.key) } } }),
+    prisma.classSession.findMany({ where: prismaOccurrenceKeys(occs.map((o) => o.key)) }),
     prisma.room.findUnique({ where: { code: teacher.permanentCode } }),
     getTeacherAssignments(teacher.id),
     loadMaster(),
   ]);
-  const byKey = new Map(sessions.map((s) => [s.occurrenceKey, s]));
+  const byKey = new Map(occs.map((o) => [o.key, pickSessionForOccurrence(sessions, o.key)]));
   const otherTeacherIds = [...new Set(occs.flatMap((o) => [o.teacherId, o.originalTeacherId]).filter((x): x is string => !!x && x !== teacher.id))];
   const names = new Map(
     (await prisma.teacher.findMany({ where: { id: { in: otherTeacherIds } }, select: { id: true, name: true } })).map((t) => [t.id, t.name])
@@ -41,7 +42,7 @@ export async function GET(req: Request) {
   const activeId = room && room.status !== 'ENDED' ? room.classSessionId : null;
 
   const classes = occs.map((o) => {
-    const s = byKey.get(o.key);
+    const s = byKey.get(o.key) ?? null;
     const phase = phaseOf(o, now, early);
     const mine = o.teacherId === teacher.id;
     return {

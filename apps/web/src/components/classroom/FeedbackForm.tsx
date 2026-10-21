@@ -27,14 +27,13 @@ export function FeedbackForm({ code, onDone }: { code: string; onDone: () => voi
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ stars, comment: normalized }),
       });
-      if (res.status === 409) {
-        setError('You already sent feedback');
-        onDone();
-        return;
-      }
       if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as { error?: string };
-        setError(data.error || 'Could not send feedback');
+        setError(
+          res.status === 409
+            ? 'You already sent feedback for this class'
+            : data.error || 'Could not send feedback'
+        );
         setBusy(false);
         return;
       }
@@ -72,7 +71,11 @@ export function FeedbackForm({ code, onDone }: { code: string; onDone: () => voi
         onChange={(e) => setComment(e.target.value.slice(0, FEEDBACK_MAX_COMMENT))}
       />
       {error && (
-        <p className="text-center text-xs text-amber-200" role="alert">
+        <p
+          className="rounded-lg border border-red-400/40 bg-red-500/15 px-2 py-1.5 text-center text-sm text-red-100"
+          role="alert"
+          data-testid="feedback-error"
+        >
           {error}
         </p>
       )}
