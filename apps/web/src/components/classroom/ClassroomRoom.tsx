@@ -22,6 +22,7 @@ import {
   createLocalAudioTrack,
   LocalAudioTrack,
   RoomEvent,
+  ConnectionQuality,
   ConnectionState,
   DisconnectReason,
   AudioPresets,
@@ -61,8 +62,17 @@ import { useChatThread } from './chatThread';
 const ChatView = dynamic(() => import('./Chat').then((m) => m.ChatView), { ssr: false });
 import { useStudentFocus } from './useStudentFocus';
 import { countFocusAlerts, focusLabel, isFocusAlert, needsCover } from '@/lib/focusStatus';
-import { FloatingPanel, useFloatDrag, readFloatPref, writeFloatPref, type FloatPos } from './FloatingPanel';
-import { shareControlsPlacement, showLocalSharePreview } from '@/lib/floatGeometry';
+import { FloatingPanel, floatInsets, useFloatDrag, readFloatPref, writeFloatPref, type FloatPos } from './FloatingPanel';
+import {
+  WB_TOOL_CLEAR_PX,
+  parseStoredPos,
+  parseStoredSize,
+  placeWhiteboardVideo,
+  shareControlsPlacement,
+  showLocalSharePreview,
+  tilesInPane,
+  type FloatRect,
+} from '@/lib/floatGeometry';
 import { candidateScreens, surfaceFromTrack, windowPositionsTrusted } from '@/lib/screenMask';
 import {
   maskPipelineSupported,
@@ -149,7 +159,13 @@ import {
   studentVideoModeShortLabel,
   type StudentVideoMode,
 } from '@/lib/studentVideoMode';
-import { STUDENT_GONE_GRACE_MS } from '@/lib/studentPresenceLogic';
+import {
+  HEARTBEAT_INTERVAL_MS,
+  LOST_GRACE_MS,
+  STUDENT_GONE_GRACE_MS,
+  nextPresencePhase,
+  type PresencePhase,
+} from '@/lib/studentPresenceLogic';
 
 type TokenPayload = {
   token: string;
@@ -742,6 +758,14 @@ function peerFloatLayout(
   return { cols, rows, tileW, tileH, paneW, paneH, gap };
 }
 
+/** Board rectangle the compact whiteboard video must stay inside (below the header, above the footer). */
+function whiteboardVideoBoard(vw: number, vh: number): FloatRect {
+  const insets = typeof document === 'undefined' ? { top: 0, bottom: 0 } : floatInsets();
+  const top = insets.top;
+  const bottom = Math.max(insets.bottom, 72);
+  return { x: 0, y: top, w: Math.max(200, vw), h: Math.max(160, vh - top - bottom) };
+}
+
 
 function TeacherCameraFloat({
   teacherIdentities,
@@ -965,6 +989,7 @@ function TeacherPeersFloat({
   slots: slotsProp,
   dock = null,
   minLeft = 0,
+  whiteboard = false,
   sharing = false,
   onDockSpace,
   focusAlerts = {},
@@ -1011,6 +1036,12 @@ function TeacherPeersFloat({
   dock?: { top: number; left: number; width: number; height: number } | null;
   /** Floating: keep the panel right of this x (whiteboard tool column). */
   minLeft?: number;
+  /**
+   * Whiteboard is open: float a compact 2-tile pane (separate from the docked
+   * class panel's size). 4/6 still grows it; the class camera cap changes only
+   * when the teacher clicks 2/4/6.
+   */
+  whiteboard?: boolean;
   /** Teacher is screen sharing: the docked panel starts minimized each share. */
   sharing?: boolean;
   onDockSpace?: (space: { left: number; top: number }) => void;
@@ -1036,9 +1067,19 @@ function TeacherPeersFloat({
   });
   useEffect(() => {
     if (slotsProp && slotsProp !== slotCount) setSlotCount(slotsProp);
-    // Only follow the room's value when it changes.
+    // Only follow the room's value when it changes. Does not touch the
+    // whiteboard's own tile count.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slotsProp]);
+  // Whiteboard opens at 2 tiles. Growing to 4/6 is for this open only; the
+  // next open starts compact again and does not rewrite the docked panel.
+  const [wbSlots, setWbSlots] = useState<2 | 4 | 6>(2);
+  const [wbEpoch, setWbEpoch] = useState(whiteboard);
+  if (whiteboard !== wbEpoch) {
+    setWbEpoch(whiteboard);
+    if (whiteboard) setWbSlots(2);
+  }
+  const activeSlots: 2 | 4 | 6 = whiteboard ? wbSlots : slotCount;
   const [minimized, setMinimized] = useState(() => {
     try {
       return sessionStorage.getItem(`peers_min_${roomCode.toUpperCase()}`) === '1';
@@ -1096,26 +1137,52 @@ function TeacherPeersFloat({
   const dockAvailW = dock
     ? Math.max(0, (narrowDock ? dock.width : dock.width * PEER_DOCK_MAX_W) - 2 * PEER_DOCK_MARGIN)
     : undefined;
-  const layout = useMemo(
-    () => peerFloatLayout(slotCount, viewport.w, viewport.h, dockAvailH, dockAvailW),
-    [slotCount, viewport.w, viewport.h, dockAvailH, dockAvailW]
-  );
+  const wbPlaced = useMemo(() => {
+    if (!whiteboard || activeSlots !== 2) return null;
+    return placeWhiteboardVideo(
+      parseStoredPos(readFloatPref('class_panel_wb')),
+      parseStoredSize(readFloatPref('class_panel_wb_size')),
+      whiteboardVideoBoard(viewport.w, viewport.h)
+    );
+  }, [whiteboard, activeSlots, viewport.w, viewport.h]);
+  const layout = useMemo(() => {
+    if (wbPlaced) {
+      const tiles = tilesInPane(wbPlaced.w, wbPlaced.h, 1, 2);
+      return {
+        cols: 1,
+        rows: 2,
+        tileW: tiles.tileW,
+        tileH: tiles.tileH,
+        paneW: wbPlaced.w,
+        paneH: wbPlaced.h,
+        gap: 6,
+      };
+    }
+    return peerFloatLayout(activeSlots, viewport.w, viewport.h, dockAvailH, dockAvailW);
+  }, [wbPlaced, activeSlots, viewport.w, viewport.h, dockAvailH, dockAvailW]);
   sizeRef.current = isMin
     ? { w: 168, h: 36 }
     : { w: layout.paneW, h: layout.paneH };
 
   const defaultPos = useCallback((): FloatPos => {
+    if (whiteboard && typeof window !== 'undefined') {
+      const placed = placeWhiteboardVideo(null, null, whiteboardVideoBoard(window.innerWidth, window.innerHeight));
+      return { x: placed.x, y: placed.y };
+    }
     const h = sizeRef.current.h;
     return { x: 12, y: Math.max(PEER_TOP_RESERVE, window.innerHeight - h - PEER_BOTTOM_RESERVE) };
-  }, []);
+  }, [whiteboard]);
 
   const { pos, reclamp, moveTo, handleProps } = useFloatDrag({
-    id: 'class_panel',
+    // Separate key so the docked panel's left-side position is not reused on the board.
+    id: whiteboard ? 'class_panel_wb' : 'class_panel',
     paneRef,
     defaultPos,
     // Dragging the docked panel pulls it out to float (the hook starts the
     // drag from where it is drawn, so it does not jump).
     onDragStart: () => setFloating(true),
+    extraInsets: whiteboard ? () => ({ left: WB_TOOL_CLEAR_PX }) : undefined,
+    insetKey: whiteboard ? 'wb' : 'dock',
   });
   const dock_ = useCallback(() => setFloating(false), []);
   const undock = useCallback(() => {
@@ -1139,6 +1206,13 @@ function TeacherPeersFloat({
       /* ignore */
     }
   }, [minimized, roomCode]);
+
+  // A 4/6-tile whiteboard pane is remembered so the next open can clamp it
+  // back down. The compact 2-tile size is not written (opening always reclamps).
+  useEffect(() => {
+    if (!whiteboard || isMin || portal || activeSlots === 2) return;
+    writeFloatPref('class_panel_wb_size', JSON.stringify({ w: layout.paneW, h: layout.paneH }));
+  }, [whiteboard, isMin, portal, activeSlots, layout.paneW, layout.paneH]);
 
   useEffect(() => {
     const read = () => setViewport({ w: window.innerWidth, h: window.innerHeight });
@@ -1304,7 +1378,7 @@ function TeacherPeersFloat({
       (id) => !tSet.has(id) && !id.startsWith('teacher_') && hasLiveCamera(id)
     );
     const pins = pinnedIdentities.filter((id) => pool.includes(id));
-    const studentSlots = Math.max(0, slotCount - 1);
+    const studentSlots = Math.max(0, activeSlots - 1);
     for (const id of Array.from(lastSpokeRef.current.keys())) {
       if (!stickySpeakersRef.current.has(id)) lastSpokeRef.current.delete(id);
     }
@@ -1346,7 +1420,7 @@ function TeacherPeersFloat({
     }
 
     // Never backfill with students who are not publishing a sample camera.
-    // The grid still paints `slotCount` cells; the rest stay blank.
+    // The grid still paints `activeSlots` cells; the rest stay blank.
     return pickTiles({
       pool: [...pins, ...(speakingId ? [speakingId] : []), ...sticky, ...mosaic].filter((id) => pool.includes(id)),
       teacherPins: pins,
@@ -1361,7 +1435,7 @@ function TeacherPeersFloat({
     room,
     speakingId,
     rotationTick,
-    slotCount,
+    activeSlots,
     tick,
     stickyVersion,
     pinnedIdentities,
@@ -1396,7 +1470,7 @@ function TeacherPeersFloat({
   }, [room, shownKey, teacherIdentities.join(',')]);
 
   const cells: Array<string | null> = ['__self__'];
-  for (let i = 0; i < slotCount - 1; i++) cells.push(peerIds[i] ?? null);
+  for (let i = 0; i < activeSlots - 1; i++) cells.push(peerIds[i] ?? null);
 
   // After more tiles are requested (2→6) or the sample changes, newly sampled
   // students take a few seconds to (re)publish and subscribe. Show
@@ -1408,7 +1482,7 @@ function TeacherPeersFloat({
     setSettling(true);
     const t = window.setTimeout(() => setSettling(false), 12_000);
     return () => window.clearTimeout(t);
-  }, [slotCount, visibleKey]);
+  }, [activeSlots, visibleKey]);
   const fillableStudents = room
     ? Array.from(room.remoteParticipants.values()).filter(
         (p) => !isTeacherParticipant(p, teacherSet) && !peerIds.includes(p.identity)
@@ -1419,8 +1493,8 @@ function TeacherPeersFloat({
   // and the window is resized to exactly fit them (lib/peerWindow).
   const [winTileW, setWinTileW] = useState(PEER_WIN_TILE_W);
   const winCount = peerWindowTileCount({
-    slots: slotCount,
-    filled: Math.min(peerIds.length, slotCount - 1),
+    slots: activeSlots,
+    filled: Math.min(peerIds.length, activeSlots - 1),
     connecting: settling ? fillableStudents : 0,
   });
   const winGrid = useMemo(() => peerWindowGrid(winCount, winTileW), [winCount, winTileW]);
@@ -1513,7 +1587,7 @@ function TeacherPeersFloat({
       ref={setPaneRef}
       className="peers-float-pane"
       role="region"
-      data-slots={slotCount}
+      data-slots={activeSlots}
       data-minimized={isMin ? '1' : '0'}
       data-docked={docked ? '1' : '0'}
       style={style}
@@ -1551,12 +1625,13 @@ function TeacherPeersFloat({
                 type="button"
                 className={cn(
                   'rounded px-1.5 py-0.5 text-[10px] font-bold transition',
-                  slotCount === n
+                  activeSlots === n
                     ? 'bg-brand-600 text-white'
                     : 'bg-white/10 text-slate-300 hover:bg-white/20'
                 )}
                 onClick={() => {
-                  setSlotCount(n);
+                  if (whiteboard) setWbSlots(n);
+                  else setSlotCount(n);
                   onSlotsChange?.(studentCapForSlots(n));
                 }}
                 aria-label={`Show ${n} videos`}
@@ -1581,7 +1656,7 @@ function TeacherPeersFloat({
       {!isMin && (
         <div
           className="peers-float-grid"
-          data-slots={slotCount}
+          data-slots={activeSlots}
           style={{
             gridTemplateRows: `repeat(${L.rows}, ${L.tileH}px)`,
             ...(portal ? { gridTemplateColumns: `repeat(${L.cols}, ${L.tileW}px)` } : {}),
@@ -2337,38 +2412,162 @@ function RoomInner({
       /* ignore */
     }
   }, [isTeacher, code, studentVideoMode]);
-  /** Student identities that left the SFU, and when. Hidden from the roster after the grace. */
+  /**
+   * Local roster filter. A timestamp is stored only once the phase is already
+   * `gone` (the grace has elapsed), so the filter must not add the grace again.
+   */
   const droppedStudentsRef = useRef<Map<string, number>>(new Map());
+  const [reconnectingIds, setReconnectingIds] = useState<ReadonlySet<string>>(() => new Set());
   const [rosterDropTick, setRosterDropTick] = useState(0);
   useEffect(() => {
     if (!isTeacher || !room) return;
-    const timers: number[] = [];
-    const report = (kind: 'joined' | 'left', p: RemoteParticipant) => {
-      if (!p.identity?.startsWith('student_') || !p.sid) return;
+    type Mark = { phase: PresencePhase; since: number; signal: 'lost' | 'left'; postedLeft: boolean };
+    const marks = new Map<string, Mark>();
+    const timers = new Map<string, number>();
+    const publish = () => {
+      const dropped = new Map<string, number>();
+      const reconnecting = new Set<string>();
+      for (const [id, m] of marks) {
+        if (m.phase === 'gone') dropped.set(id, m.since);
+        else if (m.phase === 'reconnecting') reconnecting.add(id);
+      }
+      droppedStudentsRef.current = dropped;
+      setReconnectingIds(reconnecting);
+      setRosterDropTick((n) => n + 1);
+    };
+    const report = (kind: 'joined' | 'left', identity: string, sid: string) => {
       void roomFetch(code, '/presence', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identity: p.identity, sid: p.sid, kind }),
+        body: JSON.stringify({ identity, sid, kind }),
       }).catch(() => undefined);
+    };
+    const clearTimer = (id: string) => {
+      const t = timers.get(id);
+      if (t != null) window.clearTimeout(t);
+      timers.delete(id);
+    };
+    const apply = (identity: string, signal: 'ok' | 'lost' | 'left', sid: string | undefined) => {
+      clearTimer(identity);
+      const now = Date.now();
+      const cur = marks.get(identity);
+      if (signal === 'ok') {
+        if (cur?.postedLeft && sid) report('joined', identity, sid);
+        if (cur) marks.delete(identity);
+        publish();
+        return;
+      }
+      if (cur?.phase === 'gone') return;
+      const same = !!cur && cur.signal === signal;
+      const since = same ? cur.since : now;
+      const phaseIn: PresencePhase = same ? cur.phase : 'present';
+      const next = nextPresencePhase(phaseIn, since, signal, now);
+      let postedLeft = cur?.postedLeft ?? false;
+      if (same && cur.phase === 'reconnecting' && next === 'reconnecting') {
+        const grace = signal === 'left' ? STUDENT_GONE_GRACE_MS : LOST_GRACE_MS;
+        const wait = Math.max(0, since + grace - now) + 40;
+        timers.set(
+          identity,
+          window.setTimeout(() => apply(identity, signal, sid), wait)
+        );
+        return;
+      }
+      if (next === 'gone') {
+        if (!postedLeft && sid) {
+          report('left', identity, sid);
+          postedLeft = true;
+        }
+        marks.set(identity, { phase: 'gone', since: now, signal, postedLeft });
+        publish();
+        return;
+      }
+      if (signal === 'left' && !postedLeft && sid) {
+        report('left', identity, sid);
+        postedLeft = true;
+      }
+      marks.set(identity, { phase: 'reconnecting', since, signal, postedLeft });
+      const grace = signal === 'left' ? STUDENT_GONE_GRACE_MS : LOST_GRACE_MS;
+      const wait = Math.max(0, since + grace - now) + 40;
+      timers.set(
+        identity,
+        window.setTimeout(() => apply(identity, signal, sid), wait)
+      );
+      publish();
     };
     const onDisconnected = (p: RemoteParticipant) => {
       if (!p.identity?.startsWith('student_')) return;
-      droppedStudentsRef.current.set(p.identity, Date.now());
-      report('left', p);
-      timers.push(window.setTimeout(() => setRosterDropTick((n) => n + 1), STUDENT_GONE_GRACE_MS + 100));
+      apply(p.identity, 'left', p.sid);
     };
     const onConnected = (p: RemoteParticipant) => {
       if (!p.identity?.startsWith('student_')) return;
-      droppedStudentsRef.current.delete(p.identity);
-      report('joined', p);
-      setRosterDropTick((n) => n + 1);
+      // Always tell the server, matching the previous join report. Clear
+      // postedLeft first so apply('ok') does not send a second joined.
+      if (p.sid) report('joined', p.identity, p.sid);
+      const cur = marks.get(p.identity);
+      if (cur) cur.postedLeft = false;
+      apply(p.identity, 'ok', p.sid);
+    };
+    const onQuality = (quality: ConnectionQuality, p: Participant) => {
+      if (p.isLocal || !p.identity?.startsWith('student_')) return;
+      // An explicit disconnect owns the grace. A Lost/Excellent that follows
+      // pagehide must not stretch it or undo the leave.
+      if (marks.get(p.identity)?.signal === 'left') return;
+      if (quality === ConnectionQuality.Lost) {
+        apply(p.identity, 'lost', p.sid);
+        return;
+      }
+      if (
+        quality === ConnectionQuality.Excellent ||
+        quality === ConnectionQuality.Good ||
+        quality === ConnectionQuality.Poor
+      ) {
+        const cur = marks.get(p.identity);
+        if (cur?.signal === 'lost') apply(p.identity, 'ok', p.sid);
+      }
     };
     room.on(RoomEvent.ParticipantDisconnected, onDisconnected);
     room.on(RoomEvent.ParticipantConnected, onConnected);
+    room.on(RoomEvent.ConnectionQualityChanged, onQuality);
     return () => {
       room.off(RoomEvent.ParticipantDisconnected, onDisconnected);
       room.off(RoomEvent.ParticipantConnected, onConnected);
-      for (const t of timers) window.clearTimeout(t);
+      room.off(RoomEvent.ConnectionQualityChanged, onQuality);
+      for (const t of timers.values()) window.clearTimeout(t);
+    };
+  }, [isTeacher, room, code]);
+  useEffect(() => {
+    if (isTeacher || !room) return;
+    let unload = false;
+    const send = () => {
+      if (unload) return;
+      const sid = room.localParticipant?.sid;
+      if (!sid) return;
+      void roomFetch(code, '/heartbeat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sid }),
+      }).catch(() => undefined);
+    };
+    send();
+    const iv = window.setInterval(send, HEARTBEAT_INTERVAL_MS);
+    const onVis = () => {
+      if (document.visibilityState === 'visible') send();
+    };
+    const onUnload = () => {
+      unload = true;
+    };
+    const onUp = () => send();
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('pagehide', onUnload);
+    room.on(RoomEvent.Connected, onUp);
+    room.on(RoomEvent.Reconnected, onUp);
+    return () => {
+      unload = true;
+      window.clearInterval(iv);
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('pagehide', onUnload);
+      room.off(RoomEvent.Connected, onUp);
+      room.off(RoomEvent.Reconnected, onUp);
     };
   }, [isTeacher, room, code]);
   const [micOn, setMicOn] = useState(true);
@@ -3480,8 +3679,8 @@ function RoomInner({
       .filter((p) => {
         if (p.role !== 'STUDENT') return false;
         const droppedAt = droppedStudentsRef.current.get(p.livekitIdentity);
-        // rosterDropTick forces a render after the disconnect grace.
-        if (rosterDropTick >= 0 && droppedAt != null && Date.now() - droppedAt >= STUDENT_GONE_GRACE_MS) return false;
+        // rosterDropTick forces a render once the grace has already elapsed.
+        if (rosterDropTick >= 0 && droppedAt != null && Date.now() >= droppedAt) return false;
         return true;
       })
       .map((p) => ({ ...p, handRaised: !!(p.handRaised || (state?.raisedHands ?? []).includes(p.id)) }))
@@ -4029,8 +4228,11 @@ function RoomInner({
             admitted={(state?.admitted ?? []).filter((p) => {
               if (p.role !== 'STUDENT') return true;
               const droppedAt = droppedStudentsRef.current.get(p.livekitIdentity);
-              return !(rosterDropTick >= 0 && droppedAt != null && Date.now() - droppedAt >= STUDENT_GONE_GRACE_MS);
-            })}
+              return !(rosterDropTick >= 0 && droppedAt != null && Date.now() >= droppedAt);
+            }).map((p) => ({
+              ...p,
+              reconnecting: !!p.reconnecting || reconnectingIds.has(p.livekitIdentity),
+            }))}
             waiting={(state?.waiting ?? []).map((w) => ({
               id: w.id,
               displayName: rosterLabel(w),
@@ -4443,6 +4645,11 @@ function RoomInner({
                         {focus}
                       </span>
                     )}
+                    {(reconnectingIds.has(p.livekitIdentity) || p.reconnecting) && (
+                      <span className="roster-chip roster-chip-warn" title="Reconnecting">
+                        Reconnecting
+                      </span>
+                    )}
                     {p.late && <span className="roster-chip roster-chip-red">Late</span>}
                     <span className="roster-actions">
                       <RosterIconButton
@@ -4560,7 +4767,8 @@ function RoomInner({
         // Whiteboard: floating, draggable panel like share mode — the board
         // keeps full width instead of docking videos in a right-hand column.
         dock={wbOpen ? null : dockArea}
-        minLeft={wbOpen ? 62 : 0}
+        minLeft={wbOpen ? WB_TOOL_CLEAR_PX : 0}
+        whiteboard={wbOpen}
         sharing={shareLayout}
         onDockSpace={onDockSpace}
         focusAlerts={focusByIdentity}
@@ -4604,6 +4812,7 @@ function RoomInner({
               </button>
             ) : undefined
           }
+          avoidLeft={wbOpen ? WB_TOOL_CLEAR_PX : 0}
         >
           {shareHudEl(
             wbOpen
@@ -4716,6 +4925,7 @@ function ShareHudSlot({
   popOut,
   hint,
   action,
+  avoidLeft = 0,
   children,
 }: {
   floating: boolean;
@@ -4723,11 +4933,13 @@ function ShareHudSlot({
   popOut?: () => void;
   hint?: string;
   action?: ReactNode;
+  /** While the whiteboard is up, keep the dock clear of the left tool column. */
+  avoidLeft?: number;
   children: ReactNode;
 }) {
   if (floating) return <>{children}</>;
   return (
-    <InlineShareDock onPopOut={popOut} hint={hint} compact={compact} action={action}>
+    <InlineShareDock onPopOut={popOut} hint={hint} compact={compact} action={action} avoidLeft={avoidLeft}>
       {children}
     </InlineShareDock>
   );

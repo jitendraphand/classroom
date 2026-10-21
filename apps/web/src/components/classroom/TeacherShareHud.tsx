@@ -8,7 +8,8 @@ import { toolbarInnerSize } from '@/lib/sideWindowGeometry';
 import { closeSideWindow, openSideWindow, sideWindow, SideWindowPortal, useSideWindows } from './shareSideWindows';
 import { sortRoster } from '@/lib/classSlots';
 import { filterPeople } from '@/lib/peopleSearch';
-import { useFloatDrag, type FloatPos } from './FloatingPanel';
+import { floatInsets, useFloatDrag, type FloatPos } from './FloatingPanel';
+import { whiteboardShareDockPos } from '@/lib/floatGeometry';
 import { focusLabel } from '@/lib/focusStatus';
 import { controlUrl, copyParentStyles, mountIn, waitForWindow } from './shareWindowDom';
 import { DrawOverlay, useShareDrawing } from './ShareDrawing';
@@ -55,6 +56,8 @@ export type RosterEntry = {
   drawRequested?: boolean;
   drawRequestedAt?: number | null;
   drawing?: boolean;
+  /** Heartbeat is late, or LiveKit reports the link lost. Still on the roster. */
+  reconnecting?: boolean;
 };
 
 export type TeacherShareHudProps = {
@@ -614,6 +617,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                     <span className="tsh-person-name">{s.displayName}</span>
                     {s.sid ? <span className="tsh-person-sub">{s.sid}</span> : s.gradeDivision ? <span className="tsh-person-sub">{s.gradeDivision}</span> : null}
                     {focus ? <span className="tsh-chip tsh-chip-muted" title={focus}>{focus}</span> : null}
+                    {s.reconnecting ? <span className="tsh-chip" title="Reconnecting">Reconnecting</span> : null}
                     <button
                       type="button"
                       className={s.mutedByTeacher ? 'tsh-btn tsh-icon is-warn' : 'tsh-btn tsh-icon'}
@@ -972,6 +976,7 @@ export function InlineShareDock({
   onPopOut,
   compact = false,
   action,
+  avoidLeft = 0,
 }: {
   children: ReactNode;
   hint?: string;
@@ -980,19 +985,36 @@ export function InlineShareDock({
   action?: ReactNode;
   /** Re-open the floating window (only offered for window/tab captures). */
   onPopOut?: () => void;
+  /**
+   * While the whiteboard is shown, keep this dock to the right of the tool
+   * column and remember that spot separately from the share-mode dock.
+   */
+  avoidLeft?: number;
 }) {
   const paneRef = useRef<HTMLDivElement | null>(null);
-  const defaultPos = useCallback(
-    (): FloatPos => ({ x: 12, y: 72 }),
-    []
-  );
-  const { pos, handleProps } = useFloatDrag({ id: 'share_controls_v2', paneRef, defaultPos });
+  const defaultPos = useCallback((): FloatPos => {
+    if (avoidLeft > 0 && typeof window !== 'undefined') {
+      const el = paneRef.current;
+      const w = el?.offsetWidth || 280;
+      const h = el?.offsetHeight || 44;
+      return whiteboardShareDockPos({ w, h }, { w: window.innerWidth, h: window.innerHeight }, floatInsets().top, avoidLeft);
+    }
+    return { x: 12, y: 72 };
+  }, [avoidLeft]);
+  const { pos, handleProps } = useFloatDrag({
+    id: avoidLeft > 0 ? 'share_controls_wb' : 'share_controls_v2',
+    paneRef,
+    defaultPos,
+    extraInsets: avoidLeft > 0 ? () => ({ left: avoidLeft }) : undefined,
+    insetKey: avoidLeft > 0 ? `wb-${avoidLeft}` : 'dock',
+  });
+  const fallback = avoidLeft > 0 ? { x: avoidLeft + 8, y: 72 } : { x: 12, y: 72 };
   return (
     <div
       ref={paneRef}
       className="share-inline-dock"
       data-testid="share-inline-dock"
-      style={pos ? { left: pos.x, top: pos.y } : { left: 12, top: 72 }}
+      style={pos ? { left: pos.x, top: pos.y } : { left: fallback.x, top: fallback.y }}
       role="region"
       aria-label="Share controls (in this tab)"
     >
