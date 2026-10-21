@@ -3,14 +3,13 @@
  * tests/studentPresence.test.ts).
  *
  * A student who closes the tab never calls /leave, so their seat stayed
- * ADMITTED and they lingered on the teacher's roster for minutes. LiveKit
- * tells us at once (participant_left: the client sends a leave on pagehide)
- * or within its departure timeout (participant_connection_aborted, ~15-20 s
- * when the tab/machine just dies). The webhook records the time the student's
- * connection went away; the teacher's roster hides an admitted student whose
- * connection has been gone for STUDENT_GONE_GRACE_MS (a page refresh or a
- * network blip reconnects within that grace and clears the mark). The seat
- * itself stays ADMITTED, so the student can come back with the same link.
+ * ADMITTED. The student client disconnects on pagehide (and the teacher
+ * reports ParticipantDisconnected), so LiveKit participant_left arrives at
+ * once. A crashed tab still waits for LiveKit's departure timeout
+ * (participant_connection_aborted). The roster hides an admitted student
+ * whose connection has been gone for STUDENT_GONE_GRACE_MS (a page refresh
+ * or a network blip reconnects within that grace and clears the mark). The
+ * seat itself stays ADMITTED, so the student can come back with the same link.
  */
 export const STUDENT_GONE_GRACE_MS = 2_500;
 

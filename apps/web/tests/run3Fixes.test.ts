@@ -37,7 +37,7 @@ test('closed tab: student drops off after the grace; reconnect clears it; stale 
   live = nextLive(live, { kind: 'left', sid: 'PA_1', at: t0 + 1000 })!;
   assert.equal(isGone(live, t0 + 1000 + STUDENT_GONE_GRACE_MS - 1), false);
   assert.equal(isGone(live, t0 + 1000 + STUDENT_GONE_GRACE_MS), true);
-  assert.ok(STUDENT_GONE_GRACE_MS + 1000 <= 20_000, 'drops within ~15-20 s');
+  assert.ok(STUDENT_GONE_GRACE_MS <= 5_000, 'drops within ~5 s after leave is recorded');
   // Refresh: new connection comes back.
   const back = nextLive(live, { kind: 'joined', sid: 'PA_2', at: t0 + 3000 })!;
   assert.equal(isGone(back, t0 + 60_000), false);
