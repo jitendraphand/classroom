@@ -846,6 +846,13 @@ body {
   color: #f1f5f9;
   font-size: 13px;
 }
+/* One-time share-position note: bottom-left so it never covers the draw-request
+   Allow/Deny banner or other teacher toasts at bottom-right. */
+.teacher-toast.teacher-toast-left {
+  right: auto;
+  left: 16px;
+  z-index: 60;
+}
 
 /* Student control panel buttons scale with the viewport (same look on a phone
    and a desktop, just bigger/smaller). */

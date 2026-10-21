@@ -4661,7 +4661,7 @@ function RoomInner({
         </div>
       )}
       {isTeacher && positionToast && (
-        <div className="teacher-toast" role="status" data-testid="share-position-toast">
+        <div className="teacher-toast teacher-toast-left" role="status" data-testid="share-position-toast">
           <span className="flex-1">{MONITOR_POSITION_HINT}</span>
           <button
             type="button"
