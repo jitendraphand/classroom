@@ -63,3 +63,169 @@ export function shareControlsPlacement(displaySurface: string | undefined | null
   // first with surfaceFromTrack, which also reads the track label).
   return displaySurface === 'window' || displaySurface === 'browser' ? 'floating' : 'inline';
 }
+
+/**
+ * Whiteboard tool column (WhiteboardBoard `barW`). Floats must start to the
+ * right of this, or they cover the pen / eraser / colour buttons.
+ */
+export const WB_TOOL_COLUMN_PX = 54;
+/** Column plus a gap, so a panel edge does not sit on the tool buttons. */
+export const WB_TOOL_CLEAR_PX = WB_TOOL_COLUMN_PX + 8;
+/** Compact whiteboard video may cover at most this fraction of the board. */
+export const WB_VIDEO_MAX_AREA = 0.2;
+
+export type FloatRect = { x: number; y: number; w: number; h: number };
+
+const WB_HEADER = 34;
+const WB_PAD = 16;
+const WB_GAP = 6;
+const WB_BORDER = 2;
+
+export function parseStoredSize(raw: string | null): { w: number; h: number } | null {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw) as { w?: unknown; h?: unknown };
+    if (
+      typeof v.w === 'number' &&
+      typeof v.h === 'number' &&
+      v.w > 0 &&
+      v.h > 0 &&
+      Number.isFinite(v.w) &&
+      Number.isFinite(v.h)
+    ) {
+      return { w: v.w, h: v.h };
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+/**
+ * Push a saved video panel back onto the board: right of the tool column,
+ * inside the board, and (when `maxAreaFraction` is set) no larger than that
+ * share of the board. A saved full-screen box from an older session cannot
+ * come back covering the tools.
+ */
+export function clampWhiteboardFloat(
+  box: FloatRect,
+  board: FloatRect,
+  opts: { toolClear?: number; maxAreaFraction?: number; margin?: number } = {}
+): FloatRect {
+  const toolClear = opts.toolClear ?? WB_TOOL_CLEAR_PX;
+  const margin = opts.margin ?? 8;
+  const minX = board.x + toolClear;
+  const minY = board.y + margin;
+  const maxR = board.x + board.w - margin;
+  const maxB = board.y + board.h - margin;
+  const availW = Math.max(80, maxR - minX);
+  const availH = Math.max(48, maxB - minY);
+  let w = Number.isFinite(box.w) && box.w > 0 ? box.w : 160;
+  let h = Number.isFinite(box.h) && box.h > 0 ? box.h : 120;
+  if (w > availW || h > availH) {
+    const s = Math.min(availW / w, availH / h, 1);
+    w *= s;
+    h *= s;
+  }
+  if (opts.maxAreaFraction && opts.maxAreaFraction > 0 && board.w > 0 && board.h > 0) {
+    const cap = board.w * board.h * opts.maxAreaFraction;
+    if (w * h > cap) {
+      const s = Math.sqrt(cap / (w * h));
+      w *= s;
+      h *= s;
+    }
+  }
+  w = Math.max(80, Math.min(availW, w));
+  h = Math.max(48, Math.min(availH, h));
+  let x = Number.isFinite(box.x) ? box.x : minX;
+  let y = Number.isFinite(box.y) ? box.y : minY;
+  x = Math.min(Math.max(minX, x), Math.max(minX, maxR - w));
+  y = Math.min(Math.max(minY, y), Math.max(minY, maxB - h));
+  return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
+}
+
+/** Two stacked tiles, bottom-right, at most ~20% of the board, clear of the tools. */
+export function compactWhiteboardVideo(board: FloatRect, toolClear = WB_TOOL_CLEAR_PX): FloatRect {
+  const margin = 8;
+  const maxW = Math.max(120, board.w - toolClear - margin);
+  const maxH = Math.max(90, board.h - margin);
+  const maxArea = Math.max(1, board.w * board.h * WB_VIDEO_MAX_AREA);
+  const measure = (tw: number) => {
+    const tileH = Math.max(36, Math.round((tw * 9) / 16));
+    const paneW = WB_BORDER + WB_PAD + tw;
+    const paneH = WB_HEADER + WB_PAD + tileH * 2 + WB_GAP;
+    return { paneW, paneH, tileW: tw, area: paneW * paneH };
+  };
+  let tileW = Math.min(168, Math.max(72, maxW - WB_BORDER - WB_PAD));
+  let m = measure(tileW);
+  for (let i = 0; i < 80 && (m.area > maxArea || m.paneW > maxW || m.paneH > maxH) && tileW > 72; i++) {
+    tileW -= 2;
+    m = measure(tileW);
+  }
+  return clampWhiteboardFloat(
+    { x: board.x + board.w - m.paneW - margin, y: board.y + board.h - m.paneH - margin, w: m.paneW, h: m.paneH },
+    board,
+    { toolClear, maxAreaFraction: WB_VIDEO_MAX_AREA, margin }
+  );
+}
+
+/**
+ * Geometry used when the whiteboard video panel opens. A saved box is kept
+ * only after it has been clamped off the tools and down to the compact area,
+ * so a previous 4/6-tile size cannot come back covering the board.
+ */
+export function placeWhiteboardVideo(
+  storedPos: FloatPos | null,
+  storedSize: { w: number; h: number } | null,
+  board: FloatRect,
+  toolClear = WB_TOOL_CLEAR_PX
+): FloatRect {
+  const compact = compactWhiteboardVideo(board, toolClear);
+  return clampWhiteboardFloat(
+    {
+      x: storedPos?.x ?? compact.x,
+      y: storedPos?.y ?? compact.y,
+      w: storedSize?.w ?? compact.w,
+      h: storedSize?.h ?? compact.h,
+    },
+    board,
+    { toolClear, maxAreaFraction: WB_VIDEO_MAX_AREA }
+  );
+}
+
+/** Tile size that fits a pane of `cols` × `rows` (16:9), used by the compact grid. */
+export function tilesInPane(paneW: number, paneH: number, cols: number, rows: number): { tileW: number; tileH: number } {
+  const innerW = Math.max(32, paneW - WB_BORDER - WB_PAD - WB_GAP * Math.max(0, cols - 1));
+  const innerH = Math.max(32, paneH - WB_HEADER - WB_PAD - WB_GAP * Math.max(0, rows - 1));
+  let tileW = Math.floor(innerW / Math.max(1, cols));
+  let tileH = Math.floor((tileW * 9) / 16);
+  if (tileH * rows > innerH) {
+    tileH = Math.floor(innerH / Math.max(1, rows));
+    tileW = Math.floor((tileH * 16) / 9);
+  }
+  return { tileW: Math.max(48, tileW), tileH: Math.max(27, tileH) };
+}
+
+/**
+ * In-tab share controls while the whiteboard is up: top-centre, never overlapping
+ * the left tool column. `topInset` is the teacher header height.
+ */
+export function whiteboardShareDockPos(
+  dock: { w: number; h: number },
+  viewport: FloatSize,
+  topInset: number,
+  toolClear = WB_TOOL_CLEAR_PX
+): FloatPos {
+  const board: FloatRect = {
+    x: 0,
+    y: Math.max(0, topInset),
+    w: viewport.w,
+    h: Math.max(1, viewport.h - Math.max(0, topInset)),
+  };
+  const placed = clampWhiteboardFloat(
+    { x: Math.round((viewport.w - dock.w) / 2), y: board.y + 8, w: Math.max(80, dock.w), h: Math.max(36, dock.h) },
+    board,
+    { toolClear, margin: 8 }
+  );
+  return { x: placed.x, y: placed.y };
+}

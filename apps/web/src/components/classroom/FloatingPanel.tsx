@@ -88,12 +88,22 @@ export function useFloatDrag(opts: {
   defaultPos: () => FloatPos;
   /** Called once when a drag actually starts (e.g. undock the Class panel). */
   onDragStart?: () => void;
+  /**
+   * Extra clamp insets, merged with `floatInsets()` by max. Held in a ref so
+   * the clamp callback stays stable. Use for the whiteboard tool column.
+   */
+  extraInsets?: () => Partial<FloatInsets>;
+  /** Re-read storage and re-clamp when this changes (whiteboard open/close). */
+  insetKey?: string;
 }) {
   const { id, paneRef } = opts;
   const defaultRef = useRef(opts.defaultPos);
   defaultRef.current = opts.defaultPos;
   const startRef = useRef(opts.onDragStart);
   startRef.current = opts.onDragStart;
+  const extraRef = useRef(opts.extraInsets);
+  extraRef.current = opts.extraInsets;
+  const insetKey = opts.insetKey ?? '';
 
   const desired = useRef<FloatPos | null>(null);
   const [pos, setPos] = useState<FloatPos | null>(null);
@@ -105,7 +115,14 @@ export function useFloatDrag(opts: {
       const el = paneRef.current;
       const r = el?.getBoundingClientRect();
       const size = { w: r?.width || 0, h: r?.height || 0 };
-      return clampFloat(p, size, viewportSize(), floatInsets());
+      const base = floatInsets();
+      const extra = extraRef.current?.() ?? {};
+      return clampFloat(p, size, viewportSize(), {
+        top: Math.max(base.top, extra.top ?? 0),
+        right: Math.max(base.right, extra.right ?? 0),
+        bottom: Math.max(base.bottom, extra.bottom ?? 0),
+        left: Math.max(base.left, extra.left ?? 0),
+      });
     },
     [paneRef]
   );
@@ -125,7 +142,7 @@ export function useFloatDrag(opts: {
     const stored = parseStoredPos(readFloatPref(id));
     desired.current = stored ?? defaultRef.current();
     apply();
-  }, [id, apply]);
+  }, [id, insetKey, apply]);
 
   useEffect(() => {
     const onChange = () => apply();
