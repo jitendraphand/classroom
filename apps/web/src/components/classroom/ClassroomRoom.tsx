@@ -73,6 +73,7 @@ import {
   tilesInPane,
   type FloatRect,
 } from '@/lib/floatGeometry';
+import { isRosterDropped, selectTeacherVideos, videoHidden } from '@/lib/droppedVideos';
 import { candidateScreens, surfaceFromTrack, windowPositionsTrusted } from '@/lib/screenMask';
 import {
   maskPipelineSupported,
@@ -268,6 +269,7 @@ function ParticipantGrid({
   localShareSurface = '',
   onStopShare,
   entireShareInfo,
+  hiddenIdentities = [],
 }: {
   entireShareInfo?: EntireShareInfo;
   /** What this teacher tab is capturing; decides whether the local share may be previewed. */
@@ -277,8 +279,11 @@ function ParticipantGrid({
   isTeacher: boolean;
   localPreview: ReactNode;
   teacherIdentities: string[];
+  /** Students the roster has already dropped. Their tracks are not shown. */
+  hiddenIdentities?: readonly string[];
 }) {
   void _visibleIdentities;
+  const hidden = new Set(hiddenIdentities);
   const tracks = useTracks(
     [
       { source: Track.Source.Camera, withPlaceholder: false },
@@ -291,6 +296,7 @@ function ParticipantGrid({
 
   const screenShares = tracks.filter((t) => {
     if (t.source !== Track.Source.ScreenShare) return false;
+    if (hidden.has(t.participant.identity)) return false;
     // Only the teacher shares a screen (students have no screen-share grant);
     // never render a share from anyone else.
     if (t.participant.isLocal) return isTeacher;
@@ -299,6 +305,7 @@ function ParticipantGrid({
 
   const cameras = tracks.filter((t) => {
     if (t.source !== Track.Source.Camera || t.participant.isLocal) return false;
+    if (hidden.has(t.participant.identity)) return false;
     // Only teacher remote videos. Students never see other students; the
     // teacher sees student cameras once, in the docked Class panel
     // (TeacherPeersFloat, with the 2/4/6 mosaic), not again on the stage.
@@ -979,6 +986,8 @@ function TeacherCameraFloat({
   );
 }
 
+const EMPTY_DROPPED: ReadonlyMap<string, number> = new Map();
+
 function TeacherPeersFloat({
   roomCode,
   teacherIdentities,
@@ -998,6 +1007,9 @@ function TeacherPeersFloat({
   portalWindow = null,
   onShownChange,
   embedHost = null,
+  droppedStudents = EMPTY_DROPPED,
+  liveRoster = null,
+  spotlightIdentity = null,
 }: {
   /** Panel visibility to the teacher (drives student cameras on demand). */
   onShownChange?: (shown: boolean) => void;
@@ -1022,6 +1034,15 @@ function TeacherPeersFloat({
   visibleIdentities: string[];
   selfName: string;
   selfStream: MediaStream | null;
+  /**
+   * Roster drop times (identity → moment the grace already elapsed). The
+   * mosaic, the floating panel and the sample selection all use this set.
+   */
+  droppedStudents?: ReadonlyMap<string, number>;
+  /** Admitted students. Null until the roster has loaded. */
+  liveRoster?: ReadonlySet<string> | null;
+  /** Keep this camera subscribed even when it is not one of the mosaic tiles. */
+  spotlightIdentity?: string | null;
   /** Student-camera count that fills this window (tiles minus the teacher). */
   onSlotsChange?: (studentSlots: number) => void;
   /** Panel size chosen by the room (synced with the server student cap). */
@@ -1373,9 +1394,12 @@ function TeacherPeersFloat({
       const media = pub.track?.mediaStreamTrack;
       return !media || media.readyState !== 'ended';
     };
-    // Only cameras actually publishing in the sample. Everyone else stays a blank slot.
-    const pool = visibleIdentities.filter(
-      (id) => !tSet.has(id) && !id.startsWith('teacher_') && hasLiveCamera(id)
+    // Only cameras actually publishing in the sample, minus anyone the roster
+    // has dropped. Everyone else stays a blank slot. Same identity cannot
+    // appear twice (selectTeacherVideos collapses duplicates on reconnect).
+    const pool = selectTeacherVideos(
+      visibleIdentities.filter((id) => !tSet.has(id) && !id.startsWith('teacher_') && hasLiveCamera(id)),
+      { dropped: droppedStudents, now: Date.now(), liveRoster }
     );
     const pins = pinnedIdentities.filter((id) => pool.includes(id));
     const studentSlots = Math.max(0, activeSlots - 1);
@@ -1439,35 +1463,67 @@ function TeacherPeersFloat({
     tick,
     stickyVersion,
     pinnedIdentities,
+    droppedStudents,
+    liveRoster,
   ]);
 
   // Bandwidth: subscribe to a student camera only while its tile is shown
-  // and the panel is open, and at the lowest layer.
+  // and the panel is open, and at the lowest layer. A dropped student is
+  // unsubscribed entirely (camera and mic) until the roster takes them back.
   const shownKey = isMin ? '' : peerIds.join(',');
+  const droppedRef = useRef(droppedStudents);
+  droppedRef.current = droppedStudents;
+  const liveRosterRef = useRef(liveRoster);
+  liveRosterRef.current = liveRoster;
+  const spotlightRef = useRef(spotlightIdentity);
+  spotlightRef.current = spotlightIdentity;
   useEffect(() => {
     if (!room) return;
     const want = new Set(shownKey ? shownKey.split(',') : []);
-    const apply = () => {
+    if (spotlightRef.current && !videoHidden(spotlightRef.current, { dropped: droppedRef.current, now: Date.now(), liveRoster: liveRosterRef.current })) {
+      want.add(spotlightRef.current);
+    }
+    const hiddenNow = (identity: string) =>
+      videoHidden(identity, { dropped: droppedRef.current, now: Date.now(), liveRoster: liveRosterRef.current });
+    const sync = (dropOnly: boolean) => {
       for (const p of Array.from(room.remoteParticipants.values())) {
         if (isTeacherParticipant(p, teacherSet)) continue;
-        const pub = p.getTrackPublication(Track.Source.Camera);
-        if (!pub) continue;
-        const w = want.has(p.identity);
-        try {
-          if (pub.isSubscribed !== w) pub.setSubscribed(w);
-          if (w) pub.setVideoQuality(VideoQuality.LOW);
-        } catch (e) {
-          console.warn('peer cam subscription', e);
+        const drop = hiddenNow(p.identity);
+        for (const pub of Array.from(p.trackPublications.values())) {
+          try {
+            if (drop) {
+              if (pub.isSubscribed) pub.setSubscribed(false);
+              continue;
+            }
+            if (dropOnly) continue;
+            if (pub.source === Track.Source.Microphone) {
+              if (!pub.isSubscribed) pub.setSubscribed(true);
+            } else if (pub.source === Track.Source.Camera) {
+              const w = want.has(p.identity);
+              if (pub.isSubscribed !== w) pub.setSubscribed(w);
+              if (w) pub.setVideoQuality(VideoQuality.LOW);
+            }
+          } catch (e) {
+            console.warn('peer cam subscription', e);
+          }
         }
       }
     };
+    const apply = () => sync(false);
+    // A spotlight subscribe must not be undone, but a dropped student's
+    // auto-subscribed tracks must still be released.
+    const onSubscribed = () => sync(true);
     apply();
     room.on(RoomEvent.TrackPublished, apply);
+    room.on(RoomEvent.TrackSubscribed, onSubscribed);
+    room.on(RoomEvent.ParticipantConnected, apply);
     return () => {
       room.off(RoomEvent.TrackPublished, apply);
+      room.off(RoomEvent.TrackSubscribed, onSubscribed);
+      room.off(RoomEvent.ParticipantConnected, apply);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [room, shownKey, teacherIdentities.join(',')]);
+  }, [room, shownKey, teacherIdentities.join(','), droppedStudents, liveRoster, spotlightIdentity]);
 
   const cells: Array<string | null> = ['__self__'];
   for (let i = 0; i < activeSlots - 1; i++) cells.push(peerIds[i] ?? null);
@@ -1484,9 +1540,11 @@ function TeacherPeersFloat({
     return () => window.clearTimeout(t);
   }, [activeSlots, visibleKey]);
   const fillableStudents = room
-    ? Array.from(room.remoteParticipants.values()).filter(
-        (p) => !isTeacherParticipant(p, teacherSet) && !peerIds.includes(p.identity)
-      ).length
+    ? Array.from(room.remoteParticipants.values()).filter((p) => {
+        if (isTeacherParticipant(p, teacherSet) || peerIds.includes(p.identity)) return false;
+        if (videoHidden(p.identity, { dropped: droppedStudents, now: Date.now(), liveRoster })) return false;
+        return true;
+      }).length
     : 0;
 
   // Student videos window (during a share): only the tiles actually shown,
@@ -2415,10 +2473,10 @@ function RoomInner({
   /**
    * Local roster filter. A timestamp is stored only once the phase is already
    * `gone` (the grace has elapsed), so the filter must not add the grace again.
+   * Video tiles read the same map.
    */
-  const droppedStudentsRef = useRef<Map<string, number>>(new Map());
+  const [droppedStudents, setDroppedStudents] = useState<ReadonlyMap<string, number>>(() => new Map());
   const [reconnectingIds, setReconnectingIds] = useState<ReadonlySet<string>>(() => new Set());
-  const [rosterDropTick, setRosterDropTick] = useState(0);
   useEffect(() => {
     if (!isTeacher || !room) return;
     type Mark = { phase: PresencePhase; since: number; signal: 'lost' | 'left'; postedLeft: boolean };
@@ -2431,9 +2489,8 @@ function RoomInner({
         if (m.phase === 'gone') dropped.set(id, m.since);
         else if (m.phase === 'reconnecting') reconnecting.add(id);
       }
-      droppedStudentsRef.current = dropped;
+      setDroppedStudents(dropped);
       setReconnectingIds(reconnecting);
-      setRosterDropTick((n) => n + 1);
     };
     const report = (kind: 'joined' | 'left', identity: string, sid: string) => {
       void roomFetch(code, '/presence', {
@@ -2697,6 +2754,32 @@ function RoomInner({
   const teacherLive = useTeacherLive(teacherIdentities);
   const micLockedNoTeacher = !isTeacher && teacherLive === false;
   const visibles = state?.visibleIdentities ?? visibleIdentities;
+  const liveRoster = useMemo(() => {
+    if (!state) return null;
+    const ids = new Set<string>();
+    for (const p of state.admitted ?? []) {
+      if (p.role === 'STUDENT' && p.livekitIdentity) ids.add(p.livekitIdentity);
+    }
+    return ids;
+  }, [state]);
+  const shownVisibles = useMemo(
+    () => selectTeacherVideos(visibles, { dropped: droppedStudents, now: Date.now(), liveRoster }),
+    [visibles, droppedStudents, liveRoster]
+  );
+  const hiddenVideoList = useMemo(() => {
+    const opts = { dropped: droppedStudents, now: Date.now(), liveRoster };
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    const consider = (id: string) => {
+      if (!id || seen.has(id) || !videoHidden(id, opts)) return;
+      seen.add(id);
+      ids.push(id);
+    };
+    for (const id of droppedStudents.keys()) consider(id);
+    for (const id of visibles) consider(id);
+    if (state?.spotlight?.identity) consider(state.spotlight.identity);
+    return ids;
+  }, [droppedStudents, liveRoster, visibles, state?.spotlight?.identity]);
 
   useEffect(() => {
     if (effectiveMuted) setMicOn(false);
@@ -2773,6 +2856,8 @@ function RoomInner({
       for (const s of speakers) {
         if (s.isLocal) continue;
         if (!studentIdentities.has(s.identity)) continue;
+        // A crashed student must not be pulled back into the visible sample.
+        if (videoHidden(s.identity, { dropped: droppedStudents, now: Date.now(), liveRoster })) continue;
         if (visibleSet.has(s.identity)) continue;
         postPin(s.identity, true);
       }
@@ -2794,7 +2879,7 @@ function RoomInner({
       room.off(RoomEvent.ActiveSpeakersChanged, onSpeakers);
       room.off(RoomEvent.TrackMuted, onTrackMuted);
     };
-  }, [isTeacher, room, code, refresh, state?.admitted, state?.visibleIdentities, visibleIdentities]);
+  }, [isTeacher, room, code, refresh, state?.admitted, state?.visibleIdentities, visibleIdentities, droppedStudents, liveRoster]);
 
   /** Cameras on demand: tell the server whether the student-video panel is shown. */
   const panelReported = useRef<boolean | null>(null);
@@ -3676,13 +3761,7 @@ function RoomInner({
   // first by raise time, then pinned, then by name.
   const rosterStudents = sortRoster(
     (state?.admitted ?? [])
-      .filter((p) => {
-        if (p.role !== 'STUDENT') return false;
-        const droppedAt = droppedStudentsRef.current.get(p.livekitIdentity);
-        // rosterDropTick forces a render once the grace has already elapsed.
-        if (rosterDropTick >= 0 && droppedAt != null && Date.now() >= droppedAt) return false;
-        return true;
-      })
+      .filter((p) => p.role === 'STUDENT' && !isRosterDropped(p.livekitIdentity, droppedStudents, Date.now()))
       .map((p) => ({ ...p, handRaised: !!(p.handRaised || (state?.raisedHands ?? []).includes(p.id)) }))
   );
   const shownRoster = filterPeople(rosterStudents, rosterQuery);
@@ -4227,8 +4306,7 @@ function RoomInner({
             onCompactChange={setHudCompact}
             admitted={(state?.admitted ?? []).filter((p) => {
               if (p.role !== 'STUDENT') return true;
-              const droppedAt = droppedStudentsRef.current.get(p.livekitIdentity);
-              return !(rosterDropTick >= 0 && droppedAt != null && Date.now() >= droppedAt);
+              return !isRosterDropped(p.livekitIdentity, droppedStudents, Date.now());
             }).map((p) => ({
               ...p,
               reconnecting: !!p.reconnecting || reconnectingIds.has(p.livekitIdentity),
@@ -4295,7 +4373,15 @@ function RoomInner({
       />
       <RoomAudioRenderer />
       {state?.spotlight && (
-        <SpotlightFloat identity={state.spotlight.identity} name={state.spotlight.name} />
+        <SpotlightFloat
+          identity={state.spotlight.identity}
+          name={state.spotlight.name}
+          hidden={videoHidden(state.spotlight.identity, {
+            dropped: droppedStudents,
+            now: Date.now(),
+            liveRoster,
+          })}
+        />
       )}
       {wbOpen && (
         <WhiteboardHost
@@ -4350,7 +4436,7 @@ function RoomInner({
                   {(() => {
                     const slots =
                       panelSlots ?? panelSlotsForCap(sampleCap ?? state?.maxVisibleVideos ?? 5);
-                    const v = videosShown(visibles.length, slots);
+                    const v = videosShown(shownVisibles.length, slots);
                     return `${v.shown}/${v.total} videos shown`;
                   })()}
                 </span>
@@ -4456,7 +4542,8 @@ function RoomInner({
               }
             >
               <ParticipantGrid
-                visibleIdentities={visibles}
+                visibleIdentities={shownVisibles}
+                hiddenIdentities={hiddenVideoList}
                 isTeacher={isTeacher}
                 teacherIdentities={teacherIdentities}
                 localShareSurface={shareSurface}
@@ -4756,7 +4843,15 @@ function RoomInner({
       <TeacherPeersFloat
         roomCode={code}
         teacherIdentities={teacherIdentities}
-        visibleIdentities={visibles}
+        visibleIdentities={shownVisibles}
+        droppedStudents={droppedStudents}
+        liveRoster={liveRoster}
+        spotlightIdentity={
+          state?.spotlight &&
+          !videoHidden(state.spotlight.identity, { dropped: droppedStudents, now: Date.now(), liveRoster })
+            ? state.spotlight.identity
+            : null
+        }
         selfName={displayName}
         selfStream={localCamStream}
         slots={panelSlots}

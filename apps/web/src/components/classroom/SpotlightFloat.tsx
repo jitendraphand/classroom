@@ -6,7 +6,16 @@ import { RoomEvent, Track } from 'livekit-client';
 import { useFloatDrag, type FloatPos } from './FloatingPanel';
 
 /** One classmate camera, shown only while the teacher spotlights them. */
-export function SpotlightFloat({ identity, name }: { identity: string; name: string }) {
+export function SpotlightFloat({
+  identity,
+  name,
+  hidden = false,
+}: {
+  identity: string;
+  name: string;
+  /** Same drop as the roster: unsubscribe and show nothing until they return. */
+  hidden?: boolean;
+}) {
   const room = useRoomContext();
   const paneRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -16,6 +25,20 @@ export function SpotlightFloat({ identity, name }: { identity: string; name: str
 
   useEffect(() => {
     if (!room) return;
+    if (hidden) {
+      const p = room.remoteParticipants.get(identity);
+      if (p) {
+        for (const pub of Array.from(p.trackPublications.values())) {
+          if (!pub.isSubscribed) continue;
+          try {
+            pub.setSubscribed(false);
+          } catch {
+            /* the class panel retries while the student stays dropped */
+          }
+        }
+      }
+      return;
+    }
     const bump = () => setTick((n) => n + 1);
     const subscribe = () => {
       const p = room.remoteParticipants.get(identity);
@@ -46,10 +69,10 @@ export function SpotlightFloat({ identity, name }: { identity: string; name: str
       room.off(RoomEvent.ParticipantConnected, subscribe);
       room.off(RoomEvent.ParticipantDisconnected, bump);
     };
-  }, [room, identity]);
+  }, [room, identity, hidden]);
 
   void tick;
-  const participant = room?.remoteParticipants.get(identity);
+  const participant = hidden ? undefined : room?.remoteParticipants.get(identity);
   const media = participant?.getTrackPublication(Track.Source.Camera)?.track?.mediaStreamTrack ?? null;
   const label = name || participant?.name || 'Student';
 
@@ -66,6 +89,8 @@ export function SpotlightFloat({ identity, name }: { identity: string; name: str
       el.srcObject = null;
     };
   }, [media]);
+
+  if (hidden) return null;
 
   const style = pos ? { left: pos.x, top: pos.y, zIndex: 45 } : { left: 16, top: 88, zIndex: 45 };
 

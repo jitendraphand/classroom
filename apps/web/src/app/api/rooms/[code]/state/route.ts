@@ -12,6 +12,7 @@ import { manualStudentJoinAllowed } from '@/lib/schoolConfig';
 import { decodeFocus } from '@/lib/focusStatus';
 import { currentHolders, drawRequests } from '@/lib/drawServer';
 import { studentRosterPresence } from '@/lib/studentPresence';
+import { selectTeacherVideos } from '@/lib/droppedVideos';
 import { getSchoolSettings } from '@/lib/schoolSettings';
 import { classCapacity } from '@/lib/capacity';
 import { readMicBook, micQueueView } from '@/lib/micBook';
@@ -262,6 +263,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   const admitted = room.participants.filter(
     (p) => p.status === 'ADMITTED' && !(p.role === 'STUDENT' && gone.has(p.livekitIdentity))
   );
+  // Teacher video selection uses the same gone set as the roster. Publish
+  // permission stays on the raw sample so a heartbeat that resumes puts the
+  // tile back without waiting for the next rotation.
+  const visibleForView = isTeacher ? selectTeacherVideos(visible, { dropped: gone, now: Date.now() }) : visible;
 
   const [settings, spotlightId, micBook] = await Promise.all([
     getSchoolSettings(),
@@ -363,8 +368,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       ...rosterInfo(p),
       ...focusOf(p),
     })),
-    visibleIdentities: visible,
-    visibleCount: visible.length,
+    visibleIdentities: visibleForView,
+    visibleCount: visibleForView.length,
     raisedHands,
     stageMode,
     /** The share already shows student ink (drawn on the teacher's desktop): skip the stroke overlay. */
