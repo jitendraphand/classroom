@@ -6,7 +6,7 @@
  * drawn with the web FlyoutBar. Marks land on the shared picture, not on
  * other applications.
  */
-import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import {
   IconArrow,
@@ -25,10 +25,13 @@ import {
   ALLOW_GREEN,
   ANNOTATE_COLORS,
   ANNOTATE_DRAW_TOOLS,
+  ANNOTATE_TOOLS_POS_KEY,
   THICKNESS_MAX,
   THICKNESS_MIN,
   clampPanel,
   flipOrient,
+  parseAnnotateToolsPos,
+  placeAnnotateTools,
   type AnnotateDrawTool,
 } from '@/lib/shareChrome';
 import { useTeacherInk } from './TeacherInk';
@@ -53,6 +56,26 @@ const DRAW_LABEL: Record<AnnotateDrawTool, string> = {
 
 export type DrawPerson = { id: string; displayName: string };
 
+/** Share pill rectangle in the same window as the tools panel. */
+function shareBarBox(anchor: HTMLElement | null): { x: number; y: number; w: number; h: number } | null {
+  const root = anchor?.closest('.tsh');
+  const bar = root?.querySelector('[data-testid="share-toolbar"]');
+  if (!(bar instanceof HTMLElement)) return null;
+  const r = bar.getBoundingClientRect();
+  if (r.width < 1 || r.height < 1) return null;
+  return { x: r.left, y: r.top, w: r.width, h: r.height };
+}
+
+/** Class title row (`data-float-bound="top"`). Zero when this window has no header. */
+function headerBottomOf(doc: Document): number {
+  let bottom = 0;
+  doc.querySelectorAll<HTMLElement>('[data-float-bound="top"]').forEach((el) => {
+    const r = el.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) bottom = Math.max(bottom, r.bottom);
+  });
+  return bottom;
+}
+
 export function AnnotateTools({
   requests,
   drawers,
@@ -70,22 +93,59 @@ export function AnnotateTools({
   const paneRef = useRef<HTMLDivElement | null>(null);
   const anchorRef = useRef<HTMLSpanElement | null>(null);
   const [mount, setMount] = useState<HTMLElement | null>(null);
-  const [pos, setPos] = useState({ x: 12, y: 48 });
-  const drag = useRef<{ id: number; px: number; py: number; x: number; y: number } | null>(null);
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  const drag = useRef<{
+    id: number;
+    px: number;
+    py: number;
+    x: number;
+    y: number;
+    moved: boolean;
+    latest: { x: number; y: number } | null;
+  } | null>(null);
 
   useLayoutEffect(() => {
     setMount(anchorRef.current?.ownerDocument.body ?? null);
   }, [ink?.annotating]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (!ink?.annotating) return;
     const el = paneRef.current;
     if (!el) return;
     const win = el.ownerDocument.defaultView;
     if (!win) return;
-    const r = el.getBoundingClientRect();
-    setPos(clampPanel({ x: pos.x, y: pos.y }, { w: r.width || 420, h: r.height || 56 }, { w: win.innerWidth, h: win.innerHeight }));
-    // Re-clamp when the panel opens, flips, or moves into its window.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const place = () => {
+      if (drag.current) return;
+      const node = paneRef.current;
+      if (!node) return;
+      const r = node.getBoundingClientRect();
+      if (r.width < 8 || r.height < 8) return;
+      const bar = shareBarBox(anchorRef.current);
+      let saved: { x: number; y: number } | null = null;
+      try {
+        saved = parseAnnotateToolsPos(win.localStorage.getItem(ANNOTATE_TOOLS_POS_KEY));
+      } catch {
+        saved = null;
+      }
+      const next = placeAnnotateTools({
+        panel: { w: r.width, h: r.height },
+        viewport: { w: win.innerWidth, h: win.innerHeight },
+        bar,
+        saved,
+        headerBottom: headerBottomOf(node.ownerDocument),
+      });
+      setPos((prev) => (prev && prev.x === next.x && prev.y === next.y ? prev : next));
+    };
+    place();
+    const ro = new ResizeObserver(() => place());
+    ro.observe(el);
+    const barEl = anchorRef.current?.closest('.tsh')?.querySelector('[data-testid="share-toolbar"]');
+    if (barEl) ro.observe(barEl);
+    win.addEventListener('resize', place);
+    return () => {
+      ro.disconnect();
+      win.removeEventListener('resize', place);
+    };
   }, [ink?.annotating, ink?.orient, mount]);
 
   if (!ink?.annotating) return <span ref={anchorRef} hidden />;
@@ -101,7 +161,7 @@ export function AnnotateTools({
     if (!el || !win) return;
     e.preventDefault();
     e.stopPropagation();
-    drag.current = { id: e.pointerId, px: e.clientX, py: e.clientY, x: pos.x, y: pos.y };
+    drag.current = { id: e.pointerId, px: e.clientX, py: e.clientY, x: pos?.x ?? 0, y: pos?.y ?? 0, moved: false, latest: pos };
     e.currentTarget.setPointerCapture?.(e.pointerId);
   };
   const onGripMove = (e: ReactPointerEvent<HTMLSpanElement>) => {
@@ -110,16 +170,26 @@ export function AnnotateTools({
     const win = el?.ownerDocument.defaultView;
     if (!d || d.id !== e.pointerId || !el || !win) return;
     const r = el.getBoundingClientRect();
-    setPos(
-      clampPanel(
-        { x: d.x + (e.clientX - d.px), y: d.y + (e.clientY - d.py) },
-        { w: r.width, h: r.height },
-        { w: win.innerWidth, h: win.innerHeight }
-      )
+    const next = clampPanel(
+      { x: d.x + (e.clientX - d.px), y: d.y + (e.clientY - d.py) },
+      { w: r.width, h: r.height },
+      { w: win.innerWidth, h: win.innerHeight }
     );
+    d.moved = true;
+    d.latest = next;
+    setPos(next);
   };
   const onGripUp = (e: ReactPointerEvent<HTMLSpanElement>) => {
-    if (drag.current?.id === e.pointerId) drag.current = null;
+    const d = drag.current;
+    if (d?.id !== e.pointerId) return;
+    if (d.moved && d.latest) {
+      try {
+        e.currentTarget.ownerDocument.defaultView?.localStorage.setItem(ANNOTATE_TOOLS_POS_KEY, JSON.stringify(d.latest));
+      } catch {
+        /* private mode */
+      }
+    }
+    drag.current = null;
   };
 
   const choose = (id: AnnotateDrawTool) => {
@@ -312,7 +382,15 @@ export function AnnotateTools({
       ref={paneRef}
       data-testid="annotate-tools"
       onPointerDown={(e) => e.stopPropagation()}
-      style={{ position: 'fixed', left: pos.x, top: pos.y, zIndex: 120, width: 'max-content', maxWidth: 'calc(100vw - 12px)' }}
+      style={{
+        position: 'fixed',
+        left: pos?.x ?? 0,
+        top: pos?.y ?? 0,
+        visibility: pos ? 'visible' : 'hidden',
+        zIndex: 120,
+        width: 'max-content',
+        maxWidth: 'calc(100vw - 12px)',
+      }}
     >
       <FlyoutBar
         groups={groups}

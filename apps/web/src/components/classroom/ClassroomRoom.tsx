@@ -58,7 +58,12 @@ import { LocalPreview } from './LocalPreview';
 import { DrawOverlay, ShareDrawingProvider, useDrawingActions, useShareDrawing } from './ShareDrawing';
 import { TeacherInkOverlay, TeacherInkProvider } from './TeacherInk';
 import { WhiteboardMeetingBar } from './MeetingBar';
-import { MEETING_BAR_PX } from '@/lib/shareChrome';
+import {
+  MEETING_BAR_PX,
+  SHARE_POSITION_NOTICE_KEY,
+  inlineShareDockHint,
+  sharePositionNoticeOpen,
+} from '@/lib/shareChrome';
 import { ZoomPanSurface } from './ZoomPanSurface';
 import { WhiteboardHost, WhiteboardViewer, hasSavedBoard } from './Whiteboard';
 import { useChatThread } from './chatThread';
@@ -2828,6 +2833,21 @@ function RoomInner({
   useMicDuck(isTeacher, localParticipant, () => screenAudioRef.current?.track ?? null, (t) => setHudNotice(t));
   const [maskActive, setMaskActive] = useState(false);
   const [maskFallback, setMaskFallback] = useState<MaskFallback>('');
+  /** One-time Wayland position note. The yellow strip under the pill is not used. */
+  const [positionToast, setPositionToast] = useState(false);
+  useEffect(() => {
+    if (maskFallback !== 'position') {
+      setPositionToast(false);
+      return;
+    }
+    let seen: string | null = null;
+    try {
+      seen = localStorage.getItem(SHARE_POSITION_NOTICE_KEY);
+    } catch {
+      seen = '1';
+    }
+    setPositionToast(sharePositionNoticeOpen(seen));
+  }, [maskFallback]);
   /** Share controls start as the compact pill on every share. */
   const [hudCompact, setHudCompact] = useState(true);
   const { state, refresh } = useRoomState(code, 2000, room);
@@ -4504,6 +4524,7 @@ function RoomInner({
               />
             }
             notice={shareMount ? hudNotice || undefined : undefined}
+            toolbarTitle={maskFallback === 'position' ? MONITOR_POSITION_HINT : undefined}
             {...over}
           />
   );
@@ -4635,6 +4656,26 @@ function RoomInner({
             Allow
           </Button>
           <button type="button" className="text-xs text-slate-400 hover:text-white" onClick={() => setDrawToast(null)} aria-label="Dismiss">
+            ✕
+          </button>
+        </div>
+      )}
+      {isTeacher && positionToast && (
+        <div className="teacher-toast" role="status" data-testid="share-position-toast">
+          <span className="flex-1">{MONITOR_POSITION_HINT}</span>
+          <button
+            type="button"
+            className="text-xs text-slate-400 hover:text-white"
+            aria-label="Dismiss"
+            onClick={() => {
+              try {
+                localStorage.setItem(SHARE_POSITION_NOTICE_KEY, '1');
+              } catch {
+                /* private mode */
+              }
+              setPositionToast(false);
+            }}
+          >
             ✕
           </button>
         </div>
@@ -5042,15 +5083,14 @@ function RoomInner({
           }
           hint={
             shareControlsPlacement(shareSurface) === 'inline' && !maskActive
-              ? maskFallback === 'screens'
-                ? MONITOR_SCREENS_HINT
-                : maskFallback === 'unsafe'
-                  ? MONITOR_UNSAFE_HINT
-                  : maskFallback === 'position'
-                    ? MONITOR_POSITION_HINT
-                    : MONITOR_SHARE_HINT
+              ? inlineShareDockHint(maskFallback, {
+                  share: MONITOR_SHARE_HINT,
+                  screens: MONITOR_SCREENS_HINT,
+                  unsafe: MONITOR_UNSAFE_HINT,
+                })
               : undefined
           }
+          title={maskFallback === 'position' ? MONITOR_POSITION_HINT : undefined}
           action={
             maskFallback === 'screens' ? (
               <button type="button" className="share-inline-btn" onClick={() => void requestScreenDetails()}>
@@ -5196,6 +5236,7 @@ function ShareHudSlot({
   compact,
   popOut,
   hint,
+  title,
   action,
   avoidLeft = 0,
   children,
@@ -5204,6 +5245,7 @@ function ShareHudSlot({
   compact?: boolean;
   popOut?: () => void;
   hint?: string;
+  title?: string;
   action?: ReactNode;
   /** While the whiteboard is up, keep the dock clear of the left tool column. */
   avoidLeft?: number;
@@ -5211,7 +5253,7 @@ function ShareHudSlot({
 }) {
   if (floating) return <>{children}</>;
   return (
-    <InlineShareDock onPopOut={popOut} hint={hint} compact={compact} action={action} avoidLeft={avoidLeft}>
+    <InlineShareDock onPopOut={popOut} hint={hint} title={title} compact={compact} action={action} avoidLeft={avoidLeft}>
       {children}
     </InlineShareDock>
   );

@@ -15,7 +15,17 @@ import { controlUrl, copyParentStyles, mountIn, waitForWindow } from './shareWin
 import { DrawOverlay, useShareDrawing } from './ShareDrawing';
 import { AnnotateTools } from './AnnotateTools';
 import { useTeacherInk } from './TeacherInk';
-import { admitLabel, badgeText, shareToolbarIds, shareToolbarSeparators, type ShareToolbarId } from '@/lib/shareChrome';
+import {
+  BADGE_AMBER,
+  BADGE_TEXT,
+  FOCUS_BADGE_TEXT,
+  FOCUS_RED,
+  admitLabel,
+  badgeText,
+  shareToolbarIds,
+  shareToolbarSeparators,
+  type ShareToolbarId,
+} from '@/lib/shareChrome';
 import { useTracks, VideoTrack, type TrackReference } from '@livekit/components-react';
 import { Track } from 'livekit-client';
 
@@ -132,6 +142,8 @@ export type TeacherShareHudProps = {
   stopLabel?: string;
   /** End class button (whiteboard mode meeting column). */
   onEndClass?: () => void;
+  /** Tooltip on the pill itself (for example why controls stayed in this tab). */
+  toolbarTitle?: string;
 };
 
 type Panel = 'chat' | 'hands' | 'roster' | null;
@@ -293,9 +305,9 @@ font-size:11px;font-weight:650;white-space:nowrap;position:relative;flex:0 0 aut
 .tsh-btn[disabled]{opacity:.4;cursor:default}
 .tsh-sep{width:1px;height:18px;background:var(--line);flex:0 0 auto}
 .tsh-count{position:absolute;top:-4px;right:-4px;min-width:14px;height:14px;padding:0 3px;border-radius:999px;
-background:var(--warn);color:#1a1206;font-size:9px;font-weight:800;display:inline-grid;place-items:center}
+background:${BADGE_AMBER};color:${BADGE_TEXT};font-size:9px;font-weight:800;display:inline-grid;place-items:center}
 .tsh-count-blue{background:var(--accent);color:#04122b}
-.tsh-focus{background:#dc2626;color:#fff;left:-4px;right:auto}
+.tsh-focus{background:${FOCUS_RED};color:${FOCUS_BADGE_TEXT};left:-4px;right:auto}
 .tsh-pen-dot{position:absolute;bottom:-2px;left:-2px;width:8px;height:8px;border-radius:99px;background:#38bdf8;box-shadow:0 0 0 2px #0d1219}
 .tsh-grip{width:12px;cursor:grab;color:#94a3b8;font-size:10px;letter-spacing:-1px;user-select:none;flex:0 0 auto}
 .tsh-panel-head{display:flex;align-items:center;gap:6px;padding:4px 8px;border-bottom:1px solid var(--line)}
@@ -381,6 +393,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     onToggleTeacherCam,
     videosOpen = false,
     onToggleVideos,
+    toolbarTitle,
   } = props;
   useSideWindows();
   const ink = useTeacherInk();
@@ -805,9 +818,18 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
             title={drawAsk ? `Roster: ${drawAsk} asking to draw` : 'Roster'}
           >
             <IconUsers size={14} />
-            {waitingCount > 0 && !rosterShown ? <span className="tsh-count">{badgeText(waitingCount)}</span> : null}
+            {waitingCount > 0 && !rosterShown ? (
+              <span className="tsh-count" data-testid="tsh-people-count" style={{ background: BADGE_AMBER, color: BADGE_TEXT }}>
+                {badgeText(waitingCount)}
+              </span>
+            ) : null}
             {focusAlertCount > 0 ? (
-              <span className="tsh-count tsh-focus" data-testid="tsh-focus-alert" title={`${focusAlertCount} left fullscreen`}>
+              <span
+                className="tsh-count tsh-focus"
+                data-testid="tsh-focus-alert"
+                title={`${focusAlertCount} left fullscreen`}
+                style={{ background: FOCUS_RED, color: FOCUS_BADGE_TEXT, left: -4, right: 'auto' }}
+              >
                 ⛶{badgeText(focusAlertCount)}
               </span>
             ) : null}
@@ -874,7 +896,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
       <div className="tsh-sr" aria-live="polite">
         {waitingLabel}
       </div>
-      <div className="tsh-bar" role="toolbar" aria-label="Share tools" data-testid="share-toolbar">
+      <div className="tsh-bar" role="toolbar" aria-label="Share tools" data-testid="share-toolbar" title={toolbarTitle}>
         {toolbarIds.map((id) => (
           <Fragment key={id}>
             {sepBefore.has(id) ? <span className="tsh-sep" aria-hidden /> : null}
@@ -971,12 +993,15 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
 export function InlineShareDock({
   children,
   hint,
+  title,
   onPopOut,
   action,
   avoidLeft = 0,
 }: {
   children: ReactNode;
   hint?: string;
+  /** Tooltip for the dock when the yellow position notice is not shown. */
+  title?: string;
   compact?: boolean;
   /** Extra header control (e.g. allow multi-monitor floating controls). */
   action?: ReactNode;
@@ -1014,6 +1039,7 @@ export function InlineShareDock({
       style={pos ? { left: pos.x, top: pos.y } : { left: fallback.x, top: fallback.y }}
       role="region"
       aria-label="Share controls (in this tab)"
+      title={title}
       {...handleProps}
     >
       {children}
