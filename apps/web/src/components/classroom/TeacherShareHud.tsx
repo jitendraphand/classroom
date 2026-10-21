@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Avatar } from '@/components/ui/Avatar';
 import { IconCam, IconCamOff, IconChat, IconFilm, IconHand, IconHandDown, IconMic, IconMicOff, IconPen, IconPin, IconScreen, IconUserPlus, IconUsers, IconVideo } from '@/components/ui/Icons';
@@ -13,6 +13,9 @@ import { whiteboardShareDockPos } from '@/lib/floatGeometry';
 import { focusLabel } from '@/lib/focusStatus';
 import { controlUrl, copyParentStyles, mountIn, waitForWindow } from './shareWindowDom';
 import { DrawOverlay, useShareDrawing } from './ShareDrawing';
+import { AnnotateTools } from './AnnotateTools';
+import { useTeacherInk } from './TeacherInk';
+import { admitLabel, badgeText, shareToolbarIds, shareToolbarSeparators, type ShareToolbarId } from '@/lib/shareChrome';
 import { useTracks, VideoTrack, type TrackReference } from '@livekit/components-react';
 import { Track } from 'livekit-client';
 
@@ -34,8 +37,9 @@ import { Track } from 'livekit-client';
  * closed before publishing and the same controls render in the classroom tab
  * (`InlineShareDock`).
  *
- * Both start as a compact pill with badges (chat, hands, waiting) and expand
- * to the full toolbar on click.
+ * Both are one horizontal pill: grip, Live, mic, camera, videos, then chat,
+ * hands, roster, admit, annotate, and Stop. Eco and computer-sound are not
+ * on this bar (no teacher control for them in the browser).
  */
 
 export type RosterEntry = {
@@ -132,9 +136,9 @@ export type TeacherShareHudProps = {
 
 type Panel = 'chat' | 'hands' | 'roster' | null;
 
-/** Compact pill window size (CSS px). Small so it covers little of the screen and of the mask. */
-const COMPACT_W = 210;
-const COMPACT_H = 36;
+/** First size of the controls window. The fit effect then matches the pill. */
+const OPEN_W = 760;
+const OPEN_H = 52;
 
 const POPUP_FEATURES =
   'popup=yes,width=860,height=72,menubar=no,toolbar=no,location=no,status=no,resizable=yes';
@@ -252,8 +256,7 @@ export function beginShareControls(): Promise<ShareControlSurface | null> {
   if (pip) {
     let request: Promise<Window>;
     try {
-      // Opens as the compact pill; expanding resizes it (TeacherShareHud fit effect).
-      request = pip.requestWindow({ width: COMPACT_W, height: COMPACT_H });
+      request = pip.requestWindow({ width: OPEN_W, height: OPEN_H });
     } catch {
       return openPopupSurface();
     }
@@ -284,14 +287,17 @@ height:28px;padding:0 7px;border-radius:8px;border:1px solid transparent;color:v
 font-size:11px;font-weight:650;white-space:nowrap;position:relative;flex:0 0 auto}
 .tsh-btn:hover{background:rgba(255,255,255,.1)}
 .tsh-btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
-.tsh-btn[aria-pressed="true"]{background:rgba(51,133,255,.28);border-color:rgba(51,133,255,.55)}
-.tsh-btn-danger{color:#fecaca}
+.tsh-btn[aria-pressed="true"]{background:#1d4ed8;border-color:#93c5fd}
+.tsh-btn-danger{color:#f87171;background:transparent}
 .tsh-btn-danger:hover{background:rgba(239,68,68,.28);border-color:rgba(239,68,68,.5)}
 .tsh-btn[disabled]{opacity:.4;cursor:default}
 .tsh-sep{width:1px;height:18px;background:var(--line);flex:0 0 auto}
 .tsh-count{position:absolute;top:-4px;right:-4px;min-width:14px;height:14px;padding:0 3px;border-radius:999px;
 background:var(--warn);color:#1a1206;font-size:9px;font-weight:800;display:inline-grid;place-items:center}
 .tsh-count-blue{background:var(--accent);color:#04122b}
+.tsh-focus{background:#dc2626;color:#fff;left:-4px;right:auto}
+.tsh-pen-dot{position:absolute;bottom:-2px;left:-2px;width:8px;height:8px;border-radius:99px;background:#38bdf8;box-shadow:0 0 0 2px #0d1219}
+.tsh-grip{width:12px;cursor:grab;color:#94a3b8;font-size:10px;letter-spacing:-1px;user-select:none;flex:0 0 auto}
 .tsh-panel-head{display:flex;align-items:center;gap:6px;padding:4px 8px;border-bottom:1px solid var(--line)}
 .tsh-panel-title{font-weight:650;font-size:11px;flex:1}
 .tsh-scroll{flex:1 1 auto;min-height:0;overflow:auto;padding:6px 8px}
@@ -304,9 +310,9 @@ background:var(--warn);color:#1a1206;font-size:9px;font-weight:800;display:inlin
 .tsh-hand{display:inline-flex;vertical-align:-2px;margin-right:4px;color:#fcd34d}
 .tsh-pin{display:inline-grid;place-items:center;padding:4px 6px}
 .tsh-pin.is-on{background:#f59e0b;color:#111;border-color:#f59e0b}
-.tsh-icon{display:inline-grid;place-items:center;width:24px;height:24px;padding:0;flex-shrink:0}
+.tsh-icon{display:inline-grid;place-items:center;width:28px;height:28px;padding:0;flex-shrink:0}
 .tsh-icon.is-on{background:#f59e0b;color:#111;border-color:#f59e0b}
-.tsh-icon.is-warn{color:#fcd34d;border-color:rgba(245,158,11,.4)}
+.tsh-icon.is-warn{color:#fcd34d;border-color:#f59e0b;background:transparent}
 .tsh-person.is-raised{background:rgba(245,158,11,.12)}
 .tsh-person .tsh-chip{max-width:84px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0}
 .tsh-chat{height:220px;min-height:160px}
@@ -325,7 +331,7 @@ background:var(--warn);color:#1a1206;font-size:9px;font-weight:800;display:inlin
 .tsh-search{width:100%;box-sizing:border-box;margin:0 0 8px;height:28px;padding:0 8px;border-radius:8px;border:1px solid var(--line);background:rgba(255,255,255,.06);color:var(--text);font:inherit;font-size:12px}
 .tsh-search:focus{outline:none;border-color:rgba(51,133,255,.7)}
 .tsh-inline{width:auto;max-width:calc(100vw - 16px)}
-.tsh-inline .tsh-bar{flex-wrap:wrap;width:auto;min-width:0;position:static}
+.tsh-inline .tsh-bar{flex-wrap:nowrap;width:max-content;min-width:0;position:static}
 .tsh-inline .tsh-panel{width:min(420px,calc(100vw - 16px));max-height:min(280px,45vh)}
 .tsh-inline .tsh-chat{height:min(220px,35vh)}
 .tsh-vertical{display:flex;flex-direction:row-reverse;align-items:stretch;height:100%;width:auto;max-width:none}
@@ -368,8 +374,6 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     onVideoModeChange,
     notice,
     inline = false,
-    compact = false,
-    onCompactChange,
     focusAlertCount = 0,
     sideWindowsAllowed = false,
     sideWindowsNeedTrust = false,
@@ -379,6 +383,8 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     onToggleVideos,
   } = props;
   useSideWindows();
+  const ink = useTeacherInk();
+  const annotateOn = !!ink?.annotating;
   const chatWin = sideWindowsAllowed ? sideWindow('chat') : null;
   const rosterWin = sideWindowsAllowed ? sideWindow('roster') : null;
   const [sideNotice, setSideNotice] = useState('');
@@ -451,10 +457,19 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
       }
       // Just the row of controls (plus the in-toolbar panel only in the
       // fallback, when separate windows are not available): no empty band.
-      const inPanel = !!panel && !compact;
+      // Annotate tools are position:fixed, so they do not grow scrollHeight;
+      // the window is opened tall enough to hold the flyout bar.
+      const inPanel = !!panel || annotateOn;
       const contentW = inPanel ? Math.max(barW, root.scrollWidth) : barW;
       const contentH = inPanel || notice || sideNotice ? root.scrollHeight : barH || root.scrollHeight;
-      const size = toolbarInnerSize({ w: contentW, h: contentH }, { panel: inPanel || !!notice || !!sideNotice });
+      let size = toolbarInnerSize({ w: contentW, h: contentH }, { panel: inPanel || !!notice || !!sideNotice });
+      if (annotateOn) {
+        const verticalTools = ink?.orient === 'vertical';
+        size = {
+          w: Math.max(size.w, verticalTools ? 420 : 720),
+          h: Math.max(size.h, verticalTools ? 520 : 320),
+        };
+      }
       if (bar) bar.style.maxWidth = contentW > 980 ? '978px' : '';
       if (Math.abs(win.innerWidth - size.w) <= 1 && Math.abs(win.innerHeight - size.h) <= 1) return;
       const extraW = win.innerWidth > 0 ? Math.max(0, win.outerWidth - win.innerWidth) : 0;
@@ -478,7 +493,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
       win.removeEventListener('resize', applyZoom);
       win.document.removeEventListener('pointerdown', onPointer, true);
     };
-  }, [hostWindow, panel, videoMode, waitingCount, notice, sideNotice, compact]);
+  }, [hostWindow, panel, videoMode, waitingCount, notice, sideNotice, annotateOn, ink?.orient]);
 
   // Raised hands first (earliest raise first), then by name.
   const students = useMemo(() => sortRoster(admitted.filter((a) => a.role === 'STUDENT')), [admitted]);
@@ -674,60 +689,28 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
           </div>
   );
 
-  const tree = (
-    <div
-      ref={rootRef}
-      className={props.vertical ? 'tsh tsh-inline tsh-vertical' : inline ? 'tsh tsh-inline' : !panel && !notice && !sideNotice ? 'tsh tsh-fill' : 'tsh'}
-      role="region"
-      aria-label="Share controls"
-    >
-      <style>{HUD_CSS}</style>
-      <div className="tsh-sr" aria-live="polite">
-        {waitingLabel}
-      </div>
-      {compact ? (
-        <div className="tsh-bar tsh-pill" role="toolbar" aria-label="Share controls (compact)">
-          <button
-            type="button"
-            className="tsh-btn tsh-pill-main"
-            onClick={() => onCompactChange?.(false)}
-            title="Expand share controls"
-            aria-label={`Expand share controls${chatUnread ? `, ${chatUnread} new messages` : ''}${
-              hands.length ? `, ${hands.length} raised hands` : ''
-            }${waitingCount ? `, ${waitingCount} waiting` : ''}`}
-          >
-            <span className="tsh-dot" aria-hidden />
-            <span className="tsh-live">Live</span>
-            {chatUnread > 0 && (
-              <span className="tsh-badge tsh-badge-blue" title="New chat message">
-                <IconChat size={12} />
-                {chatUnread > 9 ? '9+' : chatUnread}
-              </span>
-            )}
-            {hands.length > 0 && (
-              <span className="tsh-badge" title="Raised hand">
-                <IconHand size={12} />
-                {hands.length}
-              </span>
-            )}
-            {focusAlertCount > 0 && (
-              <span className="tsh-badge tsh-badge-dim" title="Not in fullscreen / switched away">
-                ⛶{focusAlertCount}
-              </span>
-            )}
-            {waitingCount > 0 && (
-              <span className="tsh-badge" title="Waiting to be admitted">
-                <IconUsers size={12} />
-                {waitingCount}
-              </span>
-            )}
-            <span aria-hidden className="tsh-expand">▸</span>
-          </button>
-          {waiting.length > 0 && (
-            <button type="button" className="tsh-btn" onClick={() => onAdmit?.(waiting[0].id)} title={`Admit ${waiting[0].displayName}`}>
-              Admit
-            </button>
-          )}
+  const toolbarIds = shareToolbarIds({
+    video: !!onVideoModeChange,
+    videos: !!onToggleVideos,
+    annotate: true,
+  });
+  const sepBefore = new Set(shareToolbarSeparators(toolbarIds).map((s) => s.before));
+  const drawAsk = students.filter((s) => s.drawRequested && !s.drawing).length;
+  const chatShown = panel === 'chat' || !!chatWin;
+  const rosterShown = panel === 'roster' || !!rosterWin;
+  const admitText = admitLabel(waiting.length, waiting[0]?.displayName);
+  const shareControl = (id: ShareToolbarId): ReactNode => {
+    switch (id) {
+      case 'grip':
+        return (
+          <span className="tsh-grip" title="Drag" aria-hidden>
+            ⋮⋮
+          </span>
+        );
+      case 'live':
+        return <span className="tsh-live">Live</span>;
+      case 'mic':
+        return (
           <button
             type="button"
             className="tsh-btn"
@@ -738,38 +721,9 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
           >
             {teacherMicOn ? <IconMic size={14} /> : <IconMicOff size={14} />}
           </button>
-          <button type="button" className="tsh-btn tsh-btn-danger" onClick={onStopSharing} title="Stop sharing" aria-label="Stop sharing">
-            <IconScreen size={14} />
-          </button>
-        </div>
-      ) : (
-      <div className="tsh-bar" role="toolbar" aria-label="Share tools">
-        {onCompactChange && (
-          <button
-            type="button"
-            className="tsh-btn"
-            onClick={() => {
-              setPanel(null);
-              onCompactChange(true);
-            }}
-            title="Collapse to the small pill"
-            aria-label="Collapse share controls"
-          >
-            ◂
-          </button>
-        )}
-        <span className="tsh-live">Live</span>
-        <button
-          type="button"
-          className="tsh-btn"
-          aria-pressed={!teacherMicOn}
-          onClick={onToggleTeacherMic}
-          aria-label={teacherMicOn ? 'Mute mic' : 'Unmute mic'}
-          title={teacherMicOn ? 'Mute mic' : 'Unmute mic'}
-        >
-          {teacherMicOn ? <IconMic size={14} /> : <IconMicOff size={14} />}
-        </button>
-        {onToggleTeacherCam && (
+        );
+      case 'cam':
+        return onToggleTeacherCam ? (
           <button
             type="button"
             className="tsh-btn"
@@ -780,8 +734,9 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
           >
             {teacherCamOn ? <IconCam size={14} /> : <IconCamOff size={14} />}
           </button>
-        )}
-        {onToggleVideos && (
+        ) : null;
+      case 'videos':
+        return onToggleVideos ? (
           <button
             type="button"
             className="tsh-btn"
@@ -792,8 +747,9 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
           >
             <IconVideo size={14} />
           </button>
-        )}
-        {onVideoModeChange && (
+        ) : null;
+      case 'video':
+        return onVideoModeChange ? (
           <button
             type="button"
             className="tsh-btn"
@@ -809,91 +765,126 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
             <IconFilm size={14} />
             Video
           </button>
-        )}
-        <span className="tsh-sep" aria-hidden />
-        <button
-          type="button"
-          className="tsh-btn"
-          aria-pressed={panel === 'chat' || !!chatWin}
-          onClick={() => toggleSide('chat')}
-          aria-label={chatWin ? 'Close chat window' : 'Chat'}
-          title={chatWin ? 'Close chat window' : 'Chat'}
-        >
-          <IconChat size={14} />
-          {chatUnread > 0 && panel !== 'chat' && !chatWin && (
-            <span className="tsh-count">{chatUnread > 9 ? '9+' : chatUnread}</span>
-          )}
-        </button>
-        <button
-          type="button"
-          className="tsh-btn"
-          aria-pressed={panel === 'hands'}
-          onClick={() => (sideWindowsAllowed && !inline ? toggleSide('roster') : togglePanel('hands'))}
-          aria-label="Raised hands"
-          title="Raised hands (listed first in the roster)"
-        >
-          <IconHand size={14} />
-          {hands.length > 0 && panel !== 'hands' && <span className="tsh-count">{hands.length}</span>}
-        </button>
-        <button
-          type="button"
-          className="tsh-btn"
-          aria-pressed={panel === 'roster' || !!rosterWin}
-          onClick={() => toggleSide('roster')}
-          aria-label={rosterWin ? 'Close roster window' : 'Roster'}
-          title={rosterWin ? 'Close roster window' : 'Roster'}
-        >
-          <IconUsers size={14} />
-          {waitingCount > 0 && panel !== 'roster' ? (
-            <span className="tsh-count">{waitingCount > 9 ? '9+' : waitingCount}</span>
-          ) : students.length > 0 && panel !== 'roster' && !rosterWin ? (
-            <span className="tsh-count tsh-count-blue">{students.length}</span>
-          ) : null}
-        </button>
-        {/* Always present (fixed width): the toolbar window cannot grow
-            without a click, so nothing appears or disappears on its own. */}
-        <button
-          type="button"
-          className={waiting.length > 0 ? 'tsh-btn tsh-icon is-warn' : 'tsh-btn tsh-icon'}
-          disabled={waiting.length === 0}
-          onClick={() => (waiting.length > 1 ? onAdmitAll?.() : waiting[0] && onAdmit?.(waiting[0].id))}
-          aria-label={
-            waiting.length > 1
-              ? `Admit all ${waiting.length} waiting`
-              : waiting[0]
-                ? `Admit ${waiting[0].displayName}`
-                : 'Nobody waiting'
-          }
-          title={
-            waiting.length > 1
-              ? `Admit all ${waiting.length} waiting`
-              : waiting[0]
-                ? `Admit ${waiting[0].displayName}`
-                : 'Nobody waiting'
-          }
-        >
-          <IconUserPlus size={14} />
-        </button>
-        <span className="tsh-sep" aria-hidden />
-        {props.vertical && (
-          <button type="button" className="tsh-btn" onClick={() => onMuteAll(true)} title="Mute all students" aria-label="Mute all students">
-            <IconMicOff size={14} />
+        ) : null;
+      case 'chat':
+        return (
+          <button
+            type="button"
+            className="tsh-btn"
+            aria-pressed={chatShown}
+            onClick={() => toggleSide('chat')}
+            aria-label={chatShown ? 'Close chat' : 'Open chat'}
+            title={chatShown ? 'Close chat' : 'Open chat'}
+          >
+            <IconChat size={14} />
+            {chatUnread > 0 && !chatShown ? <span className="tsh-count">{badgeText(chatUnread)}</span> : null}
           </button>
-        )}
-        <button type="button" className="tsh-btn tsh-btn-danger" data-testid="hud-stop" onClick={onStopSharing} title={props.stopLabel ?? 'Stop sharing'} aria-label={props.stopLabel ?? 'Stop sharing'}>
-          <IconScreen size={14} />
-          {props.vertical ? null : 'Stop'}
-        </button>
-        {props.onEndClass && (
-          <button type="button" className="tsh-btn tsh-btn-danger" onClick={props.onEndClass} title="End class for everyone" aria-label="End class">
-            End
+        );
+      case 'hands':
+        return (
+          <button
+            type="button"
+            className="tsh-btn"
+            aria-pressed={panel === 'hands'}
+            onClick={() => (sideWindowsAllowed && !inline ? toggleSide('roster') : togglePanel('hands'))}
+            aria-label="Raised hands"
+            title="Raised hands (listed first in the roster)"
+          >
+            <IconHand size={14} />
+            {hands.length > 0 && panel !== 'hands' ? <span className="tsh-count">{badgeText(hands.length)}</span> : null}
           </button>
-        )}
-      </div>
-      )}
-      {(notice || sideNotice) && !compact ? <div className="tsh-tip">{sideNotice || notice}</div> : null}
+        );
+      case 'people':
+        return (
+          <button
+            type="button"
+            className="tsh-btn"
+            aria-pressed={rosterShown}
+            onClick={() => toggleSide('roster')}
+            aria-label={rosterShown ? 'Close roster' : 'Open roster'}
+            title={drawAsk ? `Roster: ${drawAsk} asking to draw` : 'Roster'}
+          >
+            <IconUsers size={14} />
+            {waitingCount > 0 && !rosterShown ? <span className="tsh-count">{badgeText(waitingCount)}</span> : null}
+            {focusAlertCount > 0 ? (
+              <span className="tsh-count tsh-focus" data-testid="tsh-focus-alert" title={`${focusAlertCount} left fullscreen`}>
+                ⛶{badgeText(focusAlertCount)}
+              </span>
+            ) : null}
+            {drawAsk > 0 ? <span className="tsh-pen-dot" aria-hidden /> : null}
+          </button>
+        );
+      case 'admit':
+        return (
+          <button
+            type="button"
+            className={waiting.length > 0 ? 'tsh-btn tsh-icon is-warn' : 'tsh-btn tsh-icon'}
+            disabled={waiting.length === 0}
+            onClick={() => (waiting.length > 1 ? onAdmitAll?.() : waiting[0] && onAdmit?.(waiting[0].id))}
+            aria-label={admitText}
+            title={admitText}
+          >
+            <IconUserPlus size={14} />
+          </button>
+        );
+      case 'annotate':
+        return (
+          <button
+            type="button"
+            className="tsh-btn"
+            aria-pressed={annotateOn}
+            onClick={() => ink?.setAnnotating(!annotateOn)}
+            aria-label={annotateOn ? 'Stop annotating' : 'Annotate'}
+            title={
+              annotateOn
+                ? 'Stop annotating (removes your marks)'
+                : 'Annotate the shared picture. Students see the marks.'
+            }
+          >
+            <IconPen size={14} />
+          </button>
+        );
+      case 'stop':
+        return (
+          <button
+            type="button"
+            className="tsh-btn tsh-btn-danger"
+            data-testid="hud-stop"
+            onClick={onStopSharing}
+            title={props.stopLabel ?? 'Stop sharing'}
+            aria-label={props.stopLabel ?? 'Stop sharing screen'}
+          >
+            <IconScreen size={14} />
+            Stop
+          </button>
+        );
+      default:
+        return null;
+    }
+  };
 
-      {!compact && panel === 'chat' && (
+  const tree = (
+    <div
+      ref={rootRef}
+      className={props.vertical ? 'tsh tsh-inline tsh-vertical' : inline ? 'tsh tsh-inline' : !panel && !notice && !sideNotice && !annotateOn ? 'tsh tsh-fill' : 'tsh'}
+      role="region"
+      aria-label="Share controls"
+    >
+      <style>{HUD_CSS}</style>
+      <div className="tsh-sr" aria-live="polite">
+        {waitingLabel}
+      </div>
+      <div className="tsh-bar" role="toolbar" aria-label="Share tools" data-testid="share-toolbar">
+        {toolbarIds.map((id) => (
+          <Fragment key={id}>
+            {sepBefore.has(id) ? <span className="tsh-sep" aria-hidden /> : null}
+            {shareControl(id)}
+          </Fragment>
+        ))}
+      </div>
+      {notice || sideNotice ? <div className="tsh-tip">{sideNotice || notice}</div> : null}
+
+      {panel === 'chat' && (
         <div className="tsh-panel">
           <div className="tsh-panel-head">
             <span className="tsh-panel-title">Chat</span>
@@ -905,7 +896,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
         </div>
       )}
 
-      {!compact && panel === 'hands' && (
+      {panel === 'hands' && (
         <div className="tsh-panel">
           <div className="tsh-panel-head">
             <span className="tsh-panel-title">Raised hands</span>
@@ -931,7 +922,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
         </div>
       )}
 
-      {!compact && panel === 'roster' && (
+      {panel === 'roster' && (
         <div className="tsh-panel">
           <div className="tsh-panel-head">
             <span className="tsh-panel-title">Roster</span>
@@ -944,6 +935,13 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
         </div>
       )}
 
+      <AnnotateTools
+        requests={students.filter((s) => s.drawRequested && !s.drawing).map((s) => ({ id: s.id, displayName: s.displayName }))}
+        drawers={students.filter((s) => !!s.drawing).map((s) => ({ id: s.id, displayName: s.displayName }))}
+        onAllow={onAllowDraw}
+        onDeny={onRevokeDraw}
+        onClearStudents={onClearDrawing}
+      />
       {chatWin && (
         <SideWindowPortal win={chatWin} title="Class chat">
           <div style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: 8, boxSizing: 'border-box' }}>{chat}</div>
@@ -974,7 +972,6 @@ export function InlineShareDock({
   children,
   hint,
   onPopOut,
-  compact = false,
   action,
   avoidLeft = 0,
 }: {
@@ -1017,18 +1014,19 @@ export function InlineShareDock({
       style={pos ? { left: pos.x, top: pos.y } : { left: fallback.x, top: fallback.y }}
       role="region"
       aria-label="Share controls (in this tab)"
+      {...handleProps}
     >
-      <div className="share-inline-head" {...handleProps} title="Drag to move">
-        <span aria-hidden className="text-slate-500">⠿</span>
-        <span className="flex-1 truncate">{compact ? '' : 'Share controls'}</span>
-        {action}
-        {onPopOut && (
-          <button type="button" className="share-inline-btn" onClick={onPopOut}>
-            Pop out
-          </button>
-        )}
-      </div>
       {children}
+      {(action || onPopOut) && (
+        <div className="share-inline-actions" data-no-drag>
+          {action}
+          {onPopOut && (
+            <button type="button" className="share-inline-btn" onClick={onPopOut}>
+              Pop out
+            </button>
+          )}
+        </div>
+      )}
       {hint ? <p className="share-inline-hint">{hint}</p> : null}
     </div>
   );

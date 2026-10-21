@@ -56,6 +56,9 @@ import { shortName } from '@/lib/displayNames';
 import { Controls } from './Controls';
 import { LocalPreview } from './LocalPreview';
 import { DrawOverlay, ShareDrawingProvider, useDrawingActions, useShareDrawing } from './ShareDrawing';
+import { TeacherInkOverlay, TeacherInkProvider } from './TeacherInk';
+import { WhiteboardMeetingBar } from './MeetingBar';
+import { MEETING_BAR_PX } from '@/lib/shareChrome';
 import { ZoomPanSurface } from './ZoomPanSurface';
 import { WhiteboardHost, WhiteboardViewer, hasSavedBoard } from './Whiteboard';
 import { useChatThread } from './chatThread';
@@ -520,6 +523,7 @@ function TeacherShareTile({ trackRef }: { trackRef: ReturnType<typeof useTracks>
         )}
         {/* What students draw, over the teacher's in-page preview (never on the real desktop). */}
         <DrawOverlay interactive={false} />
+        <TeacherInkOverlay interactive={t.participant.isLocal} />
       </div>
       <div className="pointer-events-none absolute bottom-2 left-2 z-20 flex items-center gap-2 rounded-lg bg-black/65 px-2.5 py-1 text-xs backdrop-blur">
         <Avatar
@@ -572,6 +576,7 @@ export function TeacherScreenStage({ teacherIdentities, zoomable = false, drawin
                 )}
                 {/* Students' drawing (and the allowed student's drawing surface). */}
                 <DrawOverlay />
+                <TeacherInkOverlay interactive={false} />
               </div>
             );
             // Students: local pinch / wheel zoom (one finger draws while drawing is allowed).
@@ -772,10 +777,12 @@ function peerFloatLayout(
 
 /** Board rectangle the compact whiteboard video must stay inside (below the header, above the footer). */
 function whiteboardVideoBoard(vw: number, vh: number): FloatRect {
-  const insets = typeof document === 'undefined' ? { top: 0, bottom: 0 } : floatInsets();
+  const insets = typeof document === 'undefined' ? { top: 0, right: 0, bottom: 0, left: 0 } : floatInsets();
   const top = insets.top;
-  const bottom = Math.max(insets.bottom, 72);
-  return { x: 0, y: top, w: Math.max(200, vw), h: Math.max(160, vh - top - bottom) };
+  // The footer is hidden while the board is open. Keep the panel left of the meeting bar.
+  const bottom = Math.max(insets.bottom, 8);
+  const right = Math.max(insets.right, MEETING_BAR_PX);
+  return { x: 0, y: top, w: Math.max(200, vw - right), h: Math.max(160, vh - top - bottom) };
 }
 
 
@@ -1012,12 +1019,15 @@ function TeacherPeersFloat({
   portalWindow = null,
   onShownChange,
   embedHost = null,
+  videosHidden = false,
   droppedStudents = EMPTY_DROPPED,
   liveRoster = null,
   spotlightIdentity = null,
 }: {
   /** Panel visibility to the teacher (drives student cameras on demand). */
   onShownChange?: (shown: boolean) => void;
+  /** Hide the in-tab panel (meeting bar / share pill "student videos" toggle). */
+  videosHidden?: boolean;
   /**
    * Whiteboard side column. When set, the pane is portaled here instead of
    * floating. A separate videos window (portalWindow) still wins.
@@ -1151,7 +1161,7 @@ function TeacherPeersFloat({
     doc.addEventListener('visibilitychange', on);
     return () => doc.removeEventListener('visibilitychange', on);
   }, [portal, portalWindow]);
-  const shown = panelShown({ minimized: isMin, portalHidden });
+  const shown = !videosHidden && panelShown({ minimized: isMin, portalHidden });
   const onShownRef = useRef(onShownChange);
   onShownRef.current = onShownChange;
   useEffect(() => {
@@ -1206,7 +1216,7 @@ function TeacherPeersFloat({
       const base = floatInsets();
       return {
         top: base.top,
-        right: base.right,
+        right: Math.max(base.right, whiteboard ? MEETING_BAR_PX : 0),
         bottom: base.bottom,
         left: Math.max(base.left, whiteboard ? WB_TOOL_CLEAR_PX : 0),
       };
@@ -1249,7 +1259,7 @@ function TeacherPeersFloat({
     // Dragging the docked panel pulls it out to float (the hook starts the
     // drag from where it is drawn, so it does not jump).
     onDragStart: () => setFloating(true),
-    extraInsets: whiteboard ? () => ({ left: WB_TOOL_CLEAR_PX }) : undefined,
+    extraInsets: whiteboard ? () => ({ left: WB_TOOL_CLEAR_PX, right: MEETING_BAR_PX }) : undefined,
     insetKey: whiteboard ? 'wb' : 'dock',
   });
   const dock_ = useCallback(() => setFloating(false), []);
@@ -1666,6 +1676,7 @@ function TeacherPeersFloat({
       ro?.disconnect();
     };
   }, [portal, portalWindow, paneEl, winGrid.paneW, winGrid.paneH, winCount]);
+  if (videosHidden && !portal) return null;
   const L = portal && !clampedManual ? winGrid : view;
   const shownCells = portal ? cells.slice(0, winCount) : cells;
 
@@ -1737,20 +1748,20 @@ function TeacherPeersFloat({
         }}
         title={docked ? 'Drag to float this panel' : 'Drag to move · double-click to dock'}
       >
-        <span className="text-2xs font-semibold text-slate-200">
-          <span aria-hidden className="text-slate-500">⠿</span>
-          {isMin && <span className="ml-1 text-slate-400">{peerIds.length + 1} videos</span>}
+        <span className="peers-float-grip" aria-hidden>
+          ⋮⋮
         </span>
-        <div className="flex items-center gap-1" data-no-drag>
-          {dock && !portal && (
+        <div className="flex min-w-0 flex-1 items-center gap-1" data-no-drag>
+          {!portal && (
             <button
               type="button"
-              className="rounded px-1.5 py-0.5 text-[10px] font-bold text-slate-300 hover:bg-white/10"
-              onClick={floating ? dock_ : undock}
-              aria-label={floating ? 'Dock class videos beside the stage' : 'Float class videos'}
-              title={floating ? 'Dock beside the stage' : 'Float (drag anywhere)'}
+              className="peers-float-slot"
+              data-testid="videos-min"
+              onClick={() => (sharingDock ? setShareMinimized((v) => !v) : setMinimized((v) => !v))}
+              aria-label={isMin ? 'Expand class videos' : 'Minimize class videos'}
+              title={isMin ? 'Show student videos' : 'Minimise student videos'}
             >
-              {floating ? 'Dock' : 'Float'}
+              {isMin ? `▢ ${peerIds.length + 1}` : '—'}
             </button>
           )}
           {!isMin &&
@@ -1758,12 +1769,9 @@ function TeacherPeersFloat({
               <button
                 key={n}
                 type="button"
-                className={cn(
-                  'rounded px-1.5 py-0.5 text-[10px] font-bold transition',
-                  activeSlots === n
-                    ? 'bg-brand-600 text-white'
-                    : 'bg-white/10 text-slate-300 hover:bg-white/20'
-                )}
+                data-testid={`videos-layout-${n}`}
+                className={cn('peers-float-slot', activeSlots === n && 'is-on')}
+                aria-pressed={activeSlots === n}
                 onClick={() => {
                   if (whiteboard) setWbSlots(n);
                   else setSlotCount(n);
@@ -1779,16 +1787,16 @@ function TeacherPeersFloat({
                 {n}
               </button>
             ))}
-          {!portal && (
-          <button
-            type="button"
-            className="rounded px-1.5 py-0.5 text-[10px] font-bold text-slate-300 hover:bg-white/10"
-            onClick={() => (sharingDock ? setShareMinimized((v) => !v) : setMinimized((v) => !v))}
-            aria-label={isMin ? 'Expand class videos' : 'Minimize class videos'}
-            title={isMin ? 'Expand' : 'Minimize'}
-          >
-            {isMin ? '▢' : '—'}
-          </button>
+          {dock && !portal && (
+            <button
+              type="button"
+              className="peers-float-slot"
+              onClick={floating ? dock_ : undock}
+              aria-label={floating ? 'Dock class videos beside the stage' : 'Float class videos'}
+              title={floating ? 'Dock beside the stage' : 'Float (drag anywhere)'}
+            >
+              {floating ? 'Dock' : 'Float'}
+            </button>
           )}
         </div>
       </div>
@@ -3786,6 +3794,11 @@ function RoomInner({
 
   // Whiteboard (teacher): exclusive with the screen share.
   const [wbOpen, setWbOpen] = useState(false);
+  /** Student videos stay up when the board opens. The meeting bar can hide them. */
+  const [wbVideosOn, setWbVideosOn] = useState(true);
+  const [wbAllMuted, setWbAllMuted] = useState(false);
+  /** In-tab class panel while sharing without a separate videos window. */
+  const [shareVideosOn, setShareVideosOn] = useState(true);
   // Fresh teacher session: reopen a board this tab still has, or clear a stale flag.
   const wbChecked = useRef(false);
   useEffect(() => {
@@ -4245,7 +4258,12 @@ function RoomInner({
       canDraw={!isTeacher && myDrawState === 'drawing' && !!state?.me?.canDraw}
       desktopInk={!!state?.desktopInk}
     >
-      {node}
+      <TeacherInkProvider
+        active={isTeacher ? screenOn : effectiveStage === 'screen' && !state?.whiteboard}
+        publish={isTeacher}
+      >
+        {node}
+      </TeacherInkProvider>
     </ShareDrawingProvider>
   );
 
@@ -4456,8 +4474,11 @@ function RoomInner({
             onToggleTeacherCam={() => setCamOn((v) => !v)}
             sideWindowsAllowed={sideWindowsAllowed}
             sideWindowsNeedTrust={maskActive}
-            videosOpen={!!videosWin}
-            onToggleVideos={sideWindowsAllowed ? toggleVideosWindow : undefined}
+            videosOpen={sideWindowsAllowed ? !!videosWin : shareVideosOn}
+            onToggleVideos={() => {
+              if (sideWindowsAllowed) toggleVideosWindow();
+              else setShareVideosOn((v) => !v);
+            }}
             onStopSharing={() => void toggleScreen()}
             onMuteStudent={(id, muted) => void muteStudent(id, muted)}
             onMuteAll={(muted) => void muteAllStudents(muted)}
@@ -4991,6 +5012,7 @@ function RoomInner({
         // keeps full width instead of docking videos in a right-hand column.
         dock={wbOpen ? null : dockArea}
         minLeft={wbOpen ? WB_TOOL_CLEAR_PX : 0}
+        videosHidden={(wbOpen && !wbVideosOn) || (screenOn && !wbOpen && !sideWindowsAllowed && !shareVideosOn)}
         whiteboard={wbOpen}
         sharing={shareLayout}
         onDockSpace={onDockSpace}
@@ -5007,18 +5029,19 @@ function RoomInner({
 
       {/* Share controls: in the floating window for window/tab captures; in
           this tab (draggable dock) for entire-screen captures or when no
-          window could be opened. Never both. */}
-      {isTeacher && (screenOn || wbOpen) && (
+          window could be opened. Never both. Hidden while the whiteboard
+          meeting bar is up. */}
+      {isTeacher && screenOn && !wbOpen && (
         <ShareHudSlot
-          floating={!!shareMount && !wbOpen}
+          floating={!!shareMount}
           compact={hudCompact}
           popOut={
-            wbOpen || (shareControlsPlacement(shareSurface) === 'inline' && !maskActive)
+            shareControlsPlacement(shareSurface) === 'inline' && !maskActive
               ? undefined
               : () => reopenShareControls()
           }
           hint={
-            !wbOpen && shareControlsPlacement(shareSurface) === 'inline' && !maskActive
+            shareControlsPlacement(shareSurface) === 'inline' && !maskActive
               ? maskFallback === 'screens'
                 ? MONITOR_SCREENS_HINT
                 : maskFallback === 'unsafe'
@@ -5029,36 +5052,61 @@ function RoomInner({
               : undefined
           }
           action={
-            !wbOpen && maskFallback === 'screens' ? (
+            maskFallback === 'screens' ? (
               <button type="button" className="share-inline-btn" onClick={() => void requestScreenDetails()}>
                 Allow
               </button>
             ) : undefined
           }
-          avoidLeft={wbOpen ? WB_TOOL_CLEAR_PX : 0}
+          avoidLeft={0}
         >
-          {shareHudEl(
-            wbOpen
-              ? {
-                  host: null,
-                  hostWindow: null,
-                  inline: true,
-                  compact: false,
-                  onCompactChange: undefined,
-                  stopLabel: 'Stop whiteboard',
-                  onStopSharing: () => wbStopRef.current?.(),
-                  onEndClass: endClass,
-                  sideWindowsAllowed: false,
-                  onToggleVideos: undefined,
-                  drawPreview: 'strokes',
-                  notice: hudNotice || undefined,
-                }
-              : {}
-          )}
+          {shareHudEl({})}
         </ShareHudSlot>
       )}
 
-      {/* Bottom dock — never covers content */}
+      {isTeacher && wbOpen && (
+        <WhiteboardMeetingBar
+          micOn={micOn && !effectiveMuted}
+          onToggleMic={() => setMicOn((v) => !v)}
+          camOn={camOn}
+          onToggleCam={() => setCamOn((v) => !v)}
+          chatUnread={chatUnread}
+          chatOpen={chatOpen}
+          onToggleChat={() => setChatOpen((v) => !v)}
+          hands={raisedHands.length}
+          focusAlerts={focusAlertCount}
+          rosterOpen={rosterOpen}
+          onToggleRoster={() => setRosterOpen((v) => !v)}
+          waiting={(state?.waiting ?? []).map((w) => ({ id: w.id, displayName: rosterLabel(w) }))}
+          onAdmit={(id) => void admitStudents([id])}
+          onAdmitAll={() => void admitStudents(undefined, true)}
+          requests={(state?.admitted ?? [])
+            .filter((p) => p.role === 'STUDENT' && p.drawRequested && !p.drawing && !isRosterDropped(p.livekitIdentity, droppedStudents, Date.now()))
+            .map((p) => ({ id: p.id, displayName: rosterLabel(p) }))}
+          drawers={(state?.admitted ?? [])
+            .filter((p) => p.role === 'STUDENT' && p.drawing && !isRosterDropped(p.livekitIdentity, droppedStudents, Date.now()))
+            .map((p) => ({ id: p.id, displayName: rosterLabel(p) }))}
+          onAllowDraw={(id) => void allowDrawing(id)}
+          onRevokeDraw={(id) => void revokeDrawing(id)}
+          allMuted={wbAllMuted}
+          onToggleMuteAll={() => {
+            setWbAllMuted((v) => {
+              void muteAllStudents(!v);
+              return !v;
+            });
+          }}
+          videosOn={wbVideosOn}
+          onToggleVideos={() => setWbVideosOn((v) => !v)}
+          onStopWhiteboard={() => {
+            if (wbStopRef.current) wbStopRef.current();
+            else closeWhiteboard();
+          }}
+          onEndClass={() => void endClass()}
+        />
+      )}
+
+      {/* Bottom dock — hidden while the whiteboard meeting bar owns these actions. */}
+      {!wbOpen && (
       <footer data-float-bound="bottom" data-testid="teacher-dock" className="relative z-[80] shrink-0 border-t border-white/[0.06] bg-surface-1/90 px-3 py-2.5 backdrop-blur-xl sm:px-4">
         <Controls
           {...controlsProps}
@@ -5078,6 +5126,7 @@ function RoomInner({
           handsCount={raisedHands.length}
         />
       </footer>
+      )}
     </div>
   );
 }

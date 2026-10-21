@@ -374,7 +374,31 @@ body {
   /* Docked in the stage corner by default; dragging the header floats it,
      double-click the header (or the Dock button) docks it again. */
   .peers-float-header {
-    @apply flex items-center justify-between gap-2 border-b border-white/10 bg-black/40 px-2 py-1.5;
+    @apply flex items-center gap-1 border-b border-white/10 bg-black/40 px-1.5 py-1;
+  }
+  .peers-float-grip {
+    width: 14px;
+    flex: none;
+    color: #94a3b8;
+    font-size: 11px;
+    letter-spacing: -1px;
+    cursor: grab;
+    user-select: none;
+  }
+  .peers-float-slot {
+    height: 26px;
+    min-width: 26px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: rgba(30, 41, 59, 0.8);
+    color: #e2e8f0;
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .peers-float-slot.is-on {
+    background: #1d4ed8;
+    border-color: #93c5fd;
+    color: #fff;
   }
   .peers-float-grid {
     @apply grid gap-1.5 p-2;
@@ -620,13 +644,20 @@ body {
 .share-inline-dock {
   position: fixed;
   z-index: 55;
-  max-width: min(420px, calc(100vw - 16px));
+  width: max-content;
+  max-width: min(960px, calc(100vw - 16px));
   max-height: min(70vh, calc(100dvh - 8rem));
   overflow: auto;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.15);
   background: #0d1219;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.share-inline-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 2px 6px 4px;
 }
 .share-inline-head {
   display: flex;
@@ -735,28 +766,31 @@ body {
   padding-right: 2px;
 }
 .draw-color {
-  width: 26px;
-  height: 26px;
-  border-radius: 999px;
-  border: 2px solid rgba(255, 255, 255, 0.35);
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.4);
 }
 .draw-color.is-on {
-  border-color: #fff;
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35);
+  border: 3px solid #fff;
+  box-shadow: none;
 }
 .draw-tool {
   display: inline-flex;
-  width: 30px;
-  height: 30px;
+  width: 40px;
+  height: 40px;
   align-items: center;
   justify-content: center;
-  border-radius: 999px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
   color: #e2e8f0;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.06);
 }
 .draw-tool.is-on {
-  background: #f8fafc;
-  color: #0f172a;
+  background: #1d4ed8;
+  color: #fff;
+  border-color: #93c5fd;
 }
 .draw-tool:disabled {
   opacity: 0.35;

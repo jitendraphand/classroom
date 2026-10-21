@@ -423,7 +423,7 @@ function DrawSurface({ w, h }: { w: number; h: number }) {
       />
       <div className="draw-toolbar" role="toolbar" aria-label="Drawing tools">
         <span className="draw-toolbar-label">
-          <IconPen size={14} /> {Math.floor(left / 60)}:{String(left % 60).padStart(2, '0')}
+          <IconPen size={18} /> {Math.floor(left / 60)}:{String(left % 60).padStart(2, '0')}
         </span>
         {DRAW_COLOR_NAMES.map((c) => (
           <button
@@ -446,7 +446,7 @@ function DrawSurface({ w, h }: { w: number; h: number }) {
           aria-pressed={tool === 'eraser'}
           onClick={() => setTool((t) => (t === 'eraser' ? 'pen' : 'eraser'))}
         >
-          <IconEraser size={16} />
+          <IconEraser size={18} />
         </button>
         <button
           type="button"
@@ -455,7 +455,7 @@ function DrawSurface({ w, h }: { w: number; h: number }) {
           disabled={!lastStrokeOf(d.strokes, d.myIdentity)}
           onClick={() => erase(lastStrokeOf(strokesRef.current, d.myIdentity))}
         >
-          <IconUndo size={16} />
+          <IconUndo size={18} />
         </button>
         <button type="button" className="draw-done" onClick={() => void d.post({ action: 'release' })}>
           Done

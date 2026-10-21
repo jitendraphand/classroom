@@ -89,9 +89,17 @@ test('web teacher mic uses explicit echo cancellation / NS / AGC; share audio go
   assert.doesNotMatch(admin, /RoomAudioRenderer/, 'admin previews never play audio');
 });
 
-test('whiteboard mode: share HUD can allow and deny draw requests; Stop whiteboard is wired', () => {
+test('whiteboard mode: meeting bar stops the board; roster chips can allow and deny drawing', () => {
   const room = src('components/classroom/ClassroomRoom.tsx');
-  assert.match(room, /stopLabel: 'Stop whiteboard'/);
+  assert.match(room, /WhiteboardMeetingBar/);
+  assert.match(room, /onStopWhiteboard=/);
+  assert.match(room, /isTeacher && screenOn && !wbOpen/);
+  assert.match(room, /!wbOpen && \(/);
+  const bar = src('components/classroom/MeetingBar.tsx');
+  assert.match(bar, /aria-label="Stop whiteboard sharing"/);
+  assert.match(bar, /aria-label="End class"/);
+  assert.match(bar, /wbm-draw-allow/);
+  assert.match(bar, /wbm-draw-deny/);
   const hud = src('components/classroom/TeacherShareHud.tsx');
   assert.match(hud, /hud-draw-allow/);
   assert.match(hud, /hud-draw-deny/);

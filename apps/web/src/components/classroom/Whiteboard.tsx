@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useRoomContext } from '@livekit/components-react';
 import { ConnectionState, RoomEvent, type RemoteParticipant } from 'livekit-client';
+import { MEETING_BAR_PX } from '@/lib/shareChrome';
 import { WhiteboardBoard } from '@/lib/whiteboard/WhiteboardBoard';
 import { SNAP_STORE_MS, WhiteboardSession, b64ToPackets, opsPackets, packetsToB64 } from '@/lib/whiteboard/session';
 import { WB_TOPIC, cleanDoc, isOwnRelayEcho, studentOpAllowed, type Op, type Packet } from '@/lib/whiteboard/model';
@@ -176,10 +177,10 @@ export function WhiteboardHost({
   }, [code, onClose]);
 
   if (stopRef) stopRef.current = stop;
-  // Full-width board; class videos float above (ClassroomRoom) like share mode.
-  // Bottom gap leaves the teacher footer (Stop whiteboard, End class) clickable.
+  // Full-height board. The meeting bar owns the right 54px (Stop, End, mic).
+  // The teacher footer is hidden while this is open.
   return (
-    <div className="fixed inset-x-0 top-0 z-40 flex bg-[#0b0f14]" style={{ bottom: '4.5rem' }} data-testid="wb-host">
+    <div className="fixed bottom-0 left-0 top-0 z-40 flex bg-[#0b0f14]" style={{ right: MEETING_BAR_PX }} data-testid="wb-host">
       <div className="relative min-w-0 flex-1">
         <WhiteboardBoard session={session} mode="edit" identity={identity} onSend={(ops) => void publish(opsPackets(ops))} onClose={stop} hideStop />
       </div>
