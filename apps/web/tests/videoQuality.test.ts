@@ -29,10 +29,10 @@ test('student camera: small, ~15 fps, low bitrate, single layer', () => {
   assert.equal(STUDENT_CAMERA.simulcast, false);
 });
 
-test('screen share: slides ≤8 fps, 1080p top, 720p floor layer', () => {
+test('screen share: 24 fps ideal, max 30, 1080p top, 720p floor layer', () => {
   assert.equal(SCREEN_SHARE.capture.height.ideal, 1080);
-  assert.equal(SCREEN_SHARE.capture.frameRate.max, 8);
-  assert.equal(SCREEN_SHARE.encoding.maxFramerate, 8);
+  assert.equal(SCREEN_SHARE.capture.frameRate.max, 30);
+  assert.equal(SCREEN_SHARE.encoding.maxFramerate, 30);
   assert.equal(SCREEN_SHARE.layers.length, 1);
   assert.ok(Math.min(SCREEN_SHARE.layers[0].width, SCREEN_SHARE.layers[0].height) >= 720);
 });

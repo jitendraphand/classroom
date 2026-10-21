@@ -12,6 +12,9 @@ import { manualStudentJoinAllowed } from '@/lib/schoolConfig';
 import { decodeFocus } from '@/lib/focusStatus';
 import { currentHolders, drawRequests } from '@/lib/drawServer';
 import { goneStudentIdentities } from '@/lib/studentPresence';
+import { getSchoolSettings } from '@/lib/schoolSettings';
+import { classCapacity } from '@/lib/capacity';
+import { readMicBook, micQueueView } from '@/lib/micBook';
 
 export const dynamic = 'force-dynamic';
 
@@ -106,6 +109,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     const raisedHands = (await redis.smembers(keys.hands(code))).map(String);
 
     if (me?.status !== 'ADMITTED') {
+      const settings = await getSchoolSettings();
+      const cap = classCapacity(settings.maxStudentsPerClass);
+      const admittedCount = room.participants.filter((p) => p.role === 'STUDENT' && p.status === 'ADMITTED').length;
       return jsonOk({
         code: room.code,
         name: room.name,
@@ -134,6 +140,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
         visibleCount: 0,
         raisedHands: [],
         stageMode,
+        classFull: cap != null && admittedCount >= cap,
       });
     }
   }
@@ -176,17 +183,41 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
 
   // Roster details for the teacher: roll number, grade-division, late flag and
   // whether the student belongs to this class's timetabled audience.
-  let classSession: { id: string; campus: string; grade: string; divisions: string[]; allDivisions: boolean; subject: string; adHoc: boolean } | null = null;
+  let classSession: {
+    id: string;
+    campus: string;
+    grade: string;
+    divisions: string[];
+    allDivisions: boolean;
+    subject: string;
+    adHoc: boolean;
+    academicYear: string;
+    scheduledStart: Date | null;
+    scheduledEnd: Date | null;
+    teacher?: { name: string };
+  } | null = null;
   const lateByStudent = new Map<string, boolean>();
-  if (isTeacher && room.classSessionId) {
+  if (room.classSessionId) {
     const csId = room.classSessionId;
-    classSession = await cachedRead(`class-session:${csId}`, () =>
+    classSession = await cachedRead(`class-session:v7:${csId}`, () =>
       prisma.classSession.findUnique({
         where: { id: csId },
-        select: { id: true, campus: true, grade: true, divisions: true, allDivisions: true, subject: true, adHoc: true },
+        select: {
+          id: true,
+          campus: true,
+          grade: true,
+          divisions: true,
+          allDivisions: true,
+          subject: true,
+          adHoc: true,
+          academicYear: true,
+          scheduledStart: true,
+          scheduledEnd: true,
+          teacher: { select: { name: true } },
+        },
       })
     );
-    if (classSession) {
+    if (classSession && isTeacher) {
       const cid = classSession.id;
       const recs = await cachedRead(`attendance-late:${cid}`, () =>
         prisma.attendanceRecord.findMany({
@@ -197,6 +228,17 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       for (const r of recs) lateByStudent.set(r.studentId, r.late);
     }
   }
+  const classInfo = classSession
+    ? {
+        subject: classSession.subject,
+        teacherName: classSession.teacher?.name || room.teacher.name,
+        audience: formatAudience(classSession.campus, classSession.grade, classSession.divisions, classSession.allDivisions),
+        scheduledStart: classSession.scheduledStart ? classSession.scheduledStart.toISOString() : null,
+        scheduledEnd: classSession.scheduledEnd ? classSession.scheduledEnd.toISOString() : null,
+        classSessionId: classSession.id,
+        academicYear: classSession.academicYear,
+      }
+    : null;
   const rosterInfo = (p: (typeof room.participants)[number]) => {
     if (!isTeacher || p.role !== 'STUDENT') return {};
     const st = p.student;
@@ -216,6 +258,19 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   const admitted = room.participants.filter(
     (p) => p.status === 'ADMITTED' && !(p.role === 'STUDENT' && gone.has(p.livekitIdentity))
   );
+
+  const [settings, spotlightId, micBook] = await Promise.all([
+    getSchoolSettings(),
+    redis.get(keys.spotlight(code)),
+    readMicBook(code),
+  ]);
+  const spotlightParticipant = spotlightId ? room.participants.find((p) => p.id === spotlightId && p.status === 'ADMITTED') : undefined;
+  const spotlight = spotlightParticipant
+    ? { participantId: spotlightParticipant.id, identity: spotlightParticipant.livekitIdentity, name: spotlightParticipant.displayName }
+    : null;
+  const names = new Map(room.participants.map((p) => [p.id, p.displayName]));
+  const micQueue = isTeacher ? micQueueView(micBook, names) : [];
+  const micOpen = new Set(micBook.open);
 
   const me = isTeacher
     ? room.participants.find((p) => p.role === 'TEACHER')
@@ -237,11 +292,20 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
         mutedByTeacher: me.mutedByTeacher || mutedIds.includes(me.id),
         canPublishVideo,
         inVisibleSample: canPublishVideo,
-        /** Publish camera video now (in the sample AND the teacher shows the video panel). */
-        camWanted: camWanted({ isTeacher, inSample: canPublishVideo, panelRaw }),
+        /** Publish camera video now (in the sample AND the teacher shows the video panel, or spotlighted). */
+        camWanted: camWanted({
+          isTeacher,
+          inSample: canPublishVideo,
+          panelRaw,
+          spotlighted: !!spotlight && spotlight.participantId === me.id,
+        }),
         handRaised: raisedHands.includes(me.id),
         drawRequested: drawReqAt.has(me.id),
         canDraw: drawingIds.has(me.id),
+        spotlighted: !!spotlight && spotlight.participantId === me.id,
+        micGranted: settings.maxOpenStudentMics <= 0 ? !me.mutedByTeacher : micOpen.has(me.id),
+        micWaiting: settings.maxOpenStudentMics > 0 && micBook.queue.some((w) => w.id === me.id),
+        micPosition: settings.maxOpenStudentMics > 0 ? (micQueueView(micBook, names).find((w) => w.id === me.id)?.position ?? null) : null,
       }
     : null;
 
@@ -271,6 +335,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
           adHoc: classSession.adHoc,
         }
       : null,
+    classInfo,
     admitted: admitted.map((p) => ({
       id: p.id,
       displayName: p.displayName,
@@ -289,6 +354,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
           }
         : {}),
       drawing: p.role === 'STUDENT' && drawingIds.has(p.id),
+      micWaiting: p.role === 'STUDENT' && settings.maxOpenStudentMics > 0 && micBook.queue.some((w) => w.id === p.id),
       ...rosterInfo(p),
       ...focusOf(p),
     })),
@@ -311,5 +377,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     takeovers: isTeacher ? await recentTakeovers(code) : undefined,
     sampleNote:
       'Only a rotating sample of students publish video to the teacher. Everyone keeps a local preview and may appear visible.',
+    classFull: false,
+    spotlight,
+    micLimit: settings.maxOpenStudentMics,
+    micQueue: isTeacher ? micQueue : undefined,
   });
 }

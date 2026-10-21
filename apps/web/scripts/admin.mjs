@@ -111,7 +111,7 @@ async function main() {
       const password = generatePassword();
       try {
         await prisma.admin.create({
-          data: { email, passwordHash: await bcrypt.hash(password, 12), mustChangePassword: true },
+          data: { email, passwordHash: await bcrypt.hash(password, 12), mustChangePassword: true, kind: 'SYSTEM' },
         });
       } catch (e) {
         // Two containers booting at once: the other one won.
@@ -135,8 +135,10 @@ async function main() {
         return 2;
       }
       const password = generatePassword();
+      const system = await prisma.admin.findFirst({ where: { kind: 'SYSTEM' }, orderBy: { createdAt: 'asc' } });
+      const targetId = system?.id || existing[0].id;
       const admin = await prisma.admin.update({
-        where: { id: existing[0].id },
+        where: { id: targetId },
         data: {
           passwordHash: await bcrypt.hash(password, 12),
           mustChangePassword: true,

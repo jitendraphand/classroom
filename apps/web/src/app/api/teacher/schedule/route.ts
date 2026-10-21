@@ -2,6 +2,7 @@ import { prisma } from '@/lib/db';
 import { getTeacherSession } from '@/lib/auth';
 import { displayAssignment, formatAudience } from '@/lib/grades';
 import { jsonError, jsonOk } from '@/lib/response';
+import { isAcademicYearLabel } from '@/lib/academicYear';
 import { addDays, formatHHMM, localDateOf, opensAt, phaseOf } from '@/lib/schedule';
 import { occurrencesForRange } from '@/lib/scheduleService';
 import { appTimeZone, earlyWindowMinutes } from '@/lib/schoolConfig';
@@ -12,7 +13,7 @@ import { teacherGradeChoices } from '@/lib/gradeMasterLogic';
 export const dynamic = 'force-dynamic';
 
 /** The signed-in teacher's classes today + next 6 days, with start eligibility. */
-export async function GET() {
+export async function GET(req: Request) {
   const teacher = await getTeacherSession();
   if (!teacher) return jsonError('Unauthorized', 401);
 
@@ -20,7 +21,9 @@ export async function GET() {
   const early = earlyWindowMinutes();
   const now = new Date();
   const today = localDateOf(now, tz);
-  const occs = (await occurrencesForRange(today, addDays(today, 6), tz)).filter(
+  const yearParam = new URL(req.url).searchParams.get('year') || '';
+  const year = isAcademicYearLabel(yearParam) ? yearParam : undefined;
+  const occs = (await occurrencesForRange(today, addDays(today, 6), tz, year)).filter(
     (o) => o.teacherId === teacher.id || o.originalTeacherId === teacher.id
   );
 

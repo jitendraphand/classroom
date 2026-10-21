@@ -11,6 +11,8 @@ test('cameras on demand: sample AND panel shown; teachers and old servers unaffe
   assert.equal(camWanted({ isTeacher: false, inSample: true, panelRaw: null }), true);
   assert.equal(camWanted({ isTeacher: false, inSample: true, panelRaw: '0' }), false);
   assert.equal(camWanted({ isTeacher: false, inSample: false, panelRaw: null }), false);
+  assert.equal(camWanted({ isTeacher: false, inSample: false, panelRaw: '0', spotlighted: true }), true);
+  assert.equal(effectiveCamWanted({ canPublishVideo: false, camWanted: false, spotlighted: true }), true);
   assert.equal(camWanted({ isTeacher: true, inSample: false, panelRaw: '0' }), true);
   assert.equal(effectiveCamWanted({ canPublishVideo: true }), true); // server without camWanted
   assert.equal(effectiveCamWanted({ canPublishVideo: true, camWanted: false }), false);

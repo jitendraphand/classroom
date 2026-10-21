@@ -9,7 +9,7 @@ bind_addresses:
 rtc:
   tcp_port: 7881
   port_range_start: 50000
-  port_range_end: 50100
+  port_range_end: 60000
   # false for local demos; true (or set LIVEKIT_NODE_IP) on a public VPS
   use_external_ip: __USE_EXTERNAL_IP__
 __NODE_IP_LINE__
@@ -41,7 +41,7 @@ room:
     - mime: video/vp9
   auto_create: true
   empty_timeout: 300
-  max_participants: 200
+  max_participants: 0
 
 # TURN relay for students behind strict firewalls / UDP-blocked networks.
 # TURN/TLS on 5349 uses the certificate Caddy obtained for the LiveKit host

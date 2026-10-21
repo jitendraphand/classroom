@@ -5,7 +5,7 @@ import { gradeStore } from '@/lib/gradeMaster';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-const deps = { guard: requireAdminApi, store: gradeStore };
+const deps = { guard: () => requireAdminApi('manageSchool'), store: gradeStore };
 type Ctx = { params: Promise<{ id: string }> };
 
 /** Admin only: rename (`label`), activate/deactivate (`active`), `sortOrder`. */

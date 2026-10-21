@@ -8,7 +8,7 @@ export const runtime = 'nodejs';
 
 /** Admin only: add grades/divisions used by existing data but missing from the list. */
 export async function POST() {
-  const res = await handleSync({ guard: requireAdminApi, store: gradeStore });
+  const res = await handleSync({ guard: () => requireAdminApi('manageSchool'), store: gradeStore });
   if (!res.ok) return res;
   // Campuses too (the guard above already passed).
   const body = (await res.json()) as { added?: Record<string, number> };

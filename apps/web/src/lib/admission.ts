@@ -3,6 +3,15 @@ import { prisma } from './db';
 import { ensureRedis, keys } from './redis';
 import { rotateVisibleSample } from './sample';
 import { markAdmitted } from './attendanceService';
+import { CLASS_FULL_MESSAGE, classCapacity, seatsLeft } from './capacity';
+import { getSchoolSettings } from './schoolSettings';
+
+export class ClassFullError extends Error {
+  constructor() {
+    super(CLASS_FULL_MESSAGE);
+    this.name = 'ClassFullError';
+  }
+}
 
 /**
  * Admit waiting students (ids, or every waiting student with `all`). Keeps the
@@ -14,13 +23,25 @@ export async function admitWaiting(room: Pick<Room, 'id' | 'code' | 'status'>, o
     ? { roomId: room.id, role: 'STUDENT' as const, status: 'WAITING' as const }
     : { roomId: room.id, role: 'STUDENT' as const, status: 'WAITING' as const, id: { in: opts.ids || [] } };
 
-  const toAdmit = await prisma.participant.findMany({ where, select: { id: true } });
-  if (toAdmit.length === 0 && !opts.all) return 0;
+  const waiting = await prisma.participant.findMany({ where, select: { id: true } });
+  if (waiting.length === 0 && !opts.all) return 0;
+  const settings = await getSchoolSettings();
+  const cap = classCapacity(settings.maxStudentsPerClass);
+  let ids = waiting.map((p) => p.id);
+  if (cap != null && ids.length) {
+    const admittedCount = await prisma.participant.count({
+      where: { roomId: room.id, role: 'STUDENT', status: 'ADMITTED' },
+    });
+    const seats = seatsLeft(cap, admittedCount, ids.length);
+    if (seats.full) throw new ClassFullError();
+    ids = ids.slice(0, seats.admit);
+  }
+  if (ids.length === 0) return 0;
   const updated = await prisma.participant.updateMany({
-    where: { ...where, id: { in: toAdmit.map((p) => p.id) } },
+    where: { ...where, id: { in: ids } },
     data: { status: 'ADMITTED' },
   });
-  await markAdmitted(toAdmit.map((p) => p.id)).catch((e) => console.error('attendance admit', e));
+  await markAdmitted(ids).catch((e) => console.error('attendance admit', e));
 
   if (room.status === 'WAITING') {
     await prisma.room.update({ where: { id: room.id }, data: { status: 'LIVE' } });

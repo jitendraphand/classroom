@@ -11,14 +11,23 @@
 export const VIDEO_PANEL_TTL_S = 60 * 60 * 6;
 
 /** Server: should this student publish camera video now? Teachers always may. */
-export function camWanted(opts: { isTeacher: boolean; inSample: boolean; panelRaw: string | null }): boolean {
-  if (opts.isTeacher) return true;
+export function camWanted(opts: {
+  isTeacher: boolean;
+  inSample: boolean;
+  panelRaw: string | null;
+  /** Teacher spotlight: the class is watching this camera, even outside the mosaic. */
+  spotlighted?: boolean;
+}): boolean {
+  if (opts.isTeacher || opts.spotlighted) return true;
   return opts.inSample && opts.panelRaw !== '0';
 }
 
 /** Client: older servers omit camWanted → follow canPublishVideo as before. */
-export function effectiveCamWanted(me: { canPublishVideo?: boolean; camWanted?: boolean } | null | undefined): boolean {
+export function effectiveCamWanted(
+  me: { canPublishVideo?: boolean; camWanted?: boolean; spotlighted?: boolean } | null | undefined
+): boolean {
   if (!me) return false;
+  if (me.spotlighted) return true;
   return typeof me.camWanted === 'boolean' ? me.camWanted && !!me.canPublishVideo : !!me.canPublishVideo;
 }
 

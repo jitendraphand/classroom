@@ -1,3 +1,4 @@
+import { academicYearForDate } from './academicYear';
 import { waitingRoomDefaultFor } from './waitingRoomPref';
 import type { ClassSession, Room } from '@prisma/client';
 import { prisma } from './db';
@@ -38,6 +39,7 @@ export async function upsertOccurrenceSession(occ: Occurrence): Promise<ClassSes
     subject: occ.subject,
     scheduledStart: occ.start,
     scheduledEnd: occ.end,
+    academicYear: occ.academicYear || academicYearForDate(occ.date),
   };
   try {
     return await prisma.classSession.upsert({
@@ -168,6 +170,7 @@ export async function startAdHocClass(
       divisions: parsed.divisions,
       allDivisions: parsed.allDivisions,
       subject,
+      academicYear: academicYearForDate(localDateOf(new Date(), appTimeZone())),
     },
   });
   return openRoomForSession(teacher, cs, opts);

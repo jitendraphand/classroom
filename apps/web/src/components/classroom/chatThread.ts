@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRoomContext } from '@livekit/components-react';
 import { RoomEvent, DataPacket_Kind } from 'livekit-client';
 import { replyTargetFor, resolveChatRecipient } from '@/lib/chatReply';
-import { roomFetch } from '@/lib/classroomClient';
+import { getClassroomRole, roomFetch } from '@/lib/classroomClient';
 import { chatPollMs } from '@/lib/pollPolicy';
 import { usePageHidden, usePushLive } from '@/hooks/usePollSignals';
 
@@ -69,6 +69,8 @@ export function useChatThread({
   const [error, setError] = useState('');
   const [ended, setEnded] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  /** Server-sent events are delivering messages, so the poll can back off. */
+  const [sseLive, setSseLive] = useState(false);
   const lastSeenId = useRef<string | null>(null);
   const baselineDone = useRef(false);
   const sendingRef = useRef(false);
@@ -122,13 +124,45 @@ export function useChatThread({
   }, [fetchMessages, stopped]);
 
   // Messages arrive as server data packets while connected; the poll repairs gaps.
+  // An EventSource (cookies, same origin) is a second push path. While it is
+  // open the poll uses the slow push interval; on error it closes and the poll stays.
   const hidden = usePageHidden();
   const pushLive = usePushLive(room);
   useEffect(() => {
+    if (stopped || ended || typeof EventSource === 'undefined') return;
+    let closed = false;
+    const q = getClassroomRole(code) === 'student' ? '?as=student' : '';
+    const es = new EventSource(`/api/rooms/${code.toUpperCase()}/messages/stream${q}`, { withCredentials: true });
+    const onMsg = (ev: Event) => {
+      const data = (ev as MessageEvent).data;
+      if (typeof data !== 'string') return;
+      try {
+        const msg = JSON.parse(data) as { type?: string; message?: ChatMessage };
+        if (msg?.type === 'message' && msg.message?.id) mergeMessages([msg.message]);
+      } catch {
+        /* ignore malformed event */
+      }
+    };
+    es.addEventListener('message', onMsg);
+    es.onopen = () => {
+      if (!closed) setSseLive(true);
+    };
+    es.onerror = () => {
+      if (closed) return;
+      setSseLive(false);
+      es.close();
+    };
+    return () => {
+      closed = true;
+      setSseLive(false);
+      es.close();
+    };
+  }, [code, stopped, ended, mergeMessages]);
+  useEffect(() => {
     if (stopped) return;
-    const t = setInterval(fetchMessages, chatPollMs({ hidden, pushLive }));
+    const t = setInterval(fetchMessages, chatPollMs({ hidden, pushLive: sseLive || pushLive }));
     return () => clearInterval(t);
-  }, [fetchMessages, stopped, hidden, pushLive]);
+  }, [fetchMessages, stopped, hidden, pushLive, sseLive]);
 
   // Reconnected after a drop: packets sent meanwhile were missed, fetch now.
   const wasLive = useRef(pushLive);
@@ -177,8 +211,9 @@ export function useChatThread({
       if (topic !== CHAT_TOPIC) return;
       // Chat packets are only ever sent by the server (POST /messages →
       // RoomServiceClient.sendData, addressed to the allowed readers). A packet
-      // that names a participant came from a browser and is forged.
-      if (participant) return;
+      // with a real participant identity came from a browser and is forged.
+      // Server sends omit the participant or leave the identity empty.
+      if (participant?.identity) return;
       if (!decoder) return;
       try {
         const msg = JSON.parse(decoder.decode(payload)) as ChatPacket;

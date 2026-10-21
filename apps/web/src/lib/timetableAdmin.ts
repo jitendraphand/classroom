@@ -1,3 +1,4 @@
+import { academicYearForDate, isAcademicYearLabel } from './academicYear';
 import { z } from 'zod';
 import { prisma } from './db';
 import { formatAudience, normalizeCampus, normalizeGrade, parseDivisionList } from './grades';
@@ -7,6 +8,7 @@ import {
   dateValue,
   formatHHMM,
   isLocalDate,
+  localDateOf,
   occurrenceConflicts,
   occurrencesOn,
   parseHHMM,
@@ -49,6 +51,7 @@ export const slotBody = z.object({
   end: time,
   effectiveFrom: optDate,
   effectiveTo: optDate,
+  academicYear: z.string().max(16).optional().nullable(),
   /** Admin confirmed a grade-division overlap warning. */
   force: z.boolean().optional(),
 });
@@ -70,6 +73,7 @@ function toInput(b: SlotBody, id?: string): SlotInput {
     endMinute: parseHHMM(b.end)!,
     effectiveFrom: b.effectiveFrom ?? null,
     effectiveTo: b.effectiveTo ?? null,
+    academicYear: b.academicYear && isAcademicYearLabel(b.academicYear) ? b.academicYear : undefined,
   };
 }
 
@@ -139,6 +143,10 @@ function slotData(input: SlotInput) {
     endMinute: input.endMinute,
     effectiveFrom: input.effectiveFrom ? dateValue(input.effectiveFrom) : null,
     effectiveTo: input.effectiveTo ? dateValue(input.effectiveTo) : null,
+    academicYear:
+      input.academicYear && isAcademicYearLabel(input.academicYear)
+        ? input.academicYear
+        : academicYearForDate(input.effectiveFrom || localDateOf(new Date(), appTimeZone())),
   };
 }
 
@@ -283,6 +291,7 @@ export async function createOverride(body: OverrideBody) {
     startMinute: body.kind === 'CANCEL' ? null : startMinute,
     endMinute: body.kind === 'CANCEL' ? null : endMinute,
     note: body.note?.trim() || null,
+    academicYear: academicYearForDate(body.date),
   };
 
   // Conflict check on that date with the change applied.

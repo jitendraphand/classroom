@@ -3,7 +3,7 @@ import { jsonError, jsonOk } from '@/lib/response';
 import { resetTeacherPassword, TeacherError } from '@/lib/teachers';
 
 export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { res } = await requireAdminApi();
+  const { res } = await requireAdminApi('manageTeachers');
   if (res) return res;
   try {
     const { id } = await params;

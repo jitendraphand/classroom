@@ -30,6 +30,7 @@ import {
   type LocalTrackPublication,
   type Participant,
   type ParticipantTrackPermission,
+  type RemoteParticipant,
   type TrackPublication,
 } from 'livekit-client';
 import {
@@ -41,6 +42,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { TEACHER_ABSENCE_GRACE_MS } from '@/lib/graceTimer';
 import { MIC_CAPTURE, keepShareAudio } from '@/lib/audioPolicy';
@@ -137,6 +139,15 @@ import { effectiveCamWanted, panelShown } from '@/lib/camOnDemand';
 import { nextDataSaver } from '@/lib/dataSaver';
 import { useDataSaver } from '@/hooks/useDataSaver';
 import { TeacherMediaDemand } from './TeacherMediaDemand';
+import { ClassInfoButton } from './ClassInfoButton';
+import { FeedbackForm } from './FeedbackForm';
+import { SpotlightFloat } from './SpotlightFloat';
+import {
+  nextStudentVideoMode,
+  parseStudentVideoMode,
+  studentVideoModeLabel,
+  type StudentVideoMode,
+} from '@/lib/studentVideoMode';
 
 type TokenPayload = {
   token: string;
@@ -733,12 +744,15 @@ function TeacherCameraFloat({
   selfName,
   selfStream,
   camOn,
+  mode,
 }: {
   teacherIdentities: string[];
   roomCode: string;
   selfName: string;
   selfStream: MediaStream | null;
   camOn: boolean;
+  /** both = teacher + self, teacher = teacher only, min = draggable "Videos" pill. */
+  mode: StudentVideoMode;
 }) {
   const room = useRoomContext();
   const [dataSaver] = useDataSaver();
@@ -747,25 +761,8 @@ function TeacherCameraFloat({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const selfVideoRef = useRef<HTMLVideoElement | null>(null);
   const paneRef = useRef<HTMLDivElement | null>(null);
-  type SelfMode = 'show' | 'min' | 'off';
-  const selfKey = `student_self_${roomCode.toUpperCase()}`;
-  const paneKey = `student_media_min_${roomCode.toUpperCase()}`;
-  const [selfMode, setSelfMode] = useState<SelfMode>(() => {
-    try {
-      const v = sessionStorage.getItem(selfKey);
-      if (v === 'show' || v === 'min' || v === 'off') return v;
-    } catch {
-      /* ignore */
-    }
-    return 'show';
-  });
-  const [paneMin, setPaneMin] = useState(() => {
-    try {
-      return sessionStorage.getItem(paneKey) === '1';
-    } catch {
-      return false;
-    }
-  });
+  const minimized = mode === 'min';
+  const showSelf = mode === 'both';
 
   // Bottom-right by default (clamped above the control bar by the hook).
   const defaultPos = useCallback(
@@ -773,22 +770,6 @@ function TeacherCameraFloat({
     []
   );
   const { pos, handleProps } = useFloatDrag({ id: 'student_videos', paneRef, defaultPos });
-
-  useEffect(() => {
-    try {
-      sessionStorage.setItem(selfKey, selfMode);
-    } catch {
-      /* ignore */
-    }
-  }, [selfKey, selfMode]);
-
-  useEffect(() => {
-    try {
-      sessionStorage.setItem(paneKey, paneMin ? '1' : '0');
-    } catch {
-      /* ignore */
-    }
-  }, [paneKey, paneMin]);
 
   useEffect(() => {
     if (!room) return;
@@ -878,7 +859,7 @@ function TeacherCameraFloat({
     return () => {
       el.srcObject = null;
     };
-  }, [mediaTrack, paneMin]);
+  }, [mediaTrack, mode]);
 
   const hasVideo = !!mediaTrack && !teacherPub?.isMuted;
 
@@ -886,7 +867,7 @@ function TeacherCameraFloat({
     const el = selfVideoRef.current;
     if (!el) return;
     const track = selfStream?.getVideoTracks().find((t) => t.readyState === 'live') ?? null;
-    if (!track || selfMode !== 'show' || paneMin) {
+    if (!track || !showSelf || minimized) {
       el.srcObject = null;
       return;
     }
@@ -895,27 +876,25 @@ function TeacherCameraFloat({
     return () => {
       el.srcObject = null;
     };
-  }, [selfStream, selfMode, paneMin, camOn]);
+  }, [selfStream, showSelf, minimized, camOn]);
 
   const style = pos ? { left: pos.x, top: pos.y } : { right: 12, bottom: 88 };
-  const showSelfTile = selfMode === 'show';
 
   return (
     <>
-    <TeacherMediaDemand teacherIdentities={teacherIdentities} mode={dataSaver} camPaneMinimized={paneMin} />
+    <TeacherMediaDemand teacherIdentities={teacherIdentities} mode={dataSaver} camPaneMinimized={minimized} />
     <div
       ref={paneRef}
       className="student-media-float"
-      data-minimized={paneMin ? '1' : '0'}
+      data-minimized={minimized ? '1' : '0'}
+      data-room={roomCode}
+      data-video-mode={mode}
       style={style}
       aria-label="Videos — drag the top bar to move"
     >
-      {paneMin ? (
+      {minimized ? (
         <div className="student-media-restore" {...handleProps} title="Drag to move">
           <span>Videos</span>
-          <button type="button" className="student-media-btn" onClick={() => setPaneMin(false)}>
-            Show videos
-          </button>
         </div>
       ) : (
         <>
@@ -923,20 +902,10 @@ function TeacherCameraFloat({
             <span className="student-media-title">
               <span aria-hidden className="mr-1 text-white/40">⠿</span>Videos
             </span>
-            <span className="flex items-center gap-1">
-              {selfMode === 'off' && (
-                <button type="button" className="student-media-btn" onClick={() => setSelfMode('show')}>
-                  Show me
-                </button>
-              )}
-              <button type="button" className="student-media-btn" onClick={() => setPaneMin(true)}>
-                Minimize
-              </button>
-            </span>
           </div>
           <div className="student-media-row">
-            {hasVideo && (
-              <div className="student-media-tile" aria-label="Teacher camera">
+            <div className="student-media-tile" aria-label="Teacher camera">
+              {hasVideo ? (
                 <video
                   ref={videoRef}
                   className="pointer-events-none h-full w-full object-cover"
@@ -944,12 +913,16 @@ function TeacherCameraFloat({
                   playsInline
                   muted
                 />
-                <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-2 pb-1 pt-4">
-                  <span className="text-2xs font-semibold tracking-wide text-white">{teacherName}</span>
+              ) : (
+                <div className="flex h-full items-center justify-center px-2 text-center text-[10px] text-slate-300">
+                  Camera off
                 </div>
+              )}
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-2 pb-1 pt-4">
+                <span className="text-2xs font-semibold tracking-wide text-white">{teacherName}</span>
               </div>
-            )}
-            {showSelfTile && (
+            </div>
+            {showSelf && (
               <div className="student-media-tile" aria-label="Your camera">
                 {camOn && selfStream ? (
                   <video
@@ -964,25 +937,10 @@ function TeacherCameraFloat({
                     Camera off
                   </div>
                 )}
-                <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-1 bg-gradient-to-t from-black/75 to-transparent px-1.5 pb-1 pt-4">
-                  <span className="pointer-events-none truncate text-2xs font-semibold text-white">
-                    {selfName || 'Me'}
-                  </span>
-                  <span className="flex gap-1">
-                    <button type="button" className="student-media-btn" onClick={() => setSelfMode('min')}>
-                      Min
-                    </button>
-                    <button type="button" className="student-media-btn" onClick={() => setSelfMode('off')}>
-                      Hide
-                    </button>
-                  </span>
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-1.5 pb-1 pt-4">
+                  <span className="truncate text-2xs font-semibold text-white">{selfName || 'Me'}</span>
                 </div>
               </div>
-            )}
-            {selfMode === 'min' && (
-              <button type="button" className="student-media-me" onClick={() => setSelfMode('show')}>
-                Me
-              </button>
             )}
           </div>
         </>
@@ -1009,9 +967,15 @@ function TeacherPeersFloat({
   onTogglePin,
   portalWindow = null,
   onShownChange,
+  embedHost = null,
 }: {
   /** Panel visibility to the teacher (drives student cameras on demand). */
   onShownChange?: (shown: boolean) => void;
+  /**
+   * Whiteboard side column. When set, the pane is portaled here instead of
+   * floating. A separate videos window (portalWindow) still wins.
+   */
+  embedHost?: HTMLElement | null;
   /**
    * While sharing: render the panel inside this separate window (beside the
    * share toolbar) instead of the classroom tab. Same tiles, pins, rotation.
@@ -1529,6 +1493,15 @@ function TeacherPeersFloat({
     style.width = layout.paneW;
     style.height = layout.paneH;
   }
+  const embed = !!embedHost && !portal;
+  if (embed) {
+    style.position = 'relative';
+    style.left = 0;
+    style.top = 0;
+    style.width = '100%';
+    style.maxWidth = '100%';
+    style.height = 'auto';
+  }
 
   const pane = (
     <div
@@ -1686,6 +1659,7 @@ function TeacherPeersFloat({
       </SideWindowPortal>
     );
   }
+  if (embedHost) return createPortal(pane, embedHost);
   return pane;
 }
 
@@ -2192,19 +2166,21 @@ function CameraErrorBanner({ message, onDismiss }: { message: string; onDismiss:
  * Subscriber side: the student connects with autoSubscribe off and subscribes
  * only to the teacher's tracks (camera, microphone, screen) and to classmates'
  * microphones (class audio is not limited by the sample). Other students'
- * cameras are never subscribed.
+ * cameras stay unsubscribed, except the one teacher-spotlighted student.
  *
  * Publisher side (enforced by the SFU for this student's own tracks): only
  * the teacher may subscribe to everything; classmates may subscribe to the
- * microphone track only. So even a modified classmate client cannot pull this
- * student's camera.
+ * microphone track only, plus this camera while this student is spotlighted.
  */
 function StudentMediaPrivacy({
   teacherIdentities,
   studentIdentities,
+  spotlightIdentity = null,
 }: {
   teacherIdentities: string[];
   studentIdentities: string[];
+  /** LiveKit identity of the spotlighted student, if any. */
+  spotlightIdentity?: string | null;
 }) {
   const room = useRoomContext();
   const teacherKey = teacherIdentities.join(',');
@@ -2241,7 +2217,8 @@ function StudentMediaPrivacy({
           }
         }
         for (const pub of Array.from(p.trackPublications.values())) {
-          const want = isTeacherP || pub.source === Track.Source.Microphone;
+          const spotlightCam = !!spotlightIdentity && p.identity === spotlightIdentity && pub.source === Track.Source.Camera;
+          const want = isTeacherP || pub.source === Track.Source.Microphone || spotlightCam;
           if (pub.isSubscribed !== want) {
             try {
               pub.setSubscribed(want);
@@ -2256,12 +2233,18 @@ function StudentMediaPrivacy({
       classmates.delete(me.identity);
       for (const t of Array.from(teachers)) classmates.delete(t);
       const micSid = me.getTrackPublication(Track.Source.Microphone)?.trackSid;
+      const camSid = me.getTrackPublication(Track.Source.Camera)?.trackSid;
+      const spotlighted = !!spotlightIdentity && me.identity === spotlightIdentity;
       const perms: ParticipantTrackPermission[] = Array.from(teachers)
         .sort()
         .map((identity) => ({ participantIdentity: identity, allowAll: true }));
-      if (micSid) {
+      const classmateSids = [
+        ...(micSid ? [micSid] : []),
+        ...(spotlighted && camSid ? [camSid] : []),
+      ];
+      if (classmateSids.length) {
         for (const identity of Array.from(classmates).sort()) {
-          perms.push({ participantIdentity: identity, allowAll: false, allowedTrackSids: [micSid] });
+          perms.push({ participantIdentity: identity, allowAll: false, allowedTrackSids: classmateSids });
         }
       }
       const key = JSON.stringify(perms);
@@ -2303,7 +2286,7 @@ function StudentMediaPrivacy({
       room.off(RoomEvent.LocalTrackUnpublished, sync);
       window.clearInterval(iv);
     };
-  }, [room, teacherKey, studentKey]);
+  }, [room, teacherKey, studentKey, spotlightIdentity]);
 
   return null;
 }
@@ -2333,6 +2316,47 @@ function RoomInner({
   const router = useRouter();
   const room = useRoomContext();
   const { localParticipant } = useLocalParticipant();
+  const [studentVideoMode, setStudentVideoMode] = useState<StudentVideoMode>(() => {
+    if (typeof window === 'undefined') return 'both';
+    try {
+      return parseStudentVideoMode(sessionStorage.getItem(`student_video_mode_${code}`));
+    } catch {
+      return 'both';
+    }
+  });
+  useEffect(() => {
+    if (isTeacher) return;
+    try {
+      sessionStorage.setItem(`student_video_mode_${code}`, studentVideoMode);
+    } catch {
+      /* ignore */
+    }
+  }, [isTeacher, code, studentVideoMode]);
+  const [wbVideoHost, setWbVideoHost] = useState<HTMLElement | null>(null);
+  /** Student identities that left the SFU, and when. Hidden from the roster after 2s. */
+  const droppedStudentsRef = useRef<Map<string, number>>(new Map());
+  const [rosterDropTick, setRosterDropTick] = useState(0);
+  useEffect(() => {
+    if (!isTeacher || !room) return;
+    const timers: number[] = [];
+    const onDisconnected = (p: RemoteParticipant) => {
+      if (!p.identity?.startsWith('student_')) return;
+      droppedStudentsRef.current.set(p.identity, Date.now());
+      timers.push(window.setTimeout(() => setRosterDropTick((n) => n + 1), 2100));
+    };
+    const onConnected = (p: RemoteParticipant) => {
+      if (!p.identity?.startsWith('student_')) return;
+      droppedStudentsRef.current.delete(p.identity);
+      setRosterDropTick((n) => n + 1);
+    };
+    room.on(RoomEvent.ParticipantDisconnected, onDisconnected);
+    room.on(RoomEvent.ParticipantConnected, onConnected);
+    return () => {
+      room.off(RoomEvent.ParticipantDisconnected, onDisconnected);
+      room.off(RoomEvent.ParticipantConnected, onConnected);
+      for (const t of timers) window.clearTimeout(t);
+    };
+  }, [isTeacher, room]);
   const [micOn, setMicOn] = useState(true);
   // Teacher camera starts OFF (turned on from the dock). Students keep their
   // previous default. Nothing is captured or published until camOn is true.
@@ -3439,7 +3463,13 @@ function RoomInner({
   // first by raise time, then pinned, then by name.
   const rosterStudents = sortRoster(
     (state?.admitted ?? [])
-      .filter((p) => p.role === 'STUDENT')
+      .filter((p) => {
+        if (p.role !== 'STUDENT') return false;
+        const droppedAt = droppedStudentsRef.current.get(p.livekitIdentity);
+        // rosterDropTick forces a render ~2.1s after the disconnect.
+        if (rosterDropTick >= 0 && droppedAt != null && Date.now() - droppedAt >= 2000) return false;
+        return true;
+      })
       .map((p) => ({ ...p, handRaised: !!(p.handRaised || (state?.raisedHands ?? []).includes(p.id)) }))
   );
   const shownRoster = filterPeople(rosterStudents, rosterQuery);
@@ -3525,6 +3555,24 @@ function RoomInner({
       window.removeEventListener('resize', read);
     };
   }, [isTeacher]);
+
+  /** One spotlighted student at a time. Null clears it. */
+  async function setSpotlight(participantId: string | null) {
+    try {
+      const res = await roomFetch(code, '/spotlight', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ participantId }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setHudNotice((data as { error?: string }).error || 'Could not change spotlight');
+      }
+    } catch {
+      setHudNotice('Could not change spotlight');
+    }
+    refresh();
+  }
 
   /** Teacher pins / unpins a student's video (roster, class panel tile, share HUD). */
   async function togglePin(participantId: string, pinned: boolean) {
@@ -3674,13 +3722,24 @@ function RoomInner({
     return () => window.clearTimeout(t);
   }, [drawToast]);
 
+  const micLimitOn = (state?.micLimit ?? 0) > 0;
+  const micWaiting = !!state?.me?.micWaiting;
+  const showAskToSpeak = !isTeacher && micLimitOn && effectiveMuted && !state?.me?.micGranted;
   const controlsProps = {
     micOn: micOn && !effectiveMuted,
     camOn,
     screenOn,
     onToggleMic: () => {
       if ((effectiveMuted || micLockedNoTeacher) && !isTeacher) return;
+      const turningOff = micOn;
       setMicOn((v) => !v);
+      if (!isTeacher && micLimitOn && !effectiveMuted && turningOff) {
+        void roomFetch(code, '/mic', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ want: false }),
+        }).then(() => refresh());
+      }
     },
     onToggleCam: () => setCamOn((v) => !v),
     onToggleScreen: () => {
@@ -3692,10 +3751,52 @@ function RoomInner({
     onToggleWhiteboard: isTeacher
       ? () => {
           if (wbOpen) return closeWhiteboard();
-          if (screenOn) void toggleScreen();
-          setWbOpen(true);
+          void roomFetch(code, '/whiteboard', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'on' }),
+          });
+          if (!screenOn) {
+            setWbOpen(true);
+            return;
+          }
+          let opened = false;
+          const onUnpub = (pub: LocalTrackPublication) => {
+            if (pub?.source !== Track.Source.ScreenShare) return;
+            if (opened) return;
+            opened = true;
+            room.off(RoomEvent.LocalTrackUnpublished, onUnpub);
+            setWbOpen(true);
+          };
+          room.on(RoomEvent.LocalTrackUnpublished, onUnpub);
+          void toggleScreen().finally(() => {
+            if (opened) return;
+            opened = true;
+            room.off(RoomEvent.LocalTrackUnpublished, onUnpub);
+            setWbOpen(true);
+          });
         }
       : undefined,
+    videoPanelLabel: isTeacher ? undefined : studentVideoModeLabel(studentVideoMode),
+    onCycleVideoPanel: isTeacher ? undefined : () => setStudentVideoMode((m) => nextStudentVideoMode(m)),
+    askToSpeakLabel: micWaiting
+      ? state?.me?.micPosition
+        ? `Waiting (#${state.me.micPosition})`
+        : 'Waiting'
+      : 'Ask to speak',
+    onAskToSpeak: showAskToSpeak
+      ? () => {
+          void roomFetch(code, '/mic', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ want: !micWaiting }),
+          }).then(() => refresh());
+        }
+      : undefined,
+    micWaitNote:
+      !isTeacher && micWaiting
+        ? `Waiting to speak${state?.me?.micPosition ? ` (#${state.me.micPosition})` : ''}`
+        : null,
     onLeave: leave,
     isTeacher,
     canPublishVideo: effectiveCanPublish,
@@ -3742,7 +3843,7 @@ function RoomInner({
       <div className="stage-fullscreen">
         <SelectivePublisher
           isTeacher={false}
-          canPublishVideo={effectiveCanPublish}
+          canPublishVideo={effectiveCanPublish || !!state?.me?.spotlighted}
           camWanted={effectiveCamWanted(state?.me) || (!state?.me && effectiveCanPublish)}
           mutedByTeacher={effectiveMuted || micLockedNoTeacher}
           camDesired={camOn}
@@ -3754,6 +3855,7 @@ function RoomInner({
         <StudentMediaPrivacy
           teacherIdentities={teacherIdentities}
           studentIdentities={studentIdentities}
+          spotlightIdentity={state?.spotlight?.identity ?? null}
         />
         <RoomAudioRenderer />
 
@@ -3822,7 +3924,19 @@ function RoomInner({
 
         {/* Teacher video hidden: receive no teacher camera at all. */}
         {covered && <TeacherMediaDemand teacherIdentities={teacherIdentities} mode={dataSaver} camPaneMinimized />}
-        {/* The floating teacher video, on every device (draggable, minimisable). */}
+        {/* Class details. Hidden under the fullscreen cover, same as the video float. */}
+        {!covered && (
+          <div className="absolute left-3 top-12 z-40">
+            <ClassInfoButton
+              teacherName={state?.classInfo?.teacherName || state?.teacherName || null}
+              subject={state?.classInfo ? state.classInfo.subject : state?.name || null}
+              audience={state?.classInfo?.audience || null}
+              scheduledStart={state?.classInfo?.scheduledStart ?? null}
+              scheduledEnd={state?.classInfo?.scheduledEnd ?? null}
+            />
+          </div>
+        )}
+        {/* The one student video float (teacher, screen share and whiteboard). */}
         {!covered && (
           <TeacherCameraFloat
             teacherIdentities={teacherIdentities}
@@ -3830,7 +3944,11 @@ function RoomInner({
             selfName={displayName}
             selfStream={localCamStream}
             camOn={camOn}
+            mode={studentVideoMode}
           />
+        )}
+        {!covered && state?.spotlight && state.spotlight.identity !== state.me?.livekitIdentity && (
+          <SpotlightFloat identity={state.spotlight.identity} name={state.spotlight.name} />
         )}
 
         {/* Student controls: a vertical panel on the right edge, on every device. */}
@@ -3950,11 +4068,15 @@ function RoomInner({
         onCameraError={setCamError}
       />
       <RoomAudioRenderer />
+      {state?.spotlight && (
+        <SpotlightFloat identity={state.spotlight.identity} name={state.spotlight.name} />
+      )}
       {wbOpen && (
         <WhiteboardHost
           code={code}
           identity={localParticipant.identity}
           onClose={() => setWbOpen(false)}
+          onVideoHost={setWbVideoHost}
           stopRef={wbStopRef}
           side={shareHudEl({
             vertical: true,
@@ -4055,7 +4177,7 @@ function RoomInner({
         </div>
       )}
       {isTeacher && drawToast && (
-        <div className="teacher-toast" role="status">
+        <div className="teacher-toast z-[120]" role="status">
           <IconPen size={16} className="shrink-0 text-amber-300" />
           <span className="flex-1">
             <b>{drawToast.name}</b> asks to draw on your screen
@@ -4251,6 +4373,24 @@ function RoomInner({
                 </span>
               )}
             </label>
+            {(state?.micLimit ?? 0) > 0 && (state?.micQueue?.length ?? 0) > 0 && (
+              <div className="shrink-0 rounded-xl border border-white/10 bg-white/[0.03] p-1.5" data-no-drag>
+                <h3 className="px-1 text-2xs font-semibold uppercase tracking-wider text-slate-400">Speaking queue</h3>
+                <ul className="mt-1 space-y-0.5">
+                  {state?.micQueue?.map((q) => (
+                    <li key={q.id} className="flex items-center justify-between gap-2 px-1 py-0.5 text-xs text-slate-100">
+                      <span className="min-w-0 truncate">{q.name}</span>
+                      <span className="shrink-0 text-[10px] text-amber-200">waiting to speak</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {state?.spotlight && (
+              <p className="shrink-0 px-1 text-2xs text-amber-200" data-no-drag>
+                Spotlight: {state.spotlight.name}
+              </p>
+            )}
             <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto" data-no-drag>
               {rosterStudents.length === 0 && (
                 <EmptyState
@@ -4333,6 +4473,18 @@ function RoomInner({
                           Allow
                         </button>
                       ) : null}
+                      <button
+                        type="button"
+                        className={cn(
+                          'shrink-0 rounded px-1 text-[10px] font-semibold leading-4',
+                          state?.spotlight?.participantId === p.id
+                            ? 'bg-amber-500/25 text-amber-100'
+                            : 'bg-white/10 text-slate-200 hover:bg-white/20'
+                        )}
+                        onClick={() => void setSpotlight(state?.spotlight?.participantId === p.id ? null : p.id)}
+                      >
+                        {state?.spotlight?.participantId === p.id ? 'Stop spotlight' : 'Spotlight'}
+                      </button>
                     </span>
                   </li>
                 );
@@ -4403,6 +4555,7 @@ function RoomInner({
         // minimise, 2/4/6, pins, hands first), starting right of the board's tools.
         dock={wbOpen ? null : dockArea}
         minLeft={wbOpen ? 62 : 0}
+        embedHost={wbOpen ? wbVideoHost : null}
         sharing={shareLayout || wbOpen}
         onDockSpace={onDockSpace}
         focusAlerts={focusByIdentity}
@@ -4452,7 +4605,7 @@ function RoomInner({
       )}
 
       {/* Bottom dock — never covers content */}
-      <footer data-float-bound="bottom" className="shrink-0 border-t border-white/[0.06] bg-surface-1/90 px-3 py-2.5 backdrop-blur-xl sm:px-4">
+      <footer data-float-bound="bottom" data-testid="teacher-dock" className="relative z-[80] shrink-0 border-t border-white/[0.06] bg-surface-1/90 px-3 py-2.5 backdrop-blur-xl sm:px-4">
         <Controls
           {...controlsProps}
           onPrepareScreenShare={() => {
@@ -4824,7 +4977,15 @@ export function ClassroomRoom({ code }: { code: string }) {
   // effectiveCanPublish / effectiveMuted immediately override from `state`.
 
   if (finished || (classEnded && !isTeacher && getClassroomRole(code) === 'student')) {
-    return <StudentFinished reason={finished ?? 'ended'} />;
+    return (
+      <StudentFinished
+        reason={finished ?? 'ended'}
+        code={code}
+        offerFeedback={Boolean(
+          schoolStudent && (finished === 'left' || finished === 'ended' || (classEnded && !finished))
+        )}
+      />
+    );
   }
 
   if (handoff) {
@@ -4998,21 +5159,35 @@ function ReconnectWatchdog({ onStuck }: { onStuck: () => void }) {
  * it makes no requests itself. window.close() works when the tab was opened
  * by the school app; otherwise the student closes it.
  */
-function StudentFinished({ reason }: { reason: FinishReason }) {
+function StudentFinished({
+  reason,
+  code,
+  offerFeedback,
+}: {
+  reason: FinishReason;
+  code: string;
+  offerFeedback?: boolean;
+}) {
+  const showForm = !!offerFeedback && (reason === 'left' || reason === 'ended');
+  const [formDone, setFormDone] = useState(false);
   useEffect(() => {
     window.dispatchEvent(new Event(CLASS_FINISHED_EVENT));
+  }, []);
+  useEffect(() => {
+    if (showForm && !formDone) return;
     try {
       window.close();
     } catch {
       /* blocked: the screen stays */
     }
-  }, []);
+  }, [showForm, formDone]);
   const copy = finishCopy(reason);
   return (
     <main className="flex min-h-screen flex-col items-center justify-center gap-4 px-6" data-finished={reason}>
       <div className="max-w-md rounded-2xl border border-white/10 bg-surface-1 p-8 text-center shadow-lift">
         <p className="font-display text-2xl font-semibold tracking-tight">{copy.title}</p>
         <p className="mt-2 text-sm text-slate-400">{copy.body}</p>
+        {showForm && !formDone && <FeedbackForm code={code} onDone={() => setFormDone(true)} />}
       </div>
     </main>
   );

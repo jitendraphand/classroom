@@ -6,6 +6,9 @@ import { jsonError, jsonOk } from '@/lib/response';
 import { ensureRedis, keys } from '@/lib/redis';
 import { setManyParticipantMics, setParticipantMicAllowed } from '@/lib/livekit';
 import { clearPinnedSpeakers, getVisibleSample, unpinSpeaker } from '@/lib/sample';
+import { getSchoolSettings } from '@/lib/schoolSettings';
+import { readMicBook, writeMicBook } from '@/lib/micBook';
+import { teacherSetMic } from '@/lib/micSlots';
 
 const schema = z.union([
   z.object({
@@ -30,12 +33,62 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
   try {
     const body = schema.parse(await req.json());
     const redis = await ensureRedis();
+    const { maxOpenStudentMics: micLimit } = await getSchoolSettings();
 
     if ('all' in body) {
       const students = await prisma.participant.findMany({
         where: { roomId: room.id, role: 'STUDENT', status: 'ADMITTED' },
+        orderBy: { createdAt: 'asc' },
         select: { id: true, livekitIdentity: true },
       });
+      if (micLimit > 0) {
+        const { visible } = await getVisibleSample(code);
+        const inSample = new Set(visible);
+        if (body.muted) {
+          await writeMicBook(code, { open: [], queue: [] });
+          await prisma.participant.updateMany({
+            where: { roomId: room.id, role: 'STUDENT', status: 'ADMITTED' },
+            data: { mutedByTeacher: true },
+          });
+          const ids = students.map((s) => s.id);
+          if (ids.length) {
+            await redis.del(keys.muted(code));
+            await redis.sadd(keys.muted(code), ...ids);
+          } else await redis.del(keys.muted(code));
+          void setManyParticipantMics(code, students.map((s) => s.livekitIdentity), false, (identity) => inSample.has(identity));
+          await clearPinnedSpeakers(code);
+          pushMuteState(room.code, room.sessionId, students.map((s) => s.livekitIdentity), true);
+          nudgeRoomState(room.code, 'all');
+          return jsonOk({ ok: true, all: true, muted: true, count: ids.length, waiting: 0 });
+        }
+        let book = { open: [] as string[], queue: [] as { id: string; source: 'teacher' | 'student' }[] };
+        const openIds: string[] = [];
+        for (const s of students) {
+          const next = teacherSetMic(book, s.id, false, micLimit);
+          book = next;
+          if (next.granted) openIds.push(s.id);
+        }
+        await writeMicBook(code, book);
+        const waiting = students.filter((s) => !openIds.includes(s.id)).map((s) => s.id);
+        if (openIds.length) {
+          await prisma.participant.updateMany({ where: { id: { in: openIds } }, data: { mutedByTeacher: false } });
+        }
+        if (waiting.length) {
+          await prisma.participant.updateMany({ where: { id: { in: waiting } }, data: { mutedByTeacher: true } });
+        }
+        if (waiting.length) {
+          await redis.del(keys.muted(code));
+          await redis.sadd(keys.muted(code), ...waiting);
+        } else await redis.del(keys.muted(code));
+        const openSet = new Set(openIds);
+        for (const s of students) {
+          void setParticipantMicAllowed(code, s.livekitIdentity, openSet.has(s.id), inSample.has(s.livekitIdentity));
+        }
+        pushMuteState(room.code, room.sessionId, students.filter((s) => openSet.has(s.id)).map((s) => s.livekitIdentity), false);
+        pushMuteState(room.code, room.sessionId, students.filter((s) => !openSet.has(s.id)).map((s) => s.livekitIdentity), true);
+        nudgeRoomState(room.code, 'all');
+        return jsonOk({ ok: true, all: true, muted: false, count: openIds.length, waiting: waiting.length });
+      }
       const ids = students.map((s) => s.id);
       const identities = students.map((s) => s.livekitIdentity);
 
@@ -81,6 +134,32 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
       where: { id: body.participantId, roomId: room.id, role: 'STUDENT' },
     });
     if (!participant) return jsonError('Participant not found', 404);
+
+    if (micLimit > 0) {
+      const book = await readMicBook(code);
+      const next = teacherSetMic(book, participant.id, body.muted, micLimit);
+      await writeMicBook(code, next);
+      const muted = body.muted || !next.granted;
+      await prisma.participant.update({ where: { id: participant.id }, data: { mutedByTeacher: muted } });
+      if (muted) await redis.sadd(keys.muted(code), participant.id);
+      else await redis.srem(keys.muted(code), participant.id);
+      const { visible } = await getVisibleSample(code);
+      void setParticipantMicAllowed(code, participant.livekitIdentity, !muted, visible.includes(participant.livekitIdentity));
+      if (muted) await unpinSpeaker(code, participant.livekitIdentity);
+      pushMuteState(room.code, room.sessionId, [participant.livekitIdentity], muted);
+      const promoted = 'promoted' in next ? (next as { promoted?: string | null }).promoted : null;
+      if (promoted) {
+        const nextStudent = await prisma.participant.findFirst({ where: { id: promoted, roomId: room.id, role: 'STUDENT' } });
+        if (nextStudent) {
+          await prisma.participant.update({ where: { id: nextStudent.id }, data: { mutedByTeacher: false } });
+          await redis.srem(keys.muted(code), nextStudent.id);
+          void setParticipantMicAllowed(code, nextStudent.livekitIdentity, true, visible.includes(nextStudent.livekitIdentity));
+          pushMuteState(room.code, room.sessionId, [nextStudent.livekitIdentity], false);
+        }
+      }
+      nudgeRoomState(room.code, 'all');
+      return jsonOk({ ok: true, muted, waiting: next.waiting });
+    }
 
     await prisma.participant.update({
       where: { id: participant.id },

@@ -13,7 +13,7 @@ const schema = z.object({
 });
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { res } = await requireAdminApi();
+  const { res } = await requireAdminApi('manageTeachers');
   if (res) return res;
   try {
     const { id } = await params;
@@ -35,7 +35,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
 /** Admin: delete a teacher (soft delete, see lib/teachers deleteTeacher). */
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { res } = await requireAdminApi();
+  const { res } = await requireAdminApi('manageTeachers');
   if (res) return res;
   try {
     const { id } = await params;

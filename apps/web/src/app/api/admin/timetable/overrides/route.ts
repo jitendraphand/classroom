@@ -4,7 +4,7 @@ import { jsonError, jsonOk } from '@/lib/response';
 import { createOverride, overrideBody, TimetableError } from '@/lib/timetableAdmin';
 
 export async function POST(req: Request) {
-  const { res } = await requireAdminApi();
+  const { res } = await requireAdminApi('schedule');
   if (res) return res;
   try {
     const override = await createOverride(overrideBody.parse(await req.json()));

@@ -7,5 +7,5 @@ export const runtime = 'nodejs';
 
 /** Admin only: `{ ids }` = grade ids in display order. */
 export async function POST(req: Request) {
-  return handleReorder(await req.json().catch(() => null), { guard: requireAdminApi, store: gradeStore });
+  return handleReorder(await req.json().catch(() => null), { guard: () => requireAdminApi('manageSchool'), store: gradeStore });
 }

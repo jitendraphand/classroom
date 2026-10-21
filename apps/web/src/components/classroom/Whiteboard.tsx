@@ -13,7 +13,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { useRoomContext } from '@livekit/components-react';
-import { RoomEvent, type RemoteParticipant } from 'livekit-client';
+import { ConnectionState, RoomEvent, type RemoteParticipant } from 'livekit-client';
 import { WhiteboardBoard } from '@/lib/whiteboard/WhiteboardBoard';
 import { SNAP_STORE_MS, WhiteboardSession, b64ToPackets, opsPackets, packetsToB64 } from '@/lib/whiteboard/session';
 import { WB_TOPIC, cleanDoc, isOwnRelayEcho, studentOpAllowed, type Op, type Packet } from '@/lib/whiteboard/model';
@@ -38,7 +38,22 @@ export function filterRelayed(session: WhiteboardSession, p: Packet & { by?: str
   return p.ops.length > 0;
 }
 
-export function WhiteboardHost({ code, identity, onClose, side, stopRef }: { code: string; identity: string; onClose: () => void; side?: ReactNode; stopRef?: { current: (() => void) | null } }) {
+export function WhiteboardHost({
+  code,
+  identity,
+  onClose,
+  side,
+  stopRef,
+  onVideoHost,
+}: {
+  code: string;
+  identity: string;
+  onClose: () => void;
+  side?: ReactNode;
+  stopRef?: { current: (() => void) | null };
+  /** Side-column element the class video panel is portaled into. */
+  onVideoHost?: (el: HTMLElement | null) => void;
+}) {
   const room = useRoomContext();
   const session = useMemo(() => {
     // Survive a reload / rejoin of the teacher tab (the board lives here).
@@ -72,10 +87,28 @@ export function WhiteboardHost({ code, identity, onClose, side, stopRef }: { cod
 
   const publish = useCallback(
     async (packets: Uint8Array[], to?: string[]) => {
+      // Students never publish board data; only the teacher host calls this.
+      const pause = () => new Promise((resolve) => setTimeout(resolve, 200));
       for (const data of packets) {
-        await room.localParticipant
-          .publishData(data as Uint8Array<ArrayBuffer>, { reliable: true, topic: WB_TOPIC, destinationIdentities: to })
-          .catch((e) => console.warn('whiteboard publish', e));
+        let sent = false;
+        for (let attempt = 0; attempt < 8 && !sent; attempt++) {
+          if (room.state !== ConnectionState.Connected) {
+            await pause();
+            continue;
+          }
+          try {
+            await room.localParticipant.publishData(data as Uint8Array<ArrayBuffer>, {
+              reliable: true,
+              topic: WB_TOPIC,
+              destinationIdentities: to,
+            });
+            sent = true;
+          } catch (e) {
+            // The first failure is usually mid-renegotiation. Retry quietly.
+            if (attempt >= 7) console.warn('whiteboard publish', e);
+            else await pause();
+          }
+        }
       }
     },
     [room]
@@ -105,6 +138,8 @@ export function WhiteboardHost({ code, identity, onClose, side, stopRef }: { cod
   useEffect(() => {
     void roomFetch(code, '/whiteboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'on' }) });
     void sendSnapshot();
+    const snapSoon = window.setTimeout(() => void sendSnapshot(), 500);
+    const snapLater = window.setTimeout(() => void sendSnapshot(), 1500);
     const onData = (payload: Uint8Array, participant?: RemoteParticipant, _k?: unknown, topic?: string) => {
       if (topic !== WB_TOPIC || participant) return; // only server-relayed packets
       void (async () => {
@@ -127,6 +162,8 @@ export function WhiteboardHost({ code, identity, onClose, side, stopRef }: { cod
     room.on(RoomEvent.ParticipantConnected, onJoin);
     room.on(RoomEvent.Reconnected, onReconnected);
     return () => {
+      window.clearTimeout(snapSoon);
+      window.clearTimeout(snapLater);
       room.off(RoomEvent.DataReceived, onData);
       room.off(RoomEvent.ParticipantConnected, onJoin);
       room.off(RoomEvent.Reconnected, onReconnected);
@@ -144,13 +181,24 @@ export function WhiteboardHost({ code, identity, onClose, side, stopRef }: { cod
   }, [code, onClose]);
 
   if (stopRef) stopRef.current = stop;
+  const videoHostCb = useRef(onVideoHost);
+  videoHostCb.current = onVideoHost;
+  const setVideoSlot = useCallback((el: HTMLDivElement | null) => {
+    videoHostCb.current?.(el);
+  }, []);
   // Teacher layout: tools docked left (inside the board), meeting controls docked right.
+  // Bottom gap leaves the teacher footer (Stop whiteboard, End class) clickable.
   return (
-    <div className="fixed inset-0 z-[95] flex bg-[#0b0f14]" data-testid="wb-host">
+    <div className="fixed inset-x-0 top-0 z-40 flex bg-[#0b0f14]" style={{ bottom: '4.5rem' }} data-testid="wb-host">
       <div className="relative min-w-0 flex-1">
         <WhiteboardBoard session={session} mode="edit" identity={identity} onSend={(ops) => void publish(opsPackets(ops))} onClose={stop} hideStop={!!side} />
       </div>
-      {side ? <div className="relative h-full shrink-0 border-l border-white/10" data-testid="wb-meeting">{side}</div> : null}
+      {side ? (
+        <div className="relative flex h-full min-h-0 shrink-0 flex-col border-l border-white/10" data-testid="wb-meeting">
+          <div data-testid="wb-video-slot" className="max-h-[46%] shrink-0 overflow-auto" ref={setVideoSlot} />
+          <div className="min-h-0 flex-1 overflow-auto">{side}</div>
+        </div>
+      ) : null}
     </div>
   );
 }

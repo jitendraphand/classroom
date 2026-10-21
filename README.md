@@ -170,7 +170,7 @@ displays (or HiDPI) receive the 1080p layer, the admin tiles the 720p one.
 ### Prerequisites
 
 - Docker Engine + Compose plugin
-- Ports free: **3000** (web), **5432** (Postgres), **6379** (Redis), **7880/7881** (LiveKit), **50000–50100/udp** (WebRTC)
+- Ports free: **3000** (web), **5432** (Postgres), **6379** (Redis), **7880/7881** (LiveKit), **50000–60000/udp** (WebRTC). One UDP port per participant; there is no app-level class-size cap. See [docs/CAPACITY.md](docs/CAPACITY.md).
 
 ### Secrets (read this before deploying)
 
@@ -238,7 +238,7 @@ PUBLIC_IP=203.0.113.10 ./scripts/configure-public-ip.sh   # your VM public IPv4
 docker compose up --build -d
 ```
 
-Open `http://PUBLIC_IP:3000`. Firewall must allow **3000/tcp**, **7880/tcp**, **7881/tcp**, and **50000–50100/udp**. Full steps: [docs/DEPLOY-VPS.md](docs/DEPLOY-VPS.md).
+Open `http://PUBLIC_IP:3000`. Firewall must allow **3000/tcp**, **7880/tcp**, **7881/tcp**, and **50000–60000/udp**. Full steps: [docs/DEPLOY-VPS.md](docs/DEPLOY-VPS.md).
 
 ## Deploy with HTTPS (Caddy + Let's Encrypt)
 
@@ -262,7 +262,7 @@ PUBLIC_IP=81.223.254.76 ACME_EMAIL=admin@example.com \
 docker compose --profile tls up --build -d
 ```
 
-Opens `https://…` and `wss://livekit.…`. Firewall: **80/443**, **7881/tcp**, **50000–50100/udp**; do **not** expose **3000** or **7880** publicly. Full steps: [docs/DEPLOY-CADDY.md](docs/DEPLOY-CADDY.md).
+Opens `https://…` and `wss://livekit.…`. Firewall: **80/443**, **7881/tcp**, **50000–60000/udp**; do **not** expose **3000** or **7880** publicly. Full steps: [docs/DEPLOY-CADDY.md](docs/DEPLOY-CADDY.md).
 
 
 ## URLs & ports

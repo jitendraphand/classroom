@@ -4,7 +4,7 @@ import { jsonError, jsonOk } from '@/lib/response';
 import { deleteSlot, slotBody, TimetableError, updateSlot } from '@/lib/timetableAdmin';
 
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { res } = await requireAdminApi();
+  const { res } = await requireAdminApi('schedule');
   if (res) return res;
   try {
     const slot = await updateSlot((await params).id, slotBody.parse(await req.json()));
@@ -18,7 +18,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
 }
 
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { res } = await requireAdminApi();
+  const { res } = await requireAdminApi('schedule');
   if (res) return res;
   try {
     await deleteSlot((await params).id);

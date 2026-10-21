@@ -9,29 +9,49 @@ import { PageLoading } from '@/components/ui/Skeleton';
 import { api } from '@/lib/clientFetch';
 import { cn } from '@/lib/cn';
 import { loginHref } from '@/lib/sessionClient';
+import { visibleAdminTabs, type PrivilegeSet } from '@/lib/privileges';
 
-export const ADMIN_NAV = [
-  { href: '/admin', label: 'Teachers' },
-  { href: '/admin/timetable', label: 'Timetable' },
-  { href: '/admin/students', label: 'Students' },
-  { href: '/admin/grades', label: 'Campuses & grades' },
-  { href: '/admin/reports', label: 'Attendance' },
-  { href: '/admin/live', label: 'Ongoing classes' },
+const TABS = [
+  { id: 'today' as const, href: '/admin', label: "Today's classes" },
+  { id: 'live' as const, href: '/admin/live', label: 'Live classes' },
+  { id: 'performance' as const, href: '/admin/performance', label: 'Teacher performance' },
+  { id: 'system' as const, href: '/admin/system', label: 'System Control' },
 ];
 
-/** Admin page frame: checks the admin session, renders header + section nav. */
+const SYSTEM_PREFIXES = ['/admin/system', '/admin/teachers', '/admin/timetable', '/admin/students', '/admin/grades', '/admin/reports'];
+
+function tabForPath(pathname: string) {
+  if (pathname.startsWith('/admin/live')) return 'live' as const;
+  if (pathname.startsWith('/admin/performance')) return 'performance' as const;
+  if (SYSTEM_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + '/'))) return 'system' as const;
+  if (pathname === '/admin') return 'today' as const;
+  return 'system' as const;
+}
+
+/** Admin page frame: checks the admin session, renders header + the four tabs. */
 export function AdminShell({ children, title }: { children: ReactNode; title: string }) {
   const router = useRouter();
-  const pathname = usePathname();
-  const [me, setMe] = useState<{ email: string } | null>(null);
+  const pathname = usePathname() || '/admin';
+  const [me, setMe] = useState<{ email: string; tabs: Array<(typeof TABS)[number]['id']> } | null>(null);
 
   useEffect(() => {
-    api<{ role: string; email: string; mustChangePassword?: boolean }>('/api/auth/me').then(({ data }) => {
+    api<{ role: string; email: string; mustChangePassword?: boolean; kind?: string; privileges?: PrivilegeSet }>('/api/auth/me').then(({ data }) => {
       if (data.role !== 'admin') router.replace(loginHref((data as { reason?: unknown }).reason, window.location.pathname));
       else if (data.mustChangePassword) router.replace('/account/password');
-      else setMe({ email: data.email });
+      else {
+        const tabs = data.privileges && data.kind ? visibleAdminTabs(data.privileges, data.kind) : (['today', 'live', 'performance', 'system'] as const);
+        setMe({ email: data.email, tabs: [...tabs] });
+      }
     });
   }, [router]);
+
+  useEffect(() => {
+    if (!me) return;
+    const here = tabForPath(pathname);
+    if (me.tabs.includes(here)) return;
+    const first = TABS.find((t) => me.tabs.includes(t.id));
+    if (first) router.replace(first.href);
+  }, [me, pathname, router]);
 
   async function logout() {
     await api('/api/auth/logout', { method: 'POST' });
@@ -57,8 +77,8 @@ export function AdminShell({ children, title }: { children: ReactNode; title: st
         }
       />
       <nav className="mb-6 flex gap-1 overflow-x-auto border-b border-white/10 pb-px" aria-label="Admin sections">
-        {ADMIN_NAV.map((n) => {
-          const active = n.href === '/admin' ? pathname === '/admin' : pathname?.startsWith(n.href);
+        {TABS.filter((n) => me.tabs.includes(n.id)).map((n) => {
+          const active = tabForPath(pathname) === n.id;
           return (
             <Link
               key={n.href}

@@ -8,7 +8,7 @@ export const runtime = 'nodejs';
 /** Admin only: add division(s) to a grade `{ name: "A" | "A, B" }`. */
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   return handleCreateDivision((await params).id, await req.json().catch(() => null), {
-    guard: requireAdminApi,
+    guard: () => requireAdminApi('manageSchool'),
     store: gradeStore,
   });
 }

@@ -81,6 +81,8 @@ export async function clearRoomRedis(code: string) {
     keys.desktopInk(code),
     keys.pinnedSpeakers(code),
     keys.teacherPresent(code),
+    keys.micBook(code),
+    keys.spotlight(code),
     ...legacyKeys(code)
   );
 }

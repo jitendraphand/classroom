@@ -13,7 +13,7 @@ import { occurrencesForRange } from './scheduleService';
 import { addDays, forAudience, formatHHMM, localDateOf, type Occurrence } from './schedule';
 import { appTimeZone, earlyWindowMinutes } from './schoolConfig';
 import { decideRoute, routeSignature, type SessionState } from './studentRouting';
-import { admitWaiting } from './admission';
+import { admitWaiting, ClassFullError } from './admission';
 import { shouldAutoAdmit } from './admissionLogic';
 import type { JoinClaims } from './schoolJwt';
 
@@ -118,8 +118,12 @@ export async function ensureStudentParticipant(student: Student, room: Room, cs:
   // Waiting room switched off by the teacher: admit on arrival (still muted,
   // still only this class).
   if (shouldAutoAdmit(room, participant)) {
-    await admitWaiting(room, { ids: [participant.id] });
-    participant = { ...participant, status: 'ADMITTED' };
+    try {
+      await admitWaiting(room, { ids: [participant.id] });
+      participant = { ...participant, status: 'ADMITTED' };
+    } catch (e) {
+      if (!(e instanceof ClassFullError)) throw e;
+    }
   }
   await setStudentCookie(participant.sessionToken);
   await setActAsStudent();

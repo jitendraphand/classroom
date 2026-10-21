@@ -3,6 +3,7 @@ import { prisma } from './db';
 import { attendanceStatus, STATUS_LABEL, totalConnectedMs, type AttendanceStatus } from './attendance';
 import { toCsv, type Cell } from './csv';
 import { audienceIncludes, formatAudience, normalizeCampus, normalizeDivision, normalizeGrade } from './grades';
+import { isAcademicYearLabel } from './academicYear';
 import { addDays, dateOnly, dateValue, daysBetween, formatHHMM, isLocalDate, localDateOf, localMinuteOf } from './schedule';
 import { occurrencesForRange } from './scheduleService';
 import { appTimeZone } from './schoolConfig';
@@ -16,6 +17,7 @@ export type ReportFilter = {
   division?: string;
   subject?: string;
   classSessionId?: string;
+  academicYear?: string;
 };
 
 export class ReportError extends Error {}
@@ -42,6 +44,7 @@ export function parseReportFilter(url: URL, opts: { forceTeacherId?: string } = 
     division: d ? normalizeDivision(d) : undefined,
     subject: url.searchParams.get('subject')?.trim() || undefined,
     classSessionId: url.searchParams.get('sessionId') || undefined,
+    academicYear: isAcademicYearLabel(url.searchParams.get('year') || '') ? url.searchParams.get('year')! : undefined,
   };
 }
 
@@ -56,6 +59,7 @@ async function loadSessions(f: ReportFilter): Promise<SessionWith[]> {
     ...(f.subject ? { subject: { contains: f.subject, mode: 'insensitive' } } : {}),
     ...(f.division ? { OR: [{ allDivisions: true }, { divisions: { has: f.division } }] } : {}),
     ...(f.classSessionId ? { id: f.classSessionId } : {}),
+    ...(f.academicYear ? { academicYear: f.academicYear } : {}),
   };
   return prisma.classSession.findMany({
     where,

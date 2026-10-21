@@ -81,6 +81,14 @@ type Props = {
   /** Student data saver (cycles off → Low quality → Audio + share only). */
   dataSaver?: DataSaverMode;
   onCycleDataSaver?: () => void;
+  /** Student: cycles teacher+self / teacher / minimized. Shown only when set. */
+  videoPanelLabel?: string;
+  onCycleVideoPanel?: () => void;
+  /** Student mic queue. Label is "Ask to speak" or "Waiting (#n)". */
+  askToSpeakLabel?: string;
+  onAskToSpeak?: () => void;
+  /** Shown near the buttons while this student is in the speaking queue. */
+  micWaitNote?: string | null;
 };
 
 export function Controls({
@@ -118,6 +126,11 @@ export function Controls({
   onPrepareScreenShare,
   dataSaver,
   onCycleDataSaver,
+  videoPanelLabel,
+  onCycleVideoPanel,
+  askToSpeakLabel,
+  onAskToSpeak,
+  micWaitNote,
 }: Props) {
   void _canPublishVideo;
   const teacherMuted = !!mutedByTeacher && !isTeacher;
@@ -176,6 +189,36 @@ export function Controls({
         >
           {camOn ? <IconCam /> : <IconCamOff />}
         </IconButton>
+
+        {onCycleVideoPanel && (
+          <button
+            type="button"
+            data-testid="video-panel"
+            aria-label="Video panel"
+            title={videoPanelLabel || 'Video panel'}
+            onClick={onCycleVideoPanel}
+            className={cn(
+              'inline-flex items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-center font-semibold leading-tight text-slate-100 hover:bg-white/[0.12]',
+              rail ? 'w-full px-1 py-1 text-[9px]' : 'h-11 max-w-[11rem] px-2 text-[10px]'
+            )}
+          >
+            {videoPanelLabel || 'Video panel'}
+          </button>
+        )}
+
+        {onAskToSpeak && (
+          <button
+            type="button"
+            data-testid="ask-to-speak"
+            onClick={onAskToSpeak}
+            className={cn(
+              'inline-flex items-center justify-center rounded-full border border-amber-400/40 bg-amber-500/20 font-semibold leading-tight text-amber-100 hover:bg-amber-500/30',
+              rail ? 'w-full px-1 py-1 text-[9px]' : 'h-9 px-2.5 text-[11px]'
+            )}
+          >
+            {askToSpeakLabel || 'Ask to speak'}
+          </button>
+        )}
 
         {showScreenShare && (
           <IconButton
@@ -336,11 +379,21 @@ export function Controls({
           {teacherMuted ? 'Muted by teacher — wait to be unmuted' : lockReason}
         </p>
       )}
+      {micWaitNote && !rail && (
+        <p className="mt-1 w-full text-center text-2xs text-amber-200/90" role="status">
+          {micWaitNote}
+        </p>
+      )}
     </div>
     {micLocked && rail && (
       // Outside the rail (its backdrop-filter would trap position: fixed).
       <p className="control-status-pill" role="status">
         {teacherMuted ? 'Muted by teacher' : lockReason}
+      </p>
+    )}
+    {micWaitNote && rail && (
+      <p className="control-status-pill" style={micLocked ? { top: 36 } : undefined} role="status">
+        {micWaitNote}
       </p>
     )}
     </>

@@ -13,6 +13,7 @@ import { claimTeacherTab } from '@/lib/classroomClient';
 import { api } from '@/lib/clientFetch';
 import { loginHref } from '@/lib/sessionClient';
 import { adhocProblem } from '@/lib/adhocForm';
+import { TeacherInsights } from '@/components/teacher/TeacherInsights';
 
 type Me = { role: string; name?: string; email?: string; permanentCode?: string; mustChangePassword?: boolean };
 type ClassItem = {
@@ -66,6 +67,7 @@ export default function TeacherDashboard() {
   const [lastStart, setLastStart] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [adhoc, setAdhoc] = useState({ campus: '', grade: '', divisions: [] as string[], all: false, extra: '', subject: '' });
+  const [year, setYear] = useState('');
 
   useEffect(() => {
     fetch('/api/auth/act-as', {
@@ -84,9 +86,10 @@ export default function TeacherDashboard() {
   }, [router]);
 
   const loadSchedule = useCallback(async () => {
-    const { ok, data } = await api<Schedule>('/api/teacher/schedule');
+    const qs = year ? `?year=${encodeURIComponent(year)}` : '';
+    const { ok, data } = await api<Schedule>(`/api/teacher/schedule${qs}`);
     if (ok) setSchedule(data);
-  }, []);
+  }, [year]);
 
   useEffect(() => {
     if (!me) return;
@@ -183,7 +186,7 @@ export default function TeacherDashboard() {
   }, {});
 
   return (
-    <main className="page-shell max-w-4xl">
+    <main className="page-shell max-w-6xl">
       <AppHeader
         compact
         subtitle="Teacher dashboard"
@@ -207,6 +210,8 @@ export default function TeacherDashboard() {
         <h1 className="font-display text-2xl font-semibold tracking-tight">{me.name}</h1>
         <p className="text-sm text-slate-400">{me.email}</p>
       </div>
+
+      <TeacherInsights year={year} onYear={setYear} />
 
       {error && (
         <p className="mb-4 rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-2 text-sm text-danger-fg" role="alert">

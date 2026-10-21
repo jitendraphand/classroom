@@ -7,7 +7,7 @@ import { arriveAtSession, studentMayEnterRoom } from '@/lib/studentService';
 import { generateIdentity, generateSessionToken } from '@/lib/codes';
 import { jsonError, jsonOk } from '@/lib/response';
 import { ensureRedis, keys } from '@/lib/redis';
-import { admitWaiting } from '@/lib/admission';
+import { admitWaiting, ClassFullError } from '@/lib/admission';
 import { shouldAutoAdmit } from '@/lib/admissionLogic';
 
 const schema = z.object({
@@ -69,8 +69,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     // Waiting room switched off by the teacher: straight into the class.
     let status: string = participant.status;
     if (shouldAutoAdmit(room, participant)) {
-      await admitWaiting(room, { ids: [participant.id] });
-      status = 'ADMITTED';
+      try {
+        await admitWaiting(room, { ids: [participant.id] });
+        status = 'ADMITTED';
+      } catch (e) {
+        if (!(e instanceof ClassFullError)) throw e;
+      }
     }
 
     nudgeRoomState(room.code, 'teacher');

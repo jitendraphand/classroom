@@ -1,3 +1,4 @@
+import { privilegeSetFrom, type PrivilegeSet } from './privileges';
 import { cachedRead } from './dbCache';
 import { cookies } from 'next/headers';
 import bcrypt from 'bcryptjs';
@@ -215,7 +216,14 @@ export async function clearAdminCookie() {
   (await cookies()).set(adminCookieName(), '', cookieOptions(0));
 }
 
-export type AdminSession = { id: string; email: string; name: string; mustChangePassword: boolean };
+export type AdminSession = {
+  id: string;
+  email: string;
+  name: string;
+  mustChangePassword: boolean;
+  kind: 'SYSTEM' | 'SUB';
+  privileges: PrivilegeSet;
+};
 
 /** The signed-in admin, or null (same rules as getTeacherSession). */
 export async function getAdminSession(
@@ -233,6 +241,8 @@ export async function getAdminSession(
       email: admin.email,
       name: admin.name,
       mustChangePassword: admin.mustChangePassword,
+      kind: admin.kind,
+      privileges: privilegeSetFrom(admin),
     };
   } catch {
     return null;

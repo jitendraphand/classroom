@@ -5,7 +5,7 @@ import { campusStore } from '@/lib/campusMaster';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-const deps = { guard: requireAdminApi, store: campusStore };
+const deps = { guard: () => requireAdminApi('manageSchool'), store: campusStore };
 
 /** Admin only: campuses (incl. inactive) with usage counts, and unrecognised student campuses. */
 export async function GET() {

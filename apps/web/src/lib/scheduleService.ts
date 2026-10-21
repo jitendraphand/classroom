@@ -26,6 +26,7 @@ export function toSlotLike(s: TimetableSlot): SlotLike {
     endMinute: s.endMinute,
     effectiveFrom: dateOnly(s.effectiveFrom),
     effectiveTo: dateOnly(s.effectiveTo),
+    academicYear: s.academicYear || '',
   };
 }
 
@@ -44,30 +45,41 @@ export function toOverrideLike(o: ScheduleOverride): OverrideLike {
     startMinute: o.startMinute,
     endMinute: o.endMinute,
     note: o.note,
+    academicYear: o.academicYear || '',
   };
 }
 
-/** Slots + overrides relevant to [from, to]. */
-export async function loadSchedule(from: string, to: string) {
+/**
+ * Slots + overrides relevant to [from, to].
+ * When `year` is set, only that academic year (and still-untagged rows) are loaded.
+ */
+export async function loadSchedule(from: string, to: string, year?: string) {
+  const yearClause = year ? { OR: [{ academicYear: year }, { academicYear: '' }] } : undefined;
   const [slots, overrides] = await Promise.all([
     prisma.timetableSlot.findMany({
       where: {
         AND: [
           { OR: [{ effectiveFrom: null }, { effectiveFrom: { lte: dateValue(to) } }] },
           { OR: [{ effectiveTo: null }, { effectiveTo: { gte: dateValue(from) } }] },
+          ...(yearClause ? [yearClause] : []),
         ],
       },
     }),
     prisma.scheduleOverride.findMany({
-      where: { date: { gte: dateValue(from), lte: dateValue(to) } },
+      where: {
+        date: { gte: dateValue(from), lte: dateValue(to) },
+        ...(yearClause ? yearClause : {}),
+      },
     }),
   ]);
   return { slots: slots.map(toSlotLike), overrides: overrides.map(toOverrideLike) };
 }
 
-export async function occurrencesForRange(from: string, to: string, tz = appTimeZone()): Promise<Occurrence[]> {
-  const { slots, overrides } = await loadSchedule(from, to);
-  return occurrencesBetween(from, to, slots, overrides, tz);
+export async function occurrencesForRange(from: string, to: string, tz = appTimeZone(), year?: string): Promise<Occurrence[]> {
+  const { slots, overrides } = await loadSchedule(from, to, year);
+  const occs = occurrencesBetween(from, to, slots, overrides, tz);
+  if (!year) return occs;
+  return occs.filter((o) => !o.academicYear || o.academicYear === year);
 }
 
 export async function occurrencesForDate(date: string, tz = appTimeZone()): Promise<Occurrence[]> {

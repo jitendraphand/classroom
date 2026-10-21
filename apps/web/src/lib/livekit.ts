@@ -6,6 +6,7 @@ import {
   TrackType,
 } from 'livekit-server-sdk';
 import { prisma } from './db';
+import { ensureRedis, keys } from './redis';
 import { resolvePublicLiveKitUrl } from './url';
 import { isTeacherPresent } from './teacherPresence';
 import { studentMicAllowed } from './teacherPresenceLogic';
@@ -278,6 +279,21 @@ export async function sendRoomData(
   }
 }
 
+/** True when this identity is the student the teacher is currently spotlighting. */
+async function spotlightKeepsCamera(code: string, identity: string): Promise<boolean> {
+  try {
+    const id = await (await ensureRedis()).get(keys.spotlight(code));
+    if (!id) return false;
+    const part = await prisma.participant.findFirst({
+      where: { id, livekitIdentity: identity, role: 'STUDENT' },
+      select: { id: true },
+    });
+    return !!part;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Server-side force of a participant's publish permissions via LiveKit.
  *
@@ -304,6 +320,9 @@ export async function setParticipantPublishPermissions(
   const perms: PublishPermissions = {
     ...requested,
     allowMic: studentMicAllowed({ mutedByTeacher: !requested.allowMic, teacherPresent }),
+    // Spotlight keeps the camera grant when a sample rotation or a mute update
+    // would otherwise take it away. The spotlight key is cleared before a stop.
+    allowCamera: requested.allowCamera || (await spotlightKeepsCamera(code, identity)),
   };
   // Only ever called for students: never re-grant data publishing or screen share.
   const allowed = publishSourcesFor({ allowCamera: perms.allowCamera, allowMic: perms.allowMic });

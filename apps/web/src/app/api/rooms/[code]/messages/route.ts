@@ -4,6 +4,7 @@ import { resolveRoomAccess } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
 import { livekitRoomName, sendRoomData } from '@/lib/livekit';
 import { chatAudience } from '@/lib/chatAudience';
+import { publishChat } from '@/lib/chatBus';
 
 export const dynamic = 'force-dynamic';
 
@@ -162,6 +163,8 @@ async function pushMessage(
     },
     people
   );
+  const allowedIds = people.filter((p) => audience.includes(p.livekitIdentity)).map((p) => p.id);
+  void publishChat(room.code, serializeMessage(msg), allowedIds).catch((e) => console.warn('chat sse', e));
   if (audience.length === 0) return;
   await sendRoomData(
     livekitRoomName(room.code, room.sessionId),

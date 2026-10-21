@@ -14,7 +14,7 @@ export const runtime = 'nodejs';
 export async function POST(req: Request, { params }: { params: Promise<{ code: string }> }) {
   const body = await req.json().catch(() => null);
   return handleObserverToken((await params).code, body, {
-    guard: requireAdminApi,
+    guard: () => requireAdminApi('monitorLive'),
     get: getLiveClass,
     mint: createObserverToken,
     serverUrl: (roomName) => mediaUrlForRoom(roomName, req),

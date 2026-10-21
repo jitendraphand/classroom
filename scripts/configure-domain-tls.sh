@@ -88,7 +88,7 @@ cat > "$CADDYFILE" << CADDY
 # Bring up with TLS profile:
 #   docker compose --profile tls up --build -d
 #
-# Firewall: open 80/tcp, 443/tcp, 7881/tcp, 50000–50100/udp, and for TURN 5349/tcp + 3478/udp.
+# Firewall: open 80/tcp, 443/tcp, 7881/tcp, 50000–60000/udp, and for TURN 5349/tcp + 3478/udp.
 # Do NOT expose 3000 or 7880 publicly when using Caddy (signaling via WSS on livekit host).
 # Media (WebRTC UDP/TCP) stays direct to LiveKit — Caddy cannot terminate UDP.
 
@@ -134,6 +134,6 @@ echo "  ./scripts/sync-livekit-keys.sh"
 echo "  docker compose --profile tls up --build -d"
 echo
 echo "Firewall reminder (with Caddy):"
-echo "  Open:  80/tcp, 443/tcp, 7881/tcp, 50000-50100/udp"
+echo "  Open:  80/tcp, 443/tcp, 7881/tcp, 50000-60000/udp"
 echo "  Close publicly: 3000/tcp, 7880/tcp (proxied via Caddy), 5432, 6379"
 echo "See docs/DEPLOY-CADDY.md"

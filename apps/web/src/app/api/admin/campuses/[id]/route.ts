@@ -5,7 +5,7 @@ import { campusStore } from '@/lib/campusMaster';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-const deps = { guard: requireAdminApi, store: campusStore };
+const deps = { guard: () => requireAdminApi('manageSchool'), store: campusStore };
 
 /** Admin only: `{ label?, active? }` (the code itself only while unused). */
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {

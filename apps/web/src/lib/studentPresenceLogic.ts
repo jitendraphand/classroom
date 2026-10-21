@@ -12,7 +12,7 @@
  * network blip reconnects within that grace and clears the mark). The seat
  * itself stays ADMITTED, so the student can come back with the same link.
  */
-export const STUDENT_GONE_GRACE_MS = 8_000;
+export const STUDENT_GONE_GRACE_MS = 2_500;
 
 export type StudentLive = { sid: string; gone?: number };
 

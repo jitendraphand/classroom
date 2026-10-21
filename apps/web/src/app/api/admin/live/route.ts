@@ -7,5 +7,5 @@ export const runtime = 'nodejs';
 
 /** Admin only: every class that is running right now (see lib/liveClasses.ts). */
 export async function GET() {
-  return handleListLive({ guard: requireAdminApi, list: listLiveClasses });
+  return handleListLive({ guard: () => requireAdminApi('monitorLive'), list: listLiveClasses });
 }

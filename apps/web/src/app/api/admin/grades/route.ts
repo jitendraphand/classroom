@@ -5,7 +5,7 @@ import { gradeStore } from '@/lib/gradeMaster';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-const deps = { guard: requireAdminApi, store: gradeStore };
+const deps = { guard: () => requireAdminApi('manageSchool'), store: gradeStore };
 
 /** Admin only: the full master list (incl. inactive), usage counts, unrecognised student entries. */
 export async function GET() {

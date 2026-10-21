@@ -16,13 +16,13 @@ const createSchema = z.object({
 });
 
 export async function GET() {
-  const { res } = await requireAdminApi();
+  const { res } = await requireAdminApi(['manageTeachers', 'schedule', 'viewReports']);
   if (res) return res;
   return jsonOk({ teachers: await listTeachers() });
 }
 
 export async function POST(req: Request) {
-  const { res } = await requireAdminApi();
+  const { res } = await requireAdminApi('manageTeachers');
   if (res) return res;
   try {
     const body = createSchema.parse(await req.json());

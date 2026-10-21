@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic';
  * plus overrides in the next 60 days (or ?from&to) and the teacher list.
  */
 export async function GET(req: Request) {
-  const { res } = await requireAdminApi();
+  const { res } = await requireAdminApi('schedule');
   if (res) return res;
   const url = new URL(req.url);
   const teacherId = url.searchParams.get('teacherId') || undefined;
@@ -23,6 +23,8 @@ export async function GET(req: Request) {
   const today = localDateOf(new Date(), tz);
   const from = url.searchParams.get('from') || addDays(today, -7);
   const to = url.searchParams.get('to') || addDays(today, 60);
+  const year = url.searchParams.get('year') || '';
+  const yearWhere = year ? { academicYear: year } : {};
 
   const [teachers, slotRows, overrideRows] = await Promise.all([
     prisma.teacher.findMany({
@@ -31,11 +33,11 @@ export async function GET(req: Request) {
       select: { id: true, name: true, disabled: true, assignments: { select: { campus: true, grade: true, division: true } } },
     }),
     prisma.timetableSlot.findMany({
-      where: { ...(teacherId ? { teacherId } : {}), ...(campus ? { campus } : {}), ...(grade ? { grade } : {}) },
+      where: { ...(teacherId ? { teacherId } : {}), ...(campus ? { campus } : {}), ...(grade ? { grade } : {}), ...yearWhere },
       orderBy: [{ weekday: 'asc' }, { startMinute: 'asc' }],
     }),
     prisma.scheduleOverride.findMany({
-      where: { date: { gte: dateValue(from), lte: dateValue(to) } },
+      where: { date: { gte: dateValue(from), lte: dateValue(to) }, ...yearWhere },
       orderBy: [{ date: 'asc' }, { startMinute: 'asc' }],
       include: { slot: true },
     }),
@@ -58,6 +60,7 @@ export async function GET(req: Request) {
       end: formatHHMM(s.endMinute),
       effectiveFrom: dateOnly(s.effectiveFrom),
       effectiveTo: dateOnly(s.effectiveTo),
+      academicYear: s.academicYear,
     }));
   const overrides = overrideRows.map((o) => ({
     id: o.id,
@@ -85,5 +88,6 @@ export async function GET(req: Request) {
     teachers: teachers.map((t) => ({ id: t.id, name: t.name, disabled: t.disabled, assignments: t.assignments })),
     slots,
     overrides,
+    academicYear: year || null,
   });
 }

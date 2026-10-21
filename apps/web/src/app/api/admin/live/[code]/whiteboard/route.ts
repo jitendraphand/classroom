@@ -11,7 +11,7 @@ export const runtime = 'nodejs';
  * this admin's own observer identities).
  */
 export async function POST(req: Request, { params }: { params: Promise<{ code: string }> }) {
-  const g = await requireAdminApi();
+  const g = await requireAdminApi('monitorLive');
   if (g.res) return g.res;
   const code = String((await params).code || '').toUpperCase().slice(0, 32);
   const body = (await req.json().catch(() => null)) as { identity?: unknown } | null;

@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic';
 
 /** Known students (first signed join or roster import), filterable. */
 export async function GET(req: Request) {
-  const { res } = await requireAdminApi();
+  const { res } = await requireAdminApi('manageSchool');
   if (res) return res;
   const url = new URL(req.url);
   const campus = url.searchParams.get('campus');
@@ -65,7 +65,7 @@ const deleteSchema = z.object({ id: z.string().min(1).max(64) });
  * (or a roster import) restores the student.
  */
 export async function DELETE(req: Request) {
-  const { res } = await requireAdminApi();
+  const { res } = await requireAdminApi('manageSchool');
   if (res) return res;
   const parsed = deleteSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return jsonError('Student id required');

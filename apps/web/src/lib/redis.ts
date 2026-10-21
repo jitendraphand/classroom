@@ -67,6 +67,12 @@ export const keys = {
   replacedToken: (token: string) => `student-token:${token}:replaced`,
   /** List of JSON TakeoverNotice for the teacher's toast (newest first). */
   takeovers: (code: string) => `room:${code}:takeovers`,
+  /** JSON MicBook: open student mics and the speak queue. */
+  micBook: (code: string) => `room:${code}:mic-book`,
+  /** Participant id the teacher is spotlighting, or absent. */
+  spotlight: (code: string) => `room:${code}:spotlight`,
+  /** Redis pub/sub channel for chat SSE (not a stored key). */
+  chatChannel: (code: string) => `room:${code}:chat`,
 };
 
 export type StageMode = 'idle' | 'screen';

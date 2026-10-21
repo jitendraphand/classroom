@@ -5,7 +5,8 @@ import { prisma } from '@/lib/db';
 import { getTeacherSession } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
 import { clampMaxVisible, rotateVisibleSample } from '@/lib/sample';
-import { admitWaiting } from '@/lib/admission';
+import { admitWaiting, ClassFullError } from '@/lib/admission';
+import { CLASS_FULL_MESSAGE } from '@/lib/capacity';
 import { idsToAdmitOnToggle } from '@/lib/admissionLogic';
 
 const schema = z.object({
@@ -54,6 +55,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ code: 
     });
   } catch (e) {
     if (e instanceof z.ZodError) return jsonError(e.errors[0]?.message || 'Invalid input');
+    if (e instanceof ClassFullError) return jsonError(CLASS_FULL_MESSAGE, 409);
     console.error(e);
     return jsonError('Update failed', 500);
   }

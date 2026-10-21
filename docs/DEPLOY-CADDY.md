@@ -17,7 +17,7 @@ Goal: serve the app at `https://DOMAIN` and LiveKit signaling at `wss://livekit.
 | LiveKit **signaling** (WebSocket) | Caddy `livekit.DOMAIN:443` → `127.0.0.1:7880` |
 | LiveKit **media** (WebRTC UDP + TCP RTC) | **Direct to LiveKit** on the host — **not** through Caddy |
 
-Caddy cannot terminate WebRTC UDP. Keep UDP `50000–50100` and TCP `7881` open to the public internet (same as the bare-IP deploy). `LIVEKIT_NODE_IP` / `use_external_ip` still advertise the VM public IP for ICE.
+Caddy cannot terminate WebRTC UDP. Keep UDP `50000–60000` and TCP `7881` open to the public internet (same as the bare-IP deploy). `LIVEKIT_NODE_IP` / `use_external_ip` still advertise the VM public IP for ICE.
 
 All Compose services (including Caddy) use **`network_mode: host`** so Caddy can reach loopback Next.js/LiveKit and bind `:80`/`:443` on the VM.
 
@@ -52,7 +52,7 @@ PUBLIC_IP=81.223.254.76 ACME_EMAIL=admin@example.com \
 docker compose --profile tls up --build -d
 ```
 
-No registrar or manual A records. Still open firewall **80/443**, **7881**, and UDP **50000–50100** as in §2. Confirm resolution first:
+No registrar or manual A records. Still open firewall **80/443**, **7881**, and UDP **50000–60000** as in §2. Confirm resolution first:
 
 ```bash
 getent ahostsv4 81-223-254-76.sslip.io
@@ -79,7 +79,7 @@ Wait until both resolve (`dig +short class.example.com`) before bringing Caddy u
 | **80** | TCP | ACME HTTP-01 + HTTP→HTTPS redirect |
 | **443** | TCP | HTTPS (app) + WSS (LiveKit signaling via subdomain) |
 | **7881** | TCP | LiveKit RTC over TCP fallback (**direct**, not via Caddy) |
-| **50000–50100** | UDP | LiveKit WebRTC media (**direct**) |
+| **50000–60000** | UDP | LiveKit WebRTC media (**direct**) |
 
 **Do not** expose publicly when using Caddy:
 
@@ -93,7 +93,7 @@ Example (ufw):
 sudo ufw allow 80/tcp
 sudo ufw allow 443/tcp
 sudo ufw allow 7881/tcp
-sudo ufw allow 50000:50100/udp
+sudo ufw allow 50000:60000/udp
 # If you previously opened these for bare-IP HTTP, close them:
 sudo ufw delete allow 3000/tcp || true
 sudo ufw delete allow 7880/tcp || true
@@ -205,7 +205,7 @@ Same as bare-IP: if some clients get signaling but no media, add TURN. HTTPS doe
 - [ ] DNS A/AAAA for `DOMAIN` and `livekit.DOMAIN` → `PUBLIC_IP`
 - [ ] `DOMAIN=… PUBLIC_IP=… ./scripts/configure-domain-tls.sh`
 - [ ] Optional `ACME_EMAIL` for LE notices
-- [ ] Firewall: 80, 443, 7881, UDP 50000–50100; **not** public 3000/7880/5432/6379
+- [ ] Firewall: 80, 443, 7881, UDP 50000–60000; **not** public 3000/7880/5432/6379
 - [ ] `./scripts/sync-livekit-keys.sh`
 - [ ] `docker compose --profile tls up --build -d`
 - [ ] `https://DOMAIN/api/health` healthy; join links use `https://`

@@ -38,7 +38,7 @@ type Override = {
   end: string | null;
   note: string | null;
 };
-type Data = { timezone: string; today: string; teachers: Teacher[]; slots: Slot[]; overrides: Override[] };
+type Data = { timezone: string; today: string; teachers: Teacher[]; slots: Slot[]; overrides: Override[]; academicYear?: string | null };
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
@@ -83,6 +83,8 @@ function TimetableEditor() {
   const [slotForm, setSlotForm] = useState(emptySlot);
   const [editingId, setEditingId] = useState<string | null>(null);
   const gradeOptions = useGradeOptions();
+  const [year, setYear] = useState('');
+  const [years, setYears] = useState<string[]>([]);
   const [ov, setOv] = useState({
     kind: 'CANCEL' as Override['kind'],
     date: '',
@@ -105,15 +107,22 @@ function TimetableEditor() {
       qs.set('grade', grade);
       if (division) qs.set('division', division);
     }
+    if (year) qs.set('year', year);
     const [v, a] = await Promise.all([api<Data>(`/api/admin/timetable?${qs}`), api<Data>('/api/admin/timetable')]);
     if (v.ok) setView(v.data);
     else setError(v.data.error || 'Could not load timetable');
     if (a.ok) setAll(a.data);
-  }, [mode, teacherId, campus, grade, division]);
+  }, [mode, teacherId, campus, grade, division, year]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    api<{ years: { label: string }[] }>('/api/admin/academic-years').then(({ ok, data }) => {
+      if (ok) setYears(data.years.map((y) => y.label));
+    });
+  }, []);
 
   useEffect(() => {
     if (all && !ov.date) setOv((o) => ({ ...o, date: all.today }));
@@ -142,6 +151,7 @@ function TimetableEditor() {
       weekdays: editingId ? undefined : days,
       effectiveFrom: slotForm.effectiveFrom || null,
       effectiveTo: slotForm.effectiveTo || null,
+      academicYear: year || undefined,
       force,
     };
     const { ok, data } = await api<{ canForce?: boolean }>(
@@ -258,6 +268,17 @@ function TimetableEditor() {
               </button>
             ))}
           </div>
+          <label className="block text-sm">
+            <span className="label">Academic year</span>
+            <select className="input" value={year} onChange={(e) => setYear(e.target.value)} aria-label="Academic year">
+              <option value="">All years</option>
+              {years.map((y) => (
+                <option key={y} value={y}>
+                  {y}
+                </option>
+              ))}
+            </select>
+          </label>
           {mode === 'teacher' ? (
             <select className="input max-w-xs" value={teacherId} onChange={(e) => setTeacherId(e.target.value)} aria-label="Teacher">
               <option value="">Choose a teacher…</option>

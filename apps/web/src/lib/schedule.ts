@@ -8,6 +8,7 @@
  * - Times are minutes after local midnight (0‥1440).
  * - weekday 0 = Sunday … 6 = Saturday (JS getDay()).
  */
+import { academicYearForDate } from './academicYear';
 import { audiencesOverlap, audienceIncludes, normalizeCampus, normalizeDivision, normalizeGrade, type Audience } from './grades';
 
 export type { Audience };
@@ -21,6 +22,8 @@ export type SlotLike = Audience & {
   endMinute: number;
   effectiveFrom: string | null;
   effectiveTo: string | null;
+  /** India-style label. Omitted on older fixtures; derived from the date. */
+  academicYear?: string;
 };
 
 export type OverrideKindT = 'CANCEL' | 'MODIFY' | 'EXTRA';
@@ -39,6 +42,7 @@ export type OverrideLike = {
   startMinute: number | null;
   endMinute: number | null;
   note: string | null;
+  academicYear?: string;
 };
 
 export type Occurrence = Audience & {
@@ -58,6 +62,7 @@ export type Occurrence = Audience & {
   modified: boolean;
   extra: boolean;
   note: string | null;
+  academicYear?: string;
 };
 
 export const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -225,6 +230,7 @@ export function occurrencesOn(
       modified: !!mod,
       extra: false,
       note: mod?.note ?? null,
+      academicYear: mod?.academicYear || slot.academicYear || academicYearForDate(date),
     });
   }
   for (const o of todays) {
@@ -248,6 +254,7 @@ export function occurrencesOn(
       modified: false,
       extra: true,
       note: o.note,
+      academicYear: o.academicYear || academicYearForDate(date),
     });
   }
   return out.sort((a, b) => a.start.getTime() - b.start.getTime() || a.subject.localeCompare(b.subject));

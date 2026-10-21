@@ -4,7 +4,7 @@ import { jsonError, jsonOk } from '@/lib/response';
 import { createSlot, slotBody, TimetableError } from '@/lib/timetableAdmin';
 
 export async function POST(req: Request) {
-  const { res } = await requireAdminApi();
+  const { res } = await requireAdminApi('schedule');
   if (res) return res;
   try {
     const out = await createSlot(slotBody.parse(await req.json()));

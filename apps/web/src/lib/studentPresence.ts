@@ -13,7 +13,8 @@ export async function recordStudentConnection(code: string, identity: string, ki
   await r.multi().hset(keys.studentLive(code), identity, JSON.stringify(next)).expire(keys.studentLive(code), TTL_S).exec();
   if (kind === 'left') {
     // The roster drops them once the grace has passed: tell the teacher then.
-    setTimeout(() => nudgeRoomState(code, 'teacher'), STUDENT_GONE_GRACE_MS + 500).unref?.();
+    setTimeout(() => nudgeRoomState(code, 'teacher'), STUDENT_GONE_GRACE_MS).unref?.();
+    setTimeout(() => nudgeRoomState(code, 'teacher'), STUDENT_GONE_GRACE_MS + 1500).unref?.();
   } else {
     nudgeRoomState(code, 'teacher');
   }

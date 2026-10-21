@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { academicYearForDate, formatAcademicYear } from '@/lib/academicYear';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -87,7 +88,7 @@ export function ReportView({
   showTeacherFilter?: boolean;
 }) {
   const [kind, setKind] = useState<Kind>('sessions');
-  const [filter, setFilter] = useState({ from: isoDay(-30), to: isoDay(0), teacherId: '', campus: '', grade: '', division: '', subject: '', sessionId: '' });
+  const [filter, setFilter] = useState({ from: isoDay(-30), to: isoDay(0), teacherId: '', campus: '', grade: '', division: '', subject: '', sessionId: '', year: academicYearForDate(isoDay(0)) });
   const [rows, setRows] = useState<unknown[] | null>(null);
   const [total, setTotal] = useState<number | null>(null);
   const [error, setError] = useState('');
@@ -132,6 +133,20 @@ export function ReportView({
           <label className="block">
             <span className="label">To</span>
             <input className="input px-2" type="date" value={filter.to} onChange={set('to')} />
+          </label>
+          <label className="block">
+            <span className="label">Academic year</span>
+            <select className="input" value={filter.year} onChange={set('year')}>
+              <option value="">All years</option>
+              {[new Date().getFullYear() - 1, new Date().getFullYear(), new Date().getFullYear() + 1].map((y) => {
+                const label = formatAcademicYear(y);
+                return (
+                  <option key={label} value={label}>
+                    {label}
+                  </option>
+                );
+              })}
+            </select>
           </label>
           {showTeacherFilter && (
             <label className="block">

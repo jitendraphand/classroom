@@ -32,8 +32,9 @@ test('encodings: last is the top layer, other fields kept', () => {
   assert.deepEqual(out[0], { rid: 'q', active: true, scaleResolutionDownBy: 1.5, maxBitrate: 1_000_000, maxFramerate: 24 });
   assert.deepEqual(out[1], { rid: 'h', active: false, scaleResolutionDownBy: 1, maxBitrate: 1_500_000, maxFramerate: 24 });
   const back = shareEncodingsFor(out, false);
-  assert.equal(back[0].maxFramerate, 8);
-  assert.equal(back[1].maxBitrate, 1_500_000);
+  // Slides (default) share: 720p floor at 24 fps, top layer at the raised bitrate.
+  assert.equal(back[0].maxFramerate, 24);
+  assert.equal(back[1].maxBitrate, 2_500_000);
   const single = shareEncodingsFor([{ maxBitrate: 1 }], true);
   assert.equal(single[0].maxBitrate, 1_500_000);
 });

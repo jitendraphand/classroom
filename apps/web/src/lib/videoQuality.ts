@@ -5,7 +5,8 @@
  * Teacher camera: 360p single layer. Student camera: small single layer, and
  * only published while the teacher actually shows it (see camWanted in /state).
  * Screen share: VP9 L1T3 (frame rate degrades, resolution never) with a VP8
- * 720p-floor simulcast backup; slides ≤8 fps, video mode 720p24. Subscribers
+ * 720p-floor simulcast backup; default capture is 24 fps (max 30) so motion
+ * stays readable, video mode is 720p24. Subscribers
  * use adaptiveStream + dynacast (ClassroomRoom), so the SFU forwards what fits
  * the element and publishers stop encoding layers nobody receives.
  */
@@ -38,20 +39,20 @@ export const STUDENT_CAMERA = {
 } as const;
 
 export const SCREEN_SHARE = {
-  // Slides: max 8 fps. Chrome's screen capturer only delivers a frame when the
-  // screen changes, and the encoder sends almost nothing for a static frame,
-  // so a still slide costs ~0 kbps; 8 fps keeps the pointer readable.
-  capture: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 8, max: 8 } },
+  // Motion-capable default: ideal 24 fps, max 30. Chrome's screen capturer
+  // still skips unchanged frames, so a still slide stays cheap, while a
+  // playing video or a moving pointer is no longer stuck at 8 fps.
+  capture: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 24, max: 30 } },
   /** Top layer: the captured resolution (≤1080p with the capture hints). */
-  encoding: { maxBitrate: 1_500_000, maxFramerate: 8 },
+  encoding: { maxBitrate: 2_500_000, maxFramerate: 30 },
   simulcast: true,
   /**
    * VP8/H.264 fallback only (VP9 uses one spatial layer, see SHARE_CODEC):
-   * one lower layer at 720p, the floor for legible slide text (540p blurs
+   * one lower layer at 720p, the floor for legible text on phones (540p blurs
    * small text). Received by small viewports, data-saver students and admin
    * tiles; large viewports keep the top layer.
    */
-  layers: [{ width: 1280, height: 720, maxBitrate: 450_000, maxFramerate: 8 }] satisfies Layer[],
+  layers: [{ width: 1280, height: 720, maxBitrate: 1_200_000, maxFramerate: 24 }] satisfies Layer[],
 } as const;
 
 /**

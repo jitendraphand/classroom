@@ -10,13 +10,28 @@ datasource db {
 /// The single school administrator (bootstrapped by scripts/create-admin.sh /
 /// the container entrypoint from ADMIN_EMAIL). Kept apart from Teacher so an
 /// admin session can never be used as a teacher session and vice versa.
+enum AdminKind {
+  /// Bootstrapped from ADMIN_EMAIL. The only account that manages sub-admins.
+  SYSTEM
+  /// Created by the system administrator, with an explicit privilege set.
+  SUB
+}
+
 model Admin {
-  id                 String   @id @default(cuid())
-  email              String   @unique
+  id                 String    @id @default(cuid())
+  email              String    @unique
   passwordHash       String
-  name               String   @default("Administrator")
+  name               String    @default("Administrator")
+  /// SYSTEM is seeded at deploy. SUB is created in System Control.
+  kind               AdminKind @default(SYSTEM)
+  /// Privileges apply to SUB only. SYSTEM always has every privilege.
+  privManageTeachers Boolean   @default(false)
+  privSchedule       Boolean   @default(false)
+  privMonitorLive    Boolean   @default(false)
+  privViewReports    Boolean   @default(false)
+  privManageSchool   Boolean   @default(false)
   /// Set for a generated (bootstrap / reset) password: must change on first login.
-  mustChangePassword Boolean  @default(true)
+  mustChangePassword Boolean   @default(true)
   /// Bumped on password change/reset; session JWTs carry it so old sessions die.
   sessionVersion     Int      @default(0)
   /// The one signed-in session (set on login, cleared on logout). A token with another id was replaced by a newer login.
@@ -50,6 +65,7 @@ model Teacher {
   slots              TimetableSlot[]
   overrides          ScheduleOverride[]
   classSessions      ClassSession[]
+  rankSnapshots      TeacherRankSnapshot[]
 }
 
 /// Grade/division a teacher may teach. division "*" = every division of the grade.
@@ -177,6 +193,8 @@ model TimetableSlot {
   /// Optional inclusive local-date range (term dates).
   effectiveFrom DateTime?          @db.Date
   effectiveTo   DateTime?          @db.Date
+  /// India-style academic year label, e.g. "2026-27" (June–May). Editable.
+  academicYear  String             @default("")
   createdAt     DateTime           @default(now())
   updatedAt     DateTime           @updatedAt
   overrides     ScheduleOverride[]
@@ -184,6 +202,7 @@ model TimetableSlot {
 
   @@index([teacherId, weekday])
   @@index([campus, grade, weekday])
+  @@index([academicYear])
 }
 
 enum OverrideKind {
@@ -214,11 +233,14 @@ model ScheduleOverride {
   startMinute  Int?
   endMinute    Int?
   note         String?
+  /// India-style academic year label. Defaults from `date` when omitted.
+  academicYear String         @default("")
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
 
   @@unique([slotId, date])
   @@index([date])
+  @@index([academicYear])
 }
 
 /// One held (or about-to-be-held) class: a timetable occurrence or an ad-hoc
@@ -248,13 +270,17 @@ model ClassSession {
   /// Set when the teacher starts the class (first start; kept on reopen).
   startedAt      DateTime?
   endedAt        DateTime?
+  /// India-style academic year label copied from the schedule (or the session date).
+  academicYear   String             @default("")
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
   attendance     AttendanceRecord[]
+  feedback       ClassFeedback[]
 
   @@index([teacherId, sessionDate])
   @@index([campus, grade, sessionDate])
   @@index([sessionDate])
+  @@index([academicYear])
 }
 
 /// A student known from the external school app (first signed join) or an
@@ -280,6 +306,7 @@ model Student {
   updatedAt    DateTime           @updatedAt
   participants Participant[]
   attendance   AttendanceRecord[]
+  feedback     ClassFeedback[]
 
   @@index([campus, grade, division])
 }
@@ -359,4 +386,61 @@ model Division {
   updatedAt DateTime @updatedAt
 
   @@unique([gradeId, name])
+}
+
+/// One student's end-of-class rating. Teachers never receive `comment`.
+model ClassFeedback {
+  id             String       @id @default(cuid())
+  classSessionId String
+  classSession   ClassSession @relation(fields: [classSessionId], references: [id], onDelete: Cascade)
+  studentId      String
+  student        Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  /// 1–5. Required.
+  stars          Int
+  /// Optional, at most 100 characters. Letters, digits, spaces and . , ! ? ' " - ( ) : ;
+  comment        String?
+  createdAt      DateTime     @default(now())
+
+  @@unique([classSessionId, studentId])
+  @@index([studentId])
+  @@index([classSessionId])
+}
+
+/// Weekly percentile snapshot. Recomputed by the in-process scheduler and by "recompute now".
+model TeacherRankSnapshot {
+  id           String   @id @default(cuid())
+  teacherId    String
+  teacher      Teacher  @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  academicYear String
+  /// Monday (school time zone) of the week this snapshot describes.
+  weekStart    DateTime @db.Date
+  /// Null when the teacher is under the minimum-ratings threshold.
+  percentile   Float?
+  bayesianAvg  Float
+  rawAvg       Float?
+  ratingCount  Int
+  eligible     Boolean  @default(false)
+  computedAt   DateTime @default(now())
+
+  @@unique([teacherId, academicYear, weekStart])
+  @@index([academicYear, weekStart])
+}
+
+/// Labels the school uses (e.g. "2026-27"). Schedules store the label as text.
+model AcademicYear {
+  id        String   @id @default(cuid())
+  label     String   @unique
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// Singleton school settings. id is always "default".
+model SchoolSetting {
+  id                  String   @id @default("default")
+  /// 0 = no cap. Otherwise at most this many student microphones open at once.
+  maxOpenStudentMics  Int      @default(0)
+  /// Null or 0 = no cap on students in one class.
+  maxStudentsPerClass Int?
+  updatedAt           DateTime @updatedAt
 }

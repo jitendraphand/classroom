@@ -7,5 +7,5 @@ export const runtime = 'nodejs';
 
 /** Admin only: one ongoing class + the names of the students connected now. */
 export async function GET(_req: Request, { params }: { params: Promise<{ code: string }> }) {
-  return handleLiveDetail((await params).code, { guard: requireAdminApi, get: getLiveClass });
+  return handleLiveDetail((await params).code, { guard: () => requireAdminApi('monitorLive'), get: getLiveClass });
 }

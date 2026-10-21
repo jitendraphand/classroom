@@ -6,7 +6,7 @@ Goal: serve the app at `http://PUBLIC_IP:3000` and LiveKit at `ws://PUBLIC_IP:78
 
 This stack uses Docker **`network_mode: host`** on a **single Linux VM**. That is intentional for WebRTC:
 
-- LiveKit binds UDP `50000–50100` and TCP `7880`/`7881` directly on the host NICs.
+- LiveKit binds UDP `50000–60000` and TCP `7880`/`7881` directly on the host NICs.
 - Published-port bridge NAT often breaks UDP ICE on small VPS images; host mode avoids that.
 - Postgres/Redis stay reachable on `127.0.0.1` inside the VM. **Do not open 5432/6379** on the cloud firewall.
 
@@ -27,7 +27,7 @@ Open **inbound**:
 | 3000 | TCP | Next.js web UI + API |
 | 7880 | TCP | LiveKit signaling (WebSocket) |
 | 7881 | TCP | LiveKit RTC over TCP fallback |
-| 50000–50100 | UDP | LiveKit WebRTC media |
+| 50000–60000 | UDP | LiveKit WebRTC media |
 
 Keep closed to the public internet: **5432** (Postgres), **6379** (Redis), **22** only from your admin IPs.
 
@@ -37,7 +37,7 @@ Example (ufw):
 sudo ufw allow 3000/tcp
 sudo ufw allow 7880/tcp
 sudo ufw allow 7881/tcp
-sudo ufw allow 50000:50100/udp
+sudo ufw allow 50000:60000/udp
 sudo ufw enable
 sudo ufw status
 ```
@@ -179,7 +179,7 @@ Without a trusted cert, getUserMedia / Secure cookies may still be limited on so
 
 ## 6. TURN (optional, restrictive NATs)
 
-If some students connect to signaling but never get media, add a TURN server and point LiveKit `rtc` / client iceServers at it. Not required for typical home/office NATs when `use_external_ip` / `node_ip` are set and UDP `50000–50100` is open.
+If some students connect to signaling but never get media, add a TURN server and point LiveKit `rtc` / client iceServers at it. Not required for typical home/office NATs when `use_external_ip` / `node_ip` are set and UDP `50000–60000` is open.
 
 ## 7. Stop / wipe
 
@@ -192,7 +192,7 @@ docker compose down -v
 ## Checklist
 
 - [ ] `PUBLIC_IP` set via `configure-public-ip.sh`
-- [ ] Firewall: 3000/tcp, 7880/tcp, 7881/tcp, 50000–50100/udp
+- [ ] Firewall: 3000/tcp, 7880/tcp, 7881/tcp, 50000–60000/udp
 - [ ] 5432/6379 **not** public
 - [ ] `./scripts/sync-livekit-keys.sh` after every LiveKit secret or IP change
 - [ ] `infra/livekit.yaml` shows `use_external_ip: true` (and `node_ip` if set)

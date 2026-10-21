@@ -49,6 +49,14 @@ export type RoomState = {
     drawRequested?: boolean;
     /** Allowed to draw on the share now. */
     canDraw?: boolean;
+    /** Teacher is showing this student's camera to the class. */
+    spotlighted?: boolean;
+    /** Holding a speaking slot while a mic limit is on. */
+    micGranted?: boolean;
+    /** In the speaking queue (not granted yet). */
+    micWaiting?: boolean;
+    /** 1-based queue position while waiting to speak. */
+    micPosition?: number | null;
   } | null;
   waiting?: ({ id: string; displayName: string } & RosterInfo)[];
   admitted: ({
@@ -71,9 +79,29 @@ export type RoomState = {
     drawRequestedAt?: number | null;
     /** Allowed to draw now. */
     drawing?: boolean;
+    /** In the speaking queue. */
+    micWaiting?: boolean;
   } & RosterInfo)[];
   /** Teacher only: the class session running in this room. */
   classSession?: { subject: string; audience: string; adHoc: boolean } | null;
+  /** Class details for the student info button. Null when the room has none. */
+  classInfo?: {
+    subject: string;
+    teacherName: string;
+    audience: string;
+    scheduledStart: string | null;
+    scheduledEnd: string | null;
+    classSessionId: string | null;
+    academicYear?: string;
+  } | null;
+  /** The one student whose camera classmates may see. Null when off. */
+  spotlight?: { participantId: string; identity: string; name: string } | null;
+  /** Simultaneous student mics. Missing or 0: no queue, mute works as before. */
+  micLimit?: number;
+  /** Teacher: students waiting for a speaking slot. */
+  micQueue?: { id: string; name: string; source: 'teacher' | 'student'; position: number }[];
+  /** Waiting room: the class cannot take another student. */
+  classFull?: boolean;
   visibleIdentities: string[];
   visibleCount: number;
   raisedHands?: string[];

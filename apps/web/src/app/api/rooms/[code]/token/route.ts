@@ -59,12 +59,15 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   // Students joining while the teacher is not connected to the SFU get a token
   // without microphone publish; the LiveKit webhook grants it when the teacher
   // connects (and revokes it again when the teacher leaves).
-  const [sample, mutedFlag, teacherPresent] = await Promise.all([
+  const [sample, mutedFlag, teacherPresent, spotlightId] = await Promise.all([
     ensureSampleFresh(code),
     isTeacher ? Promise.resolve(0) : redis.sismember(keys.muted(code), participant.id),
     isTeacher ? Promise.resolve(true) : isTeacherPresent(code, room),
+    isTeacher ? Promise.resolve(null) : redis.get(keys.spotlight(code)),
   ]);
-  const canPublishVideo = isTeacher || sample.visible.includes(participant.livekitIdentity);
+  const inSample = isTeacher || sample.visible.includes(participant.livekitIdentity);
+  const canPublishVideo = inSample;
+  const allowCamera = inSample || (!isTeacher && spotlightId === participant.id);
   const mutedByTeacher = !isTeacher && (participant.mutedByTeacher || mutedFlag === 1);
 
   if (isTeacher) {
@@ -90,7 +93,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     // Server-side enforcement of selective video: a student outside the visible
     // sample is granted every source EXCEPT camera, so their video cannot reach
     // the SFU regardless of what the client does.
-    allowCamera: canPublishVideo,
+    allowCamera,
     metadata: {
       role: participant.role,
       participantId: participant.id,

@@ -26,6 +26,7 @@ type State = {
   teacherSessionName?: string;
   actingAsStudent?: boolean;
   meLeft?: boolean;
+  classFull?: boolean;
 };
 
 const leftKey = (code: string) => `waiting_left_${code}`;
@@ -247,6 +248,11 @@ export default function JoinRoomPage() {
           <p className="mt-2 text-sm text-slate-400">
             Your teacher will admit you shortly. Keep this tab open.
           </p>
+          {roomInfo?.classFull && (
+            <p className="mt-3 text-sm font-semibold text-amber-200" role="status">
+              This class is full.
+            </p>
+          )}
           {!roomInfo?.me?.viaSchoolApp && (
             <Button type="button" variant="secondary" className="mt-6 w-full" onClick={joinAsDifferentStudent}>
               Not you? Join with a different name

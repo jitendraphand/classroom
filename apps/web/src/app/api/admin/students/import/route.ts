@@ -14,7 +14,7 @@ const schema = z.object({
 
 /** Roster CSV import (externalId,name,grade,division,roll,campus) so absentees are known before first join. */
 export async function POST(req: Request) {
-  const { res } = await requireAdminApi();
+  const { res } = await requireAdminApi('manageSchool');
   if (res) return res;
   try {
     const body = schema.parse(await req.json());

@@ -3,7 +3,7 @@ import { jsonError, jsonOk } from '@/lib/response';
 import { deleteOverride, TimetableError } from '@/lib/timetableAdmin';
 
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { res } = await requireAdminApi();
+  const { res } = await requireAdminApi('schedule');
   if (res) return res;
   try {
     await deleteOverride((await params).id);
