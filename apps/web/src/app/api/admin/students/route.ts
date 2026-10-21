@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/adminGuard';
 import { normalizeCampus, normalizeDivision, normalizeGrade } from '@/lib/grades';
+import { studentSearchClause } from '@/lib/studentSearch';
 import { z } from 'zod';
 import { jsonError } from '@/lib/response';
 import { ensureRedis, keys } from '@/lib/redis';
@@ -24,15 +25,7 @@ export async function GET(req: Request) {
     ...(campus ? { campus: normalizeCampus(campus) } : {}),
     ...(grade ? { grade: normalizeGrade(grade) } : {}),
     ...(division ? { division: normalizeDivision(division) } : {}),
-    ...(q
-      ? {
-          OR: [
-            { name: { contains: q, mode: 'insensitive' as const } },
-            { externalId: { contains: q } },
-            { rollNumber: { equals: q } },
-          ],
-        }
-      : {}),
+    ...(studentSearchClause(q) ?? {}),
   };
   const [total, students, groups] = await Promise.all([
     prisma.student.count({ where }),

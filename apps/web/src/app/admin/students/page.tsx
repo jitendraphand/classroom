@@ -260,7 +260,14 @@ function StudentsPanel() {
           <CampusSelect className="w-40" value={filter.campus} onChange={(c) => setFilter({ ...filter, campus: c })} options={gradeOptions} emptyLabel="All campuses" />
           <GradeSelect className="w-40" value={filter.grade} onChange={(g) => setFilter({ ...filter, grade: g, division: '' })} options={gradeOptions} emptyLabel="All grades" />
           <DivisionSelect className="w-40" grade={filter.grade} value={filter.division} onChange={(d) => setFilter({ ...filter, division: d })} options={gradeOptions} />
-          <input className="input max-w-xs" placeholder="Name, ID or roll no" value={filter.q} onChange={(e) => setFilter({ ...filter, q: e.target.value })} aria-label="Search" />
+          <input
+            className="input max-w-xs"
+            placeholder="Name or student ID"
+            value={filter.q}
+            onChange={(e) => setFilter({ ...filter, q: e.target.value })}
+            aria-label="Search name or student ID"
+            data-testid="students-search"
+          />
           <p className="text-sm text-slate-400">{data ? `${data.total} student(s)` : ''}</p>
         </div>
         {data && data.groups.length > 0 && (
