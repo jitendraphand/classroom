@@ -348,6 +348,29 @@ body {
     min-width: 140px;
     height: auto !important;
   }
+  /* Bottom-right grip. Pointer events + capture live on the element. */
+  .peers-float-resize {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    z-index: 5;
+    width: 28px;
+    height: 28px;
+    cursor: nwse-resize;
+    touch-action: none;
+    background: linear-gradient(135deg, transparent 50%, rgba(255, 255, 255, 0.18) 50%);
+    border-bottom-right-radius: 14px;
+  }
+  .peers-float-resize::after {
+    content: '';
+    position: absolute;
+    right: 5px;
+    bottom: 5px;
+    width: 8px;
+    height: 8px;
+    border-right: 2px solid rgba(255, 255, 255, 0.7);
+    border-bottom: 2px solid rgba(255, 255, 255, 0.7);
+  }
   /* Docked in the stage corner by default; dragging the header floats it,
      double-click the header (or the Dock button) docks it again. */
   .peers-float-header {

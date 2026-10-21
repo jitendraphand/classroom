@@ -193,6 +193,70 @@ export function placeWhiteboardVideo(
   );
 }
 
+/** Smallest useful floating video panel: header plus one short tile. */
+export const VIDEO_PANEL_MIN_W = 180;
+export const VIDEO_PANEL_MIN_H = 132;
+/** Gap kept between a resized video panel and the viewport edges. */
+export const VIDEO_PANEL_MARGIN = 8;
+
+export type VideoPanelClampOpts = {
+  minW?: number;
+  minH?: number;
+  margin?: number;
+  insets?: Partial<FloatInsets>;
+};
+
+/**
+ * Clamp a floating video-panel size into the free viewport (minus insets and
+ * margin). A saved or dragged size cannot cover the header, the tool column,
+ * or the control bar, and cannot shrink past a usable tile — unless the
+ * viewport itself is smaller, in which case the minimum shrinks to fit.
+ */
+export function clampVideoPanelSize(
+  size: { w: number; h: number },
+  viewport: { w: number; h: number },
+  opts: VideoPanelClampOpts = {}
+): { w: number; h: number } {
+  const margin = opts.margin ?? VIDEO_PANEL_MARGIN;
+  const insets = opts.insets ?? {};
+  const vw = Number.isFinite(viewport.w) ? viewport.w : 0;
+  const vh = Number.isFinite(viewport.h) ? viewport.h : 0;
+  const left = Math.max(0, insets.left ?? 0);
+  const right = Math.max(0, insets.right ?? 0);
+  const top = Math.max(0, insets.top ?? 0);
+  const bottom = Math.max(0, insets.bottom ?? 0);
+  const availW = vw - left - right - margin * 2;
+  const availH = vh - top - bottom - margin * 2;
+  const maxW = Math.max(1, Math.floor(availW));
+  const maxH = Math.max(1, Math.floor(availH));
+  const minW = Math.min(opts.minW ?? VIDEO_PANEL_MIN_W, maxW);
+  const minH = Math.min(opts.minH ?? VIDEO_PANEL_MIN_H, maxH);
+  const w0 = Number.isFinite(size.w) && size.w > 0 ? size.w : minW;
+  const h0 = Number.isFinite(size.h) && size.h > 0 ? size.h : minH;
+  return {
+    w: Math.round(Math.min(maxW, Math.max(minW, w0))),
+    h: Math.round(Math.min(maxH, Math.max(minH, h0))),
+  };
+}
+
+/** Size after a pointer drag of the bottom-right handle, then clamped. */
+export function videoPanelSizeFromDrag(
+  start: { w: number; h: number },
+  dx: number,
+  dy: number,
+  viewport: { w: number; h: number },
+  opts?: VideoPanelClampOpts
+): { w: number; h: number } {
+  return clampVideoPanelSize(
+    {
+      w: start.w + (Number.isFinite(dx) ? dx : 0),
+      h: start.h + (Number.isFinite(dy) ? dy : 0),
+    },
+    viewport,
+    opts
+  );
+}
+
 /** Tile size that fits a pane of `cols` × `rows` (16:9), used by the compact grid. */
 export function tilesInPane(paneW: number, paneH: number, cols: number, rows: number): { tileW: number; tileH: number } {
   const innerW = Math.max(32, paneW - WB_BORDER - WB_PAD - WB_GAP * Math.max(0, cols - 1));

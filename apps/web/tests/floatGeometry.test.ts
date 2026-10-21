@@ -2,10 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
+  VIDEO_PANEL_MARGIN,
+  VIDEO_PANEL_MIN_H,
+  VIDEO_PANEL_MIN_W,
   WB_TOOL_CLEAR_PX,
   WB_TOOL_COLUMN_PX,
   WB_VIDEO_MAX_AREA,
   clampFloat,
+  clampVideoPanelSize,
   clampWhiteboardFloat,
   compactWhiteboardVideo,
   isDrag,
@@ -15,6 +19,7 @@ import {
   shareControlsPlacement,
   showLocalSharePreview,
   tilesInPane,
+  videoPanelSizeFromDrag,
   whiteboardShareDockPos,
 } from '../src/lib/floatGeometry';
 
@@ -108,4 +113,54 @@ test('teacher stage previews only window/tab shares (no recursive tunnel)', () =
   assert.equal(showLocalSharePreview('monitor'), false);
   assert.equal(showLocalSharePreview(''), false);
   assert.equal(showLocalSharePreview(undefined), false);
+});
+
+test('video panel size clamps to a usable tile and to the free viewport', () => {
+  assert.equal(VIDEO_PANEL_MIN_W, 180);
+  assert.equal(VIDEO_PANEL_MIN_H, 132);
+  assert.equal(VIDEO_PANEL_MARGIN, 8);
+  const roomy = { w: 1000, h: 800 };
+  assert.deepEqual(clampVideoPanelSize({ w: 10, h: 10 }, roomy), { w: 180, h: 132 });
+  assert.deepEqual(clampVideoPanelSize({ w: 5000, h: 5000 }, roomy), { w: 984, h: 784 });
+  assert.deepEqual(clampVideoPanelSize({ w: NaN, h: 0 }, roomy), { w: 180, h: 132 });
+  assert.deepEqual(clampVideoPanelSize({ w: -4, h: Number.POSITIVE_INFINITY }, roomy), { w: 180, h: 132 });
+
+  const inset = clampVideoPanelSize({ w: 900, h: 700 }, roomy, {
+    insets: { left: 62, top: 90, right: 0, bottom: 40 },
+  });
+  assert.deepEqual(inset, { w: 900, h: 654 });
+
+  const tiny = clampVideoPanelSize({ w: 50, h: 50 }, { w: 100, h: 80 });
+  assert.deepEqual(tiny, { w: 84, h: 64 });
+  assert.ok(tiny.w < VIDEO_PANEL_MIN_W && tiny.h < VIDEO_PANEL_MIN_H);
+
+  const once = clampVideoPanelSize({ w: 9999, h: 10 }, { w: 640, h: 480 }, { insets: { left: 62, top: 48 } });
+  assert.deepEqual(clampVideoPanelSize(once, { w: 640, h: 480 }, { insets: { left: 62, top: 48 } }), once);
+});
+
+test('a pointer drag grows from the start size and then clamps', () => {
+  const start = { w: 200, h: 160 };
+  assert.deepEqual(videoPanelSizeFromDrag(start, 40, -10, { w: 800, h: 600 }), { w: 240, h: 150 });
+  assert.deepEqual(videoPanelSizeFromDrag(start, Number.NaN, 20, { w: 800, h: 600 }), { w: 200, h: 180 });
+  const huge = videoPanelSizeFromDrag(start, 5000, 5000, { w: 400, h: 300 });
+  assert.deepEqual(huge, clampVideoPanelSize({ w: 5200, h: 5160 }, { w: 400, h: 300 }));
+  assert.deepEqual(videoPanelSizeFromDrag(huge, 0, 0, { w: 400, h: 300 }), huge);
+});
+
+test('the floating video handle resizes with pointer capture in whiteboard and share', () => {
+  const room = readFileSync(new URL('../src/components/classroom/ClassroomRoom.tsx', import.meta.url), 'utf8');
+  assert.match(room, /data-testid="video-panel-resize"/);
+  assert.match(room, /aria-label="Resize videos"/);
+  assert.match(room, /onPointerDown=\{/);
+  assert.match(room, /onPointerMove=\{/);
+  assert.match(room, /onPointerUp=\{finishResize\}/);
+  assert.match(room, /onPointerCancel=\{finishResize\}/);
+  assert.match(room, /onLostPointerCapture=\{finishResize\}/);
+  assert.match(room, /setPointerCapture\(e\.pointerId\)/);
+  assert.match(room, /class_panel_wb_manual/);
+  assert.match(room, /class_panel_share_manual/);
+  assert.match(room, /setManualSize\(null\)/);
+  assert.match(room, /allowResize = !isMin && !embedLayout && \(whiteboard \|\| sharing \|\| floating \|\| portal\)/);
+  const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
+  assert.match(css, /\.peers-float-resize \{[\s\S]*touch-action: none;/);
 });

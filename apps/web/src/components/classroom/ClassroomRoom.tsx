@@ -41,6 +41,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
@@ -64,14 +65,18 @@ import { useStudentFocus } from './useStudentFocus';
 import { countFocusAlerts, focusLabel, isFocusAlert, needsCover } from '@/lib/focusStatus';
 import { FloatingPanel, floatInsets, useFloatDrag, readFloatPref, writeFloatPref, type FloatPos } from './FloatingPanel';
 import {
+  VIDEO_PANEL_MIN_W,
   WB_TOOL_CLEAR_PX,
+  clampVideoPanelSize,
   parseStoredPos,
   parseStoredSize,
   placeWhiteboardVideo,
   shareControlsPlacement,
   showLocalSharePreview,
   tilesInPane,
+  videoPanelSizeFromDrag,
   type FloatRect,
+  type VideoPanelClampOpts,
 } from '@/lib/floatGeometry';
 import { isRosterDropped, selectTeacherVideos, videoHidden } from '@/lib/droppedVideos';
 import { candidateScreens, surfaceFromTrack, windowPositionsTrusted } from '@/lib/screenMask';
@@ -1072,6 +1077,14 @@ function TeacherPeersFloat({
   const paneRef = useRef<HTMLDivElement | null>(null);
   const sizeRef = useRef({ w: 372, h: 250 });
   const stickySpeakersRef = useRef<Set<string>>(new Set());
+  const resizeDrag = useRef<{
+    pointerId: number;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    key: string;
+  } | null>(null);
   /** identity → last time heard speaking (sticky pins expire, see activeStickySpeakers). */
   const lastSpokeRef = useRef<Map<string, number>>(new Map());
   const seenCamsRef = useRef<Set<string>>(new Set());
@@ -1151,6 +1164,8 @@ function TeacherPeersFloat({
   const [stickyVersion, setStickyVersion] = useState(0);
   const [tick, setTick] = useState(0);
   const [viewport, setViewport] = useState({ w: 1400, h: 900 });
+  const manualKey = whiteboard ? 'class_panel_wb_manual' : sharing ? 'class_panel_share_manual' : 'class_panel_manual';
+  const [manualSize, setManualSize] = useState<{ w: number; h: number } | null>(null);
 
   const dockAvailH = dock
     ? Math.max(0, (narrowDock ? dock.height * PEER_DOCK_NARROW_MAX_H : dock.height) - 2 * PEER_DOCK_MARGIN)
@@ -1181,9 +1196,41 @@ function TeacherPeersFloat({
     }
     return peerFloatLayout(activeSlots, viewport.w, viewport.h, dockAvailH, dockAvailW);
   }, [wbPlaced, activeSlots, viewport.w, viewport.h, dockAvailH, dockAvailW]);
+  const embedLayout = !!embedHost && !portal;
+  // Floating panel in whiteboard, share (docked, floated, or the videos window)
+  // and whenever the class panel itself is undocked. The docked class grid
+  // keeps the 2/4/6 preset until the teacher floats it.
+  const allowResize = !isMin && !embedLayout && (whiteboard || sharing || floating || portal);
+  const panelClampOpts: VideoPanelClampOpts = {
+    insets: (() => {
+      const base = floatInsets();
+      return {
+        top: base.top,
+        right: base.right,
+        bottom: base.bottom,
+        left: Math.max(base.left, whiteboard ? WB_TOOL_CLEAR_PX : 0),
+      };
+    })(),
+  };
+  const clampedManual =
+    allowResize && manualSize ? clampVideoPanelSize(manualSize, viewport, panelClampOpts) : null;
+  const manualTiles =
+    clampedManual != null ? tilesInPane(clampedManual.w, clampedManual.h, layout.cols, layout.rows) : null;
+  const view =
+    clampedManual && manualTiles
+      ? {
+          cols: layout.cols,
+          rows: layout.rows,
+          gap: layout.gap,
+          tileW: manualTiles.tileW,
+          tileH: manualTiles.tileH,
+          paneW: clampedManual.w,
+          paneH: clampedManual.h,
+        }
+      : layout;
   sizeRef.current = isMin
     ? { w: 168, h: 36 }
-    : { w: layout.paneW, h: layout.paneH };
+    : { w: view.paneW, h: view.paneH };
 
   const defaultPos = useCallback((): FloatPos => {
     if (whiteboard && typeof window !== 'undefined') {
@@ -1243,11 +1290,15 @@ function TeacherPeersFloat({
   }, []);
 
   useEffect(() => {
+    setManualSize(parseStoredSize(readFloatPref(manualKey)));
+  }, [manualKey]);
+
+  useEffect(() => {
     const el = paneRef.current;
     if (!el) return;
     const sync = () => {
-      const w = el.offsetWidth || layout.paneW;
-      const h = el.offsetHeight || (isMin ? 36 : layout.paneH);
+      const w = el.offsetWidth || view.paneW;
+      const h = el.offsetHeight || (isMin ? 36 : view.paneH);
       sizeRef.current = { w, h };
       if (docked) {
         // Expanded: a left column (top band when narrow). Minimized: a thin
@@ -1265,7 +1316,7 @@ function TeacherPeersFloat({
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null;
     ro?.observe(el);
     return () => ro?.disconnect();
-  }, [layout.paneW, layout.paneH, isMin, docked, narrowDock, reclamp, onDockSpace]);
+  }, [view.paneW, view.paneH, isMin, docked, narrowDock, reclamp, onDockSpace]);
 
   useEffect(() => {
     if (!docked) onDockSpace?.({ left: 0, top: 0 });
@@ -1615,7 +1666,7 @@ function TeacherPeersFloat({
       ro?.disconnect();
     };
   }, [portal, portalWindow, paneEl, winGrid.paneW, winGrid.paneH, winCount]);
-  const L = portal ? winGrid : layout;
+  const L = portal && !clampedManual ? winGrid : view;
   const shownCells = portal ? cells.slice(0, winCount) : cells;
 
   const style: CSSProperties = portal
@@ -1626,9 +1677,13 @@ function TeacherPeersFloat({
         ? { left: Math.max(minLeft, pos.x), top: pos.y }
         : { left: Math.max(12, minLeft), top: PEER_TOP_RESERVE };
   if (!isMin && !portal) {
-    // Size is the selected slot layout, even when some tiles are blank.
-    style.width = layout.paneW;
-    style.height = layout.paneH;
+    // Preset (2/4/6) or the teacher's dragged size, even when some tiles are blank.
+    style.width = view.paneW;
+    style.height = view.paneH;
+  }
+  if (portal && clampedManual) {
+    style.width = view.paneW;
+    style.height = view.paneH;
   }
   const embed = !!embedHost && !portal;
   if (embed) {
@@ -1639,6 +1694,28 @@ function TeacherPeersFloat({
     style.maxWidth = '100%';
     style.height = 'auto';
   }
+
+  // Pointer-up, cancel, and a lost capture all save the same clamped size.
+  // Clearing the drag ref first keeps a follow-up lostpointercapture from writing twice.
+  const finishResize = (e: ReactPointerEvent<HTMLElement>) => {
+    const d = resizeDrag.current;
+    if (!d || d.pointerId !== e.pointerId) return;
+    resizeDrag.current = null;
+    try {
+      if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* already released */
+    }
+    const next = videoPanelSizeFromDrag(
+      { w: d.w, h: d.h },
+      e.clientX - d.x,
+      e.clientY - d.y,
+      viewport,
+      panelClampOpts
+    );
+    setManualSize(next);
+    writeFloatPref(d.key, JSON.stringify(next));
+  };
 
   const pane = (
     <div
@@ -1690,6 +1767,10 @@ function TeacherPeersFloat({
                 onClick={() => {
                   if (whiteboard) setWbSlots(n);
                   else setSlotCount(n);
+                  // A 2/4/6 pick is a preset: drop the dragged size so the
+                  // button visibly changes the panel again.
+                  setManualSize(null);
+                  writeFloatPref(manualKey, null);
                   onSlotsChange?.(studentCapForSlots(n));
                 }}
                 aria-label={`Show ${n} videos`}
@@ -1787,6 +1868,53 @@ function TeacherPeersFloat({
             );
           })}
         </div>
+      )}
+      {allowResize && (
+        <div
+          role="slider"
+          aria-label="Resize videos"
+          aria-valuemin={VIDEO_PANEL_MIN_W}
+          aria-valuenow={Math.round(view.paneW)}
+          data-testid="video-panel-resize"
+          data-no-drag
+          className="peers-float-resize"
+          onPointerDown={(e) => {
+            if (e.pointerType === 'mouse' && e.button !== 0) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const shown = clampedManual ?? { w: view.paneW, h: view.paneH };
+            resizeDrag.current = {
+              pointerId: e.pointerId,
+              x: e.clientX,
+              y: e.clientY,
+              w: shown.w,
+              h: shown.h,
+              key: manualKey,
+            };
+            try {
+              e.currentTarget.setPointerCapture(e.pointerId);
+            } catch {
+              /* pointer capture is missing in a few embedded webviews */
+            }
+          }}
+          onPointerMove={(e) => {
+            const d = resizeDrag.current;
+            if (!d || d.pointerId !== e.pointerId) return;
+            e.preventDefault();
+            setManualSize(
+              videoPanelSizeFromDrag(
+                { w: d.w, h: d.h },
+                e.clientX - d.x,
+                e.clientY - d.y,
+                viewport,
+                panelClampOpts
+              )
+            );
+          }}
+          onPointerUp={finishResize}
+          onPointerCancel={finishResize}
+          onLostPointerCapture={finishResize}
+        />
       )}
     </div>
   );
