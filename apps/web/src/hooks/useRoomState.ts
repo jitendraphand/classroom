@@ -79,6 +79,8 @@ export type RoomState = {
     drawRequestedAt?: number | null;
     /** Allowed to draw now. */
     drawing?: boolean;
+    /** Teacher only: heartbeat is late, or LiveKit reports the link lost, but still inside the grace. */
+    reconnecting?: boolean;
     /** In the speaking queue. */
     micWaiting?: boolean;
   } & RosterInfo)[];

@@ -184,6 +184,12 @@ displays (or HiDPI) receive the 1080p layer, the admin tiles the 720p one.
   `infra/livekit.example.yaml`). Never commit it: an early version of this repo
   committed a real LiveKit secret, which is why any deployment created before
   2026-09-30 must rotate (see `docs/DEPLOY-VPS.md` → "Upgrading an existing server").
+  The template's `room.departure_timeout: 10` only keeps an empty room from
+  closing; it does not speed up crashed-participant detection. livekit-server
+  v1.13.9 hardcodes that signal ping (5 s interval, 15 s timeout). Do not set
+  `rtc.ping_interval` or `rtc.ping_timeout` — this server ignores them. Crashed
+  students leave the roster via the web heartbeat. Regenerate
+  `infra/livekit.yaml` so production picks up `departure_timeout`.
 - The web container refuses to start when a LiveKit or NextAuth secret is
   missing, a placeholder or a known-leaked value.
 

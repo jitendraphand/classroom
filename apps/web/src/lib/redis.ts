@@ -61,6 +61,8 @@ export const keys = {
   drawOrder: (code: string) => `room:${code}:draw-order`,
   /** Student LiveKit presence: hash identity -> JSON {sid, gone?: ms} (lib/studentPresence). */
   studentLive: (code: string) => `room:${code}:student-live`,
+  /** Student heartbeat: hash identity -> last beat ms. Missing is not stale. */
+  studentHb: (code: string) => `room:${code}:student-hb`,
   /** JSON {s: sessionId, p: boolean}: is the teacher connected to the LiveKit room (webhook / probe) */
   teacherPresent: (code: string) => `room:${code}:teacher-present`,
   /** '1': this student session token was taken over by another device (lib/deviceTakeover). */

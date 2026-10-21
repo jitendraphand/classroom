@@ -10,6 +10,12 @@ rtc:
 keys:
   # REPLACE: api key: secret (never commit real values)
   APIxxxxxxxx: change-me-to-a-long-random-secret
+# Same server version as the main node. departure_timeout is how long an empty
+# room stays open after the last participant leaves. It does not speed up
+# crashed-participant detection (that ping is hardcoded in v1.13.9; see
+# infra/livekit.example.yaml). rtc.ping_interval / rtc.ping_timeout are ignored.
+room:
+  departure_timeout: 10
 # Webhooks go to the ONE web server (presence / attendance / mic lock).
 webhook:
   api_key: APIxxxxxxxx

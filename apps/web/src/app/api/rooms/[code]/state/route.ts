@@ -11,7 +11,7 @@ import { audienceIncludes, formatAudience } from '@/lib/grades';
 import { manualStudentJoinAllowed } from '@/lib/schoolConfig';
 import { decodeFocus } from '@/lib/focusStatus';
 import { currentHolders, drawRequests } from '@/lib/drawServer';
-import { goneStudentIdentities } from '@/lib/studentPresence';
+import { studentRosterPresence } from '@/lib/studentPresence';
 import { getSchoolSettings } from '@/lib/schoolSettings';
 import { classCapacity } from '@/lib/capacity';
 import { readMicBook, micQueueView } from '@/lib/micBook';
@@ -252,9 +252,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       adHocClass: !!classSession?.adHoc,
     };
   };
-  // Students whose tab closed / connection died drop off the roster after a
-  // short grace (LiveKit webhook, lib/studentPresence), even without /leave.
-  const gone = isTeacher ? await goneStudentIdentities(code) : new Set<string>();
+  // Explicit leave drops off after a short grace. A crash with no leave drops
+  // off once the student heartbeat is stale (lib/studentPresence). Reconnecting
+  // students stay listed with a flag.
+  const presence = isTeacher
+    ? await studentRosterPresence(code)
+    : { gone: new Set<string>(), reconnecting: new Set<string>() };
+  const gone = presence.gone;
   const admitted = room.participants.filter(
     (p) => p.status === 'ADMITTED' && !(p.role === 'STUDENT' && gone.has(p.livekitIdentity))
   );
@@ -351,6 +355,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
             pinnedAt: p.pinnedAt ? p.pinnedAt.getTime() : null,
             drawRequested: drawReqAt.has(p.id),
             drawRequestedAt: drawReqAt.get(p.id) ?? null,
+            reconnecting: presence.reconnecting.has(p.livekitIdentity),
           }
         : {}),
       drawing: p.role === 'STUDENT' && drawingIds.has(p.id),

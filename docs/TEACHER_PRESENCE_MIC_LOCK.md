@@ -33,6 +33,30 @@ for Leave / tab close, and for a lost connection after the SFU gives up on it
 (roughly 15–30 s). Until then students can still talk; the student UI locks as
 soon as their own LiveKit client sees the teacher disconnect.
 
+## Dropped students
+
+This is separate from the teacher mic lock above.
+
+A student who closes the tab disconnects on `pagehide`, and the teacher posts
+`/presence` left, so the roster drops them after `STUDENT_GONE_GRACE_MS`
+(2.5 s). A crash, kill, or network loss does not send that leave. LiveKit
+server v1.13.9 only notices after its hardcoded signal ping (5 s interval,
+15 s timeout). `room.departure_timeout` (set to 10 in
+`infra/livekit.example.yaml`) is how long the room stays open after the last
+participant leaves, not how fast a crashed participant is removed.
+`rtc.ping_interval` and `rtc.ping_timeout` are not config keys on this version.
+
+The student client posts `POST /api/rooms/:code/heartbeat` every 2 s (Redis
+`room:<code>:student-hb`). The roster shows "Reconnecting" when the last beat
+is 4 s old and hides them at 7 s unless a beat or a new join arrives. The
+teacher also marks "Reconnecting" on `ConnectionQuality.Lost` and hides them
+after 5 s if the quality does not recover. A student who reconnects inside
+that window stays or reappears. The seat stays ADMITTED.
+
+A tab left in the background for a long time can have its timers throttled
+(Chrome eventually fires them about once a minute). That student may drop off
+and reappear on the next heartbeat. The seat stays ADMITTED.
+
 ## Deploy
 
 1. `./scripts/sync-livekit-keys.sh` — regenerates `infra/livekit.yaml` with the

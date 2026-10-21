@@ -41,6 +41,15 @@ room:
     - mime: video/vp9
   auto_create: true
   empty_timeout: 300
+  # Seconds to keep the ROOM open after the last participant leaves (LiveKit
+  # default is 20). This is not how quickly a crashed participant is detected.
+  # livekit-server v1.13.9 hardcodes the signal ping at a 5s interval and a 15s
+  # timeout (pkg/rtc/participant.go PingIntervalSeconds / PingTimeoutSeconds).
+  # rtc.ping_interval and rtc.ping_timeout are not config keys on this version
+  # and are ignored. Crashed students leave the roster via the web heartbeat
+  # (about 5–8s). Production infra/livekit.yaml is generated from this file:
+  # regenerate it (or add this key) and restart LiveKit.
+  departure_timeout: 10
   max_participants: 0
 
 # TURN relay for students behind strict firewalls / UDP-blocked networks.
