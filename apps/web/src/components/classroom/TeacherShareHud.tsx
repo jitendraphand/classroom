@@ -983,15 +983,16 @@ export function InlineShareDock({
 }) {
   const paneRef = useRef<HTMLDivElement | null>(null);
   const defaultPos = useCallback(
-    (): FloatPos => ({ x: Math.max(8, window.innerWidth - 300), y: window.innerHeight - 160 }),
+    (): FloatPos => ({ x: 12, y: 72 }),
     []
   );
-  const { pos, handleProps } = useFloatDrag({ id: 'share_controls', paneRef, defaultPos });
+  const { pos, handleProps } = useFloatDrag({ id: 'share_controls_v2', paneRef, defaultPos });
   return (
     <div
       ref={paneRef}
       className="share-inline-dock"
-      style={pos ? { left: pos.x, top: pos.y } : { left: 8, bottom: 96 }}
+      data-testid="share-inline-dock"
+      style={pos ? { left: pos.x, top: pos.y } : { left: 12, top: 72 }}
       role="region"
       aria-label="Share controls (in this tab)"
     >

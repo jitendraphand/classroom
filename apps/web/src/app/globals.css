@@ -597,8 +597,9 @@ body {
 .share-inline-dock {
   position: fixed;
   z-index: 55;
-  max-width: calc(100vw - 16px);
-  overflow: hidden;
+  max-width: min(420px, calc(100vw - 16px));
+  max-height: min(70vh, calc(100dvh - 8rem));
+  overflow: auto;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.15);
   background: #0d1219;
@@ -804,6 +805,11 @@ body {
   width: calc(var(--rail-btn) * 0.46);
   height: calc(var(--rail-btn) * 0.46);
 }
+.control-rail [data-testid="video-panel"] {
+  height: auto;
+  min-height: var(--rail-btn);
+  width: var(--rail-btn);
+}
 /* iPhone Safari has no element fullscreen: the same look as a fixed,
    scroll-locked page that fills the visible viewport. */
 html.pseudo-fullscreen,
@@ -825,7 +831,18 @@ html {
   text-size-adjust: 100%;
 }
 
-/* The mute pill sits under the drawing toolbar while the student draws. */
+/* Mute pill: keep off the top-centre drawing toolbar while the student annotates. */
 html:has(.draw-toolbar) .control-status-pill {
-  top: 3.4rem;
+  top: auto;
+  bottom: max(5.5rem, env(safe-area-inset-bottom, 0px) + 4.5rem);
+  z-index: 30;
+}
+@media (orientation: portrait) and (max-width: 700px) {
+  html:has(.draw-toolbar) .control-status-pill {
+    top: 8px;
+    bottom: auto;
+    left: auto;
+    right: 8px;
+    transform: none;
+  }
 }
