@@ -146,8 +146,10 @@ import {
   nextStudentVideoMode,
   parseStudentVideoMode,
   studentVideoModeLabel,
+  studentVideoModeShortLabel,
   type StudentVideoMode,
 } from '@/lib/studentVideoMode';
+import { STUDENT_GONE_GRACE_MS } from '@/lib/studentPresenceLogic';
 
 type TokenPayload = {
   token: string;
@@ -411,7 +413,7 @@ function EntireShareDrawingPreview() {
       <div className="draw-preview" style={{ aspectRatio: String(aspect) }}>
         <DrawOverlay aspect={aspect} interactive={false} />
       </div>
-      <div className="mt-2 flex flex-wrap justify-center gap-2">
+      <div className="relative z-10 mt-2 flex flex-wrap justify-center gap-2" data-testid="share-draw-actions">
         {d.strokes.length > 0 && (
           <button
             type="button"
@@ -439,7 +441,10 @@ function EntireScreenShareCard({ onStop, info }: { onStop?: () => void; info?: E
   const controlsInTab = info?.controlsInTab ?? true;
   const hands = info?.hands ?? 0;
   return (
-    <div className="video-tile relative flex h-full min-h-0 w-full items-center justify-center overflow-hidden bg-ink-950 p-4">
+    <div
+      className="video-tile relative flex h-full min-h-0 w-full items-center justify-center overflow-hidden bg-ink-950 p-4"
+      style={controlsInTab ? { paddingTop: '5.5rem', paddingBottom: '6.5rem' } : undefined}
+    >
       <div className="max-w-md rounded-2xl border border-white/10 bg-surface-1/90 p-5 text-center shadow-lift">
         <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-brand-500/20 text-brand-300">
           <IconScreen size={20} />
@@ -2332,21 +2337,30 @@ function RoomInner({
       /* ignore */
     }
   }, [isTeacher, code, studentVideoMode]);
-  const [wbVideoHost, setWbVideoHost] = useState<HTMLElement | null>(null);
-  /** Student identities that left the SFU, and when. Hidden from the roster after 2s. */
+  /** Student identities that left the SFU, and when. Hidden from the roster after the grace. */
   const droppedStudentsRef = useRef<Map<string, number>>(new Map());
   const [rosterDropTick, setRosterDropTick] = useState(0);
   useEffect(() => {
     if (!isTeacher || !room) return;
     const timers: number[] = [];
+    const report = (kind: 'joined' | 'left', p: RemoteParticipant) => {
+      if (!p.identity?.startsWith('student_') || !p.sid) return;
+      void roomFetch(code, '/presence', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identity: p.identity, sid: p.sid, kind }),
+      }).catch(() => undefined);
+    };
     const onDisconnected = (p: RemoteParticipant) => {
       if (!p.identity?.startsWith('student_')) return;
       droppedStudentsRef.current.set(p.identity, Date.now());
-      timers.push(window.setTimeout(() => setRosterDropTick((n) => n + 1), 2100));
+      report('left', p);
+      timers.push(window.setTimeout(() => setRosterDropTick((n) => n + 1), STUDENT_GONE_GRACE_MS + 100));
     };
     const onConnected = (p: RemoteParticipant) => {
       if (!p.identity?.startsWith('student_')) return;
       droppedStudentsRef.current.delete(p.identity);
+      report('joined', p);
       setRosterDropTick((n) => n + 1);
     };
     room.on(RoomEvent.ParticipantDisconnected, onDisconnected);
@@ -2356,7 +2370,7 @@ function RoomInner({
       room.off(RoomEvent.ParticipantConnected, onConnected);
       for (const t of timers) window.clearTimeout(t);
     };
-  }, [isTeacher, room]);
+  }, [isTeacher, room, code]);
   const [micOn, setMicOn] = useState(true);
   // Teacher camera starts OFF (turned on from the dock). Students keep their
   // previous default. Nothing is captured or published until camOn is true.
@@ -3466,8 +3480,8 @@ function RoomInner({
       .filter((p) => {
         if (p.role !== 'STUDENT') return false;
         const droppedAt = droppedStudentsRef.current.get(p.livekitIdentity);
-        // rosterDropTick forces a render ~2.1s after the disconnect.
-        if (rosterDropTick >= 0 && droppedAt != null && Date.now() - droppedAt >= 2000) return false;
+        // rosterDropTick forces a render after the disconnect grace.
+        if (rosterDropTick >= 0 && droppedAt != null && Date.now() - droppedAt >= STUDENT_GONE_GRACE_MS) return false;
         return true;
       })
       .map((p) => ({ ...p, handRaised: !!(p.handRaised || (state?.raisedHands ?? []).includes(p.id)) }))
@@ -3710,11 +3724,16 @@ function RoomInner({
     if (fresh) {
       setDrawToast({ id: fresh.id, name: fresh.displayName });
       setHudNotice(`${fresh.displayName} asks to draw on your screen. Allow in the roster.`);
-    } else if (drawToast && !ids.has(drawToast.id)) {
-      // Allowed, cancelled or revoked: the request notice is stale.
-      setDrawToast(null);
-      setHudNotice((n) => (n && n.includes(' asks to draw on your screen.') ? '' : n));
+      return;
     }
+    if (drawToast && !ids.has(drawToast.id)) setDrawToast(null);
+    setHudNotice((n) => {
+      if (!n || !n.includes(' asks to draw on your screen.')) return n;
+      const stillAsking = drawRequesters.find((p) => n.startsWith(p.displayName));
+      if (stillAsking) return n;
+      const next = drawRequesters[0];
+      return next ? `${next.displayName} asks to draw on your screen. Allow in the roster.` : '';
+    });
   }, [isTeacher, drawRequesters, drawToast]);
   useEffect(() => {
     if (!drawToast) return;
@@ -3778,6 +3797,7 @@ function RoomInner({
         }
       : undefined,
     videoPanelLabel: isTeacher ? undefined : studentVideoModeLabel(studentVideoMode),
+    videoPanelShortLabel: isTeacher ? undefined : studentVideoModeShortLabel(studentVideoMode),
     onCycleVideoPanel: isTeacher ? undefined : () => setStudentVideoMode((m) => nextStudentVideoMode(m)),
     askToSpeakLabel: micWaiting
       ? state?.me?.micPosition
@@ -4006,7 +4026,11 @@ function RoomInner({
             inline={!shareMount}
             compact={hudCompact}
             onCompactChange={setHudCompact}
-            admitted={state?.admitted ?? []}
+            admitted={(state?.admitted ?? []).filter((p) => {
+              if (p.role !== 'STUDENT') return true;
+              const droppedAt = droppedStudentsRef.current.get(p.livekitIdentity);
+              return !(rosterDropTick >= 0 && droppedAt != null && Date.now() - droppedAt >= STUDENT_GONE_GRACE_MS);
+            })}
             waiting={(state?.waiting ?? []).map((w) => ({
               id: w.id,
               displayName: rosterLabel(w),
@@ -4076,25 +4100,7 @@ function RoomInner({
           code={code}
           identity={localParticipant.identity}
           onClose={() => setWbOpen(false)}
-          onVideoHost={setWbVideoHost}
           stopRef={wbStopRef}
-          side={shareHudEl({
-            vertical: true,
-            inline: true,
-            host: null,
-            hostWindow: null,
-            compact: false,
-            onCompactChange: undefined,
-            stopLabel: 'Stop whiteboard',
-            onStopSharing: () => wbStopRef.current?.(),
-            onEndClass: endClass,
-            videoMode: undefined,
-            onVideoModeChange: undefined,
-            sideWindowsAllowed: false,
-            onToggleVideos: undefined,
-            drawPreview: 'strokes',
-            notice: hudNotice || undefined,
-          })}
         />
       )}
 
@@ -4551,12 +4557,11 @@ function RoomInner({
           setPanelSlots(panelSlotsForCap(studentSlots));
           void setStudentCameraCap(studentSlots);
         }}
-        // Whiteboard: the same floating panel as a screen share (drag, resize,
-        // minimise, 2/4/6, pins, hands first), starting right of the board's tools.
+        // Whiteboard: floating, draggable panel like share mode — the board
+        // keeps full width instead of docking videos in a right-hand column.
         dock={wbOpen ? null : dockArea}
         minLeft={wbOpen ? 62 : 0}
-        embedHost={wbOpen ? wbVideoHost : null}
-        sharing={shareLayout || wbOpen}
+        sharing={shareLayout}
         onDockSpace={onDockSpace}
         focusAlerts={focusByIdentity}
         pinnedIdentities={pinnedIdentities}
@@ -4572,17 +4577,17 @@ function RoomInner({
       {/* Share controls: in the floating window for window/tab captures; in
           this tab (draggable dock) for entire-screen captures or when no
           window could be opened. Never both. */}
-      {isTeacher && screenOn && (
+      {isTeacher && (screenOn || wbOpen) && (
         <ShareHudSlot
-          floating={!!shareMount}
+          floating={!!shareMount && !wbOpen}
           compact={hudCompact}
           popOut={
-            shareControlsPlacement(shareSurface) === 'inline' && !maskActive
+            wbOpen || (shareControlsPlacement(shareSurface) === 'inline' && !maskActive)
               ? undefined
               : () => reopenShareControls()
           }
           hint={
-            shareControlsPlacement(shareSurface) === 'inline' && !maskActive
+            !wbOpen && shareControlsPlacement(shareSurface) === 'inline' && !maskActive
               ? maskFallback === 'screens'
                 ? MONITOR_SCREENS_HINT
                 : maskFallback === 'unsafe'
@@ -4593,14 +4598,31 @@ function RoomInner({
               : undefined
           }
           action={
-            maskFallback === 'screens' ? (
+            !wbOpen && maskFallback === 'screens' ? (
               <button type="button" className="share-inline-btn" onClick={() => void requestScreenDetails()}>
                 Allow
               </button>
             ) : undefined
           }
         >
-          {shareHudEl({})}
+          {shareHudEl(
+            wbOpen
+              ? {
+                  host: null,
+                  hostWindow: null,
+                  inline: true,
+                  compact: false,
+                  onCompactChange: undefined,
+                  stopLabel: 'Stop whiteboard',
+                  onStopSharing: () => wbStopRef.current?.(),
+                  onEndClass: endClass,
+                  sideWindowsAllowed: false,
+                  onToggleVideos: undefined,
+                  drawPreview: 'strokes',
+                  notice: hudNotice || undefined,
+                }
+              : {}
+          )}
         </ShareHudSlot>
       )}
 
@@ -5054,7 +5076,9 @@ export function ClassroomRoom({ code }: { code: string }) {
       options={{
         // Minimizing the window must not drop the room. pagehide is how some
         // browsers report that; the socket still closes if the tab is destroyed.
-        disconnectOnPageLeave: false,
+        // Teachers: minimizing must not drop the room (pagehide on some browsers).
+        // Students: tab close must send leave so the roster drops in ~5s, not ~23s.
+        disconnectOnPageLeave: !isTeacher,
         // Subscribers ask the SFU for the video layer that fits the element
         // showing it (teacher camera: 180p/360p/720p simulcast). Kept playing in
         // background tabs so a student alt-tabbing back never sees a frozen
@@ -5085,6 +5109,7 @@ export function ClassroomRoom({ code }: { code: string }) {
       onError={(e) => console.error('LiveKit', e)}
       onDisconnected={onDisconnected}
     >
+      {!isTeacher && <StudentLeaveOnPageHide />}
       <ReconnectWatchdog onStuck={() => void rejoin()} />
       {rejoining && (
         <div className="pointer-events-none fixed left-1/2 top-2 z-[80] -translate-x-1/2 rounded-full bg-amber-500/90 px-3 py-1 text-xs font-semibold text-black" data-testid="rejoining">
@@ -5120,6 +5145,25 @@ function leavingNow(): boolean {
  * left in "new" after a long drop) so the outer component rejoins with a new
  * Room. Also rejoins when the browser comes back online while disconnected.
  */
+/**
+ * Tab close / navigation: send LiveKit leave immediately. Minimizing uses
+ * visibilitychange (not pagehide with persisted=false) on desktop; a brief
+ * reconnect after a refresh is absorbed by STUDENT_GONE_GRACE_MS.
+ */
+function StudentLeaveOnPageHide() {
+  const room = useRoomContext();
+  useEffect(() => {
+    if (!room) return;
+    const onHide = (e: PageTransitionEvent) => {
+      if (e.persisted) return;
+      void room.disconnect(true).catch(() => undefined);
+    };
+    window.addEventListener('pagehide', onHide);
+    return () => window.removeEventListener('pagehide', onHide);
+  }, [room]);
+  return null;
+}
+
 function ReconnectWatchdog({ onStuck }: { onStuck: () => void }) {
   const room = useRoomContext();
   const cb = useRef(onStuck);

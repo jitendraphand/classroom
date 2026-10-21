@@ -11,7 +11,7 @@
  *   after every reconnect; students allowed to draw annotate through the
  *   server relay (same permission as drawing on the share).
  */
-import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useRoomContext } from '@livekit/components-react';
 import { ConnectionState, RoomEvent, type RemoteParticipant } from 'livekit-client';
 import { WhiteboardBoard } from '@/lib/whiteboard/WhiteboardBoard';
@@ -42,17 +42,12 @@ export function WhiteboardHost({
   code,
   identity,
   onClose,
-  side,
   stopRef,
-  onVideoHost,
 }: {
   code: string;
   identity: string;
   onClose: () => void;
-  side?: ReactNode;
   stopRef?: { current: (() => void) | null };
-  /** Side-column element the class video panel is portaled into. */
-  onVideoHost?: (el: HTMLElement | null) => void;
 }) {
   const room = useRoomContext();
   const session = useMemo(() => {
@@ -181,24 +176,13 @@ export function WhiteboardHost({
   }, [code, onClose]);
 
   if (stopRef) stopRef.current = stop;
-  const videoHostCb = useRef(onVideoHost);
-  videoHostCb.current = onVideoHost;
-  const setVideoSlot = useCallback((el: HTMLDivElement | null) => {
-    videoHostCb.current?.(el);
-  }, []);
-  // Teacher layout: tools docked left (inside the board), meeting controls docked right.
+  // Full-width board; class videos float above (ClassroomRoom) like share mode.
   // Bottom gap leaves the teacher footer (Stop whiteboard, End class) clickable.
   return (
     <div className="fixed inset-x-0 top-0 z-40 flex bg-[#0b0f14]" style={{ bottom: '4.5rem' }} data-testid="wb-host">
       <div className="relative min-w-0 flex-1">
-        <WhiteboardBoard session={session} mode="edit" identity={identity} onSend={(ops) => void publish(opsPackets(ops))} onClose={stop} hideStop={!!side} />
+        <WhiteboardBoard session={session} mode="edit" identity={identity} onSend={(ops) => void publish(opsPackets(ops))} onClose={stop} hideStop />
       </div>
-      {side ? (
-        <div className="relative flex h-full min-h-0 shrink-0 flex-col border-l border-white/10" data-testid="wb-meeting">
-          <div data-testid="wb-video-slot" className="max-h-[46%] shrink-0 overflow-auto" ref={setVideoSlot} />
-          <div className="min-h-0 flex-1 overflow-auto">{side}</div>
-        </div>
-      ) : null}
     </div>
   );
 }
