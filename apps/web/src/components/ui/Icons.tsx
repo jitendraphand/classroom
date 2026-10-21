@@ -251,3 +251,78 @@ export function IconUndo(p: P) {
     </svg>
   );
 }
+
+export function IconRedo(p: P) {
+  return (
+    <svg {...base(p)}>
+      <path d="m15 14 5-5-5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function IconClose(p: P) {
+  return (
+    <svg {...base(p)}>
+      <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function IconHighlighter(p: P) {
+  return (
+    <svg {...base(p)}>
+      <path d="m9 11-5 5v4h4l5-5M9 11l4-4 4 4-4 4M9 11l4 4M14 6l3-3 4 4-3 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function IconSpeaker(p: P) {
+  return (
+    <svg {...base(p)}>
+      <path d="M4 9v6h4l5 4V5L8 9H4Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function IconSpeakerOff(p: P) {
+  return (
+    <svg {...base(p)}>
+      <path d="M4 9v6h4l5 4V5L8 9H4Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <path d="m16 9 5 6M21 9l-5 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function IconLine(p: P) {
+  return (
+    <svg {...base(p)}>
+      <path d="M5 19 19 5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function IconArrow(p: P) {
+  return (
+    <svg {...base(p)}>
+      <path d="M5 19 19 5M10 5h9v9" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function IconRect(p: P) {
+  return (
+    <svg {...base(p)}>
+      <rect x="4" y="6" width="16" height="12" rx="1.5" stroke="currentColor" strokeWidth="1.8" />
+    </svg>
+  );
+}
+
+export function IconEllipse(p: P) {
+  return (
+    <svg {...base(p)}>
+      <ellipse cx="12" cy="12" rx="8.5" ry="6.5" stroke="currentColor" strokeWidth="1.8" />
+    </svg>
+  );
+}

@@ -104,6 +104,8 @@ export type FlyoutGroup = {
   /** Options shown in the second column/row. */
   content?: ReactNode;
   testId?: string;
+  /** Amber outline (admit while someone is waiting). */
+  warn?: boolean;
 };
 
 export const BAR_BG = '#111827';
@@ -218,7 +220,16 @@ export function FlyoutBar({
           aria-label={g.label}
           data-testid={g.testId}
           disabled={g.disabled}
-          style={barBtn(!!g.active || f.open === g.id, g.danger ? { background: '#b91c1c' } : g.disabled ? { opacity: 0.45, cursor: 'default' } : undefined)}
+          style={barBtn(
+            !!g.active || f.open === g.id,
+            g.danger
+              ? { background: '#b91c1c' }
+              : g.warn
+                ? { borderColor: '#f59e0b', color: '#fcd34d', background: 'transparent' }
+                : g.disabled
+                  ? { opacity: 0.45, cursor: 'default' }
+                  : undefined
+          )}
           {...(g.content ? f.groupProps(g.id) : { onClick: g.onClick })}
         >
           {g.icon}
