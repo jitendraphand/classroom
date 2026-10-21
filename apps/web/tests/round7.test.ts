@@ -79,6 +79,8 @@ test('privileges: system has all, sub-admins only what was checked, tabs follow'
   assert.equal(hasPrivilege(sub, 'SUB', 'schedule'), true);
   assert.equal(hasPrivilege(sub, 'SUB', 'viewReports'), false);
   assert.deepEqual(visibleAdminTabs(sub, 'SUB'), ['today', 'system']);
+  const liveOnly = privilegeSetFrom({ kind: 'SUB', privMonitorLive: true });
+  assert.deepEqual(visibleAdminTabs(liveOnly, 'SUB'), ['today', 'live']);
   assert.equal(parsePrivilegeBody({ manageTeachers: true }), null);
   const parsed = parsePrivilegeBody({
     manageTeachers: true,

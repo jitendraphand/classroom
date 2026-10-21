@@ -190,6 +190,7 @@ test('word divisions are canonical and matched case-insensitively everywhere', (
   assert.equal(normalizeDivision('Second'), 'SECOND');
   assert.equal(displayDivision('MAHAVEER'), 'Mahaveer');
   assert.equal(displayDivision('B'), 'B');
+  assert.equal(displayDivision('GA'), 'GA');
   assert.equal(formatAudience('CC', '7', ['MAHAVEER', 'A'], false), 'CC · 7-A, Mahaveer');
   assert.equal(formatAssignment({ campus: 'CC', grade: '7', division: 'MAHAVEER' }), 'CC@7-Mahaveer');
   assert.deepEqual(parseAssignments('7-Mahaveer, 7 shivaji, 8-ALL', 'CC'), [

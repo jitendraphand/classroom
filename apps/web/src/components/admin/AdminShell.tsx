@@ -13,7 +13,7 @@ import { visibleAdminTabs, type PrivilegeSet } from '@/lib/privileges';
 
 const TABS = [
   { id: 'today' as const, href: '/admin', label: "Today's classes" },
-  { id: 'live' as const, href: '/admin/live', label: 'Live classes' },
+  { id: 'live' as const, href: '/admin/live', label: 'Live dashboard' },
   { id: 'performance' as const, href: '/admin/performance', label: 'Teacher performance' },
   { id: 'system' as const, href: '/admin/system', label: 'System Control' },
 ];

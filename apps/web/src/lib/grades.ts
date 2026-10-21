@@ -51,10 +51,11 @@ export function normalizeDivision(raw: unknown): string {
     .slice(0, MAX_DIVISION_LENGTH);
 }
 
-/** Friendly form of a canonical division: "A" → "A", "MAHAVEER" → "Mahaveer", "*" → "ALL". */
+/** Friendly form of a canonical division: "A" → "A", "GA" → "GA", "MAHAVEER" → "Mahaveer", "*" → "ALL". */
 export function displayDivision(d: string): string {
   if (d === ALL_DIVISIONS) return 'ALL';
-  if (d.length > 1 && /^[A-Z]+$/.test(d)) return d.charAt(0) + d.slice(1).toLowerCase();
+  // Two-letter codes stay as entered ("GA", not "Ga"). Longer words get a friendly form.
+  if (d.length > 2 && /^[A-Z]+$/.test(d)) return d.charAt(0) + d.slice(1).toLowerCase();
   return d;
 }
 
