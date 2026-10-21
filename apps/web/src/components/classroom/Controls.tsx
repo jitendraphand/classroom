@@ -16,6 +16,7 @@ import {
   IconUsers,
   IconPen,
   IconBoard,
+  IconVideo,
 } from '@/components/ui/Icons';
 import { cn } from '@/lib/cn';
 
@@ -83,6 +84,8 @@ type Props = {
   onCycleDataSaver?: () => void;
   /** Student: cycles teacher+self / teacher / minimized. Shown only when set. */
   videoPanelLabel?: string;
+  /** Rail: short word (Both / Teacher / Hidden). Full sentence stays in title. */
+  videoPanelShortLabel?: string;
   onCycleVideoPanel?: () => void;
   /** Student mic queue. Label is "Ask to speak" or "Waiting (#n)". */
   askToSpeakLabel?: string;
@@ -127,6 +130,7 @@ export function Controls({
   dataSaver,
   onCycleDataSaver,
   videoPanelLabel,
+  videoPanelShortLabel,
   onCycleVideoPanel,
   askToSpeakLabel,
   onAskToSpeak,
@@ -195,14 +199,19 @@ export function Controls({
             type="button"
             data-testid="video-panel"
             aria-label="Video panel"
+            aria-description={videoPanelLabel || 'Video panel'}
             title={videoPanelLabel || 'Video panel'}
             onClick={onCycleVideoPanel}
             className={cn(
               'inline-flex items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-center font-semibold leading-tight text-slate-100 hover:bg-white/[0.12]',
-              rail ? 'w-full px-1 py-1 text-[9px]' : 'h-11 max-w-[11rem] px-2 text-[10px]'
+              rail
+                ? 'h-auto min-h-[var(--rail-btn,36px)] w-[var(--rail-btn,36px)] flex-col gap-0.5 px-0.5 py-1 text-[8px]'
+                : 'h-11 max-w-[11rem] gap-1 px-2 text-[10px]'
             )}
           >
-            {videoPanelLabel || 'Video panel'}
+            <IconVideo size={rail ? 14 : 16} />
+            <span className="max-w-full truncate">{videoPanelShortLabel || 'Videos'}</span>
+            <span className="sr-only">{videoPanelLabel || 'Video panel'}</span>
           </button>
         )}
 

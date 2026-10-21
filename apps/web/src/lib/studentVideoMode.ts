@@ -19,6 +19,13 @@ export function studentVideoModeLabel(mode: StudentVideoMode): string {
   return 'Videos minimized. Click to show teacher and you.';
 }
 
+/** Short rail label. Full sentence stays in title / aria-description. */
+export function studentVideoModeShortLabel(mode: StudentVideoMode): string {
+  if (mode === 'both') return 'Both';
+  if (mode === 'teacher') return 'Teacher';
+  return 'Hidden';
+}
+
 export function parseStudentVideoMode(v: unknown): StudentVideoMode {
   return v === 'teacher' || v === 'min' || v === 'both' ? v : 'both';
 }
