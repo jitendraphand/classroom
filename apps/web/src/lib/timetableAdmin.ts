@@ -23,6 +23,7 @@ import {
 import { loadSchedule, toSlotLike } from './scheduleService';
 import { audienceUnknownMessage } from './gradeMaster';
 import { appTimeZone } from './schoolConfig';
+import { effectiveFromForCreate } from './slotEffective';
 
 export class TimetableError extends Error {
   constructor(message: string, public status = 400, public extra?: Record<string, unknown>) {
@@ -157,7 +158,8 @@ function slotData(input: SlotInput) {
  */
 export async function createSlot(body: SlotBody) {
   const days = [...new Set(body.weekdays?.length ? body.weekdays : [body.weekday])].sort((a, b) => a - b);
-  const inputs = days.map((weekday) => toInput({ ...body, weekday }));
+  const from = effectiveFromForCreate(body.effectiveFrom, localDateOf(new Date(), appTimeZone()));
+  const inputs = days.map((weekday) => toInput({ ...body, weekday, effectiveFrom: from }));
   for (const input of inputs) {
     try {
       await validateSlot(input, !!body.force);

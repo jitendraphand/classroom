@@ -4,6 +4,7 @@ import {
   addDays,
   dateOnly,
   dateValue,
+  localDateOf,
   occurrencesBetween,
   occurrencesOn,
   type Occurrence,
@@ -26,6 +27,7 @@ export function toSlotLike(s: TimetableSlot): SlotLike {
     endMinute: s.endMinute,
     effectiveFrom: dateOnly(s.effectiveFrom),
     effectiveTo: dateOnly(s.effectiveTo),
+    createdOn: localDateOf(s.createdAt, appTimeZone()),
     academicYear: s.academicYear || '',
   };
 }

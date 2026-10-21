@@ -10,6 +10,7 @@
  */
 import { academicYearForDate } from './academicYear';
 import { audiencesOverlap, audienceIncludes, normalizeCampus, normalizeDivision, normalizeGrade, type Audience } from './grades';
+import { slotStartsOn } from './slotEffective';
 
 export type { Audience };
 
@@ -22,6 +23,8 @@ export type SlotLike = Audience & {
   endMinute: number;
   effectiveFrom: string | null;
   effectiveTo: string | null;
+  /** Local date the row was created; clips occurrences when effectiveFrom is null. */
+  createdOn?: string | null;
   /** India-style label. Omitted on older fixtures; derived from the date. */
   academicYear?: string;
 };
@@ -179,7 +182,8 @@ export function formatHHMM(min: number): string {
 
 function slotActiveOn(slot: SlotLike, date: string): boolean {
   if (slot.weekday !== weekdayOf(date)) return false;
-  if (slot.effectiveFrom && date < slot.effectiveFrom) return false;
+  const from = slotStartsOn(slot);
+  if (from && date < from) return false;
   if (slot.effectiveTo && date > slot.effectiveTo) return false;
   return true;
 }
