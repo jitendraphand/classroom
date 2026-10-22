@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { RoomEvent, type Room } from 'livekit-client';
 import { roomFetch, getClassroomRole } from '@/lib/classroomClient';
 import { STATE_TOPIC, statePollMs } from '@/lib/pollPolicy';
+import { isClassEndedPacket, noteClassEnded } from '@/lib/classEnded';
 import {
   SIGNAL_TOPIC,
   applyDrawReqPush,
@@ -24,6 +25,8 @@ export type RosterInfo = {
   /** The running class is ad hoc (not from the timetable): no timetable wording. */
   adHocClass?: boolean;
   viaSchoolApp?: boolean;
+  /** Teacher only: school student id, so two devices count as one student. */
+  studentId?: string | null;
 };
 
 export type RoomState = {
@@ -170,6 +173,7 @@ export function useRoomState(code: string, intervalMs = 2000, room?: Room | null
       if (stopped.current) return;
       if (!res.ok) {
         if (res.status === 410 || data.ended || data.status === 'ENDED') {
+          noteClassEnded(code);
           setState((prev) =>
             prev
               ? { ...prev, status: 'ENDED', ended: true }
@@ -203,6 +207,7 @@ export function useRoomState(code: string, intervalMs = 2000, room?: Room | null
         return;
       }
       if (data.status === 'ENDED' || data.ended) {
+        noteClassEnded(code);
         setState({ ...data, status: 'ENDED', ended: true });
         stopped.current = true;
         setError('');
@@ -273,6 +278,28 @@ export function useRoomState(code: string, intervalMs = 2000, room?: Room | null
         if (muted !== null) {
           mutePush.current = { muted, at: Date.now() };
           setState((prev) => (prev?.me ? { ...prev, me: { ...prev.me, mutedByTeacher: muted } } : prev));
+          return;
+        }
+        if (isClassEndedPacket(raw)) {
+          noteClassEnded(code);
+          stopped.current = true;
+          setState((prev) =>
+            prev
+              ? { ...prev, status: 'ENDED', ended: true }
+              : {
+                  code,
+                  name: 'Classroom',
+                  status: 'ENDED',
+                  ended: true,
+                  maxVisibleVideos: 0,
+                  isTeacher: false,
+                  teacherName: '',
+                  me: null,
+                  admitted: [],
+                  visibleIdentities: [],
+                  visibleCount: 0,
+                }
+          );
           return;
         }
         if (!stopped.current) void refresh();

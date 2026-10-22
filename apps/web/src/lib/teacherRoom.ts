@@ -5,7 +5,8 @@ import { prisma } from '@/lib/db';
 import { generateRoomCode, generateIdentity, generateSessionToken } from '@/lib/codes';
 import { ensureRedis, keys, legacyKeys } from '@/lib/redis';
 import { clampMaxVisible } from '@/lib/sample';
-import { roomService, livekitRoomName } from '@/lib/livekit';
+import { roomService, livekitRoomName, sendRoomData } from '@/lib/livekit';
+import { STATE_TOPIC } from '@/lib/pollPolicy';
 
 /** Allocate a unique permanent class code not used by any teacher or room. */
 export async function allocateUniqueCode(): Promise<string> {
@@ -243,6 +244,10 @@ export async function endRoom(room: { id: string; code: string; sessionId: strin
     where: { id: room.id },
     data: { status: 'ENDED', endedAt: now },
   });
+  // Tell everyone the class ended BEFORE the room is deleted. Under load,
+  // deleteRoom is often reported as PARTICIPANT_REMOVED ("you were removed").
+  const rn = livekitRoomName(room.code, room.sessionId);
+  await sendRoomData(rn, { v: 1, type: 'class-ended' }, { topic: STATE_TOPIC });
   await prisma.participant.updateMany({
     where: { roomId: room.id, status: { not: 'LEFT' } },
     data: { status: 'LEFT', leftAt: now },
@@ -252,7 +257,6 @@ export async function endRoom(room: { id: string; code: string; sessionId: strin
   }
   await clearRoomRedis(room.code);
   try {
-    const rn = livekitRoomName(room.code, room.sessionId);
     await (await roomServiceFor(rn)).deleteRoom(rn);
     await releaseRoom(rn);
   } catch (e) {
