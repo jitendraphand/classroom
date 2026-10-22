@@ -1,6 +1,6 @@
 import type { AttendanceRecord, ClassSession, Prisma, Student } from '@prisma/client';
 import { prisma } from './db';
-import { attendanceStatus, STATUS_LABEL, totalConnectedMs, type AttendanceStatus } from './attendance';
+import { attendanceStatus, STATUS_LABEL, tallyAttendance, totalConnectedMs, type AttendanceStatus } from './attendance';
 import { toCsv, type Cell } from './csv';
 import { audienceIncludes, formatAudience, normalizeCampus, normalizeDivision, normalizeGrade } from './grades';
 import { isAcademicYearLabel } from './academicYear';
@@ -132,15 +132,11 @@ export async function sessionSummary(f: ReportFilter): Promise<SessionRow[]> {
     const known = knownStudents(cs, students, f.division);
     const knownIds = new Set(known.map((s) => s.id));
     const recs = cs.attendance.filter((r) => !f.division || knownIds.has(r.studentId));
-    const counts = { present: 0, late: 0, notAdmitted: 0 };
     const seen = new Set<string>();
     for (const r of recs) {
-      seen.add(r.studentId);
-      const st = attendanceStatus(r);
-      if (st === 'present') counts.present++;
-      else if (st === 'late') counts.late++;
-      else if (st === 'not_admitted') counts.notAdmitted++;
+      if (r.studentId) seen.add(r.studentId);
     }
+    const counts = tallyAttendance(recs.map((r) => ({ studentId: r.studentId, status: attendanceStatus(r) })));
     const absent = cs.startedAt ? known.filter((s) => !seen.has(s.id)).length : 0;
     return {
       sessionId: cs.id,

@@ -9,12 +9,12 @@
  * (5s interval + 15s timeout), which is why the roster used to wait ~20–24s.
  *
  * The student client heartbeats every HEARTBEAT_INTERVAL_MS (jittered so 2,500
- * clients do not stampede). Fast roster drop on a crash is LiveKit disconnect
- * / webhook (~20s signal timeout) plus STUDENT_GONE_GRACE_MS. The heartbeat is
- * the slow safety net: reconnecting after HEARTBEAT_RECONNECTING_MS, gone after
- * HEARTBEAT_STALE_MS. The seat stays ADMITTED, so the same link brings them
- * back. The teacher also starts a short grace when LiveKit reports
- * ConnectionQuality.Lost (the JS SDK's ParticipantConnectionQualityChanged).
+ * clients do not stampede). The roster drops a student only after LiveKit
+ * says they left (webhook / ParticipantDisconnected) plus STUDENT_GONE_GRACE_MS.
+ * A late heartbeat marks "reconnecting" but does not remove them: under load
+ * the beat arrives late while they are still in the room, and dropping them
+ * made the teacher count disagree with admin "Students connected".
+ * The seat stays ADMITTED, so the same link brings them back.
  */
 export const STUDENT_GONE_GRACE_MS = 2_500;
 
@@ -28,8 +28,9 @@ export const HEARTBEAT_JITTER_MS = 5_000;
  */
 export const HEARTBEAT_RECONNECTING_MS = 50_000;
 /**
- * Last beat this old, and no explicit leave, → drop off the roster. LiveKit
- * disconnect is the fast path; this is the slow net if the webhook is missed.
+ * A beat this old used to drop the roster. It no longer does: a late beat
+ * stays "reconnecting" and the seat stays. LiveKit leave is what removes them.
+ * The constant remains so the reconnecting window stays below it.
  */
 export const HEARTBEAT_STALE_MS = 80_000;
 
@@ -81,14 +82,13 @@ export function parseBeat(raw: string | null | undefined): Heartbeat | null {
 }
 
 /**
- * Hide from the roster. An explicit leave (`live.gone`) wins after
- * STUDENT_GONE_GRACE_MS even if a heartbeat is still fresh. With no leave, a
- * missing beat is not stale (already-admitted students stay until a client
- * starts beating); a beat older than HEARTBEAT_STALE_MS is.
+ * Hide from the roster only after an explicit LiveKit leave (`live.gone`)
+ * has passed STUDENT_GONE_GRACE_MS. A stale or missing heartbeat does not
+ * hide anyone — that is a "reconnecting" chip, not a smaller class.
  */
 export function rosterHidden(live: StudentLive | null, beat: Heartbeat | null, now: number): boolean {
+  void beat;
   if (live?.gone != null) return now - live.gone >= STUDENT_GONE_GRACE_MS;
-  if (beat && now - beat.at >= HEARTBEAT_STALE_MS) return true;
   return false;
 }
 

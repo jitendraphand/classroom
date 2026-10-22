@@ -100,6 +100,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       canPublishVideo,
       mutedByTeacher,
       micLocked,
+      ...(participant.studentId ? { studentId: participant.studentId } : {}),
     },
   });
 

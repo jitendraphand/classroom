@@ -42,7 +42,7 @@ test('presence: a second left on an already-gone record is ignored', () => {
   assert.equal(nextLive(gone, { kind: 'left', sid: 'PA_1', at: t0 + 50 }), undefined);
 });
 
-test('heartbeat: interval ≥30s with jitter; reconnecting then gone; no beat is not stale', () => {
+test('heartbeat: interval ≥30s with jitter; a late beat stays listed; no beat is not stale', () => {
   const t0 = 5_000_000;
   assert.ok(HEARTBEAT_INTERVAL_MS >= 30_000);
   assert.ok(HEARTBEAT_JITTER_MS >= 0);
@@ -58,8 +58,8 @@ test('heartbeat: interval ≥30s with jitter; reconnecting then gone; no beat is
   assert.equal(connectionPhase(live, beat, t0 + HEARTBEAT_RECONNECTING_MS), 'reconnecting');
   assert.equal(rosterHidden(live, beat, t0 + HEARTBEAT_RECONNECTING_MS), false);
   assert.equal(connectionPhase(live, beat, t0 + HEARTBEAT_STALE_MS - 1), 'reconnecting');
-  assert.equal(rosterHidden(live, beat, t0 + HEARTBEAT_STALE_MS), true);
-  assert.equal(connectionPhase(live, beat, t0 + HEARTBEAT_STALE_MS), 'gone');
+  assert.equal(rosterHidden(live, beat, t0 + HEARTBEAT_STALE_MS), false);
+  assert.equal(connectionPhase(live, beat, t0 + HEARTBEAT_STALE_MS), 'reconnecting');
   assert.equal(connectionPhase(live, null, t0 + 60_000), 'ok', 'missing beat is not stale');
   assert.equal(rosterHidden(null, null, t0 + 60_000), false);
   assert.equal(parseBeat(null), null);

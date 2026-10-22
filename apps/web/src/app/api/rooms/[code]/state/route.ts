@@ -253,9 +253,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       adHocClass: !!classSession?.adHoc,
     };
   };
-  // Explicit leave drops off after a short grace. A crash with no leave drops
-  // off once the student heartbeat is stale (lib/studentPresence). Reconnecting
-  // students stay listed with a flag.
+  // Explicit leave drops off after a short grace. A late heartbeat stays
+  // listed as reconnecting (lib/studentPresence) so the count matches who is
+  // still in the room.
   const presence = isTeacher
     ? await studentRosterPresence(code)
     : { gone: new Set<string>(), reconnecting: new Set<string>() };
@@ -361,6 +361,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
             drawRequested: drawReqAt.has(p.id),
             drawRequestedAt: drawReqAt.get(p.id) ?? null,
             reconnecting: presence.reconnecting.has(p.livekitIdentity),
+            studentId: p.studentId,
           }
         : {}),
       drawing: p.role === 'STUDENT' && drawingIds.has(p.id),

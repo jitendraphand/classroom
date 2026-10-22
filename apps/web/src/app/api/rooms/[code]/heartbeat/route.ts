@@ -6,8 +6,8 @@ import { recordStudentHeartbeat } from '@/lib/studentPresence';
 
 /**
  * Admitted student heartbeat. A crash, kill, or network loss never sends
- * /presence left; the roster treats a beat older than HEARTBEAT_STALE_MS as
- * gone. Identity comes from the session, not the body.
+ * /presence left. A late beat shows "reconnecting" and does not drop the
+ * roster; LiveKit leave does. Identity comes from the session, not the body.
  */
 const schema = z.object({
   sid: z.string().min(1).max(120),

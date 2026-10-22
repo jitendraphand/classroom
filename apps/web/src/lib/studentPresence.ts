@@ -22,7 +22,7 @@ function watchKey(code: string, identity: string) {
   return `${code}\0${identity}`;
 }
 
-/** Re-check this student when a beat would turn reconnecting, then gone, and nudge the teacher. */
+/** Nudge the teacher when a beat turns "reconnecting". A late beat does not remove them. */
 function armHeartbeatWatch(code: string, identity: string) {
   const key = watchKey(code, identity);
   const prev = heartbeatWatches.get(key);
@@ -61,8 +61,8 @@ export async function recordStudentConnection(code: string, identity: string, ki
   if (!next) return;
   const multi = r.multi().hset(keys.studentLive(code), identity, JSON.stringify(next)).expire(keys.studentLive(code), TTL_S);
   if (kind === 'joined') {
-    // Seed the beat so a crash before the first client heartbeat still goes
-    // stale, and so a rejoin is not hidden by the previous beat.
+    // Seed the beat so the roster can show "reconnecting" before the first
+    // client heartbeat, and so a rejoin is not hidden by the previous beat.
     multi.hset(keys.studentHb(code), identity, String(at)).expire(keys.studentHb(code), TTL_S);
   }
   await multi.exec();
@@ -114,7 +114,7 @@ export async function studentRosterPresence(
   return { gone, reconnecting };
 }
 
-/** LiveKit identities of students whose connection is gone (past the grace or a stale beat). */
+/** LiveKit identities of students whose connection is gone (explicit leave, past the grace). */
 export async function goneStudentIdentities(code: string, now = Date.now()): Promise<Set<string>> {
   return (await studentRosterPresence(code, now)).gone;
 }

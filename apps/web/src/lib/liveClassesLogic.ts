@@ -2,6 +2,7 @@
  * Pure helpers for the admin "Ongoing classes" view (no Prisma / Next / LiveKit
  * imports), shared by the server, the admin UI and the unit tests.
  */
+import { distinctConnectedStudents } from './connectedStudents';
 
 export type LiveClass = {
   campus?: string;
@@ -25,7 +26,12 @@ export type LiveClass = {
   countSource: 'livekit' | 'attendance';
 };
 
-export type LiveRoomParticipant = { identity: string; metadata?: string | null };
+export type LiveRoomParticipant = {
+  identity: string;
+  metadata?: string | null;
+  /** School student id when known (a second device of the same student). */
+  studentId?: string | null;
+};
 
 /** Teacher identities are `teacher_…`; metadata role TEACHER is the fallback. */
 function isTeacher(p: LiveRoomParticipant) {
@@ -39,18 +45,21 @@ function isTeacher(p: LiveRoomParticipant) {
 }
 
 /**
- * Who is in the SFU room, by the same rule attendance uses (the webhook only
- * records `student_…` identities). A student with two tabs is one student.
- * Hidden admin observers/previews are neither.
+ * Who is in the SFU room. Same distinct-student rule as the teacher roster
+ * and attendance: `student_…` identities, one row per studentId when we have
+ * it, never the teacher or a hidden admin observer.
  */
 export function summarizeRoomParticipants(list: LiveRoomParticipant[]) {
-  const students = new Set<string>();
   let teacherConnected = false;
   for (const p of list) {
-    if (p.identity.startsWith('student_')) students.add(p.identity);
-    else if (isTeacher(p)) teacherConnected = true;
+    if (isTeacher(p)) teacherConnected = true;
   }
-  return { studentIdentities: [...students], studentCount: students.size, teacherConnected };
+  const students = distinctConnectedStudents(list);
+  return {
+    studentIdentities: students.map((p) => p.identity),
+    studentCount: students.length,
+    teacherConnected,
+  };
 }
 
 /**

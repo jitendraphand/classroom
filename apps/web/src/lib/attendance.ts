@@ -100,6 +100,25 @@ export function attendanceStatus(
   return r.late ? 'late' : 'present';
 }
 
+/**
+ * One row per student. A second device or a duplicate webhook must not
+ * raise the present / late / waited totals.
+ */
+export function tallyAttendance(
+  rows: { studentId: string; status: AttendanceStatus }[]
+): { present: number; late: number; notAdmitted: number } {
+  const seen = new Set<string>();
+  const counts = { present: 0, late: 0, notAdmitted: 0 };
+  for (const r of rows) {
+    if (!r.studentId || seen.has(r.studentId)) continue;
+    seen.add(r.studentId);
+    if (r.status === 'present') counts.present++;
+    else if (r.status === 'late') counts.late++;
+    else if (r.status === 'not_admitted') counts.notAdmitted++;
+  }
+  return counts;
+}
+
 export const STATUS_LABEL: Record<AttendanceStatus, string> = {
   present: 'Present',
   late: 'Late',
