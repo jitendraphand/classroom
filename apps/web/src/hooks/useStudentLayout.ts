@@ -24,6 +24,20 @@ export function compactViewport(vw: number, vh: number): boolean {
   return vh < 520 || vw < 640;
 }
 
+/** Room under the student chat on a portrait phone, so it clears the bottom control bar. */
+export const PHONE_CONTROL_RESERVE_PX = 112;
+
+export function chatBottomReserve(vw: number, vh: number): number {
+  return vw <= 700 && vh > vw ? PHONE_CONTROL_RESERVE_PX : 8;
+}
+
+/** Short on a phone so the placeholder is not clipped to "Message your". */
+export function chatPlaceholder(isTeacher: boolean, compact: boolean, toName?: string | null): string {
+  if (isTeacher) return toName ? `Private message to ${toName}…` : 'Write a message…';
+  if (compact) return 'To teacher…';
+  return 'Write a message…';
+}
+
 /**
  * Pure: the student chat window box. Bottom-left corner (the controls are on
  * the right), sized to the viewport so the shared screen stays visible:
@@ -32,11 +46,12 @@ export function compactViewport(vw: number, vh: number): boolean {
 export function studentChatBox(vw: number, vh: number, rightReserve = 72) {
   const width = Math.round(clamp(vw * 0.3, 200, 340));
   const height = Math.round(clamp(Math.min(vh * 0.5, vw * 0.6), 160, 420));
+  const bottom = chatBottomReserve(vw, vh);
   return {
     width: Math.min(width, Math.max(160, vw - rightReserve - 16)),
     height,
     x: 8,
-    y: Math.max(8, vh - height - 8),
+    y: Math.max(8, vh - height - bottom),
   };
 }
 

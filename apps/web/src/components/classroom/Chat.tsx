@@ -8,6 +8,7 @@ import { IconChat, IconHand, IconHandDown, IconReply, IconSearch, IconSend } fro
 import { filterMessages, filterPeople, normalizeQuery } from '@/lib/peopleSearch';
 import { cn } from '@/lib/cn';
 import { replyTargetFor, resolveChatRecipient } from '@/lib/chatReply';
+import { chatPlaceholder } from '@/hooks/useStudentLayout';
 import { Button } from '@/components/ui/Button';
 import { useChatThread, type ChatMessage, type ChatThread, type StudentOpt, type ThreadProps } from './chatThread';
 
@@ -341,15 +342,7 @@ export function ChatView({
             <input
               ref={inputRef}
               className={cn('input flex-1', compact ? 'py-1.5 text-sm' : 'py-2')}
-              placeholder={
-                isTeacher
-                  ? toName
-                    ? `Private message to ${toName}…`
-                    : 'Write a message…'
-                  : compact
-                    ? 'Message your teacher…'
-                    : 'Write a message…'
-              }
+              placeholder={chatPlaceholder(isTeacher, compact, toName)}
               value={text}
               maxLength={2000}
               onChange={(e) => setText(e.target.value)}

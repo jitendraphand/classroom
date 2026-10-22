@@ -401,7 +401,7 @@ export function Controls({
       </p>
     )}
     {micWaitNote && rail && (
-      <p className="control-status-pill" style={micLocked ? { top: 36 } : undefined} role="status">
+      <p className={cn('control-status-pill', micLocked && 'is-second')} role="status">
         {micWaitNote}
       </p>
     )}

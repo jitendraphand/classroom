@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { compactViewport, studentChatBox } from '../src/hooks/useStudentLayout';
+import { chatBottomReserve, compactViewport, studentChatBox } from '../src/hooks/useStudentLayout';
 
 const DEVICES: [string, number, number][] = [
   ['iPhone 14 landscape', 844, 390],
@@ -17,7 +17,7 @@ test('one chat box rule for every device: bottom-left, inside the viewport, clea
   for (const [name, w, h] of DEVICES) {
     const b = studentChatBox(w, h);
     assert.equal(b.x, 8, name);
-    assert.ok(b.y + b.height <= h - 8 || b.y === 8, `${name}: bottom inside`);
+    assert.ok(b.y + b.height <= h - chatBottomReserve(w, h) + 0.5 || b.y === 8, `${name}: bottom inside`);
     assert.ok(b.x + b.width <= w - 72, `${name}: leaves the right control panel free`);
     assert.ok(b.width * b.height <= w * h * 0.25, `${name}: covers at most a quarter of the screen`);
   }

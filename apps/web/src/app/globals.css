@@ -263,6 +263,9 @@ body {
     }
     .stage-float-chrome.is-rail > .control-rail > div {
       flex-direction: row;
+      flex-wrap: wrap;
+      justify-content: center;
+      max-width: 100%;
     }
   }
   .control-rail {
@@ -272,6 +275,25 @@ body {
   }
   .control-status-pill {
     @apply pointer-events-none fixed left-1/2 top-2 z-40 -translate-x-1/2 whitespace-nowrap rounded-full border border-amber-400/30 bg-black/70 px-2.5 py-1 text-[10px] font-semibold text-amber-200 backdrop-blur;
+  }
+  /* Phone: "Teacher is in the room" and "Muted by teacher" stack, they do not overlap. */
+  @media (max-width: 700px) {
+    .stage-fullscreen-badge {
+      max-width: calc(100vw - 1.5rem);
+      white-space: normal;
+    }
+    .control-status-pill {
+      left: 0.75rem;
+      right: auto;
+      top: 2.75rem;
+      transform: none;
+      white-space: normal;
+      max-width: calc(100vw - 1.5rem);
+      text-align: left;
+    }
+    .control-status-pill.is-second {
+      top: 4.75rem;
+    }
   }
 
   .teacher-float-pane {
@@ -853,6 +875,43 @@ body {
   left: 16px;
   z-index: 60;
 }
+/* Raised hands: left side, clear of the right meeting bar and the bottom dock. */
+.raised-hands-toast {
+  position: fixed;
+  left: 16px;
+  top: 72px;
+  z-index: 80;
+  width: min(92vw, 280px);
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(15, 18, 30, 0.95);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  padding: 10px 12px;
+  color: #f1f5f9;
+  font-size: 13px;
+}
+.raised-hands-toast ul {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+.raised-hands-toast li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 44px;
+}
+.raised-hands-toast button {
+  min-height: 44px;
+  min-width: 44px;
+  border-radius: 8px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 650;
+  color: #f8fafc;
+  background: rgba(255, 255, 255, 0.08);
+}
 
 /* Student control panel buttons scale with the viewport (same look on a phone
    and a desktop, just bigger/smaller). */
@@ -860,6 +919,12 @@ body {
   --rail-btn: clamp(34px, min(7.2vh, 5.2vw), 50px);
   gap: clamp(3px, 0.8vh, 8px);
   padding: clamp(3px, 0.6vh, 6px);
+}
+/* Phones (portrait and landscape): tap targets at least 44px. */
+@media (max-width: 960px) {
+  .control-rail {
+    --rail-btn: clamp(44px, min(8vh, 12vw), 52px);
+  }
 }
 .control-rail button {
   width: var(--rail-btn);
@@ -903,10 +968,13 @@ html:has(.draw-toolbar) .control-status-pill {
 }
 @media (orientation: portrait) and (max-width: 700px) {
   html:has(.draw-toolbar) .control-status-pill {
-    top: 8px;
+    top: 2.75rem;
     bottom: auto;
     left: auto;
     right: 8px;
     transform: none;
+  }
+  html:has(.draw-toolbar) .control-status-pill.is-second {
+    top: 4.75rem;
   }
 }
