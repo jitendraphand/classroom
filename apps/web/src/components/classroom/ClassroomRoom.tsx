@@ -2,6 +2,16 @@
 
 import { selfTileLabel } from '@/lib/rosterLabels';
 import { classEndedCopy, finishCopy, finishFromState, type FinishReason } from '@/lib/classFinish';
+import {
+  classEndedNoted,
+  noteClassEnded,
+  onceCached,
+  preferFinish,
+  verdictFromProbe,
+  type ProbeBody,
+  type ProbeHit,
+} from '@/lib/classEnded';
+import { distinctConnectedStudents } from '@/lib/connectedStudents';
 import { freshTakeovers, takeoverToastText } from '@/lib/deviceTakeover';
 import { useMicDuck } from './useMicDuck';
 import { CLASS_FINISHED_EVENT } from '@/lib/classFinishEvent';
@@ -70,7 +80,7 @@ import { useChatThread } from './chatThread';
 // Chat UI loads on first open (the thread hook above keeps unread counts live).
 const ChatView = dynamic(() => import('./Chat').then((m) => m.ChatView), { ssr: false });
 import { useStudentFocus } from './useStudentFocus';
-import { countFocusAlerts, focusLabel, isFocusAlert, needsCover } from '@/lib/focusStatus';
+import { countFocusAlerts, focusLabel, fullscreenGate, fullscreenGateText, isFocusAlert } from '@/lib/focusStatus';
 import { FloatingPanel, floatInsets, useFloatDrag, readFloatPref, writeFloatPref, type FloatPos } from './FloatingPanel';
 import {
   VIDEO_PANEL_MIN_W,
@@ -143,6 +153,8 @@ import { forwardActivityFrom, setLiveSession } from '@/lib/liveSession';
 import { filterPeople } from '@/lib/peopleSearch';
 import {
   PEER_WIN_TILE_W,
+  TILE_CONNECT_MS,
+  blankTileKind,
   peerWindowGrid,
   peerWindowOuterSize,
   peerWindowTileCount,
@@ -1595,24 +1607,26 @@ function TeacherPeersFloat({
   const cells: Array<string | null> = ['__self__'];
   for (let i = 0; i < activeSlots - 1; i++) cells.push(peerIds[i] ?? null);
 
-  // After more tiles are requested (2→6) or the sample changes, newly sampled
-  // students take a few seconds to (re)publish and subscribe. Show
-  // "Connecting…" in the blank tiles meanwhile instead of flashing
-  // "Off camera"; only students actually in the room can fill them.
-  const visibleKey = visibleIdentities.join(',');
+  // A newly opened slot may say "Connecting…" for a few seconds. Rotating the
+  // sample must not reset that timer, or every tile stays on "Connecting…".
   const [settling, setSettling] = useState(false);
   useEffect(() => {
     setSettling(true);
-    const t = window.setTimeout(() => setSettling(false), 12_000);
+    const t = window.setTimeout(() => setSettling(false), TILE_CONNECT_MS);
     return () => window.clearTimeout(t);
-  }, [activeSlots, visibleKey]);
-  const fillableStudents = room
-    ? Array.from(room.remoteParticipants.values()).filter((p) => {
-        if (isTeacherParticipant(p, teacherSet) || peerIds.includes(p.identity)) return false;
-        if (videoHidden(p.identity, { dropped: droppedStudents, now: Date.now(), liveRoster })) return false;
-        return true;
-      }).length
+  }, [activeSlots]);
+  const studentsInRoom = room
+    ? Array.from(room.remoteParticipants.values()).filter(
+        (p) => p.identity.startsWith('student_') && !isTeacherParticipant(p, teacherSet)
+      ).length
     : 0;
+  const pendingSample = visibleIdentities.filter((id) => {
+    if (!id.startsWith('student_') || peerIds.includes(id)) return false;
+    const p = room?.remoteParticipants.get(id);
+    if (p && isTeacherParticipant(p, teacherSet)) return false;
+    if (videoHidden(id, { dropped: droppedStudents, now: Date.now(), liveRoster })) return false;
+    return true;
+  }).length;
 
   // Student videos window (during a share): only the tiles actually shown,
   // and the window is resized to exactly fit them (lib/peerWindow).
@@ -1620,7 +1634,7 @@ function TeacherPeersFloat({
   const winCount = peerWindowTileCount({
     slots: activeSlots,
     filled: Math.min(peerIds.length, activeSlots - 1),
-    connecting: settling ? fillableStudents : 0,
+    connecting: settling ? pendingSample : 0,
   });
   const winGrid = useMemo(() => peerWindowGrid(winCount, winTileW), [winCount, winTileW]);
   const [paneEl, setPaneEl] = useState<HTMLDivElement | null>(null);
@@ -1684,7 +1698,10 @@ function TeacherPeersFloat({
   }, [portal, portalWindow, paneEl, winGrid.paneW, winGrid.paneH, winCount]);
   if (videosHidden && !portal) return null;
   const L = portal && !clampedManual ? winGrid : view;
-  const shownCells = portal ? cells.slice(0, winCount) : cells;
+  const rawCells = portal ? cells.slice(0, winCount) : cells;
+  // No students in the room: drop the empty slots so they never say "Off camera".
+  const shownCells = studentsInRoom > 0 ? rawCells : rawCells.filter((id) => id != null);
+  let blankCursor = 0;
 
   const style: CSSProperties = portal
     ? { position: 'relative', left: 0, top: 0, width: 'max-content', height: 'auto', borderRadius: 0, border: 0 }
@@ -1835,6 +1852,14 @@ function TeacherPeersFloat({
               );
             }
             if (!identity) {
+              const kind = blankTileKind({
+                studentsInRoom,
+                pendingSample,
+                blankIndex: blankCursor,
+                settling,
+              });
+              blankCursor += 1;
+              if (kind === 'empty') return null;
               return (
                 <div
                   key={`empty-${i}`}
@@ -1850,7 +1875,7 @@ function TeacherPeersFloat({
                     fontWeight: 650,
                   }}
                 >
-                  {settling && i - 1 - peerIds.length < fillableStudents ? 'Connecting…' : 'Off camera'}
+                  {kind === 'connecting' ? 'Connecting…' : 'Off camera'}
                 </div>
               );
             }
@@ -2624,12 +2649,17 @@ function RoomInner({
     type Mark = { phase: PresencePhase; since: number; signal: 'lost' | 'left'; postedLeft: boolean };
     const marks = new Map<string, Mark>();
     const timers = new Map<string, number>();
+    // Quality Lost is a bad link, not a leave. It must not report /presence
+    // left: under load that dropped people who were still in the room.
+    const qualityLost = new Set<string>();
     const publish = () => {
       const dropped = new Map<string, number>();
-      const reconnecting = new Set<string>();
+      const reconnecting = new Set<string>(qualityLost);
       for (const [id, m] of marks) {
-        if (m.phase === 'gone') dropped.set(id, m.since);
-        else if (m.phase === 'reconnecting') reconnecting.add(id);
+        if (m.phase === 'gone') {
+          dropped.set(id, m.since);
+          reconnecting.delete(id);
+        } else if (m.phase === 'reconnecting') reconnecting.add(id);
       }
       setDroppedStudents(dropped);
       setReconnectingIds(reconnecting);
@@ -2695,10 +2725,12 @@ function RoomInner({
     };
     const onDisconnected = (p: RemoteParticipant) => {
       if (!p.identity?.startsWith('student_')) return;
+      qualityLost.delete(p.identity);
       apply(p.identity, 'left', p.sid);
     };
     const onConnected = (p: RemoteParticipant) => {
       if (!p.identity?.startsWith('student_')) return;
+      qualityLost.delete(p.identity);
       // Always tell the server, matching the previous join report. Clear
       // postedLeft first so apply('ok') does not send a second joined.
       if (p.sid) report('joined', p.identity, p.sid);
@@ -2712,7 +2744,8 @@ function RoomInner({
       // pagehide must not stretch it or undo the leave.
       if (marks.get(p.identity)?.signal === 'left') return;
       if (quality === ConnectionQuality.Lost) {
-        apply(p.identity, 'lost', p.sid);
+        qualityLost.add(p.identity);
+        publish();
         return;
       }
       if (
@@ -2720,8 +2753,10 @@ function RoomInner({
         quality === ConnectionQuality.Good ||
         quality === ConnectionQuality.Poor
       ) {
+        const recovered = qualityLost.delete(p.identity);
         const cur = marks.get(p.identity);
         if (cur?.signal === 'lost') apply(p.identity, 'ok', p.sid);
+        else if (recovered) publish();
       }
     };
     room.on(RoomEvent.ParticipantDisconnected, onDisconnected);
@@ -2802,6 +2837,9 @@ function RoomInner({
   }, []);
   /** Student left fullscreen (Esc, swipe, app switch): prompt, never kick. */
   const focus = useStudentFocus(code, !isTeacher);
+  const [fsHintOff, setFsHintOff] = useState(false);
+  const [endAsk, setEndAsk] = useState(false);
+  const [endingClass, setEndingClass] = useState(false);
   // No element fullscreen (iPhone Safari): same look, as a scroll-locked fixed page.
   usePseudoFullscreen(!isTeacher && focus.focusMode);
   const [camError, setCamError] = useState<string | null>(null);
@@ -2980,6 +3018,7 @@ function RoomInner({
 
   useEffect(() => {
     if (state?.status === 'ENDED' || state?.ended) {
+      noteClassEnded(code);
       try {
         room?.disconnect();
       } catch {
@@ -3739,13 +3778,31 @@ function RoomInner({
     router.push('/teacher/dashboard');
   }
 
-  async function endClass() {
-    if (!confirm('End class for everyone?')) return;
-    await roomFetch(code, '/end', { method: 'POST' });
-    room?.disconnect();
-    // Teacher: stay on the "Class finished" screen (it has a Dashboard button)
-    // instead of jumping straight back to the dashboard.
-    onClassEnded();
+  function endClass() {
+    setEndAsk(true);
+  }
+
+  async function confirmEndClass() {
+    if (endingClass) return;
+    setEndingClass(true);
+    try {
+      const res = await roomFetch(code, '/end', { method: 'POST' });
+      if (!res.ok) {
+        setHudNotice('Could not end the class. Everyone is still in the room.');
+        setEndingClass(false);
+        setEndAsk(false);
+        return;
+      }
+      setEndAsk(false);
+      room?.disconnect();
+      // Teacher: stay on the "Class finished" screen (it has a Dashboard button)
+      // instead of jumping straight back to the dashboard.
+      onClassEnded();
+    } catch {
+      setHudNotice('Could not end the class. Everyone is still in the room.');
+      setEndingClass(false);
+      setEndAsk(false);
+    }
   }
 
   async function rotateSample() {
@@ -3924,15 +3981,22 @@ function RoomInner({
     }
   }
 
-  const studentCount = state?.admitted?.filter((a) => a.role === 'STUDENT').length ?? 0;
   const waitingCount = state?.waiting?.length ?? 0;
   // Roster panel: students only (the teacher is not listed), raised hands
-  // first by raise time, then pinned, then by name.
-  const rosterStudents = sortRoster(
-    (state?.admitted ?? [])
-      .filter((p) => p.role === 'STUDENT' && !isRosterDropped(p.livekitIdentity, droppedStudents, Date.now()))
-      .map((p) => ({ ...p, handRaised: !!(p.handRaised || (state?.raisedHands ?? []).includes(p.id)) }))
+  // first by raise time, then pinned, then by name. Two devices of one
+  // student count once, same rule as admin "Students connected".
+  const rosterStudents = distinctConnectedStudents(
+    sortRoster(
+      (state?.admitted ?? [])
+        .filter((p) => p.role === 'STUDENT' && !isRosterDropped(p.livekitIdentity, droppedStudents, Date.now()))
+        .map((p) => ({ ...p, handRaised: !!(p.handRaised || (state?.raisedHands ?? []).includes(p.id)) }))
+    ).map((p) => ({
+      ...p,
+      identity: p.livekitIdentity,
+      studentId: p.studentId ?? null,
+    }))
   );
+  const studentCount = rosterStudents.length;
   const shownRoster = filterPeople(rosterStudents, rosterQuery);
   const shownWaiting = filterPeople(state?.waiting ?? [], rosterQuery);
   /** Raised hands, earliest first: shown in the chat panel so they stay in
@@ -4303,7 +4367,13 @@ function RoomInner({
     const teacherGone = teacherLive === false;
     const teacherHere = teacherIdentities.length > 0 && !teacherGone;
     const showTeacherScreen = effectiveStage === 'screen' && !teacherGone;
-    const covered = needsCover(focus.status);
+    const fsGate = fullscreenGate({
+      status: focus.status,
+      everFullscreen: focus.everFullscreen,
+      iphone: focus.iphone,
+    });
+    const covered = fsGate === 'block';
+    const fsText = fullscreenGateText({ status: focus.status, everFullscreen: focus.everFullscreen });
     const badge =
       showTeacherScreen
         ? 'Teacher screen'
@@ -4344,14 +4414,31 @@ function RoomInner({
             type="button"
             onClick={() => void focus.returnToFullscreen()}
             className="fixed inset-0 z-[90] flex flex-col items-center justify-center gap-3 bg-black px-6 text-center text-white"
-            aria-label="Tap to return to fullscreen"
+            aria-label={fsText.label}
           >
             <IconScreen size={36} className="text-brand-300" />
-            <span className="font-display text-xl font-semibold">Tap to return to fullscreen</span>
-            <span className="max-w-sm text-sm text-slate-400">
-              You are still in the class and can hear it. Your teacher can see that you left fullscreen.
-            </span>
+            <span className="font-display text-xl font-semibold">{fsText.title}</span>
+            <span className="max-w-sm text-sm text-slate-400">{fsText.body}</span>
           </button>
+        )}
+        {fsGate === 'hint' && !fsHintOff && (
+          <div
+            className="fixed left-3 right-3 top-14 z-[70] flex flex-wrap items-center justify-center gap-2 rounded-xl border border-white/15 bg-black/75 px-3 py-2 text-center text-xs text-white"
+            role="status"
+            data-testid="fullscreen-hint"
+          >
+            <span className="max-w-sm">{fsText.body}</span>
+            <button
+              type="button"
+              className="rounded-lg bg-white/15 px-3 py-2 font-semibold"
+              onClick={() => void focus.returnToFullscreen()}
+            >
+              {fsText.label}
+            </button>
+            <button type="button" className="px-2 py-2 text-slate-300" onClick={() => setFsHintOff(true)} aria-label="Dismiss fullscreen hint">
+              Dismiss
+            </button>
+          </div>
         )}
 
         {/* Small portrait screens (any device): a hint only, never blocks taps or audio. */}
@@ -4424,7 +4511,10 @@ function RoomInner({
         )}
 
         {/* Student controls: a vertical panel on the right edge, on every device. */}
-        <div className="stage-float-chrome is-rail" data-float-bound="right">
+        <div
+          className="stage-float-chrome is-rail"
+          data-float-bound={viewport.w <= 700 && viewport.h > viewport.w ? 'bottom' : 'right'}
+        >
           <Controls
             {...controlsProps}
             variant="float"
@@ -4640,6 +4730,24 @@ function RoomInner({
         </span>
       )}
 
+      {isTeacher && raisedHands.length > 0 && (
+        <div className="raised-hands-toast" role="status" data-testid="raised-hands-toast" aria-label="Raised hands">
+          <p className="font-semibold">Raised hands</p>
+          <ul>
+            {raisedHands.slice(0, 8).map((h) => (
+              <li key={h.id}>
+                <span className="min-w-0 truncate">{h.displayName}</span>
+                <button type="button" onClick={() => void lowerHand(h.id)} aria-label={`Lower hand for ${h.displayName}`}>
+                  Lower
+                </button>
+              </li>
+            ))}
+          </ul>
+          {raisedHands.length > 8 && (
+            <p className="mt-1 text-xs text-slate-400">+{raisedHands.length - 8} more in the roster</p>
+          )}
+        </div>
+      )}
       {isTeacher && takeoverToast && (
         <div className="teacher-toast" role="status" data-testid="takeover-toast">
           <span className="flex-1">{takeoverToast}</span>
@@ -5175,6 +5283,29 @@ function RoomInner({
         />
       </footer>
       )}
+      {endAsk && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 px-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="end-class-title"
+            data-testid="end-class-confirm"
+            className="w-full max-w-sm rounded-2xl border border-white/10 bg-surface-1 p-6 text-center shadow-lift"
+          >
+            <p id="end-class-title" className="font-display text-lg font-semibold">
+              End class for everyone?
+            </p>
+            <div className="mt-5 flex justify-center gap-3">
+              <Button variant="danger" onClick={() => void confirmEndClass()} disabled={endingClass}>
+                End class
+              </Button>
+              <Button variant="secondary" onClick={() => { setEndAsk(false); setEndingClass(false); }} disabled={endingClass}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -5267,6 +5398,9 @@ function ShareHudSlot({
   );
 }
 
+const endProbeCache = new Map<string, ProbeHit<{ httpStatus: number; body: ProbeBody }>>();
+const endProbeInflight = new Map<string, Promise<{ httpStatus: number; body: ProbeBody }>>();
+
 export function ClassroomRoom({ code }: { code: string }) {
   const router = useRouter();
   const [tokenData, setTokenData] = useState<TokenPayload | null>(null);
@@ -5348,6 +5482,7 @@ export function ClassroomRoom({ code }: { code: string }) {
         if (outcome === 'retry') continue;
         const body = await res.json().catch(() => ({}));
         if (outcome === 'ended') {
+          noteClassEnded(code);
           setClassEnded(true);
           setTokenData(null);
           return;
@@ -5369,28 +5504,93 @@ export function ClassroomRoom({ code }: { code: string }) {
 
   const onDisconnected = useCallback(
     (reason?: DisconnectReason) => {
-      if (shouldAutoRejoin(reason, { leaving: rejoinRef.current.unmounted || leavingNow() })) {
+      const leaving = rejoinRef.current.unmounted || leavingNow();
+      if (shouldAutoRejoin(reason, { leaving })) {
         void rejoin();
         return;
       }
-      if (!isTeacher && (reason === DisconnectReason.DUPLICATE_IDENTITY || reason === DisconnectReason.PARTICIPANT_REMOVED)) {
-        // Students: the newer device took the seat, or the teacher removed them.
-        setFinished((f) => f ?? (reason === DisconnectReason.DUPLICATE_IDENTITY ? 'replaced' : 'removed'));
-        setTokenData(null);
+      if (reason === DisconnectReason.DUPLICATE_IDENTITY) {
+        if (!isTeacher) {
+          setFinished((f) => f ?? 'replaced');
+          setTokenData(null);
+        } else {
+          setHandoff((h) => h ?? 'device');
+          setTokenData(null);
+          window.dispatchEvent(new Event(SESSION_CHECK_EVENT));
+        }
         return;
       }
-      if (reason === DisconnectReason.DUPLICATE_IDENTITY) {
-        setHandoff((h) => h ?? 'device');
-        setTokenData(null);
-        window.dispatchEvent(new Event(SESSION_CHECK_EVENT));
-      } else if (reason === DisconnectReason.PARTICIPANT_REMOVED && isTeacher) {
+      if (reason === DisconnectReason.PARTICIPANT_REMOVED && isTeacher) {
         // Only a newer sign-in removes the teacher from the SFU (sessionKick).
         setHandoff((h) => h ?? 'device');
         setTokenData(null);
         window.dispatchEvent(new Event(SESSION_CHECK_EVENT));
+        return;
+      }
+      // Room deletion under load often arrives as PARTICIPANT_REMOVED. One
+      // cached /state read decides ended vs removed. Never call it a kick
+      // until that probe says the student was removed from a live class.
+      if (!isTeacher && (reason === DisconnectReason.PARTICIPANT_REMOVED || reason === DisconnectReason.ROOM_DELETED)) {
+        const roomDeleted = reason === DisconnectReason.ROOM_DELETED;
+        const participantRemoved = reason === DisconnectReason.PARTICIPANT_REMOVED;
+        void (async () => {
+          try {
+            if (classEndedNoted(code)) {
+              noteClassEnded(code);
+              setFinished((f) => preferFinish(f, 'ended'));
+              setClassEnded(true);
+              setTokenData(null);
+              return;
+            }
+            const probed = await onceCached({
+              key: `end:${code}`,
+              now: Date.now(),
+              ttlMs: 15_000,
+              cache: endProbeCache,
+              inflight: endProbeInflight,
+              load: async () => {
+                const res = await roomFetch(code, '/state');
+                const body = (await res.json().catch(() => null)) as ProbeBody;
+                return { httpStatus: res.status, body };
+              },
+            });
+            const verdict = verdictFromProbe({
+              httpStatus: probed.httpStatus,
+              body: probed.body,
+              roomDeleted,
+              participantRemoved,
+              sawClassEnded: classEndedNoted(code),
+              leaving: leavingNow(),
+            });
+            if (verdict === 'ended') {
+              noteClassEnded(code);
+              setFinished((f) => preferFinish(f, 'ended'));
+              setClassEnded(true);
+              setTokenData(null);
+            } else if (verdict === 'removed') {
+              setFinished((f) => (f && f !== 'removed' ? f : 'removed'));
+              setTokenData(null);
+            } else if (verdict === 'replaced') {
+              setFinished((f) => f ?? 'replaced');
+              setTokenData(null);
+            } else if (verdict === 'rejoin') {
+              void rejoin();
+            }
+          } catch (e) {
+            console.warn('disconnect settle', e);
+            if (roomDeleted || classEndedNoted(code)) {
+              noteClassEnded(code);
+              setFinished((f) => preferFinish(f, 'ended'));
+              setClassEnded(true);
+              setTokenData(null);
+            } else {
+              void rejoin();
+            }
+          }
+        })();
       }
     },
-    [isTeacher, rejoin]
+    [isTeacher, rejoin, code]
   );
 
   /**
@@ -5448,6 +5648,7 @@ export function ClassroomRoom({ code }: { code: string }) {
     const state = await stateRes.json();
     if (!stateRes.ok) {
       if (stateRes.status === 410 || state.ended) {
+        noteClassEnded(code);
         setClassEnded(true);
         return;
       }
@@ -5455,6 +5656,7 @@ export function ClassroomRoom({ code }: { code: string }) {
       return;
     }
     if (state.status === 'ENDED' || state.ended) {
+      noteClassEnded(code);
       setClassEnded(true);
       return;
     }
@@ -5489,6 +5691,7 @@ export function ClassroomRoom({ code }: { code: string }) {
     const tok = await tokRes.json();
     if (!tokRes.ok) {
       if (tokRes.status === 410 || tok.ended) {
+        noteClassEnded(code);
         setClassEnded(true);
         return;
       }
@@ -5532,13 +5735,15 @@ export function ClassroomRoom({ code }: { code: string }) {
   // app for no behavioural gain — the props below are initial values that
   // effectiveCanPublish / effectiveMuted immediately override from `state`.
 
-  if (finished || (classEnded && !isTeacher && getClassroomRole(code) === 'student')) {
+  const endedAnyway = classEnded || classEndedNoted(code);
+  const shownFinish: FinishReason | null = finished === 'removed' && endedAnyway ? 'ended' : finished;
+  if (shownFinish || (endedAnyway && !isTeacher && getClassroomRole(code) === 'student')) {
     return (
       <StudentFinished
-        reason={finished ?? 'ended'}
+        reason={shownFinish ?? 'ended'}
         code={code}
         offerFeedback={Boolean(
-          schoolStudent && (finished === 'left' || finished === 'ended' || (classEnded && !finished))
+          schoolStudent && (shownFinish === 'left' || shownFinish === 'ended' || (endedAnyway && !shownFinish))
         )}
       />
     );

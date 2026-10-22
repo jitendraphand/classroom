@@ -54,6 +54,28 @@ export function peerWindowTileCount(opts: { slots: number; filled: number; conne
   return Math.max(1, Math.min(opts.slots, want));
 }
 
+/** How long a newly opened slot may say "Connecting…" before a real placeholder. */
+export const TILE_CONNECT_MS = 4_000;
+
+/**
+ * Blank class-panel slot.
+ * No students in the room → empty (never "Off camera").
+ * "Connecting…" only while a sampled student is still arriving, and only for
+ * the first few seconds — a rotating sample must not keep the word up.
+ */
+export function blankTileKind(opts: {
+  studentsInRoom: number;
+  pendingSample: number;
+  blankIndex: number;
+  settling: boolean;
+}): 'empty' | 'connecting' | 'off-camera' {
+  if (opts.studentsInRoom <= 0) return 'empty';
+  if (opts.settling && opts.pendingSample > 0 && opts.blankIndex >= 0 && opts.blankIndex < opts.pendingSample) {
+    return 'connecting';
+  }
+  return 'off-camera';
+}
+
 /** Outer size to open the window at (window chrome estimated; fixed after load). */
 export function peerWindowOuterSize(count: number, tileW: number = PEER_WIN_TILE_W) {
   const g = peerWindowGrid(count, tileW);

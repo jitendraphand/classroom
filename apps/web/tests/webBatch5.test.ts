@@ -66,7 +66,9 @@ test('2. finished student view: reasons, copy, static screen, window.close', () 
   assert.match(room, /function StudentFinished/);
   assert.match(room, /window\.close\(\)/);
   assert.match(room, /onFinished\('left'\)/);
-  assert.match(room, /DisconnectReason\.DUPLICATE_IDENTITY \? 'replaced' : 'removed'/);
+  assert.match(room, /reason === DisconnectReason\.DUPLICATE_IDENTITY/);
+  assert.match(room, /setFinished\(\(f\) => f \?\? 'replaced'\)/);
+  assert.match(room, /verdictFromProbe/);
   assert.match(src('hooks/useRoomState.ts'), /data\.public && \(data\.replaced \|\| data\.meLeft\)/);
   assert.match(src('components/auth/StaffSessionGuard.tsx'), /CLASS_FINISHED_EVENT/);
 });
