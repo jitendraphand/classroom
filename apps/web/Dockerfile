@@ -37,6 +37,7 @@ COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
+COPY cluster.js ./cluster.js
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 # /app/secrets: mount point for the admin bootstrap password file (see
 # scripts/create-admin.sh); container-only permissions.
@@ -49,6 +50,6 @@ ENV HOSTNAME=0.0.0.0
 
 # Explicit CMD: without it the base image's CMD is inherited and the entrypoint
 # (which forwards "$@") can never start the app.
-CMD ["node", "server.js"]
+CMD ["node", "cluster.js"]
 
 ENTRYPOINT ["/docker-entrypoint.sh"]

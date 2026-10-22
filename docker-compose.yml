@@ -22,18 +22,23 @@ services:
       # published 5432 on every interface; the firewall was the only control.
       - -c
       - listen_addresses=127.0.0.1
-      # Sized for a 2 GB VPS (the documented target host).
+      # Defaults sized for a large one-box deploy (docs/CAPACITY.md). A 2 GB VPS
+      # should set POSTGRES_MAX_CONNECTIONS=50 and POSTGRES_SHARED_BUFFERS=256MB.
       - -c
-      - shared_buffers=256MB
+      - shared_buffers=${POSTGRES_SHARED_BUFFERS:-256MB}
       - -c
-      - effective_cache_size=1536MB
+      - effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-1536MB}
       - -c
-      - maintenance_work_mem=128MB
+      - maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-128MB}
       - -c
-      - max_wal_size=512MB
+      - max_wal_size=${POSTGRES_MAX_WAL_SIZE:-512MB}
       - -c
-      - max_connections=50
+      - max_connections=${POSTGRES_MAX_CONNECTIONS:-280}
     shm_size: 256mb
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -53,6 +58,7 @@ services:
       - redis-server
       - --appendonly
       - "yes"
+      # everysec avoids AOF fsync storms under pub/sub; always is too slow at 2,500.
       - --appendfsync
       - everysec
       - --bind
@@ -60,9 +66,18 @@ services:
       - --port
       - "6379"
       - --maxmemory
-      - 192mb
+      - ${REDIS_MAXMEMORY:-192mb}
       - --maxmemory-policy
       - allkeys-lru
+      - --tcp-keepalive
+      - "60"
+      # Soft/hard/seconds. Drop a stalled subscriber before Redis OOM.
+      - --client-output-buffer-limit
+      - pubsub 32mb 8mb 60
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
     volumes:
       - redis_data:/data
     healthcheck:
@@ -76,6 +91,10 @@ services:
     restart: unless-stopped
     network_mode: host
     command: ["--config", "/etc/livekit.yaml"]
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
     volumes:
       - ./infra/livekit.yaml:/etc/livekit.yaml:ro
       # Caddy's Let's Encrypt certificates, read by LiveKit's embedded TURN/TLS
@@ -117,6 +136,15 @@ services:
       NODE_ENV: production
       PORT: "3000"
       HOSTNAME: "0.0.0.0"
+      # Empty = CPU count, capped to fit POSTGRES_MAX_CONNECTIONS (cluster.js).
+      WEB_WORKERS: ${WEB_WORKERS:-}
+      DB_POOL_PER_WORKER: ${DB_POOL_PER_WORKER:-8}
+      DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-10}
+      POSTGRES_MAX_CONNECTIONS: ${POSTGRES_MAX_CONNECTIONS:-280}
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
     depends_on:
       postgres:
         condition: service_healthy
@@ -143,6 +171,10 @@ services:
     profiles: ["tls"]
     restart: unless-stopped
     network_mode: host
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
     volumes:
       - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

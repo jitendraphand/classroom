@@ -1,7 +1,8 @@
 import { roomServiceFor } from './livekit';
 import { prisma } from './db';
+import { acquireLock, releaseLock } from './leaderLock';
 import { ensureRedis, keys } from './redis';
-import { livekitRoomName, roomService, setParticipantPublishPermissions } from './livekit';
+import { livekitRoomName, setParticipantPublishPermissions } from './livekit';
 import { TEACHER_ABSENCE_GRACE_MS, createGraceTimers } from './graceTimer';
 import { teacherPresentAmong, type PresenceParticipant, type RoomRef } from './teacherPresenceLogic';
 
@@ -59,16 +60,85 @@ export async function recordTeacherPresence(
   );
 }
 
-/** One web process: per-room "teacher left" timers (keyed by LiveKit room). */
+/** Fast path on the worker that got the webhook. Redis is the cross-worker source of truth. */
 const absenceTimers = createGraceTimers({ delayMs: TEACHER_ABSENCE_GRACE_MS });
 const timerKey = (room: RoomRef) => `${room.code}:${room.sessionId}`;
+const dueMember = (room: RoomRef) => `${room.code}|${room.sessionId}`;
 
 export function deferTeacherAbsence(room: RoomRef, confirm: () => Promise<void>) {
+  const due = Date.now() + TEACHER_ABSENCE_GRACE_MS;
+  void (async () => {
+    try {
+      const redis = await ensureRedis();
+      await redis.zadd(keys.teacherAbsenceDue(), due, dueMember(room));
+    } catch {
+      /* in-process timer still runs on this worker */
+    }
+  })();
   absenceTimers.schedule(timerKey(room), confirm);
 }
 
 export function cancelTeacherAbsence(room: RoomRef) {
   absenceTimers.cancel(timerKey(room));
+  void (async () => {
+    try {
+      const redis = await ensureRedis();
+      await redis.zrem(keys.teacherAbsenceDue(), dueMember(room));
+    } catch {
+      /* ignore */
+    }
+  })();
+}
+
+/**
+ * Any worker: confirm absences whose grace elapsed (covers the webhook worker
+ * dying mid-timer). Confirm still re-lists LiveKit so a returned teacher is
+ * not locked.
+ */
+export async function sweepTeacherAbsences(now = Date.now()): Promise<number> {
+  let redis: Awaited<ReturnType<typeof ensureRedis>>;
+  try {
+    redis = await ensureRedis();
+  } catch {
+    return 0;
+  }
+  const due = await redis.zrangebyscore(keys.teacherAbsenceDue(), 0, now);
+  let n = 0;
+  for (const member of due) {
+    const bar = member.indexOf('|');
+    if (bar <= 0) {
+      await redis.zrem(keys.teacherAbsenceDue(), member);
+      continue;
+    }
+    const room: RoomRef = { code: member.slice(0, bar), sessionId: member.slice(bar + 1) };
+    const lockKey = `lock:absence:${member}`;
+    const token = await acquireLock(lockKey, 30);
+    if (!token) continue;
+    try {
+      await redis.zrem(keys.teacherAbsenceDue(), member);
+      let stillAbsent: boolean;
+      try {
+        stillAbsent = !teacherPresentAmong(await listRoomParticipants(room));
+      } catch {
+        stillAbsent = true;
+      }
+      if (!stillAbsent) continue;
+      await recordTeacherPresence(room, false, 'webhook');
+      await applyStudentMicLock(room, false);
+      n++;
+    } finally {
+      await releaseLock(lockKey, token);
+    }
+  }
+  return n;
+}
+
+export function startAbsenceSweeper() {
+  const tick = () => {
+    void sweepTeacherAbsences().catch((e) => console.warn('[absence] sweep', e instanceof Error ? e.message : e));
+  };
+  const iv = setInterval(tick, 1000);
+  iv.unref?.();
 }
 
 export async function recordTeacherGrace(room: RoomRef) {

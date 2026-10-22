@@ -33,6 +33,9 @@ export async function GET() {
     {
       status: ok ? 'healthy' : 'degraded',
       checks,
+      pid: process.pid,
+      webWorkers: process.env.WEB_WORKERS || 'auto',
+      dbPoolPerWorker: process.env.DB_POOL_PER_WORKER || '8',
       maxVisibleStudentVideos: sampleConfig().maxVisible,
       hardMaxVisibleStudentVideos: HARD_MAX_VISIBLE_STUDENT_VIDEOS,
       speakerPinUntilMute: true,

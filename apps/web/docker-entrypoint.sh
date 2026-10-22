@@ -93,11 +93,11 @@ if ! node /app/scripts/admin.mjs bootstrap; then
   echo "[classroom] WARNING: admin bootstrap failed (see above); continuing. Run ./scripts/create-admin.sh on the host." >&2
 fi
 
-echo "[classroom] Starting Next.js..."
+echo "[classroom] Starting Next.js (cluster, WEB_WORKERS=${WEB_WORKERS:-auto})..."
 # Allow `docker compose run --rm web <cmd>` to execute that command instead of
 # silently starting the production server. The base image's CMD is inherited, so
 # an explicit override previously could not reach the process at all.
 if [ "$#" -gt 0 ]; then
   exec "$@"
 fi
-exec node server.js
+exec node cluster.js

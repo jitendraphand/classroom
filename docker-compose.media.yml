@@ -11,6 +11,10 @@ services:
     restart: unless-stopped
     network_mode: host
     command: ["--config", "/etc/livekit.yaml"]
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
     volumes:
       - ./infra/livekit-media.yaml:/etc/livekit.yaml:ro
       - media_caddy_data:/caddy-data:ro
@@ -20,6 +24,10 @@ services:
     profiles: ["media"]
     restart: unless-stopped
     network_mode: host
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
     environment:
       MEDIA_DOMAIN: ${MEDIA_DOMAIN:?MEDIA_DOMAIN must be set in .env}
     volumes:

@@ -3,10 +3,12 @@ export async function register() {
   // inside a literal NEXT_RUNTIME === 'nodejs' check so webpack drops it from the
   // edge bundle (ioredis needs Node built-ins such as stream, crypto, dns).
   if (process.env.NEXT_RUNTIME === 'nodejs') {
-    const g = globalThis as unknown as { __classroomRankJob?: boolean };
-    if (g.__classroomRankJob) return;
-    g.__classroomRankJob = true;
+    const g = globalThis as unknown as { __classroomJobs?: boolean };
+    if (g.__classroomJobs) return;
+    g.__classroomJobs = true;
     const { startRankScheduler } = await import('./lib/rankScheduler');
     startRankScheduler();
+    const { startAbsenceSweeper } = await import('./lib/teacherPresence');
+    startAbsenceSweeper();
   }
 }

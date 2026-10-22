@@ -75,6 +75,10 @@ export const keys = {
   spotlight: (code: string) => `room:${code}:spotlight`,
   /** Redis pub/sub channel for chat SSE (not a stored key). */
   chatChannel: (code: string) => `room:${code}:chat`,
+  /** Sorted set score=due-ms member=`code|sessionId` for teacher-absence grace. */
+  teacherAbsenceDue: () => `teacher-absence:due`,
+  /** SET NX lock: weekly rank snapshots run on one worker. */
+  leaderRank: () => `leader:rank-scheduler`,
 };
 
 export type StageMode = 'idle' | 'screen';
