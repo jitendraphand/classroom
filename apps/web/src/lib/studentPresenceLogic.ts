@@ -8,29 +8,37 @@
  * leave: LiveKit server v1.13.9 only notices after its hardcoded signal ping
  * (5s interval + 15s timeout), which is why the roster used to wait ~20–24s.
  *
- * The student client heartbeats every HEARTBEAT_INTERVAL_MS. The roster shows
- * "reconnecting" once the last beat is HEARTBEAT_RECONNECTING_MS old and hides
- * them at HEARTBEAT_STALE_MS (about 5–8s after the crash) unless a beat or a
- * new join lands first. The seat stays ADMITTED, so the same link brings them
- * back. The teacher also starts that same short grace when LiveKit reports
+ * The student client heartbeats every HEARTBEAT_INTERVAL_MS (jittered so 2,500
+ * clients do not stampede). Fast roster drop on a crash is LiveKit disconnect
+ * / webhook (~20s signal timeout) plus STUDENT_GONE_GRACE_MS. The heartbeat is
+ * the slow safety net: reconnecting after HEARTBEAT_RECONNECTING_MS, gone after
+ * HEARTBEAT_STALE_MS. The seat stays ADMITTED, so the same link brings them
+ * back. The teacher also starts a short grace when LiveKit reports
  * ConnectionQuality.Lost (the JS SDK's ParticipantConnectionQualityChanged).
  */
 export const STUDENT_GONE_GRACE_MS = 2_500;
 
-/** How often the student client posts /heartbeat. */
-export const HEARTBEAT_INTERVAL_MS = 2_000;
+/** How often the student client posts /heartbeat (≥30s; jitter added on the client). */
+export const HEARTBEAT_INTERVAL_MS = 30_000;
+/** Extra delay mixed into each client's period so heartbeats do not align. */
+export const HEARTBEAT_JITTER_MS = 5_000;
 /**
  * Last beat this old → show "reconnecting", but keep the seat. One missed
  * post (a brief glitch) stays under this.
  */
-export const HEARTBEAT_RECONNECTING_MS = 4_000;
+export const HEARTBEAT_RECONNECTING_MS = 50_000;
 /**
- * Last beat this old, and no explicit leave, → drop off the roster.
- * A crash just after a beat is removed at this age; a crash just before the
- * next beat is removed sooner, still inside 5–8s. Two missed posts (~4s) do
- * not reach it.
+ * Last beat this old, and no explicit leave, → drop off the roster. LiveKit
+ * disconnect is the fast path; this is the slow net if the webhook is missed.
  */
-export const HEARTBEAT_STALE_MS = 7_000;
+export const HEARTBEAT_STALE_MS = 80_000;
+
+/** Period for one client: 30s plus 0..jitter ms. `rand` in [0, 1]. */
+export function heartbeatPeriodMs(rand = Math.random()): number {
+  const r = Number.isFinite(rand) ? Math.min(1, Math.max(0, rand)) : 0;
+  return HEARTBEAT_INTERVAL_MS + Math.floor(r * HEARTBEAT_JITTER_MS);
+}
+
 /** Teacher-side grace after ConnectionQuality.Lost / a reconnecting signal. */
 export const LOST_GRACE_MS = 5_000;
 
@@ -102,8 +110,8 @@ export type HeartbeatDecision =
  * Accept a student heartbeat. A different sid is ignored only while the
  * current connection is still `ok`, so an old tab cannot refresh a live one.
  * A reconnect (phase reconnecting or gone) may take the seat and clears `gone`.
- * `nudge` is true only when this beat brings someone back — healthy 2s beats
- * must not wake the teacher's 30s poll.
+ * `nudge` is true only when this beat brings someone back — healthy 30s beats
+ * must not wake the teacher's safety poll.
  */
 export function applyHeartbeat(
   cur: StudentLive | null,

@@ -5,7 +5,7 @@
  */
 import { ensureRedis, keys } from './redis';
 import { livekitRoomNameForCode, sendRoomData } from './livekit';
-import { nudgeRoomState } from './roomNudge';
+import { nudgeRoomState, pushSignalForCode } from './roomNudge';
 import {
   DRAW_ALLOW_MS,
   DRAW_TOPIC,
@@ -69,7 +69,7 @@ export async function setDrawRequest(code: string, participantId: string, on: bo
   } else {
     await r.hdel(keys.drawRequests(code), participantId);
   }
-  nudgeRoomState(code, { participantIds: [participantId] });
+  pushSignalForCode(code, { v: 1, type: 'draw-req', on, participantId });
 }
 
 /**
@@ -164,7 +164,8 @@ export class DrawError extends Error {
 export async function appendPoints(
   code: string,
   holder: DrawHolder,
-  input: { id: string; from: number; pts: number[]; color: DrawColor }
+  input: { id: string; from: number; pts: number[]; color: DrawColor },
+  opts?: { relay?: boolean }
 ) {
   const r = await ensureRedis();
   const raw = await r.hget(keys.drawStrokes(code), input.id);
@@ -183,7 +184,9 @@ export async function appendPoints(
   const m = r.multi().hset(keys.drawStrokes(code), stroke.id, JSON.stringify(stroke));
   if (!raw) m.rpush(keys.drawOrder(code), stroke.id);
   await m.expire(keys.drawStrokes(code), TTL_S).expire(keys.drawOrder(code), TTL_S).exec();
-  await send(code, { v: 1, t: 'pts', id: stroke.id, by: stroke.by, name: stroke.name, c: stroke.color, from, pts: input.pts });
+  if (opts?.relay !== false) {
+    await send(code, { v: 1, t: 'pts', id: stroke.id, by: stroke.by, name: stroke.name, c: stroke.color, from, pts: input.pts });
+  }
 }
 
 /** Eraser / undo: a student removes one of their OWN strokes. */

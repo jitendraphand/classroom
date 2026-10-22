@@ -44,6 +44,8 @@ const schema = z.object({
   from: z.number().int().min(0).max(100_000).optional(),
   pts: z.array(z.number()).max(4000).optional(),
   color: z.string().max(10).optional(),
+  /** False when the client already published the pts packet on LiveKit. */
+  relay: z.boolean().optional(),
 });
 
 async function loadRoom(code: string) {
@@ -147,7 +149,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     if (!(await sharing(code))) return jsonError('The share stopped', 409);
     const pts = cleanPoints(body.pts);
     if (!validStrokeId(body.id) || !pts || !isDrawColor(body.color)) return jsonError('Bad stroke');
-    await appendPoints(code, holder, { id: body.id, from: body.from ?? 0, pts, color: body.color });
+    await appendPoints(
+      code,
+      holder,
+      { id: body.id, from: body.from ?? 0, pts, color: body.color },
+      { relay: body.relay !== false }
+    );
     return jsonOk({ ok: true });
   } catch (e) {
     if (e instanceof DrawError) return jsonError(e.message, e.status);

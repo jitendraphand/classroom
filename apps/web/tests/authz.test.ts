@@ -26,9 +26,9 @@ test('student → teacher message reaches only the teacher and the sender', () =
   assert.deepEqual(a.sort(), ['student_3', 'teacher_x']);
 });
 
-test('student grant: no data publishing, no screen share', () => {
+test('student grant: data publishing for strokes/chat/hand, no screen share', () => {
   const g = classroomGrant({ role: 'STUDENT', roomName: 'r', allowCamera: true, mutedByTeacher: false });
-  assert.equal(g.canPublishData, false);
+  assert.equal(g.canPublishData, true);
   assert.deepEqual(g.canPublishSources, [TrackSource.CAMERA, TrackSource.MICROPHONE]);
 });
 

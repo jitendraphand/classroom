@@ -4,6 +4,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { RoomEvent, type Room } from 'livekit-client';
 import { roomFetch, getClassroomRole } from '@/lib/classroomClient';
 import { STATE_TOPIC, statePollMs } from '@/lib/pollPolicy';
+import {
+  SIGNAL_TOPIC,
+  applyDrawReqPush,
+  applyHandPush,
+  decodeSignalPacket,
+  signalPacketTrusted,
+} from '@/lib/realtimePackets';
 import { usePageHidden, usePushLive } from '@/hooks/usePollSignals';
 
 /** Teacher-only roster details (school-app students). */
@@ -246,20 +253,40 @@ export function useRoomState(code: string, intervalMs = 2000, room?: Room | null
     if (!hidden && !stopped.current) void refresh();
   }, [hidden, refresh]);
 
-  // Server push: refetch now (coalesced by the inflight/again guard above).
+  // Server / peer push. Mute and hand/draw-request apply locally (no /state
+  // refetch of every student). A generic STATE_TOPIC packet still refetches.
   useEffect(() => {
     if (!room) return;
     const decoder = typeof TextDecoder !== 'undefined' ? new TextDecoder() : null;
-    const onData = (payload: Uint8Array, participant?: unknown, _k?: unknown, topic?: string) => {
-      // Only the server sends this topic; a packet from a participant is ignored.
-      if (topic !== STATE_TOPIC || participant) return;
-      const muted = decodeMutePush(decoder, payload);
-      // Teacher (un)muted me: flip the mic button now; the refetch confirms it.
-      if (muted !== null) {
-        mutePush.current = { muted, at: Date.now() };
-        setState((prev) => (prev?.me ? { ...prev, me: { ...prev.me, mutedByTeacher: muted } } : prev));
+    const onData = (payload: Uint8Array, participant?: { identity?: string }, _k?: unknown, topic?: string) => {
+      if (!decoder) return;
+      let raw: unknown;
+      try {
+        raw = JSON.parse(decoder.decode(payload));
+      } catch {
+        return;
       }
-      if (!stopped.current) void refresh();
+      if (topic === STATE_TOPIC) {
+        // Mute + generic "state changed" still come from the server only.
+        if (participant?.identity) return;
+        const muted = decodeMutePush(decoder, payload);
+        if (muted !== null) {
+          mutePush.current = { muted, at: Date.now() };
+          setState((prev) => (prev?.me ? { ...prev, me: { ...prev.me, mutedByTeacher: muted } } : prev));
+          return;
+        }
+        if (!stopped.current) void refresh();
+        return;
+      }
+      if (topic !== SIGNAL_TOPIC) return;
+      const sig = decodeSignalPacket(raw);
+      if (!sig) return;
+      setState((prev) => {
+        if (!prev) return prev;
+        if (!signalPacketTrusted(sig, participant?.identity, prev.me?.id ?? null)) return prev;
+        if (sig.type === 'hand') return applyHandPush(prev, sig.participantId, sig.raised);
+        return applyDrawReqPush(prev, sig.participantId, sig.on);
+      });
     };
     room.on(RoomEvent.DataReceived, onData);
     return () => {

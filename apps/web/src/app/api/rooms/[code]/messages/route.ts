@@ -5,6 +5,7 @@ import { jsonError, jsonOk } from '@/lib/response';
 import { livekitRoomName, sendRoomData } from '@/lib/livekit';
 import { chatAudience } from '@/lib/chatAudience';
 import { publishChat } from '@/lib/chatBus';
+import { CHAT_TOPIC } from '@/lib/realtimePackets';
 
 export const dynamic = 'force-dynamic';
 
@@ -138,14 +139,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   });
 }
 
-/** Topic shared with Chat.tsx. */
-const CHAT_TOPIC = 'chat';
-
 /**
- * Low-latency delivery of a message that was just stored. Sent by the server,
- * never by a browser, and only to the identities allowed to read it (the same
- * rule as the GET filter above). Clients still poll GET /messages as the
- * source of truth, so a failed push only costs latency.
+ * Low-latency delivery of a message that was just stored. The sender also
+ * publishes on the chat topic (SFU fan-out). This server send remains as a
+ * backup for clients that cannot publish. Clients merge by message id.
  */
 async function pushMessage(
   room: AccessCtx['room'],

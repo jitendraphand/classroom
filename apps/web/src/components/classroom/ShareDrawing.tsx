@@ -6,7 +6,8 @@
  * the allowed student. Rules and the overview: lib/drawLogic.ts.
  */
 import { useRoomContext } from '@livekit/components-react';
-import { RoomEvent } from 'livekit-client';
+import { ConnectionState, RoomEvent } from 'livekit-client';
+import { drawPacketTrusted } from '@/lib/realtimePackets';
 import {
   createContext,
   useCallback,
@@ -53,6 +54,8 @@ type DrawingCtx = {
   touched: Map<string, number>;
   setStrokes: (fn: (s: Stroke[]) => Stroke[]) => void;
   post: (body: Record<string, unknown>) => Promise<Response | null>;
+  /** Publish a pts packet on LiveKit. False when not connected. */
+  publishPts: (packet: object) => Promise<boolean>;
 };
 
 const Ctx = createContext<DrawingCtx | null>(null);
@@ -128,12 +131,12 @@ export function ShareDrawingProvider({
   useEffect(() => {
     if (!room) return;
     const decoder = typeof TextDecoder !== 'undefined' ? new TextDecoder() : null;
-    const onData = (payload: Uint8Array, participant?: unknown, _k?: unknown, topic?: string) => {
-      // Only the server sends `draw`; a packet naming a participant is forged.
-      if (topic !== DRAW_TOPIC || participant || !decoder) return;
+    const onData = (payload: Uint8Array, participant?: { identity?: string }, _k?: unknown, topic?: string) => {
+      if (topic !== DRAW_TOPIC || !decoder) return;
       try {
         const p = decodePacket(JSON.parse(decoder.decode(payload)));
         if (!p) return;
+        if (!drawPacketTrusted({ senderIdentity: participant?.identity, packet: p })) return;
         // My own points are already drawn locally (an echo could briefly cut
         // the points drawn since that batch).
         if (p.t === 'pts' && p.by === meRef.current) return;
@@ -151,6 +154,20 @@ export function ShareDrawingProvider({
     };
   }, [room, load]);
 
+  const publishPts = useCallback(
+    async (packet: object) => {
+      if (!room || room.state !== ConnectionState.Connected) return false;
+      try {
+        const bytes = new TextEncoder().encode(JSON.stringify(packet));
+        await room.localParticipant.publishData(bytes as Uint8Array<ArrayBuffer>, { reliable: true, topic: DRAW_TOPIC });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [room]
+  );
+
   const value = useMemo<DrawingCtx>(
     () => ({
       strokes: active ? strokes : [],
@@ -161,8 +178,9 @@ export function ShareDrawingProvider({
       touched,
       setStrokes,
       post,
+      publishPts,
     }),
-    [active, strokes, holder, myIdentity, canDraw, desktopInk, touched, setStrokes, post]
+    [active, strokes, holder, myIdentity, canDraw, desktopInk, touched, setStrokes, post, publishPts]
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
@@ -325,7 +343,25 @@ function DrawSurface({ w, h }: { w: number; h: number }) {
   const batcher = useMemo(
     () =>
       createPointBatcher(async (b) => {
-        const res = await d.post({ action: 'pts', id: b.id, from: b.from, pts: b.pts, color: b.color });
+        const packet = {
+          v: 1,
+          t: 'pts',
+          id: b.id,
+          by: d.myIdentity,
+          name: d.holder?.name ?? '',
+          c: b.color,
+          from: b.from,
+          pts: b.pts,
+        };
+        const published = await d.publishPts(packet);
+        const res = await d.post({
+          action: 'pts',
+          id: b.id,
+          from: b.from,
+          pts: b.pts,
+          color: b.color,
+          relay: !published,
+        });
         if (res && !res.ok) {
           const data = (await res.json().catch(() => ({}))) as { error?: string };
           setError(data.error || 'Could not send the drawing');

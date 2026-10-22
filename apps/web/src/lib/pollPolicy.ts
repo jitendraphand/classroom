@@ -15,11 +15,11 @@ export function statePollMs(opts: { role: PollRole; hidden: boolean; pushLive: b
   if (role === 'teacher') {
     // A sharing teacher's tab is usually hidden behind the shared window, and the
     // share HUD still needs hands / waiting counts: never slow down on hidden.
-    // Every change the teacher sees is pushed (STATE_TOPIC nudges, chat
-    // packets): the poll is only a 30 s safety net while connected.
-    return pushLive ? 30000 : 2000;
+    // Every change the teacher sees is pushed (STATE_TOPIC / SIGNAL_TOPIC,
+    // chat packets): the poll is only a 60 s safety net while connected.
+    return pushLive ? 60000 : 2000;
   }
-  if (pushLive) return hidden ? 60000 : 30000;
+  if (pushLive) return hidden ? 120000 : 60000;
   return hidden ? 10000 : 2000;
 }
 

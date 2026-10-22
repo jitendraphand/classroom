@@ -115,10 +115,11 @@ export type ParticipantGrantInput = {
  * The LiveKit video grant for a classroom participant. Pure so it can be
  * unit-tested.
  *
- * - Teacher: publish every source, plus data for the whiteboard only (chat
- *   and room events are still sent by the server).
+ * - Teacher: publish every source, plus data (whiteboard, chat fan-out, signals).
  * - Student: publish camera (only while in the sample) and microphone (only
- *   while not teacher-muted); **no data publishing** and **no screen share**.
+ *   while not teacher-muted); **data publishing** for strokes / chat / hand
+ *   (recipients trust LiveKit's sender identity; mute-all stays server-side);
+ *   **no screen share**.
  */
 export function classroomGrant(input: ParticipantGrantInput) {
   const isTeacher = input.role === 'TEACHER';
@@ -136,10 +137,10 @@ export function classroomGrant(input: ParticipantGrantInput) {
     room: input.roomName,
     canPublish: true,
     canSubscribe: true,
-    // Teacher: may publish data for the whiteboard (vector ops, topic `wb`).
-    // Clients accept `wb` packets only from a teacher identity or the server.
-    // Students still publish no data.
-    canPublishData: isTeacher,
+    // Teacher and students publish data (wb / draw / chat / cls-signal). Clients
+    // accept packets only from a matching identity or the server. Mute-all is
+    // still enforced with updateParticipant / mutePublishedTrack.
+    canPublishData: true,
     canPublishSources: sources,
   };
 }
@@ -257,10 +258,10 @@ export async function removeLiveKitParticipant(roomName: string, identity: strin
 }
 
 /**
- * Server-originated data packet. Used for chat so message bodies only reach
- * the participants allowed to read them (`destinationIdentities`), and so a
- * client can trust a chat packet because only the server can send one
- * (students have no data-publish grant).
+ * Server-originated data packet. Used for chat (backup fan-out with
+ * destinationIdentities), mute, and state nudges. Clients also accept
+ * identity-stamped packets from teachers and students on chat / wb / draw /
+ * cls-signal; mute-all is still this path plus updateParticipant.
  */
 export async function sendRoomData(
   roomName: string,
@@ -324,7 +325,8 @@ export async function setParticipantPublishPermissions(
     // would otherwise take it away. The spotlight key is cleared before a stop.
     allowCamera: requested.allowCamera || (await spotlightKeepsCamera(code, identity)),
   };
-  // Only ever called for students: never re-grant data publishing or screen share.
+  // Students keep data publishing (strokes / chat / hand). Screen share is never
+  // in `allowed` (publishSourcesFor omits it unless asked).
   const allowed = publishSourcesFor({ allowCamera: perms.allowCamera, allowMic: perms.allowMic });
 
   try {
@@ -332,7 +334,7 @@ export async function setParticipantPublishPermissions(
       permission: {
         canPublish: true,
         canSubscribe: true,
-        canPublishData: false,
+        canPublishData: true,
         canPublishSources: allowed,
       },
     });

@@ -175,6 +175,7 @@ import {
 } from '@/lib/studentVideoMode';
 import {
   HEARTBEAT_INTERVAL_MS,
+  heartbeatPeriodMs,
   LOST_GRACE_MS,
   STUDENT_GONE_GRACE_MS,
   nextPresencePhase,
@@ -2747,7 +2748,13 @@ function RoomInner({
       }).catch(() => undefined);
     };
     send();
-    const iv = window.setInterval(send, HEARTBEAT_INTERVAL_MS);
+    const period = heartbeatPeriodMs();
+    const startAt = Math.floor(Math.random() * Math.min(period, HEARTBEAT_INTERVAL_MS));
+    let iv = 0;
+    const start = window.setTimeout(() => {
+      send();
+      iv = window.setInterval(send, period);
+    }, startAt);
     const onVis = () => {
       if (document.visibilityState === 'visible') send();
     };
@@ -2761,6 +2768,7 @@ function RoomInner({
     room.on(RoomEvent.Reconnected, onUp);
     return () => {
       unload = true;
+      window.clearTimeout(start);
       window.clearInterval(iv);
       document.removeEventListener('visibilitychange', onVis);
       window.removeEventListener('pagehide', onUnload);

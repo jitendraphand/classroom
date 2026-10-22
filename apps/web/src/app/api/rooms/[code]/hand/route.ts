@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { nudgeRoomState } from '@/lib/roomNudge';
+import { pushSignal } from '@/lib/roomNudge';
 import { prisma } from '@/lib/db';
 import { resolveRoomAccess, getTeacherSession } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
@@ -61,7 +61,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
       });
       if (!participant) return jsonError('Participant not found', 404);
       await setHand(redis, code, participant.id, body.raised);
-      nudgeRoomState(room.code, { participantIds: [participant.id] });
+      pushSignal(room.code, room.sessionId, { v: 1, type: 'hand', raised: body.raised, participantId: participant.id });
       return jsonOk({ ok: true, raised: body.raised, participantId: participant.id });
     }
 
@@ -76,8 +76,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     }
 
     await setHand(redis, code, me.id, body.raised);
-
-    nudgeRoomState(room.code, 'teacher');
+    pushSignal(room.code, room.sessionId, { v: 1, type: 'hand', raised: body.raised, participantId: me.id });
     return jsonOk({ ok: true, raised: body.raised, participantId: me.id });
   } catch (e) {
     if (e instanceof z.ZodError) return jsonError(e.errors[0]?.message || 'Invalid input');

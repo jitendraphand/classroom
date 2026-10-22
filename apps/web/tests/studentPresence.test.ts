@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   HEARTBEAT_INTERVAL_MS,
+  HEARTBEAT_JITTER_MS,
   HEARTBEAT_RECONNECTING_MS,
   HEARTBEAT_STALE_MS,
   LOST_GRACE_MS,
   STUDENT_GONE_GRACE_MS,
+  heartbeatPeriodMs,
   applyHeartbeat,
   connectionPhase,
   isGone,
@@ -40,19 +42,21 @@ test('presence: a second left on an already-gone record is ignored', () => {
   assert.equal(nextLive(gone, { kind: 'left', sid: 'PA_1', at: t0 + 50 }), undefined);
 });
 
-test('heartbeat: one or two missed beats stay; a crash drops inside 5–8s; no beat is not stale', () => {
+test('heartbeat: interval ≥30s with jitter; reconnecting then gone; no beat is not stale', () => {
   const t0 = 5_000_000;
-  assert.equal(HEARTBEAT_INTERVAL_MS, 2_000);
-  assert.ok(HEARTBEAT_STALE_MS >= 5_000 && HEARTBEAT_STALE_MS <= 8_000);
+  assert.ok(HEARTBEAT_INTERVAL_MS >= 30_000);
+  assert.ok(HEARTBEAT_JITTER_MS >= 0);
+  assert.equal(heartbeatPeriodMs(0), HEARTBEAT_INTERVAL_MS);
+  assert.equal(heartbeatPeriodMs(1), HEARTBEAT_INTERVAL_MS + HEARTBEAT_JITTER_MS);
   assert.ok(HEARTBEAT_RECONNECTING_MS > HEARTBEAT_INTERVAL_MS);
   assert.ok(HEARTBEAT_RECONNECTING_MS < HEARTBEAT_STALE_MS);
   assert.equal(LOST_GRACE_MS, 5_000);
   const live = { sid: 'PA_1' };
   const beat = { at: t0 };
-  assert.equal(connectionPhase(live, beat, t0 + 3_000), 'ok', 'one missed post (~3s) stays');
-  assert.equal(rosterHidden(live, beat, t0 + 3_000), false);
-  assert.equal(connectionPhase(live, beat, t0 + 5_000), 'reconnecting', '5s-old beat is not gone');
-  assert.equal(rosterHidden(live, beat, t0 + 5_000), false);
+  assert.equal(connectionPhase(live, beat, t0 + HEARTBEAT_INTERVAL_MS), 'ok', 'one interval stays');
+  assert.equal(rosterHidden(live, beat, t0 + HEARTBEAT_INTERVAL_MS), false);
+  assert.equal(connectionPhase(live, beat, t0 + HEARTBEAT_RECONNECTING_MS), 'reconnecting');
+  assert.equal(rosterHidden(live, beat, t0 + HEARTBEAT_RECONNECTING_MS), false);
   assert.equal(connectionPhase(live, beat, t0 + HEARTBEAT_STALE_MS - 1), 'reconnecting');
   assert.equal(rosterHidden(live, beat, t0 + HEARTBEAT_STALE_MS), true);
   assert.equal(connectionPhase(live, beat, t0 + HEARTBEAT_STALE_MS), 'gone');
@@ -83,14 +87,15 @@ test('heartbeat: a different sid is ignored while healthy and accepted when reco
   assert.equal(healthy.ignore, false);
   if (!healthy.ignore) assert.equal(healthy.nudge, false, 'a healthy beat must not nudge');
   const late = { at: t0 };
-  const back = applyHeartbeat(cur, late, { at: t0 + 5_000, sid: 'PA_2' });
+  const backAt = t0 + HEARTBEAT_RECONNECTING_MS + 1;
+  const back = applyHeartbeat(cur, late, { at: backAt, sid: 'PA_2' });
   assert.equal(back.ignore, false);
   if (!back.ignore) {
     assert.equal(back.nudge, true);
     assert.deepEqual(back.live, { sid: 'PA_2' });
-    assert.equal(connectionPhase(back.live, back.beat, t0 + 5_000), 'ok');
+    assert.equal(connectionPhase(back.live, back.beat, backAt), 'ok');
   }
-  const gone = applyHeartbeat({ sid: 'PA_1', gone: t0 }, { at: t0 - 20_000 }, { at: t0 + 8_000, sid: 'PA_3' });
+  const gone = applyHeartbeat({ sid: 'PA_1', gone: t0 }, { at: t0 - 20_000 }, { at: t0 + HEARTBEAT_STALE_MS + 1_000, sid: 'PA_3' });
   assert.equal(gone.ignore, false);
   if (!gone.ignore) {
     assert.equal(gone.nudge, true);

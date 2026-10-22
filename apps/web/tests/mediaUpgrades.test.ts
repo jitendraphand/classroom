@@ -52,7 +52,7 @@ test('targeted nudges merge; all wins', () => {
   assert.equal(mergeAudience(undefined, 'teacher'), 'teacher');
   assert.deepEqual(mergeAudience({ participantIds: ['a'] }, { participantIds: ['b', 'a'] }), { participantIds: ['a', 'b'] });
   assert.deepEqual(mergeAudience('teacher', { participantIds: ['a'] }), { participantIds: ['a'] });
-  assert.match(src('app/api/rooms/[code]/hand/route.ts'), /participantIds: \[participant\.id\]/);
+  assert.match(src('app/api/rooms/[code]/hand/route.ts'), /pushSignal\(room\.code, room\.sessionId/);
 });
 
 test('audio: student mic speech + DTX without RED; share audio music without DTX', () => {

@@ -4,10 +4,11 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRoomContext } from '@livekit/components-react';
-import { RoomEvent, DataPacket_Kind } from 'livekit-client';
+import { ConnectionState, RoomEvent, DataPacket_Kind } from 'livekit-client';
 import { replyTargetFor, resolveChatRecipient } from '@/lib/chatReply';
 import { getClassroomRole, roomFetch } from '@/lib/classroomClient';
 import { chatPollMs } from '@/lib/pollPolicy';
+import { CHAT_TOPIC, chatPacketTrusted } from '@/lib/realtimePackets';
 import { usePageHidden, usePushLive } from '@/hooks/usePollSignals';
 
 export { replyTargetFor, resolveChatRecipient };
@@ -46,7 +47,6 @@ export type ChatThread = {
   send: (text: string, destination: string) => Promise<boolean>;
 };
 
-const CHAT_TOPIC = 'chat';
 const decoder = typeof TextDecoder !== 'undefined' ? new TextDecoder() : null;
 
 type ChatPacket = { v: 1; type: 'message'; message: ChatMessage };
@@ -123,13 +123,17 @@ export function useChatThread({
     fetchMessages();
   }, [fetchMessages, stopped]);
 
-  // Messages arrive as server data packets while connected; the poll repairs gaps.
-  // An EventSource (cookies, same origin) is a second push path. While it is
-  // open the poll uses the slow push interval; on error it closes and the poll stays.
+  // Messages arrive as LiveKit data packets while connected; the poll repairs gaps.
+  // EventSource is only a fallback when LiveKit is down (2,500 SSE + Redis
+  // subscriber sockets would pin the web workers).
   const hidden = usePageHidden();
   const pushLive = usePushLive(room);
   useEffect(() => {
     if (stopped || ended || typeof EventSource === 'undefined') return;
+    if (pushLive) {
+      setSseLive(false);
+      return;
+    }
     let closed = false;
     const q = getClassroomRole(code) === 'student' ? '?as=student' : '';
     const es = new EventSource(`/api/rooms/${code.toUpperCase()}/messages/stream${q}`, { withCredentials: true });
@@ -157,7 +161,7 @@ export function useChatThread({
       setSseLive(false);
       es.close();
     };
-  }, [code, stopped, ended, mergeMessages]);
+  }, [code, stopped, ended, mergeMessages, pushLive]);
   useEffect(() => {
     if (stopped) return;
     const t = setInterval(fetchMessages, chatPollMs({ hidden, pushLive: sseLive || pushLive }));
@@ -209,16 +213,20 @@ export function useChatThread({
       topic?: string
     ) => {
       if (topic !== CHAT_TOPIC) return;
-      // Chat packets are only ever sent by the server (POST /messages →
-      // RoomServiceClient.sendData, addressed to the allowed readers). A packet
-      // with a real participant identity came from a browser and is forged.
-      // Server sends omit the participant or leave the identity empty.
-      if (participant?.identity) return;
       if (!decoder) return;
       try {
         const msg = JSON.parse(decoder.decode(payload)) as ChatPacket;
         if (!msg || msg.v !== 1 || msg.type !== 'message' || !msg.message?.id) return;
         const m = msg.message;
+        if (
+          !chatPacketTrusted({
+            senderIdentity: participant?.identity,
+            message: m,
+            identityParticipantId: m.senderParticipantId === myParticipantId ? myParticipantId : null,
+          })
+        ) {
+          return;
+        }
         if (!isTeacher) {
           if (m.scope === 'BROADCAST') {
             /* ok */
@@ -264,8 +272,19 @@ export function useChatThread({
           setError(data.error || 'Send failed');
           return false;
         }
-        // The server pushes the stored message to the other readers.
-        if (data.message) mergeMessages([data.message]);
+        if (data.message) {
+          mergeMessages([data.message]);
+          // SFU fan-out so the web process is not on the hot path. Recipients
+          // merge by id with the server backup sendData.
+          try {
+            if (room?.localParticipant && room.state === ConnectionState.Connected) {
+              const bytes = new TextEncoder().encode(JSON.stringify({ v: 1, type: 'message', message: data.message }));
+              void room.localParticipant.publishData(bytes as Uint8Array<ArrayBuffer>, { reliable: true, topic: CHAT_TOPIC });
+            }
+          } catch {
+            /* server sendData / poll still deliver */
+          }
+        }
         return true;
       } catch {
         setError('Network error');
@@ -275,7 +294,7 @@ export function useChatThread({
         setSending(false);
       }
     },
-    [code, ended, mergeMessages]
+    [code, ended, mergeMessages, room]
   );
 
   return { messages, ended, sending, error, send };

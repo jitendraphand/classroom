@@ -5,11 +5,12 @@
  *
  * - WhiteboardHost: web teacher. Owns the board; publishes ops over LiveKit
  *   data (topic `wb`, reliable); answers snapshot requests relayed by the
- *   server and sends a snapshot to every participant that connects.
+ *   server and sends a snapshot to every participant that connects. Also
+ *   applies student annotation ops that arrive on `wb` (identity-stamped).
  * - WhiteboardViewer: students (and admin preview/observer). Renders the
  *   teacher's board scaled to the viewport; asks for a snapshot on start and
- *   after every reconnect; students allowed to draw annotate through the
- *   server relay (same permission as drawing on the share).
+ *   after every reconnect; students allowed to draw publish ops on `wb`
+ *   (HTTP `/whiteboard` ops remains a fallback).
  */
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useRoomContext } from '@livekit/components-react';
@@ -17,7 +18,8 @@ import { ConnectionState, RoomEvent, type RemoteParticipant } from 'livekit-clie
 import { MEETING_BAR_PX } from '@/lib/shareChrome';
 import { WhiteboardBoard } from '@/lib/whiteboard/WhiteboardBoard';
 import { SNAP_STORE_MS, WhiteboardSession, b64ToPackets, opsPackets, packetsToB64 } from '@/lib/whiteboard/session';
-import { WB_TOPIC, cleanDoc, isOwnRelayEcho, studentOpAllowed, type Op, type Packet } from '@/lib/whiteboard/model';
+import { WB_TOPIC, cleanDoc, encodePacket, isOwnRelayEcho, studentOpAllowed, type Op, type Packet } from '@/lib/whiteboard/model';
+import { wbStudentPacketAllowed } from '@/lib/realtimePackets';
 import { roomFetch } from '@/lib/classroomClient';
 
 export const wbStoreKey = (code: string) => `wb_doc_${code.toUpperCase()}`;
@@ -137,7 +139,7 @@ export function WhiteboardHost({
     const snapSoon = window.setTimeout(() => void sendSnapshot(), 500);
     const snapLater = window.setTimeout(() => void sendSnapshot(), 1500);
     const onData = (payload: Uint8Array, participant?: RemoteParticipant, _k?: unknown, topic?: string) => {
-      if (topic !== WB_TOPIC || participant) return; // only server-relayed packets
+      if (topic !== WB_TOPIC) return;
       void (async () => {
         const text = new TextDecoder().decode(payload);
         let p: (Packet & { by?: string }) | null = null;
@@ -147,6 +149,11 @@ export function WhiteboardHost({
           return;
         }
         if (!p) return;
+        if (participant) {
+          if (isTeacherId(participant.identity)) return;
+          if (!participant.identity.startsWith('student_') || !wbStudentPacketAllowed(p.t)) return;
+          p.by = participant.identity;
+        }
         if (p.t === 'req') return void sendSnapshot([p.to]);
         if (p.t === 'ops' && !filterRelayed(session, p)) return;
         await session.receive(new TextEncoder().encode(JSON.stringify(p)));
@@ -218,7 +225,6 @@ export function WhiteboardViewer({
   useEffect(() => {
     const onData = (payload: Uint8Array, participant?: RemoteParticipant, _k?: unknown, topic?: string) => {
       if (topic !== WB_TOPIC) return;
-      if (participant && !isTeacherId(participant.identity)) return;
       void (async () => {
         let p: (Packet & { by?: string }) | null = null;
         try {
@@ -227,6 +233,15 @@ export function WhiteboardViewer({
           return;
         }
         if (!p || p.t === 'req') return;
+        if (participant) {
+          if (isTeacherId(participant.identity)) {
+            /* teacher host */
+          } else if (participant.identity.startsWith('student_') && wbStudentPacketAllowed(p.t)) {
+            p.by = participant.identity;
+          } else {
+            return;
+          }
+        }
         if (isOwnRelayEcho(p, identityRef.current)) return; // my own stroke, already drawn locally
         if (p.t === 'ops' && !filterRelayed(session, p)) return;
         await session.receive(new TextEncoder().encode(JSON.stringify(p)));
@@ -258,22 +273,33 @@ export function WhiteboardViewer({
   const queue = useRef<Op[]>([]);
   const busy = useRef(false);
   const pump = useCallback(async () => {
-    if (busy.current || !sendOps) return;
+    if (busy.current) return;
     busy.current = true;
     try {
       while (queue.current.length) {
         const ops = queue.current.splice(0, 20);
-        await sendOps(ops).catch(() => undefined);
+        let published = false;
+        try {
+          if (room.state === ConnectionState.Connected) {
+            for (const data of encodePacket({ v: 1, t: 'ops', ops, by: identityRef.current })) {
+              await room.localParticipant.publishData(data as Uint8Array<ArrayBuffer>, { reliable: true, topic: WB_TOPIC });
+            }
+            published = true;
+          }
+        } catch {
+          published = false;
+        }
+        if (!published && sendOps) await sendOps(ops).catch(() => undefined);
       }
     } finally {
       busy.current = false;
     }
-  }, [sendOps]);
+  }, [sendOps, room]);
 
   return (
     <WhiteboardBoard
       session={session}
-      mode={canAnnotate && sendOps ? 'annotate' : 'view'}
+      mode={canAnnotate ? 'annotate' : 'view'}
       identity={identity}
       onSend={(ops) => {
         queue.current.push(...ops);

@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db';
 import { livekitRoomName, sendRoomData } from '@/lib/livekit';
 import { STATE_TOPIC, mergeAudience, type NudgeAudience } from '@/lib/pollPolicy';
+import { SIGNAL_TOPIC, type SignalPacket } from '@/lib/realtimePackets';
 
 /**
  * Tell connected classroom clients that /state changed so they refetch now
@@ -71,4 +72,24 @@ export function pushMuteState(roomCode: string, sessionId: string, identities: s
     { v: 1, type: 'mute', muted },
     { topic: STATE_TOPIC, destinationIdentities: identities }
   ).catch(() => undefined);
+}
+
+/** Hand / draw-request: one SFU packet; clients apply locally (no /state refetch). */
+export function pushSignal(roomCode: string, sessionId: string, packet: SignalPacket) {
+  void sendRoomData(livekitRoomName(roomCode, sessionId), packet, { topic: SIGNAL_TOPIC }).catch(() => undefined);
+}
+
+export function pushSignalForCode(roomCode: string, packet: SignalPacket) {
+  void (async () => {
+    try {
+      const room = await prisma.room.findUnique({
+        where: { code: roomCode },
+        select: { code: true, sessionId: true },
+      });
+      if (!room) return;
+      await sendRoomData(livekitRoomName(room.code, room.sessionId), packet, { topic: SIGNAL_TOPIC });
+    } catch (e) {
+      console.warn('pushSignal', e instanceof Error ? e.message : e);
+    }
+  })();
 }
