@@ -107,13 +107,35 @@ ${DOMAIN} {
 	# API answers are per user and live: never cached (unless the route says otherwise).
 	@api path /api/*
 	header @api ?Cache-Control "no-store"
-	reverse_proxy 127.0.0.1:3000
+	# Node cluster shares :3000 (WEB_WORKERS). Sticky is not required.
+	reverse_proxy 127.0.0.1:3000 {
+		flush_interval -1
+		health_uri /api/health
+		health_interval 10s
+		health_timeout 3s
+		transport http {
+			keepalive 2m
+			keepalive_idle_conns 512
+			dial_timeout 10s
+			read_timeout 0
+			write_timeout 0
+		}
+	}
 }
 
 ${LIVEKIT_HOST} {
 	encode zstd gzip
 	# WebSocket upgrade is automatic in Caddy
-	reverse_proxy 127.0.0.1:7880
+	reverse_proxy 127.0.0.1:7880 {
+		flush_interval -1
+		transport http {
+			keepalive 2m
+			keepalive_idle_conns 256
+			dial_timeout 10s
+			read_timeout 0
+			write_timeout 0
+		}
+	}
 }
 CADDY
 

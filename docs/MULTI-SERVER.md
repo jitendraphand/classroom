@@ -56,7 +56,8 @@ Restart `web` after changing it. Keep secrets only in `.env` (never commit).
   student after the 2026-10-16 bandwidth work; ~300 was the run-4 ceiling at
   270 Mbps with the old bitrates). Use `capacity: 200` unless a load test shows
   otherwise.
-- The web/DB server stays single; at 1000 students it needs ~2-4 vCPU (run 4:
-  web + Postgres + Redis were a small part of 16 vCPU).
+- The web process is clustered (`WEB_WORKERS`, default CPU count). At 1000 students
+  it still needs only a few cores for HTTP (run 4: web + Postgres + Redis were a
+  small part of 16 vCPU); LiveKit media is the rest. See [CAPACITY.md](CAPACITY.md).
 - Oracle Always Free: this deploy keeps one node (N=1). Adding nodes there means
   new OCI resources, which this change does not do.

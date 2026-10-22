@@ -8,8 +8,16 @@ bind_addresses:
   - 0.0.0.0
 rtc:
   tcp_port: 7881
+  # One UDP port per ICE candidate by default. 50000–60000 is ~10k ports, enough
+  # for 2,500 students (typically 1–2 ports each) plus a teacher share. LiveKit
+  # uses all cores; leave WEB_WORKERS below the host CPU count so encoding still
+  # has room (docs/CAPACITY.md).
   port_range_start: 50000
   port_range_end: 60000
+  # Alternative for 2,500+ on one NIC: single-port UDP mux. Comment the
+  # port_range_* pair above and set:
+  #   udp_port: 7882
+  # Then open 7882/udp instead of 50000–60000. ICE still advertises the public IP.
   # false for local demos; true (or set LIVEKIT_NODE_IP) on a public VPS
   use_external_ip: __USE_EXTERNAL_IP__
 __NODE_IP_LINE__
@@ -40,16 +48,20 @@ room:
     - mime: video/h264
     - mime: video/vp9
   auto_create: true
+  # Seconds an empty room stays before LiveKit deletes it. 5 min covers a
+  # teacher refresh / device switch without dropping the SFU room.
   empty_timeout: 300
   # Seconds to keep the ROOM open after the last participant leaves (LiveKit
   # default is 20). This is not how quickly a crashed participant is detected.
   # livekit-server v1.13.9 hardcodes the signal ping at a 5s interval and a 15s
   # timeout (pkg/rtc/participant.go PingIntervalSeconds / PingTimeoutSeconds).
   # rtc.ping_interval and rtc.ping_timeout are not config keys on this version
-  # and are ignored. Crashed students leave the roster via the web heartbeat
-  # (about 5–8s). Production infra/livekit.yaml is generated from this file:
-  # regenerate it (or add this key) and restart LiveKit.
+  # and are ignored. Crashed students leave the roster via LiveKit disconnect /
+  # webhook (~20s) plus the web heartbeat (≥30s, jittered). Production
+  # infra/livekit.yaml is generated from this file: regenerate it (or add this
+  # key) and restart LiveKit.
   departure_timeout: 10
+  # 0 = unlimited. Capacity is ports, CPU and egress, not this flag.
   max_participants: 0
 
 # TURN relay for students behind strict firewalls / UDP-blocked networks.

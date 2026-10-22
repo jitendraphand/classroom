@@ -1,4 +1,14 @@
 # TLS for a standalone media node: wss://MEDIA_DOMAIN → LiveKit signalling on 7880.
 {$MEDIA_DOMAIN} {
-	reverse_proxy 127.0.0.1:7880
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:7880 {
+		flush_interval -1
+		transport http {
+			keepalive 2m
+			keepalive_idle_conns 256
+			dial_timeout 10s
+			read_timeout 0
+			write_timeout 0
+		}
+	}
 }

@@ -1,0 +1,8 @@
+{
+  "name": "classroom-loadtest",
+  "private": true,
+  "description": "Optional LiveKit rtc-node for scripts/loadtest/loadtest.mjs. HTTP-only mode needs no install.",
+  "dependencies": {
+    "@livekit/rtc-node": "^0.13.11"
+  }
+}

@@ -143,23 +143,47 @@ Caddy image: `caddy:2-alpine`. Volumes: `infra/Caddyfile`, named volumes `caddy_
 
 ## 5. Caddyfile shape
 
+`configure-domain-tls.sh` writes this (keepalive, `flush_interval -1` for SSE, health checks). Node cluster shares `:3000`; sticky sessions are not required.
+
 ```caddyfile
 {
 	email admin@example.com   # optional; from ACME_EMAIL
 }
 
 class.example.com {
-	encode gzip
-	reverse_proxy 127.0.0.1:3000
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:3000 {
+		flush_interval -1
+		health_uri /api/health
+		health_interval 10s
+		transport http {
+			keepalive 2m
+			keepalive_idle_conns 512
+		}
+	}
 }
 
 livekit.class.example.com {
-	encode gzip
-	reverse_proxy 127.0.0.1:7880
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:7880 {
+		flush_interval -1
+		transport http {
+			keepalive 2m
+			keepalive_idle_conns 256
+		}
+	}
 }
 ```
 
-WebSocket upgrades for LiveKit are handled by Caddy by default (no extra `header_up` required).
+WebSocket upgrades for LiveKit are handled by Caddy by default (no extra `header_up` required). Node `keepAliveTimeout` is 65 s so it outlives Caddy's keepalive.
+
+To load-balance N processes on `3001..300N` instead of cluster-on-3000, list those upstreams on `reverse_proxy` with `lb_policy round_robin` and the same `health_uri` / `flush_interval`. Sticky (cookie / ip_hash) is only needed if you introduce in-process session state — this app does not.
+
+## LiveKit / API secret rotation
+
+Same as [DEPLOY-VPS.md](DEPLOY-VPS.md) § "LiveKit / API secret rotation": `ROTATE_SECRETS=1 ./scripts/sync-livekit-keys.sh`, apply the new Postgres password inside the volume, regenerate `infra/livekit.yaml`, recreate containers. Never put real keys in tracked files. After rotation everyone reconnects.
+
+Scale env (`WEB_WORKERS`, Prisma pool, Postgres `max_connections`, Redis `maxmemory`, ulimits): [CAPACITY.md](CAPACITY.md) and [DEPLOY-VPS.md](DEPLOY-VPS.md) § Scaling.
 
 To use a different LiveKit hostname, set `LIVEKIT_HOST=lk.example.com` when running `configure-domain-tls.sh` (must still have DNS → `PUBLIC_IP`).
 
@@ -206,6 +230,7 @@ Same as bare-IP: if some clients get signaling but no media, add TURN. HTTPS doe
 - [ ] `DOMAIN=… PUBLIC_IP=… ./scripts/configure-domain-tls.sh`
 - [ ] Optional `ACME_EMAIL` for LE notices
 - [ ] Firewall: 80, 443, 7881, UDP 50000–60000; **not** public 3000/7880/5432/6379
+- [ ] Optional: `WEB_WORKERS`, `POSTGRES_MAX_CONNECTIONS`, `REDIS_MAXMEMORY` for the host size ([CAPACITY.md](CAPACITY.md))
 - [ ] `./scripts/sync-livekit-keys.sh`
 - [ ] `docker compose --profile tls up --build -d`
 - [ ] `https://DOMAIN/api/health` healthy; join links use `https://`

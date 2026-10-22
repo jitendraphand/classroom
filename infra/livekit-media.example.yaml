@@ -6,6 +6,7 @@ rtc:
   tcp_port: 7881
   port_range_start: 50000
   port_range_end: 60000
+  # Alternative: single-port UDP mux (comment port_range_* and set udp_port: 7882).
   use_external_ip: true
 keys:
   # REPLACE: api key: secret (never commit real values)
@@ -15,7 +16,10 @@ keys:
 # crashed-participant detection (that ping is hardcoded in v1.13.9; see
 # infra/livekit.example.yaml). rtc.ping_interval / rtc.ping_timeout are ignored.
 room:
+  auto_create: true
+  empty_timeout: 300
   departure_timeout: 10
+  max_participants: 0
 # Webhooks go to the ONE web server (presence / attendance / mic lock).
 webhook:
   api_key: APIxxxxxxxx

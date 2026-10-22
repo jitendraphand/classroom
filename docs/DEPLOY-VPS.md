@@ -224,3 +224,34 @@ Other deploy notes for this release:
   (it accepts both cookie names).
 - The web container exits at boot if `LIVEKIT_API_KEY` is `devkey`, or if the
   LiveKit/NextAuth secrets are placeholders, too short or known-leaked.
+
+## Scaling (2,500 students, one large box)
+
+See [CAPACITY.md](CAPACITY.md) for the math. On this host:
+
+1. Set `WEB_WORKERS` (default = CPU count, capped so Prisma pools fit Postgres). The web container runs Node cluster on `:3000` (`apps/web/cluster.js`). Local `next dev` is still a single process on `:3000`.
+2. Set `DB_POOL_PER_WORKER` (default 8) and `POSTGRES_MAX_CONNECTIONS` (default 280). Prisma appends `connection_limit` / `pool_timeout` in `lib/db.ts` if they are missing from `DATABASE_URL`.
+3. Postgres `shared_buffers` / `effective_cache_size` / `max_wal_size` are env-driven in compose. A 2 GB VPS should set `POSTGRES_MAX_CONNECTIONS=50`.
+4. Redis `maxmemory` is `REDIS_MAXMEMORY` (default 192mb). AOF is `everysec`.
+5. Compose sets `ulimits.nofile` 1048576 on web, livekit, caddy, redis, postgres.
+6. LiveKit: `port_range 50000–60000`, `max_participants 0`, `empty_timeout` 300, `departure_timeout` 10. Optional single-port mux: `rtc.udp_port` in `infra/livekit.example.yaml`. LiveKit uses all cores — leave some for the web workers.
+7. PgBouncer is optional and off. Prisma interactive transactions in this repo are not safe in transaction-pooling mode until audited.
+
+Load generator: `scripts/loadtest/` (env credentials only).
+
+## LiveKit / API secret rotation
+
+`infra/livekit.yaml` is gitignored and generated from `.env` by `scripts/sync-livekit-keys.sh`. Never put real keys in `infra/livekit.example.yaml`.
+
+```bash
+# New LiveKit key/secret, NextAuth, and (with ROTATE_SECRETS=1) Postgres password.
+# Values are written only to the untracked .env; the script does not print them.
+ROTATE_SECRETS=1 ./scripts/sync-livekit-keys.sh
+set -a; . ./.env; set +a
+docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+  -c "ALTER USER \"$POSTGRES_USER\" PASSWORD '$POSTGRES_PASSWORD';"
+./scripts/sync-livekit-keys.sh    # regenerates gitignored infra/livekit.yaml
+docker compose up -d --build --force-recreate
+```
+
+After rotation every teacher/student must reconnect (old LiveKit tokens are signed with the previous secret). Do not commit `.env` or `infra/livekit.yaml`.
