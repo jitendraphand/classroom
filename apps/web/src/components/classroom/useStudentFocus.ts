@@ -57,6 +57,7 @@ export function useStudentFocus(code: string, enabled: boolean) {
   const [status, setStatus] = useState<FocusStatus>(() =>
     typeof document === 'undefined' ? 'fullscreen' : readStatus()
   );
+  const [everFullscreen, setEverFullscreen] = useState(false);
   const [iphone] = useState(() => typeof navigator !== 'undefined' && isIPhoneUA(navigator.userAgent || ''));
   const [portrait, setPortrait] = useState(false);
   const lastSent = useRef<string>('');
@@ -90,13 +91,19 @@ export function useStudentFocus(code: string, enabled: boolean) {
   useEffect(() => {
     if (!enabled) return;
     const update = () => {
+      if (isFullscreenNow()) setEverFullscreen(true);
       const next = readStatus();
       setStatus(next);
       report(next, next === 'away');
     };
     update();
     // Try once on join (browsers usually want a gesture), then on the first tap/key.
-    if (fullscreenSupported() && !isFullscreenNow()) void enterFullscreen().then(update);
+    if (fullscreenSupported() && !isFullscreenNow()) {
+      void enterFullscreen().then((ok) => {
+        if (ok) setEverFullscreen(true);
+        update();
+      });
+    }
     const onGesture = () => {
       if (fullscreenSupported() && !isFullscreenNow()) void enterFullscreen().then(update);
     };
@@ -128,11 +135,12 @@ export function useStudentFocus(code: string, enabled: boolean) {
   }, [enabled]);
 
   const returnToFullscreen = useCallback(async () => {
-    await enterFullscreen();
+    const ok = await enterFullscreen();
+    if (ok) setEverFullscreen(true);
     const next = readStatus();
     setStatus(next);
     report(next, true);
   }, [report]);
 
-  return { status, iphone, portrait, focusMode: status === 'unsupported', returnToFullscreen };
+  return { status, iphone, portrait, everFullscreen, focusMode: status === 'unsupported', returnToFullscreen };
 }

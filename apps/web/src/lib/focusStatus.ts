@@ -42,6 +42,52 @@ export function needsCover(status: FocusStatus): boolean {
   return status === 'left' || status === 'away';
 }
 
+/**
+ * What the student actually sees.
+ * - off: iPhone (no element fullscreen) and anyone already fullscreen
+ * - hint: never been fullscreen — a dismissable line, not a cover, and it does not say "return"
+ * - block: they were fullscreen and left, or they switched away (and can come back)
+ */
+export type FullscreenGate = 'off' | 'hint' | 'block';
+
+export function fullscreenGate(opts: {
+  status: FocusStatus;
+  everFullscreen: boolean;
+  iphone: boolean;
+}): FullscreenGate {
+  if (opts.iphone) return 'off';
+  if (opts.status === 'unsupported' || opts.status === 'fullscreen') return 'off';
+  if (opts.status === 'away') return 'block';
+  if (opts.status === 'left') return opts.everFullscreen ? 'block' : 'hint';
+  return 'off';
+}
+
+export function fullscreenGateText(opts: { status: FocusStatus; everFullscreen: boolean }): {
+  title: string;
+  label: string;
+  body: string;
+} {
+  if (opts.status === 'away') {
+    return {
+      title: 'You switched away from the class',
+      label: 'Tap to come back',
+      body: 'You are still in the class and can hear it. Your teacher can see that you switched away.',
+    };
+  }
+  if (opts.everFullscreen) {
+    return {
+      title: 'Tap to return to fullscreen',
+      label: 'Tap to return to fullscreen',
+      body: 'You are still in the class and can hear it. Your teacher can see that you left fullscreen.',
+    };
+  }
+  return {
+    title: 'Tap for fullscreen',
+    label: 'Tap for fullscreen',
+    body: 'Fullscreen keeps the class in view. You can dismiss this and stay in the class.',
+  };
+}
+
 /** iPhone / iPod (not iPad: iPadOS Safari has element fullscreen and uses the normal flow). */
 export function isIPhoneUA(ua: string): boolean {
   return /iPhone|iPod/i.test(ua);
