@@ -77,21 +77,29 @@ export function useChatThread({
   /** Messages created before this client joined are history, not unread. */
   const joinedAt = useRef(Date.now());
 
+  /** Newest createdAt seen: later polls ask only for what is newer. */
+  const newestAt = useRef<string | null>(null);
   const mergeMessages = useCallback((incoming: ChatMessage[]) => {
+    for (const m of incoming) {
+      if (!newestAt.current || m.createdAt > newestAt.current) newestAt.current = m.createdAt;
+    }
     setMessages((prev) => {
       const map = new Map<string, ChatMessage>();
       for (const m of prev) map.set(m.id, m);
       for (const m of incoming) map.set(m.id, m);
-      return Array.from(map.values()).sort(
+      const sorted = Array.from(map.values()).sort(
         (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
       );
+      // Bounded like the server's history (500).
+      return sorted.length > 500 ? sorted.slice(-500) : sorted;
     });
   }, []);
 
   const fetchMessages = useCallback(async () => {
     if (stopped || ended) return;
     try {
-      const res = await roomFetch(code, '/messages');
+      const since = newestAt.current;
+      const res = await roomFetch(code, since ? `/messages?since=${encodeURIComponent(since)}` : '/messages');
       const data = await res.json();
       if (!res.ok) {
         if (res.status === 410 || res.status === 401 || data.ended) {

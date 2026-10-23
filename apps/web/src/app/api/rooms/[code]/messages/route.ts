@@ -12,6 +12,7 @@ export const dynamic = 'force-dynamic';
 const MAX_BODY = 2000;
 /** Newest N messages retained per client's view of a room. */
 const MAX_HISTORY = 500;
+const SINCE_OVERLAP_MS = 5_000;
 
 type AccessCtx = {
   room: { id: string; code: string; status: string; teacherId: string; sessionId: string };
@@ -21,8 +22,12 @@ type AccessCtx = {
   admitted: boolean;
 };
 
-async function resolveAccess(req: Request, code: string): Promise<AccessCtx | null> {
-  const room = await prisma.room.findUnique({ where: { code } });
+async function resolveAccess(
+  req: Request,
+  code: string,
+  preloaded?: Awaited<ReturnType<typeof prisma.room.findUnique>>,
+): Promise<AccessCtx | null> {
+  const room = preloaded ?? (await prisma.room.findUnique({ where: { code } }));
   if (!room) return null;
 
   const url = new URL(req.url);
@@ -34,6 +39,7 @@ async function resolveAccess(req: Request, code: string): Promise<AccessCtx | nu
   if (access.isTeacher) {
     const teacherParticipant = await prisma.participant.findFirst({
       where: { roomId: room.id, role: 'TEACHER', status: 'ADMITTED' },
+      select: { id: true },
     });
     return {
       room,
@@ -97,11 +103,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   // Ended rooms answer "ended" before the access check: students are marked
   // LEFT when the class ends, and their last poll must not log a 401. Nothing
   // about the room is revealed beyond the fact that it ended.
-  const status = await prisma.room.findUnique({ where: { code }, select: { status: true } });
-  if (status?.status === 'ENDED') {
+  // One room read serves both the ended check and the access check.
+  const room = await prisma.room.findUnique({ where: { code } });
+  if (room?.status === 'ENDED') {
     return jsonOk({ messages: [], ended: true }, { status: 200 });
   }
-  const ctx = await resolveAccess(req, code);
+  if (!room) return jsonError('Unauthorized', 401);
+  const ctx = await resolveAccess(req, code, room);
   if (!ctx) return jsonError('Unauthorized', 401);
 
   // Waiting students can read nothing (or empty); stick to admitted + teacher
@@ -111,10 +119,16 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   // DMs addressed to them. Filtering in the WHERE clause keeps other students'
   // messages (notably the teacher's DMs naming a classmate) out of the result
   // set entirely, rather than pulling every row and discarding it in JS.
+  // ?since=<ISO>: only newer rows (the poll after hydration). A small overlap
+  // covers clock skew between workers; the client merges by id.
+  const sinceRaw = new URL(req.url).searchParams.get('since');
+  const sinceMs = sinceRaw ? Date.parse(sinceRaw) : NaN;
+  const createdAt = Number.isFinite(sinceMs) ? { gt: new Date(sinceMs - SINCE_OVERLAP_MS) } : undefined;
   const where = ctx.isTeacher
-    ? { roomId: ctx.room.id }
+    ? { roomId: ctx.room.id, ...(createdAt ? { createdAt } : {}) }
     : {
         roomId: ctx.room.id,
+        ...(createdAt ? { createdAt } : {}),
         OR: [
           { scope: 'BROADCAST' as const },
           { scope: 'TEACHER' as const, senderParticipantId: ctx.participantId ?? '__none__' },
@@ -148,8 +162,14 @@ async function pushMessage(
   room: AccessCtx['room'],
   msg: Parameters<typeof serializeMessage>[0]
 ) {
+  // Scoped messages need the teacher(s) and one student, not the whole roster
+  // (2,000 rows per student→teacher message in a big class).
+  const scoped = msg.scope !== 'BROADCAST';
+  const ids = [msg.senderParticipantId, msg.recipientParticipantId].filter((x): x is string => !!x);
   const people = await prisma.participant.findMany({
-    where: { roomId: room.id, status: 'ADMITTED' },
+    where: scoped
+      ? { roomId: room.id, status: 'ADMITTED', OR: [{ role: 'TEACHER' }, { id: { in: ids } }] }
+      : { roomId: room.id, status: 'ADMITTED' },
     select: { id: true, role: true, livekitIdentity: true },
   });
   const audience = chatAudience(
@@ -160,7 +180,9 @@ async function pushMessage(
     },
     people
   );
-  const allowedIds = people.filter((p) => audience.includes(p.livekitIdentity)).map((p) => p.id);
+  const audienceSet = new Set(audience);
+  // Broadcast: '*' instead of 2,000 ids in every Redis payload.
+  const allowedIds = scoped ? people.filter((p) => audienceSet.has(p.livekitIdentity)).map((p) => p.id) : ['*'];
   void publishChat(room.code, serializeMessage(msg), allowedIds).catch((e) => console.warn('chat sse', e));
   if (audience.length === 0) return;
   await sendRoomData(

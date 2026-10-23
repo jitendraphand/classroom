@@ -8,7 +8,7 @@ export type ChatPush = {
     recipientParticipantId: string | null;
     [key: string]: unknown;
   };
-  /** Participant ids allowed to read this message (students). Teachers always may. */
+  /** Participant ids allowed to read this message (students); ['*'] = every admitted viewer. Teachers always may. */
   participantIds: string[];
 };
 
@@ -20,5 +20,6 @@ export async function publishChat(code: string, message: ChatPush['message'], pa
 
 export function chatVisibleTo(push: ChatPush, viewer: { isTeacher: boolean; participantId: string | null }) {
   if (viewer.isTeacher) return true;
+  if (push.participantIds.includes('*')) return true;
   return !!viewer.participantId && push.participantIds.includes(viewer.participantId);
 }
