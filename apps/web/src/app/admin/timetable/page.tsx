@@ -8,6 +8,7 @@ import { Card, CardHeader } from '@/components/ui/Card';
 import { CampusSelect, DivisionSelect, DivisionsPicker, GradeSelect, defaultCampus, useGradeOptions } from '@/components/admin/GradePickers';
 import { api } from '@/lib/clientFetch';
 import { cn } from '@/lib/cn';
+import { modifyLabel, substituteProblem } from '@/lib/overrideRules';
 
 type Teacher = { id: string; name: string; disabled: boolean };
 type Slot = {
@@ -32,6 +33,10 @@ type Override = {
   date: string;
   slotLabel: string | null;
   teacherName: string | null;
+  teacherId?: string | null;
+  originalTeacherId?: string | null;
+  originalTeacherName?: string | null;
+  label?: string | null;
   audience: string | null;
   subject: string | null;
   start: string | null;
@@ -205,6 +210,12 @@ function TimetableEditor() {
     e.preventDefault?.();
     setError('');
     setNotice('');
+    const picked = ov.kind !== 'EXTRA' ? slotsForDate.find((s) => s.id === ov.slotId) : undefined;
+    const same = substituteProblem(ov.kind, ov.teacherId || null, picked?.teacherId, picked?.teacherName);
+    if (same) {
+      setError(same);
+      return;
+    }
     const body = {
       kind: ov.kind,
       date: ov.date,
@@ -478,7 +489,7 @@ function TimetableEditor() {
             <span className="label">Change</span>
             <select className="input" value={ov.kind} onChange={(e) => setOv({ ...ov, kind: e.target.value as Override['kind'] })}>
               <option value="CANCEL">Cancel a class</option>
-              <option value="MODIFY">Substitute / change time</option>
+              <option value="MODIFY">Substitute teacher / time change</option>
               <option value="EXTRA">Extra one-off class</option>
             </select>
           </label>
@@ -489,7 +500,7 @@ function TimetableEditor() {
           {ov.kind !== 'EXTRA' && (
             <label className="block sm:col-span-2">
               <span className="label">Class on that date</span>
-              <select className="input" required value={ov.slotId} onChange={(e) => setOv({ ...ov, slotId: e.target.value })}>
+              <select className="input" required value={ov.slotId} onChange={(e) => setOv({ ...ov, slotId: e.target.value, teacherId: '' })}>
                 <option value="">{slotsForDate.length ? 'Choose…' : 'No classes on that day'}</option>
                 {slotsForDate.map((s) => (
                   <option key={s.id} value={s.id}>
@@ -505,7 +516,7 @@ function TimetableEditor() {
                 <span className="label">{ov.kind === 'EXTRA' ? 'Teacher' : 'Substitute teacher (optional)'}</span>
                 <select className="input" value={ov.teacherId} required={ov.kind === 'EXTRA'} onChange={(e) => setOv({ ...ov, teacherId: e.target.value })}>
                   <option value="">{ov.kind === 'EXTRA' ? 'Choose…' : 'Same teacher'}</option>
-                  {teachers.filter((t) => !t.disabled).map((t) => (
+                  {teachers.filter((t) => !t.disabled && (ov.kind !== 'MODIFY' || t.id !== slotsForDate.find((s) => s.id === ov.slotId)?.teacherId)).map((t) => (
                     <option key={t.id} value={t.id}>
                       {t.name}
                     </option>
@@ -566,11 +577,14 @@ function TimetableEditor() {
                 <div>
                   <span className="mr-2 font-mono text-slate-300">{o.date}</span>
                   <Badge tone={o.kind === 'CANCEL' ? 'danger' : o.kind === 'EXTRA' ? 'success' : 'warning'}>
-                    {o.kind === 'CANCEL' ? 'Cancelled' : o.kind === 'EXTRA' ? 'Extra' : 'Changed'}
+                    {o.kind === 'CANCEL' ? 'Cancelled' : o.kind === 'EXTRA' ? 'Extra' : o.label ?? modifyLabel(o)}
                   </Badge>
                   <span className="ml-2 text-slate-300">
                     {o.slotLabel ?? `${o.subject} · ${o.audience}`}
-                    {o.kind !== 'CANCEL' && o.teacherName ? ` → ${o.teacherName}` : ''}
+                    {o.kind === 'EXTRA' && o.teacherName ? ` · ${o.teacherName}` : ''}
+                    {o.kind === 'MODIFY' && o.teacherName && o.teacherId !== o.originalTeacherId
+                      ? ` · substitute: ${o.originalTeacherName ?? 'teacher'} → ${o.teacherName}`
+                      : ''}
                     {o.start ? ` · ${o.start}–${o.end ?? ''}` : ''}
                     {o.kind === 'MODIFY' && o.subject ? ` · ${o.subject}` : ''}
                   </span>
