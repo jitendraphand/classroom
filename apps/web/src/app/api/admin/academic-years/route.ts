@@ -1,5 +1,6 @@
 import { requireAdminApi } from '@/lib/adminGuard';
-import { createAcademicYear, listAcademicYears } from '@/lib/academicYears';
+import { createAcademicYear, ensureCurrentAcademicYear, listAcademicYears } from '@/lib/academicYears';
+import { academicYearStartMonth } from '@/lib/academicYear';
 import { jsonError, jsonOk } from '@/lib/response';
 
 export const dynamic = 'force-dynamic';
@@ -8,7 +9,8 @@ export async function GET() {
   const { res } = await requireAdminApi(['schedule', 'viewReports', 'manageSchool']);
   if (res) return res;
   const years = await listAcademicYears();
-  return jsonOk({ years: years.map((y) => ({ id: y.id, label: y.label, active: y.active })) });
+  const current = await ensureCurrentAcademicYear();
+  return jsonOk({ years: years.map((y) => ({ id: y.id, label: y.label, active: y.active })), current, startMonth: academicYearStartMonth() });
 }
 
 export async function POST(req: Request) {

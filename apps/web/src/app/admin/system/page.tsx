@@ -12,7 +12,7 @@ const LINKS: { href: string; title: string; body: string; show: (kind: string, p
   { href: '/admin/students', title: 'Students', body: 'Add and delete students.', show: (_k, p) => p.manageSchool },
   { href: '/admin/grades', title: 'Campus, grade and division', body: 'The school structure students and classes use.', show: (_k, p) => p.manageSchool },
   { href: '/admin/reports', title: 'Attendance reports', body: 'Data exports for the academic year.', show: (_k, p) => p.viewReports },
-  { href: '/admin/system/years', title: 'Academic years', body: 'The June–May labels stored on every class.', show: (_k, p) => p.manageSchool },
+  { href: '/admin/system/years', title: 'Academic years', body: 'The year labels (e.g. 2026-27) stored on every class.', show: (_k, p) => p.manageSchool },
   { href: '/admin/system/settings', title: 'Class size and microphones', body: 'Optional caps. Leave them empty for no limit.', show: (_k, p) => p.manageSchool },
   { href: '/admin/system/admins', title: 'Sub-administrators', body: 'Only the system administrator can manage these.', show: (k) => k === 'SYSTEM' },
 ];

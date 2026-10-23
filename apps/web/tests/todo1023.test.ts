@@ -35,3 +35,13 @@ test('substitute clash: weekly class, extra class, cancellation honoured', () =>
   occs = occurrencesOn(D, slots, [sub, cancelB, extra], 'Asia/Kolkata');
   assert.equal(occurrenceConflicts(occs).teacher.length, 1, 'extra class clashes');
 });
+
+import { academicYearChoices, academicYearForDate } from '../src/lib/academicYear';
+test('academic year: default June start, configurable start month, dropdown choices', () => {
+  assert.equal(academicYearForDate('2026-06-01'), '2026-27');
+  assert.equal(academicYearForDate('2026-05-31'), '2025-26');
+  assert.equal(academicYearForDate('2026-04-01', 4), '2026-27');
+  assert.equal(academicYearForDate('2026-03-31', 4), '2025-26');
+  assert.equal(academicYearForDate('2026-01-05', 1), '2026-27');
+  assert.deepEqual(academicYearChoices(['2024-25', 'bad'], '2026-27'), ['2027-28', '2026-27', '2025-26', '2024-25']);
+});

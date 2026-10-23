@@ -43,7 +43,7 @@ function Years() {
 
   return (
     <Card>
-      <CardHeader title="June–May labels" subtitle="Example: 2026-27. Existing classes were filled in from their dates." />
+      <CardHeader title="Academic year labels" subtitle="Example: 2026-27. Existing classes were filled in from their dates." />
       {error && <p className="mb-3 text-sm text-red-300">{error}</p>}
       <form className="mb-4 flex flex-wrap gap-2" onSubmit={(e) => void add(e)}>
         <input className="input max-w-xs" placeholder="2026-27" value={label} onChange={(e) => setLabel(e.target.value)} />

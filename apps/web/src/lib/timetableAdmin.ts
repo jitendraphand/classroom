@@ -204,6 +204,8 @@ export const overrideBody = z.object({
   start: z.string().optional().nullable(),
   end: z.string().optional().nullable(),
   note: z.string().max(200).optional().nullable(),
+  /** Admin's pick from the year dropdown; defaults from `date`. */
+  academicYear: z.string().max(16).optional().nullable(),
   force: z.boolean().optional(),
 });
 export type OverrideBody = z.infer<typeof overrideBody>;
@@ -298,7 +300,10 @@ export async function createOverride(body: OverrideBody) {
     startMinute: body.kind === 'CANCEL' ? null : startMinute,
     endMinute: body.kind === 'CANCEL' ? null : endMinute,
     note: body.note?.trim() || null,
-    academicYear: academicYearForDate(body.date),
+    academicYear:
+      body.academicYear && isAcademicYearLabel(body.academicYear)
+        ? body.academicYear
+        : slot?.academicYear || academicYearForDate(body.date),
   };
 
   // Conflict check on that date with the change applied.

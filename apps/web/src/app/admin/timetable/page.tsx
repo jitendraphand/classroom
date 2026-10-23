@@ -9,6 +9,7 @@ import { CampusSelect, DivisionSelect, DivisionsPicker, GradeSelect, defaultCamp
 import { api } from '@/lib/clientFetch';
 import { cn } from '@/lib/cn';
 import { modifyLabel, substituteProblem } from '@/lib/overrideRules';
+import { academicYearChoices } from '@/lib/academicYear';
 
 type Teacher = { id: string; name: string; disabled: boolean };
 type Slot = {
@@ -26,6 +27,7 @@ type Slot = {
   end: string;
   effectiveFrom: string | null;
   effectiveTo: string | null;
+  academicYear?: string;
 };
 type Override = {
   id: string;
@@ -90,6 +92,11 @@ function TimetableEditor() {
   const gradeOptions = useGradeOptions();
   const [year, setYear] = useState('');
   const [years, setYears] = useState<string[]>([]);
+  /** The current academic year (server clock + configured start month); default for new classes. */
+  const [currentYear, setCurrentYear] = useState('');
+  const [slotYear, setSlotYear] = useState('');
+  const [ovYear, setOvYear] = useState('');
+  const yearChoices = useMemo(() => academicYearChoices(years, currentYear), [years, currentYear]);
   const [ov, setOv] = useState({
     kind: 'CANCEL' as Override['kind'],
     date: '',
@@ -124,8 +131,14 @@ function TimetableEditor() {
   }, [load]);
 
   useEffect(() => {
-    api<{ years: { label: string }[] }>('/api/admin/academic-years').then(({ ok, data }) => {
-      if (ok) setYears(data.years.map((y) => y.label));
+    api<{ years: { label: string; active: boolean }[]; current?: string }>('/api/admin/academic-years').then(({ ok, data }) => {
+      if (!ok) return;
+      setYears(data.years.filter((y) => y.active).map((y) => y.label));
+      if (data.current) {
+        setCurrentYear(data.current);
+        setSlotYear((v) => v || data.current!);
+        setOvYear((v) => v || data.current!);
+      }
     });
   }, []);
 
@@ -156,7 +169,7 @@ function TimetableEditor() {
       weekdays: editingId ? undefined : days,
       effectiveFrom: slotForm.effectiveFrom || null,
       effectiveTo: slotForm.effectiveTo || null,
-      academicYear: year || undefined,
+      academicYear: slotYear || year || undefined,
       force,
     };
     const { ok, data } = await api<{ canForce?: boolean }>(
@@ -196,6 +209,7 @@ function TimetableEditor() {
       effectiveFrom: s.effectiveFrom ?? '',
       effectiveTo: s.effectiveTo ?? '',
     });
+    if (s.academicYear) setSlotYear(s.academicYear);
     document.getElementById('slot-form')?.scrollIntoView({ behavior: 'smooth' });
   }
 
@@ -228,6 +242,7 @@ function TimetableEditor() {
       start: ov.start || null,
       end: ov.end || null,
       note: ov.note || null,
+      academicYear: ovYear || undefined,
       force,
     };
     const { ok, data } = await api<{ canForce?: boolean }>('/api/admin/timetable/overrides', { body });
@@ -462,6 +477,17 @@ function TimetableEditor() {
               <input className="input px-2" type="date" value={slotForm.effectiveTo} onChange={(e) => setSlotForm({ ...slotForm, effectiveTo: e.target.value })} />
             </label>
           </div>
+          <label className="block">
+            <span className="label">Academic year</span>
+            <select className="input" value={slotYear} onChange={(e) => setSlotYear(e.target.value)} aria-label="Academic year for this slot">
+              {yearChoices.map((y) => (
+                <option key={y} value={y}>
+                  {y}
+                  {y === currentYear ? ' (current)' : ''}
+                </option>
+              ))}
+            </select>
+          </label>
           <div className="flex gap-2 sm:col-span-2 lg:col-span-4">
             <Button type="submit">{editingId ? 'Save changes' : slotForm.weekdays.length > 1 ? `Add ${slotForm.weekdays.length} slots` : 'Add slot'}</Button>
             {editingId && (
@@ -470,6 +496,7 @@ function TimetableEditor() {
                 onClick={() => {
                   setEditingId(null);
                   setSlotForm(emptySlot);
+                  setSlotYear(currentYear);
                 }}
               >
                 Cancel
@@ -557,6 +584,19 @@ function TimetableEditor() {
                 </>
               )}
             </>
+          )}
+          {ov.kind !== 'CANCEL' && (
+            <label className="block">
+              <span className="label">Academic year</span>
+              <select className="input" value={ovYear} onChange={(e) => setOvYear(e.target.value)} aria-label="Academic year for this change">
+                {yearChoices.map((y) => (
+                  <option key={y} value={y}>
+                    {y}
+                    {y === currentYear ? ' (current)' : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
           )}
           <label className="block sm:col-span-2">
             <span className="label">Note (optional)</span>
