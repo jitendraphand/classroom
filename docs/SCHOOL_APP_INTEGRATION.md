@@ -92,6 +92,58 @@ node scripts/make-join-link.mjs --unsigned --url https://CLASSROOM_HOST \
 ## Signed mode (`SCHOOL_JOIN_MODE=signed`)
 
 Only `/join?t=<JWT>` is accepted; plain-parameter links get `unsigned_disabled`.
+In signed mode the dev-only code + name form is also always off (even with
+`ALLOW_MANUAL_STUDENT_JOIN=true`), so the **only** way a student gets in is a
+fresh link signed by the school's server. Each worker logs
+`[school-join] …` at start-up if signed mode is on but the issuer or key is
+missing (it never logs key or secret values).
+
+### Switching a deployment to signed mode
+
+1. School side: generate the key pair (section 1), keep the private key on the
+   website server, give the classroom operator the **public** key only.
+2. Classroom `.env`:
+   ```
+   SCHOOL_JOIN_MODE=signed
+   SCHOOL_APP_JWT_ISSUER=https://app.your-school.org
+   SCHOOL_APP_JWT_PUBLIC_KEY_FILE=/app/secrets/school-app-public.pem
+   ```
+   then `docker compose --profile tls up -d web` (no rebuild needed; env only).
+3. Check `docker compose logs web | grep school-join` shows nothing, open a link
+   from the website once (works), open it again (`replayed`), open an old
+   plain-parameter link (`unsigned_disabled`).
+4. To go back: `SCHOOL_JOIN_MODE=unsigned` and restart `web`.
+
+### Sample signer for the school website
+
+[`docs/examples/school-website-signer.mjs`](examples/school-website-signer.mjs)
+is a copy-and-use, zero-dependency Node 18+ signer (Ed25519/RSA/HS256 with
+`node:crypto` only). As a library: `classroomJoinUrl({ id, name, grade,
+division, campus })` returns the link to redirect the student to. As a CLI:
+
+```bash
+SCHOOL_SIGNER_PRIVATE_KEY_FILE=school-app-private.pem \
+SCHOOL_SIGNER_ISSUER=https://app.your-school.org CLASSROOM_URL=https://class.your-school.org \
+node docs/examples/school-website-signer.mjs --sid GOS000123 --name "Arohi Patil" --grade 7 --division A
+```
+
+The unit tests check that its tokens are accepted once, replays are refused,
+and tokens from another key are refused.
+
+### PHP (firebase/php-jwt ≥ 6, `composer require firebase/php-jwt`)
+
+```php
+use Firebase\JWT\JWT;
+$now = time();
+$token = JWT::encode([
+  'sub' => (string)$student->id, 'name' => $student->name,
+  'grade' => (string)$student->grade, 'division' => $student->division,
+  'campus' => $student->campus,            // optional with one campus
+  'iss' => 'https://app.your-school.org', 'aud' => 'classroom',
+  'iat' => $now, 'exp' => $now + 60, 'jti' => bin2hex(random_bytes(16)),
+], file_get_contents('school-app-private.pem'), 'RS256');  // or 'EdDSA' with a sodium Ed25519 key
+header('Location: https://class.your-school.org/join?t=' . $token);
+```
 
 ## 1. Keys (pick one)
 

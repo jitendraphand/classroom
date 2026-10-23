@@ -136,3 +136,17 @@ export function joinRateLimitFromEnv(env: Record<string, string | undefined> = p
   const n = Number(env.JOIN_RATE_LIMIT_PER_MINUTE);
   return Number.isFinite(n) && env.JOIN_RATE_LIMIT_PER_MINUTE?.trim() ? Math.max(0, Math.floor(n)) : 0;
 }
+
+/**
+ * Startup check (logged once per worker): signed mode without an issuer and
+ * key/secret would refuse every student. Never includes secret values.
+ */
+export function signedModeProblem(mode: SchoolJoinMode, cfg: SchoolJwtConfig): string | null {
+  if (mode !== 'signed') return null;
+  if (!cfg.issuer) return 'SCHOOL_JOIN_MODE=signed but SCHOOL_APP_JWT_ISSUER is empty: every join link will be refused.';
+  if (!cfg.publicKeyPem && !cfg.secret) {
+    return 'SCHOOL_JOIN_MODE=signed but neither SCHOOL_APP_JWT_PUBLIC_KEY(_FILE) nor SCHOOL_APP_JWT_SECRET is set: every join link will be refused.';
+  }
+  if (!cfg.publicKeyPem && cfg.secret && cfg.secret.length < 32) return 'SCHOOL_APP_JWT_SECRET is shorter than 32 characters; use a longer random secret.';
+  return null;
+}

@@ -35,6 +35,9 @@ export function lateGraceMinutes(): number {
 }
 
 /** Manual code + name student join (dev/testing only). Default off. */
-export function manualStudentJoinAllowed(): boolean {
-  return (process.env.ALLOW_MANUAL_STUDENT_JOIN || '').trim().toLowerCase() === 'true';
+export function manualStudentJoinAllowed(env: Record<string, string | undefined> = process.env): boolean {
+  // Signed mode means only links the school's website signs get a student in:
+  // the dev-only code + name form is then always off, whatever this flag says.
+  if (env.SCHOOL_JOIN_MODE?.trim().toLowerCase() === 'signed') return false;
+  return (env.ALLOW_MANUAL_STUDENT_JOIN || '').trim().toLowerCase() === 'true';
 }
