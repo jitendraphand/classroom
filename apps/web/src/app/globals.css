@@ -241,6 +241,9 @@ body {
   /* Student controls: ONE layout on every device (see useStudentLayout): a
      vertical panel centred on the right edge. Only sizes scale. */
   .stage-float-chrome.is-rail {
+    /* Item 8: above floating panels (z-45) so a dragged Videos/Chat panel can
+       never swallow taps meant for the hand/mic buttons on a phone. */
+    z-index: 50;
     /* No transform here: it would become the containing block of the
        position:fixed mute pill. A full-height flex column centres instead. */
     inset: 0 0 0 auto;
@@ -251,6 +254,7 @@ body {
   }
   .stage-float-chrome.is-rail > .control-rail {
     pointer-events: auto;
+    touch-action: manipulation;
   }
   /* B5 (live test 2026-10-17): on a portrait phone the right-edge rail covered
      the right edge of the 16:9 board/share. Portrait has free space below the
@@ -350,6 +354,15 @@ body {
     @apply relative shrink-0 overflow-hidden rounded-xl bg-black;
     width: min(42vw, 168px);
     aspect-ratio: 16 / 9;
+  }
+  /* Item 13: portrait phone — tiles side by side in the band above the board. */
+  @media (orientation: portrait) and (max-width: 700px) {
+    .student-media-row {
+      flex-direction: row;
+    }
+    .student-media-tile {
+      width: min(36vw, 150px);
+    }
   }
   .student-media-mirror {
     transform: scaleX(-1);
@@ -889,6 +902,26 @@ body {
   padding: 10px 12px;
   color: #f1f5f9;
   font-size: 13px;
+}
+.raised-hands-toggle {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-weight: 650;
+  background: transparent !important;
+  padding: 0 !important;
+}
+.raised-hands-toast[data-collapsed='1'] {
+  width: auto;
+}
+@media (max-width: 700px) {
+  .raised-hands-toast {
+    top: auto;
+    left: 8px;
+    bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+    max-height: 40vh;
+    overflow-y: auto;
+  }
 }
 .raised-hands-toast ul {
   list-style: none;

@@ -944,7 +944,11 @@ function TeacherCameraFloat({
     };
   }, [selfStream, showSelf, minimized, camOn]);
 
-  const style = pos ? { left: pos.x, top: pos.y } : { right: 12, bottom: 88 };
+  // Item 13: on a portrait phone the default spot (bottom-right) sat on top of
+  // the 16:9 board. The free band above the board fits the tiles in a row.
+  const portraitPhone =
+    typeof window !== 'undefined' && window.innerWidth <= 700 && window.innerHeight > window.innerWidth;
+  const style = pos ? { left: pos.x, top: pos.y } : portraitPhone ? { left: 8, top: 96 } : { right: 12, bottom: 88 };
 
   return (
     <>
@@ -980,12 +984,12 @@ function TeacherCameraFloat({
                   muted
                 />
               ) : (
-                <div className="flex h-full items-center justify-center px-2 text-center text-[10px] text-slate-300">
+                <div className="flex h-full items-start justify-center px-2 pt-2 text-center text-[10px] text-slate-300">
                   Camera off
                 </div>
               )}
               <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-2 pb-1 pt-4">
-                <span className="text-2xs font-semibold tracking-wide text-white">{teacherName}</span>
+                <span className="block truncate text-2xs font-semibold tracking-wide text-white" title={teacherName}>{teacherName}</span>
               </div>
             </div>
             {showSelf && (
@@ -999,12 +1003,12 @@ function TeacherCameraFloat({
                     muted
                   />
                 ) : (
-                  <div className="flex h-full items-center justify-center px-2 text-center text-[10px] text-slate-300">
+                  <div className="flex h-full items-start justify-center px-2 pt-2 text-center text-[10px] text-slate-300">
                     Camera off
                   </div>
                 )}
                 <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-1.5 pb-1 pt-4">
-                  <span className="truncate text-2xs font-semibold text-white">{selfName || 'Me'}</span>
+                  <span className="block truncate text-2xs font-semibold text-white">{selfName || 'Me'}</span>
                 </div>
               </div>
             )}
@@ -4097,6 +4101,11 @@ function RoomInner({
   const studentCount = rosterStudents.length;
   const shownRoster = filterPeople(rosterStudents, rosterQuery);
   const shownWaiting = filterPeople(state?.waiting ?? [], rosterQuery);
+  // Item 13: the hands list was pinned over the title on phones; it starts
+  // collapsed to a small pill there and the teacher can open/close it.
+  const [handsCollapsed, setHandsCollapsed] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth <= 700,
+  );
   /** Raised hands, earliest first: shown in the chat panel so they stay in
    * sight while the roster is closed. */
   const raisedHands = rosterStudents
@@ -4548,7 +4557,7 @@ function RoomInner({
 
         {/* Small portrait screens (any device): a hint only, never blocks taps or audio. */}
         {focus.portrait && viewport.w < 640 && showTeacherScreen && (
-          <div className="pointer-events-none fixed inset-x-3 top-3 z-[70] rounded-xl border border-white/15 bg-black/70 px-3 py-2 text-center text-xs font-semibold text-white backdrop-blur">
+          <div className="pointer-events-none fixed inset-x-3 top-[6.5rem] z-[30] rounded-xl border border-white/15 bg-black/70 px-3 py-2 text-center text-xs font-semibold text-white backdrop-blur">
             Rotate your phone to landscape for a bigger view
           </div>
         )}
@@ -4836,9 +4845,16 @@ function RoomInner({
       )}
 
       {isTeacher && raisedHands.length > 0 && (
-        <div className="raised-hands-toast" role="status" data-testid="raised-hands-toast" aria-label="Raised hands">
-          <p className="font-semibold">Raised hands</p>
-          <ul>
+        <div className="raised-hands-toast" role="status" data-testid="raised-hands-toast" aria-label="Raised hands" data-collapsed={handsCollapsed ? '1' : '0'}>
+          <button
+            type="button"
+            className="raised-hands-toggle"
+            onClick={() => setHandsCollapsed((v) => !v)}
+            aria-expanded={!handsCollapsed}
+          >
+            ✋ Raised hands ({raisedHands.length}) {handsCollapsed ? '▸' : '▾'}
+          </button>
+          {!handsCollapsed && <ul>
             {raisedHands.slice(0, 8).map((h) => (
               <li key={h.id}>
                 <span className="min-w-0 truncate">{h.displayName}</span>
@@ -4847,7 +4863,7 @@ function RoomInner({
                 </button>
               </li>
             ))}
-          </ul>
+          </ul>}
           {raisedHands.length > 8 && (
             <p className="mt-1 text-xs text-slate-400">+{raisedHands.length - 8} more in the roster</p>
           )}
