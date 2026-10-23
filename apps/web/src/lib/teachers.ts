@@ -158,6 +158,8 @@ export async function deleteTeacher(id: string) {
     prisma.teacherAssignment.deleteMany({ where: { teacherId: id } }),
     prisma.scheduleOverride.deleteMany({ where: { teacherId: id } }),
     prisma.timetableSlot.deleteMany({ where: { teacherId: id } }),
+    // A sub-admin role held by this teacher goes with the account.
+    prisma.admin.deleteMany({ where: { teacherId: id } }),
     prisma.teacher.update({
       where: { id },
       data: {

@@ -100,3 +100,13 @@ export type EndedSessionReason = (typeof ENDED_SESSION_REASONS)[number];
 export function newSessionId(): string {
   return crypto.randomUUID().replace(/-/g, '');
 }
+
+/** Linked-teacher checks for an admin token: teacher still active and same password generation. */
+export function linkedTeacherOk(
+  claims: object,
+  teacher: { sessionVersion: number; disabled: boolean; deletedAt: Date | null } | null
+): boolean {
+  if (!teacher || teacher.disabled || teacher.deletedAt) return false;
+  const tv = (claims as { tv?: unknown }).tv;
+  return typeof tv === 'number' && tv === teacher.sessionVersion;
+}

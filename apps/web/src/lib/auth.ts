@@ -9,6 +9,7 @@ import {
   verifySession,
   sessionStatus,
   newSessionId,
+  linkedTeacherOk,
   type SessionStatus,
   type EndedSessionReason,
 } from './sessionTokens';
@@ -200,13 +201,33 @@ export async function requireTeacher() {
 
 // ---------------------------------------------------------------- admin
 
-export async function createAdminToken(admin: {
-  id: string;
-  sessionVersion: number;
-  activeSessionId?: string | null;
-}) {
-  return signSession('admin', admin.id, admin.sessionVersion, { sid: admin.activeSessionId ?? undefined });
+export async function createAdminToken(
+  admin: {
+    id: string;
+    sessionVersion: number;
+    activeSessionId?: string | null;
+  },
+  /** Linked teacher's sessionVersion: a teacher password change/reset/disable also ends the admin view. */
+  teacherSessionVersion?: number
+) {
+  return signSession('admin', admin.id, admin.sessionVersion, {
+    sid: admin.activeSessionId ?? undefined,
+    ...(teacherSessionVersion !== undefined ? { tv: teacherSessionVersion } : {}),
+  });
 }
+
+/**
+ * Admin view for a teacher who also holds a sub-admin role (Admin.teacherId).
+ * Only reachable from a valid teacher session (see /api/auth/switch-view).
+ */
+export async function startLinkedAdminSession(adminId: string, teacherSessionVersion: number) {
+  const updated = await prisma.admin.update({
+    where: { id: adminId },
+    data: { activeSessionId: newSessionId() },
+  });
+  return createAdminToken(updated, teacherSessionVersion);
+}
+
 
 export async function setAdminCookie(token: string) {
   (await cookies()).set(adminCookieName(), token, cookieOptions(60 * 60 * 12));
@@ -223,6 +244,8 @@ export type AdminSession = {
   mustChangePassword: boolean;
   kind: 'SYSTEM' | 'SUB';
   privileges: PrivilegeSet;
+  /** Set when this sub-admin role belongs to a teacher (switch back to teacher view). */
+  linkedTeacherId: string | null;
 };
 
 /** The signed-in admin, or null (same rules as getTeacherSession). */
@@ -235,8 +258,12 @@ export async function getAdminSession(
   try {
     const admin = await prisma.admin.findUnique({ where: { id: claims.sub } });
     if (sessionStatus(claims, admin) !== 'ok' || !admin) return null;
-    if (admin.mustChangePassword && !opts.allowPendingPasswordChange) return null;
+    if (admin.teacherId) {
+      const teacher = await prisma.teacher.findUnique({ where: { id: admin.teacherId } });
+      if (!linkedTeacherOk(claims, teacher)) return null;
+    } else if (admin.mustChangePassword && !opts.allowPendingPasswordChange) return null;
     return {
+      linkedTeacherId: admin.teacherId ?? null,
       id: admin.id,
       email: admin.email,
       name: admin.name,

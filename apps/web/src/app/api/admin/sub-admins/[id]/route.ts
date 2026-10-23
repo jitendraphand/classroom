@@ -38,6 +38,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     data.sessionVersion = { increment: 1 };
   }
   let temporaryPassword: string | undefined;
+  if (body?.resetPassword === true && row.teacherId) {
+    return jsonError("This sub-administrator signs in with their teacher account; reset the teacher's password on the Teachers page", 400);
+  }
   if (body?.resetPassword === true) {
     temporaryPassword = generatePassword();
     data.passwordHash = await hashPassword(temporaryPassword);
@@ -59,6 +62,7 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
   const row = await prisma.admin.findUnique({ where: { id } });
   if (!row) return jsonError('Administrator not found', 404);
   if (row.kind !== 'SUB') return jsonError('The system administrator cannot be deleted', 403);
+  // Only the admin role goes; a linked teacher account (row.teacherId) stays as it is.
   await prisma.admin.delete({ where: { id } });
-  return jsonOk({ ok: true });
+  return jsonOk({ ok: true, teacherKept: !!row.teacherId });
 }

@@ -81,3 +81,15 @@ test('signed mode: manual join off, startup check names missing config', () => {
   assert.equal(signedModeProblem('signed', { ...base, issuer: 'x', secret: 'y'.repeat(40) }), null);
   assert.equal(signedModeProblem('unsigned', { ...base, issuer: null }), null);
 });
+
+import { linkedTeacherOk } from '../src/lib/sessionTokens';
+
+test('linked sub-admin view dies with the teacher session generation', () => {
+  const t = { sessionVersion: 3, disabled: false, deletedAt: null };
+  assert.equal(linkedTeacherOk({ tv: 3 }, t), true);
+  assert.equal(linkedTeacherOk({ tv: 2 }, t), false, 'teacher password changed/reset');
+  assert.equal(linkedTeacherOk({}, t), false, 'token without teacher version');
+  assert.equal(linkedTeacherOk({ tv: 3 }, { ...t, disabled: true }), false);
+  assert.equal(linkedTeacherOk({ tv: 3 }, { ...t, deletedAt: new Date() }), false);
+  assert.equal(linkedTeacherOk({ tv: 3 }, null), false);
+});

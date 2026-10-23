@@ -1,3 +1,4 @@
+import { prisma } from '@/lib/db';
 import { endedSessionReason, getAdminSession, getTeacherSession, getStudentParticipant } from '@/lib/auth';
 import { jsonOk } from '@/lib/response';
 
@@ -8,7 +9,10 @@ export async function GET() {
   if (admin) return jsonOk({ role: 'admin', ...admin });
 
   const teacher = await getTeacherSession({ allowPendingPasswordChange: true });
-  if (teacher) return jsonOk({ role: 'teacher', ...teacher });
+  if (teacher) {
+    const link = await prisma.admin.findUnique({ where: { teacherId: teacher.id }, select: { id: true } }).catch(() => null);
+    return jsonOk({ role: 'teacher', ...teacher, adminAvailable: !!link });
+  }
 
   const student = await getStudentParticipant();
   if (student && student.status !== 'LEFT') {

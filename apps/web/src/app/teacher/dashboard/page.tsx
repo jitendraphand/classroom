@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppHeader } from '@/components/layout/AppHeader';
+import { SwitchViewButton } from '@/components/layout/SwitchViewButton';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader } from '@/components/ui/Card';
@@ -15,7 +16,7 @@ import { loginHref } from '@/lib/sessionClient';
 import { adhocProblem } from '@/lib/adhocForm';
 import { TeacherInsights } from '@/components/teacher/TeacherInsights';
 
-type Me = { role: string; name?: string; email?: string; permanentCode?: string; mustChangePassword?: boolean };
+type Me = { role: string; name?: string; email?: string; permanentCode?: string; mustChangePassword?: boolean; adminAvailable?: boolean };
 type ClassItem = {
   key: string;
   date: string;
@@ -193,6 +194,7 @@ export default function TeacherDashboard() {
         subtitle="Teacher dashboard"
         right={
           <>
+            {me.adminAvailable && <SwitchViewButton to="admin" />}
             <Link href="/teacher/attendance" className="btn-ghost px-3 py-1.5 text-xs">
               Attendance
             </Link>

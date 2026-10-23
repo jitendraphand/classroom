@@ -7,7 +7,8 @@ import { Card, CardHeader } from '@/components/ui/Card';
 import { api } from '@/lib/clientFetch';
 import { PRIVILEGE_LABELS, type Privilege, type PrivilegeSet } from '@/lib/privileges';
 
-type AdminRow = { id: string; email: string; name: string; kind: 'SYSTEM' | 'SUB'; privileges: PrivilegeSet };
+type AdminRow = { id: string; email: string; name: string; kind: 'SYSTEM' | 'SUB'; privileges: PrivilegeSet; teacherId: string | null };
+type TeacherOpt = { id: string; name: string; email: string; disabled?: boolean };
 
 const KEYS = Object.keys(PRIVILEGE_LABELS) as Privilege[];
 
@@ -29,6 +30,10 @@ function Editor() {
   // Item 11: a failed load (e.g. 403 for a sub-admin) shows only the message, not the form too.
   const [loadError, setLoadError] = useState('');
   const [form, setForm] = useState({ name: '', email: '', privileges: blank() });
+  // Item 6: a sub-admin can be a new account or an existing teacher (one login, switchable views).
+  const [source, setSource] = useState<'teacher' | 'new'>('teacher');
+  const [teacherId, setTeacherId] = useState('');
+  const [teachers, setTeachers] = useState<TeacherOpt[]>([]);
   const [secret, setSecret] = useState<{ title: string; lines: [string, string][] } | null>(null);
 
   async function load() {
@@ -41,6 +46,9 @@ function Editor() {
   }
   useEffect(() => {
     void load();
+    void api<{ teachers: TeacherOpt[] }>('/api/admin/teachers').then(({ ok, data }) => {
+      if (ok) setTeachers((data.teachers ?? []).filter((t) => !t.disabled));
+    });
   }, []);
 
   function toggle(key: Privilege) {
@@ -50,7 +58,25 @@ function Editor() {
   async function create(e: React.FormEvent) {
     e.preventDefault();
     setError('');
-    const { ok, data } = await api<{ admin: AdminRow; temporaryPassword: string }>('/api/admin/sub-admins', { method: 'POST', body: form });
+    if (source === 'teacher') {
+      if (!teacherId) {
+        setError('Pick a teacher');
+        return;
+      }
+      const r = await api<{ admin: AdminRow }>('/api/admin/sub-admins', { method: 'POST', body: { teacherId, privileges: form.privileges } });
+      if (!r.ok) {
+        setError(r.data.error || 'Could not create');
+        return;
+      }
+      setTeacherId('');
+      setForm({ name: '', email: '', privileges: blank() });
+      void load();
+      return;
+    }
+    const { ok, data } = await api<{ admin: AdminRow; temporaryPassword: string }>('/api/admin/sub-admins', {
+      method: 'POST',
+      body: { name: form.name, email: form.email, privileges: form.privileges },
+    });
     if (!ok) {
       setError(data.error || 'Could not create');
       return;
@@ -73,7 +99,10 @@ function Editor() {
   }
 
   async function remove(row: AdminRow) {
-    if (!confirm(`Delete ${row.email}?`)) return;
+    const msg = row.teacherId
+      ? `Remove the admin role from ${row.name}? Their teacher account stays.`
+      : `Delete ${row.email}?`;
+    if (!confirm(msg)) return;
     const { ok, data } = await api(`/api/admin/sub-admins/${row.id}`, { method: 'DELETE' });
     if (!ok) setError(data.error || 'Could not delete');
     else void load();
@@ -95,6 +124,32 @@ function Editor() {
       <Card>
         <CardHeader title="New sub-administrator" subtitle="Pick the privileges. The system administrator keeps every privilege." />
         <form className="space-y-3" onSubmit={(e) => void create(e)}>
+          <div className="flex gap-4 text-sm">
+            <label className="flex items-center gap-2">
+              <input type="radio" checked={source === 'teacher'} onChange={() => setSource('teacher')} /> Existing teacher
+            </label>
+            <label className="flex items-center gap-2">
+              <input type="radio" checked={source === 'new'} onChange={() => setSource('new')} /> New account
+            </label>
+          </div>
+          {source === 'teacher' ? (
+            <label className="block">
+              <span className="label">Teacher</span>
+              <select className="input" value={teacherId} onChange={(e) => setTeacherId(e.target.value)} required>
+                <option value="">Choose a teacher…</option>
+                {teachers
+                  .filter((t) => !(rows ?? []).some((r) => r.teacherId === t.id))
+                  .map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name} · {t.email}
+                    </option>
+                  ))}
+              </select>
+              <span className="mt-1 block text-xs text-slate-400">
+                They keep one login (their teacher email and password) and switch between the teacher and admin views.
+              </span>
+            </label>
+          ) : (
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="block">
               <span className="label">Name</span>
@@ -105,6 +160,7 @@ function Editor() {
               <input className="input" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required />
             </label>
           </div>
+          )}
           <PrivChecks value={form.privileges} onToggle={toggle} />
           <Button type="submit">Create sub-administrator</Button>
         </form>
@@ -118,16 +174,18 @@ function Editor() {
                 <div>
                   <p className="font-medium">{row.name}</p>
                   <p className="text-sm text-slate-400">
-                    {row.email} · {row.kind === 'SYSTEM' ? 'System administrator' : 'Sub-administrator'}
+                    {row.email} · {row.kind === 'SYSTEM' ? 'System administrator' : row.teacherId ? 'Teacher + sub-administrator' : 'Sub-administrator'}
                   </p>
                 </div>
                 {row.kind === 'SUB' && (
                   <div className="flex gap-2">
-                    <Button size="sm" variant="secondary" onClick={() => void reset(row)}>
-                      Reset password
-                    </Button>
+                    {!row.teacherId && (
+                      <Button size="sm" variant="secondary" onClick={() => void reset(row)}>
+                        Reset password
+                      </Button>
+                    )}
                     <Button size="sm" variant="danger" onClick={() => void remove(row)}>
-                      Delete
+                      {row.teacherId ? 'Remove admin role' : 'Delete'}
                     </Button>
                   </div>
                 )}

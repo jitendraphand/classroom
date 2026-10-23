@@ -36,6 +36,10 @@ model Admin {
   sessionVersion     Int      @default(0)
   /// The one signed-in session (set on login, cleared on logout). A token with another id was replaced by a newer login.
   activeSessionId    String?
+  /// SUB role given to an existing teacher: they sign in with the teacher's
+  /// email/password and switch views. Removing the role deletes only this row.
+  teacherId          String?  @unique
+  teacher            Teacher? @relation(fields: [teacherId], references: [id], onDelete: Cascade)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 }
@@ -66,6 +70,7 @@ model Teacher {
   overrides          ScheduleOverride[]
   classSessions      ClassSession[]
   rankSnapshots      TeacherRankSnapshot[]
+  adminRole          Admin?
 }
 
 /// Grade/division a teacher may teach. division "*" = every division of the grade.

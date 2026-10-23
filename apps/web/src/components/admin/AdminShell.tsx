@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import { AppHeader } from '@/components/layout/AppHeader';
+import { SwitchViewButton } from '@/components/layout/SwitchViewButton';
 import { Button } from '@/components/ui/Button';
 import { PageLoading } from '@/components/ui/Skeleton';
 import { api } from '@/lib/clientFetch';
@@ -32,15 +33,15 @@ function tabForPath(pathname: string) {
 export function AdminShell({ children, title }: { children: ReactNode; title: string }) {
   const router = useRouter();
   const pathname = usePathname() || '/admin';
-  const [me, setMe] = useState<{ email: string; tabs: Array<(typeof TABS)[number]['id']> } | null>(null);
+  const [me, setMe] = useState<{ email: string; tabs: Array<(typeof TABS)[number]['id']>; linkedTeacher: boolean } | null>(null);
 
   useEffect(() => {
-    api<{ role: string; email: string; mustChangePassword?: boolean; kind?: string; privileges?: PrivilegeSet }>('/api/auth/me').then(({ data }) => {
+    api<{ role: string; email: string; mustChangePassword?: boolean; kind?: string; privileges?: PrivilegeSet; linkedTeacherId?: string | null }>('/api/auth/me').then(({ data }) => {
       if (data.role !== 'admin') router.replace(loginHref((data as { reason?: unknown }).reason, window.location.pathname));
       else if (data.mustChangePassword) router.replace('/account/password');
       else {
         const tabs = data.privileges && data.kind ? visibleAdminTabs(data.privileges, data.kind) : (['today', 'live', 'performance', 'system'] as const);
-        setMe({ email: data.email, tabs: [...tabs] });
+        setMe({ email: data.email, tabs: [...tabs], linkedTeacher: !!data.linkedTeacherId });
       }
     });
   }, [router]);
@@ -68,9 +69,12 @@ export function AdminShell({ children, title }: { children: ReactNode; title: st
         subtitle="School administration"
         right={
           <>
-            <Link href="/account/password" className="btn-ghost px-3 py-1.5 text-xs">
-              Change password
-            </Link>
+            {me.linkedTeacher && <SwitchViewButton to="teacher" />}
+            {!me.linkedTeacher && (
+              <Link href="/account/password" className="btn-ghost px-3 py-1.5 text-xs">
+                Change password
+              </Link>
+            )}
             <Button variant="secondary" size="sm" onClick={logout}>
               Log out
             </Button>
