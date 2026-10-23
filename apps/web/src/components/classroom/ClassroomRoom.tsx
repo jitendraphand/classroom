@@ -3915,11 +3915,21 @@ function RoomInner({
   }
 
   async function muteStudent(participantId: string, muted: boolean) {
-    await roomFetch(code, '/mute', {
+    setMuteOverrides((cur) => ({ ...cur, [participantId]: muted }));
+    const ok = await roomFetch(code, '/mute', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ participantId, muted }),
-    });
+    })
+      .then((r) => r.ok)
+      .catch(() => false);
+    if (!ok) {
+      setMuteOverrides((cur) => {
+        const next = { ...cur };
+        delete next[participantId];
+        return next;
+      });
+    }
     refresh();
   }
 
@@ -4083,6 +4093,20 @@ function RoomInner({
     }
   }
 
+  const [muteOverrides, setMuteOverrides] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    // Drop an override once the server agrees (or the student left).
+    setMuteOverrides((cur) => {
+      const ids = Object.keys(cur);
+      if (!ids.length) return cur;
+      const next = { ...cur };
+      for (const id of ids) {
+        const p = state?.admitted?.find((x) => x.id === id);
+        if (!p || !!p.mutedByTeacher === cur[id]) delete next[id];
+      }
+      return Object.keys(next).length === ids.length ? cur : next;
+    });
+  }, [state?.admitted]);
   const waitingCount = state?.waiting?.length ?? 0;
   // Roster panel: students only (the teacher is not listed), raised hands
   // first by raise time, then pinned, then by name. Two devices of one
@@ -4091,7 +4115,12 @@ function RoomInner({
     sortRoster(
       (state?.admitted ?? [])
         .filter((p) => p.role === 'STUDENT' && !isRosterDropped(p.livekitIdentity, droppedStudents, Date.now()))
-        .map((p) => ({ ...p, handRaised: !!(p.handRaised || (state?.raisedHands ?? []).includes(p.id)) }))
+        .map((p) => ({
+          ...p,
+          handRaised: !!(p.handRaised || (state?.raisedHands ?? []).includes(p.id)),
+          // Item 14: per-student mute flips at once; the server state confirms it.
+          mutedByTeacher: p.id in muteOverrides ? muteOverrides[p.id] : p.mutedByTeacher,
+        }))
     ).map((p) => ({
       ...p,
       identity: p.livekitIdentity,

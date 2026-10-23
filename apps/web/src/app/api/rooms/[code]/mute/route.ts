@@ -157,7 +157,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
           pushMuteState(room.code, room.sessionId, [nextStudent.livekitIdentity], false);
         }
       }
-      nudgeRoomState(room.code, 'all');
+      // Item 14: one student's mute only refreshes the teacher + affected students, not 2,000 clients.
+      nudgeRoomState(room.code, { participantIds: promoted ? [participant.id, promoted] : [participant.id] });
       return jsonOk({ ok: true, muted, waiting: next.waiting });
     }
 
@@ -183,7 +184,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     }
 
     pushMuteState(room.code, room.sessionId, [participant.livekitIdentity], body.muted);
-    nudgeRoomState(room.code, 'all');
+    nudgeRoomState(room.code, { participantIds: [participant.id] });
     return jsonOk({ ok: true, muted: body.muted });
   } catch (e) {
     if (e instanceof z.ZodError) return jsonError(e.errors[0]?.message || 'Invalid input');
