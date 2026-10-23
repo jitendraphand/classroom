@@ -10,6 +10,7 @@ import { Card, CardHeader } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { api } from '@/lib/clientFetch';
+import { useAdminPrivileges } from '@/components/admin/useAdminPrivileges';
 
 type Teacher = {
   id: string;
@@ -40,6 +41,8 @@ function TeachersPanel() {
   const [filter, setFilter] = useState('');
   const gradeOptions = useGradeOptions();
   const [deleting, setDeleting] = useState<Teacher | null>(null);
+  // Item 10: reports-only / schedule-only sub-admins see the list, not the actions.
+  const canManage = useAdminPrivileges().can('manageTeachers');
 
   const load = useCallback(async () => {
     const { ok, data } = await api<{ teachers: Teacher[] }>('/api/admin/teachers');
@@ -148,6 +151,7 @@ function TeachersPanel() {
         </p>
       )}
 
+      {canManage && (
       <Card>
         <CardHeader
           title="Add teacher"
@@ -178,6 +182,7 @@ function TeachersPanel() {
           </div>
         </form>
       </Card>
+      )}
 
       <Card padding={false}>
         <div className="flex flex-wrap items-center justify-between gap-3 p-5 sm:p-6">
@@ -198,7 +203,7 @@ function TeachersPanel() {
           <ul className="divide-y divide-white/5">
             {shown.map((t) => (
               <li key={t.id} className="flex flex-col gap-3 px-5 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
-                {editing === t.id ? (
+                {editing === t.id && canManage ? (
                   <form
                     className="grid w-full items-start gap-3 sm:grid-cols-[1fr_2fr_auto]"
                     onSubmit={async (e) => {
@@ -227,6 +232,7 @@ function TeachersPanel() {
                         {t.assignmentsText ? t.assignmentsText.replace(/@/g, ' · ') : 'No grades assigned'}
                       </p>
                     </div>
+                    {canManage && (
                     <div className="flex flex-wrap gap-2">
                       <Button
                         size="sm"
@@ -256,6 +262,7 @@ function TeachersPanel() {
                         Delete
                       </Button>
                     </div>
+                    )}
                   </>
                 )}
               </li>
