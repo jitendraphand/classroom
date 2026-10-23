@@ -9,6 +9,7 @@ import {
   SIGNAL_TOPIC,
   applyDrawReqPush,
   applyHandPush,
+  applyDrawAllowPush,
   decodeSignalPacket,
   signalPacketTrusted,
 } from '@/lib/realtimePackets';
@@ -312,6 +313,7 @@ export function useRoomState(code: string, intervalMs = 2000, room?: Room | null
         if (!prev) return prev;
         if (!signalPacketTrusted(sig, participant?.identity, prev.me?.id ?? null)) return prev;
         if (sig.type === 'hand') return applyHandPush(prev, sig.participantId, sig.raised);
+        if (sig.type === 'draw-allow') return applyDrawAllowPush(prev, sig);
         return applyDrawReqPush(prev, sig.participantId, sig.on);
       });
     };

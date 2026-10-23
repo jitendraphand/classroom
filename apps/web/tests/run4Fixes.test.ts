@@ -122,3 +122,18 @@ test('SDK reconnect policy: jittered, bounded, gives up for a fresh rejoin', () 
   assert.equal(isOwnStaleDuplicate({ rejoining: false, connectedAt: 1000, now: 5000 }), true);
   assert.equal(isOwnStaleDuplicate({ rejoining: false, connectedAt: 1000, now: 60_000 }), false);
 });
+
+test('draw-allow push: server-only, applied locally', async () => {
+  const { decodeSignalPacket, signalPacketTrusted, applyDrawAllowPush } = await import('../src/lib/realtimePackets');
+  const pkt = decodeSignalPacket({ v: 1, type: 'draw-allow', on: true, participantId: 'p1', identity: 'student_p1', name: 'Asha', until: 99 });
+  assert.ok(pkt && pkt.type === 'draw-allow');
+  assert.equal(signalPacketTrusted(pkt!, 'student_p1', 'p1'), false);
+  assert.equal(signalPacketTrusted(pkt!, undefined, 'p1'), true);
+  const s0 = { me: { id: 'p1', canDraw: false }, drawHolders: [], drawHolder: null };
+  const s1 = applyDrawAllowPush(s0, pkt as never);
+  assert.equal(s1.me?.canDraw, true);
+  assert.equal(s1.drawHolders.length, 1);
+  const s2 = applyDrawAllowPush(s1, { ...(pkt as object), on: false } as never);
+  assert.equal(s2.me?.canDraw, false);
+  assert.equal(s2.drawHolders.length, 0);
+});

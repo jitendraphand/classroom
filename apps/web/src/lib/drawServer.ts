@@ -89,7 +89,11 @@ export async function allowDraw(code: string, p: { id: string; livekitIdentity: 
     .expire(keys.drawHolders(code), TTL_S)
     .hdel(keys.drawRequests(code), p.id)
     .exec();
-  nudgeRoomState(code, 'all');
+  // One small SFU packet for everyone instead of a /state refetch by every
+  // student (2,000 simultaneous refetches made "Allow draw" time out). The
+  // teacher and the student still get a refetch for the rest of the state.
+  pushSignalForCode(code, { v: 1, type: 'draw-allow', on: true, ...holder });
+  nudgeRoomState(code, { participantIds: [p.id] });
   return holder;
 }
 
@@ -103,6 +107,7 @@ export async function revokeDraw(code: string, opts: { clear: boolean; clearRequ
   if (opts.participantId) {
     const h = await holderFor(code, opts.participantId, r);
     await r.hdel(keys.drawHolders(code), opts.participantId);
+    if (h) pushSignalForCode(code, { v: 1, type: 'draw-allow', on: false, ...h });
     if (opts.clear && h) {
       await deleteStrokesBy(code, h.identity);
       // Whiteboard: the student's strokes go too (every device incl. the teacher's applies it).
@@ -113,8 +118,10 @@ export async function revokeDraw(code: string, opts: { clear: boolean; clearRequ
     if (opts.clearRequests) m.del(keys.drawRequests(code));
     await m.exec();
     if (opts.clear) await clearDrawing(code);
+    nudgeRoomState(code, 'all');
+    return;
   }
-  nudgeRoomState(code, 'all');
+  nudgeRoomState(code, { participantIds: [opts.participantId] });
 }
 
 /** Remove every stroke of one student (their allow was revoked). */

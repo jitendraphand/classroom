@@ -51,7 +51,9 @@ export function chatPacketTrusted(opts: {
 
 export type SignalPacket =
   | { v: 1; type: 'hand'; raised: boolean; participantId: string }
-  | { v: 1; type: 'draw-req'; on: boolean; participantId: string };
+  | { v: 1; type: 'draw-req'; on: boolean; participantId: string }
+  /** Draw permission granted/ended (server only): applied locally, no /state refetch. */
+  | { v: 1; type: 'draw-allow'; on: boolean; participantId: string; identity: string; name: string; until: number };
 
 export function decodeSignalPacket(raw: unknown): SignalPacket | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -75,6 +77,21 @@ export function decodeSignalPacket(raw: unknown): SignalPacket | null {
   ) {
     return { v: 1, type: 'draw-req', on: o.on, participantId: o.participantId };
   }
+  if (
+    o.type === 'draw-allow' &&
+    typeof o.on === 'boolean' &&
+    typeof o.participantId === 'string' &&
+    o.participantId.length >= 1 &&
+    o.participantId.length <= 64 &&
+    typeof o.identity === 'string' &&
+    o.identity.length <= 128 &&
+    typeof o.name === 'string' &&
+    o.name.length <= 200 &&
+    typeof o.until === 'number' &&
+    Number.isFinite(o.until)
+  ) {
+    return { v: 1, type: 'draw-allow', on: o.on, participantId: o.participantId, identity: o.identity, name: o.name, until: o.until };
+  }
   return null;
 }
 
@@ -88,9 +105,32 @@ export function signalPacketTrusted(
   selfParticipantId?: string | null
 ): boolean {
   const kind = senderKind(senderIdentity);
+  // A draw permission only ever comes from the server (never self-granted).
+  if (packet.type === 'draw-allow') return kind === 'server';
   if (kind === 'server' || kind === 'teacher') return true;
   if (kind === 'student') return !!selfParticipantId && packet.participantId === selfParticipantId;
   return false;
+}
+
+type Holder = { participantId: string; identity: string; name: string; until: number };
+
+/** Apply a draw-allow push: holder list, `me.canDraw`, and the single-holder back-compat field. */
+export function applyDrawAllowPush<
+  T extends {
+    me: { id: string; canDraw?: boolean } | null;
+    drawHolders?: Holder[];
+    drawHolder?: Holder | null;
+  },
+>(state: T, push: { on: boolean; participantId: string; identity: string; name: string; until: number }): T {
+  const others = (state.drawHolders ?? (state.drawHolder ? [state.drawHolder] : [])).filter(
+    (h) => h.participantId !== push.participantId
+  );
+  const holders = push.on
+    ? [...others, { participantId: push.participantId, identity: push.identity, name: push.name, until: push.until }]
+    : others;
+  const me = state.me?.id === push.participantId ? { ...state.me, canDraw: push.on } : state.me;
+  const mine = state.me ? holders.find((h) => h.participantId === state.me!.id) : undefined;
+  return { ...state, me, drawHolders: holders, drawHolder: mine ?? holders[0] ?? null };
 }
 
 export function applyHandPush<

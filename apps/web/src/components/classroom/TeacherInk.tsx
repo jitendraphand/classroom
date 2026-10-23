@@ -346,7 +346,13 @@ export function TeacherInkOverlay({ interactive = false }: { interactive?: boole
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
     ro?.observe(host);
     const id = win.setInterval(measure, 1500);
+    // Media events do not bubble; capture them so the ink box snaps to the
+    // picture as soon as the share's size is known (or changes).
+    host.addEventListener('loadedmetadata', measure, true);
+    host.addEventListener('resize', measure, true);
     return () => {
+      host.removeEventListener('loadedmetadata', measure, true);
+      host.removeEventListener('resize', measure, true);
       win.cancelAnimationFrame(raf);
       ro?.disconnect();
       win.clearInterval(id);
