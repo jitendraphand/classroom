@@ -643,7 +643,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                     )}
                     <Avatar name={s.displayName} size="xs" />
                     <span className="tsh-person-name">{s.displayName}</span>
-                    {s.sid ? <span className="tsh-person-sub">{s.sid}</span> : s.gradeDivision ? <span className="tsh-person-sub">{s.gradeDivision}</span> : null}
+                    {s.gradeDivision ? <span className="tsh-person-sub">{s.gradeDivision}</span> : null}
                     {focus ? <span className="tsh-chip tsh-chip-muted" title={focus}>{focus}</span> : null}
                     {s.reconnecting ? <span className="tsh-chip" title="Reconnecting">Reconnecting</span> : null}
                     <button

@@ -317,7 +317,7 @@ export function ChatView({
               <option value="all">Everyone</option>
               {toOptions.map((s) => (
                 <option key={s.id} value={s.id}>
-                  {s.sid ? `${s.displayName} · ${s.sid}` : s.displayName}
+                  {s.gradeDivision ? `${s.displayName} · ${s.gradeDivision}` : s.displayName}
                 </option>
               ))}
               {searching && toOptions.length === 0 && (

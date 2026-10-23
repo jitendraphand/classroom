@@ -26,7 +26,7 @@ export type ChatMessage = {
   createdAt: string;
 };
 
-export type StudentOpt = { id: string; displayName: string; sid?: string | null };
+export type StudentOpt = { id: string; displayName: string; sid?: string | null; gradeDivision?: string | null };
 
 export type ThreadProps = {
   code: string;

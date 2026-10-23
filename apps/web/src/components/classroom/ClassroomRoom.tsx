@@ -2925,7 +2925,7 @@ function RoomInner({
   const myParticipantId = state?.me?.id ?? null;
   const chatStudents = (state?.admitted ?? [])
     .filter((a) => a.role === 'STUDENT')
-    .map((a) => ({ id: a.id, displayName: a.displayName, sid: a.sid ?? null }));
+    .map((a) => ({ id: a.id, displayName: a.displayName, sid: a.sid ?? null, gradeDivision: a.gradeDivision ?? null }));
   /** Teacher chat recipient, shared by the dock panel and the share HUD; it
    * stays on the chosen student after each send (Reply / hand chip set it). */
   const [chatTo, setChatTo] = useState<'all' | string>('all');
