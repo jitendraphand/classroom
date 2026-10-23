@@ -128,17 +128,27 @@ export type ShareProfile = {
 };
 
 /** Capture / encoder settings for a share: slides (default) or video mode. */
+/**
+ * Slides mode (video mode off), 2026-10-23: frame-rate ceiling 15 fps.
+ * Chrome's screen capturer is already change-driven (a still slide produces
+ * almost no frames, so the static case is adaptive for free, with no pixel
+ * diffing on the teacher's CPU); the ceiling caps what scrolling, pointer
+ * moves and whiteboard strokes cost. Playing video belongs in video mode.
+ * AV1 is not used: see docs/BANDWIDTH.md (screen share codecs).
+ */
+export const SLIDES_MAX_FPS = 15;
+
 export function shareProfile(videoMode: boolean): ShareProfile {
   if (videoMode) return SCREEN_SHARE_VIDEO_MODE;
   const low = SCREEN_SHARE.layers[0];
   return {
     capture: {
-      frameRate: { ideal: SCREEN_SHARE.capture.frameRate.ideal, max: SCREEN_SHARE.capture.frameRate.max },
+      frameRate: { ideal: SLIDES_MAX_FPS, max: SLIDES_MAX_FPS },
       width: { ideal: SCREEN_SHARE.capture.width.ideal },
       height: { ideal: SCREEN_SHARE.capture.height.ideal },
     },
-    top: { maxBitrate: SCREEN_SHARE.encoding.maxBitrate, maxFramerate: SCREEN_SHARE.encoding.maxFramerate },
-    low: { maxBitrate: low.maxBitrate, maxFramerate: low.maxFramerate },
+    top: { maxBitrate: SCREEN_SHARE.encoding.maxBitrate, maxFramerate: SLIDES_MAX_FPS },
+    low: { maxBitrate: low.maxBitrate, maxFramerate: Math.min(low.maxFramerate, SLIDES_MAX_FPS) },
     degradationPreference: 'maintain-resolution',
     contentHint: 'detail',
   };

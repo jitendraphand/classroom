@@ -31,3 +31,24 @@ Mixed class (60% phones): **~0.6 Mbps average** → about **250-330 students per
 measured ceiling with the old bitrates was ~150-200 on a 200 Mbps VM: about
 1.5-2x). These are estimates from the encoder caps; a new load test should
 confirm them.
+
+## Screen share codecs and frame rate (2026-10-23)
+
+- **contentHint**: slides mode (video mode off) sets `detail` on the captured
+  and the published track (and the masked track), so Chrome keeps resolution
+  and text sharpness and drops frames under pressure. `text` is not used: only
+  Chromium knows it and treats it like `detail`.
+- **Frame rate**: slides mode now caps capture and both layers at 15 fps
+  (`SLIDES_MAX_FPS`). A still slide is already near zero cost because Chrome's
+  screen capturer only emits frames when pixels change, so static content is
+  adaptive without any pixel diffing on the teacher's laptop. The cap limits
+  what scrolling, pointer moves and whiteboard strokes cost. Video mode keeps
+  24 fps / 720p.
+- **AV1 screen content: not enabled.** Reasons: (1) iOS/iPadOS Safari decodes
+  AV1 only on recent hardware (A17 Pro / M3 and later), so most phones would
+  need the fallback; (2) with LiveKit 1.13.9 the backup codec is not started
+  for a subscriber that cannot take the primary codec (see the 2026-10-10 note
+  in `videoQuality.ts`), so those students would get no share at all;
+  (3) AV1 real-time encoding with screen-content tools costs noticeably more
+  CPU than VP9 on typical school laptops. Revisit when the SFU's backup-codec
+  path is verified to work for VP9/VP8 fallback.
