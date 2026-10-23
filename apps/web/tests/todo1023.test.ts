@@ -93,3 +93,15 @@ test('linked sub-admin view dies with the teacher session generation', () => {
   assert.equal(linkedTeacherOk({ tv: 3 }, { ...t, deletedAt: new Date() }), false);
   assert.equal(linkedTeacherOk({ tv: 3 }, null), false);
 });
+
+import { presentAtEnd } from '../src/lib/feedbackText';
+
+test('feedback only for students in class when it ended', () => {
+  const end = new Date('2026-10-23T10:00:00Z');
+  const at = (m: number) => new Date(end.getTime() + m * 60_000);
+  assert.equal(presentAtEnd({ openSids: [], connectedSince: null, leftAt: end }, end), true);
+  assert.equal(presentAtEnd({ openSids: [], connectedSince: null, leftAt: at(-20) }, end), false, 'left mid-class');
+  assert.equal(presentAtEnd({ openSids: ['s'], connectedSince: at(-5), leftAt: at(-20) }, end), true, 'rejoined, end not processed yet');
+  assert.equal(presentAtEnd({ openSids: [], connectedSince: null, leftAt: at(-1) }, end), true, 'dropped in the last minute');
+  assert.equal(presentAtEnd({ openSids: [], connectedSince: null, leftAt: null }, null), false);
+});

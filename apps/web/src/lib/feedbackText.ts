@@ -47,3 +47,20 @@ export function averageStars(stars: number[]): number | null {
   const sum = stars.reduce((a, b) => a + b, 0);
   return Math.round((sum / stars.length) * 10) / 10;
 }
+
+/** Grace for "still in class at the end": a drop in the last moments still counts. */
+export const FEEDBACK_END_GRACE_MS = 90_000;
+
+/**
+ * Item 7: the end-of-class form is only for students who were in the class
+ * when the teacher ended it. A student who left mid-class (and did not come
+ * back) has leftAt well before the end; one who rejoined is closed at the end.
+ */
+export function presentAtEnd(
+  rec: { openSids: string[]; connectedSince: Date | null; leftAt: Date | null },
+  endedAt: Date | null
+): boolean {
+  if (rec.openSids.length || rec.connectedSince) return true; // still connected (end not processed yet)
+  if (!endedAt || !rec.leftAt) return false;
+  return rec.leftAt.getTime() >= endedAt.getTime() - FEEDBACK_END_GRACE_MS;
+}

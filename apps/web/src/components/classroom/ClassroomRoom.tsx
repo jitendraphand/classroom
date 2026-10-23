@@ -5897,9 +5897,8 @@ export function ClassroomRoom({ code }: { code: string }) {
       <StudentFinished
         reason={shownFinish ?? 'ended'}
         code={code}
-        offerFeedback={Boolean(
-          schoolStudent && (shownFinish === 'left' || shownFinish === 'ended' || (endedAnyway && !shownFinish))
-        )}
+        offerFeedback={Boolean(schoolStudent && (shownFinish === 'ended' || (endedAnyway && !shownFinish)))}
+        schoolStudent={!!schoolStudent}
       />
     );
   }
@@ -6103,24 +6102,41 @@ function StudentFinished({
   reason,
   code,
   offerFeedback,
+  schoolStudent,
 }: {
   reason: FinishReason;
   code: string;
   offerFeedback?: boolean;
+  schoolStudent?: boolean;
 }) {
-  const showForm = !!offerFeedback && (reason === 'left' || reason === 'ended');
+  // Item 7: only students still in class when it ended get the form; the
+  // server decides (a student who left mid-class gets the plain screen).
+  const [eligible, setEligible] = useState<boolean | null>(offerFeedback && reason === 'ended' ? null : false);
+  useEffect(() => {
+    if (eligible !== null) return;
+    let alive = true;
+    void roomFetch(code, '/feedback')
+      .then((r) => r.json())
+      .then((d: { eligible?: boolean }) => alive && setEligible(!!d.eligible))
+      .catch(() => alive && setEligible(false));
+    return () => {
+      alive = false;
+    };
+  }, [code, eligible]);
+  const showForm = eligible === true;
   const [formDone, setFormDone] = useState(false);
   useEffect(() => {
     window.dispatchEvent(new Event(CLASS_FINISHED_EVENT));
   }, []);
   useEffect(() => {
-    if (showForm && !formDone) return;
+    // A student who left can rejoin, so that screen stays open.
+    if ((showForm && !formDone) || eligible === null || reason === 'left') return;
     try {
       window.close();
     } catch {
       /* blocked: the screen stays */
     }
-  }, [showForm, formDone]);
+  }, [showForm, formDone, eligible, reason]);
   const copy = finishCopy(reason);
   return (
     <main className="flex min-h-screen flex-col items-center justify-center gap-4 px-6" data-finished={reason}>
@@ -6128,6 +6144,15 @@ function StudentFinished({
         <p className="font-display text-2xl font-semibold tracking-tight">{copy.title}</p>
         <p className="mt-2 text-sm text-slate-400">{copy.body}</p>
         {showForm && !formDone && <FeedbackForm code={code} onDone={() => setFormDone(true)} />}
+        {reason === 'left' && (
+          <a
+            href={schoolStudent ? '/student' : `/join/${code}`}
+            className="btn-primary mt-5 inline-flex px-4 py-2 text-sm"
+            data-testid="rejoin-class"
+          >
+            Rejoin class
+          </a>
+        )}
       </div>
     </main>
   );
