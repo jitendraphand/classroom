@@ -26,13 +26,18 @@ export default function SubAdminsPage() {
 function Editor() {
   const [rows, setRows] = useState<AdminRow[] | null>(null);
   const [error, setError] = useState('');
+  // Item 11: a failed load (e.g. 403 for a sub-admin) shows only the message, not the form too.
+  const [loadError, setLoadError] = useState('');
   const [form, setForm] = useState({ name: '', email: '', privileges: blank() });
   const [secret, setSecret] = useState<{ title: string; lines: [string, string][] } | null>(null);
 
   async function load() {
     const { ok, data } = await api<{ admins: AdminRow[] }>('/api/admin/sub-admins');
-    if (!ok) setError(data.error || 'Could not load administrators');
-    else setRows(data.admins);
+    if (!ok) setLoadError(data.error || 'Could not load administrators');
+    else {
+      setLoadError('');
+      setRows(data.admins);
+    }
   }
   useEffect(() => {
     void load();
@@ -73,6 +78,15 @@ function Editor() {
     if (!ok) setError(data.error || 'Could not delete');
     else void load();
   }
+
+  if (loadError) {
+    return (
+      <p className="rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-2 text-sm text-danger-fg" role="alert">
+        {loadError}
+      </p>
+    );
+  }
+  if (!rows) return <p className="text-sm text-slate-400">Loading…</p>;
 
   return (
     <div className="space-y-4">
