@@ -189,6 +189,7 @@ export default function TeacherDashboard() {
     <main className="page-shell max-w-6xl">
       <AppHeader
         compact
+        homeHref="/teacher/dashboard#today"
         subtitle="Teacher dashboard"
         right={
           <>
@@ -239,7 +240,7 @@ export default function TeacherDashboard() {
         </div>
       )}
 
-      <Card className="mb-6">
+      <Card className="mb-6 scroll-mt-4" id="today">
         <CardHeader
           title="Today"
           subtitle={

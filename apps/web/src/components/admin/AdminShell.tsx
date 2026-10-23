@@ -64,6 +64,7 @@ export function AdminShell({ children, title }: { children: ReactNode; title: st
     <main className="page-shell">
       <AppHeader
         compact
+        homeHref="/admin"
         subtitle="School administration"
         right={
           <>

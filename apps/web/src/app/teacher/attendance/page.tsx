@@ -21,7 +21,7 @@ export default function TeacherAttendancePage() {
   if (!ready) return <PageLoading label="Loading…" />;
   return (
     <main className="page-shell">
-      <AppHeader compact subtitle="Teacher · attendance" />
+      <AppHeader compact homeHref="/teacher/dashboard#today" subtitle="Teacher · attendance" />
       <BackLink href="/teacher/dashboard">Dashboard</BackLink>
       <h1 className="mb-5 font-display text-2xl font-semibold tracking-tight">Attendance for my classes</h1>
       <ReportView base="/api/teacher/attendance" />
