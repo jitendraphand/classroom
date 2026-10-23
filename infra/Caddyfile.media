@@ -4,7 +4,7 @@
 	reverse_proxy 127.0.0.1:7880 {
 		flush_interval -1
 		transport http {
-			keepalive 2m
+			keepalive 55s
 			keepalive_idle_conns 256
 			dial_timeout 10s
 			read_timeout 0

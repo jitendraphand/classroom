@@ -94,10 +94,22 @@ cat > "$CADDYFILE" << CADDY
 
 {
 	${EMAIL_LINE}
+	servers {
+		timeouts {
+			read_body 30s
+			read_header 15s
+			write 0
+			idle 5m
+		}
+		keepalive_interval 30s
+	}
 }
 
 ${DOMAIN} {
-	encode zstd gzip
+	# Never compress SSE: the encoder buffers it and Caddy logs an
+	# incomplete response when the stream ends mid-chunk.
+	@compressible not path */messages/stream
+	encode @compressible zstd gzip
 	# Hashed build assets never change: cache for a year.
 	@immutable path /_next/static/*
 	header @immutable Cache-Control "public, max-age=31536000, immutable"
@@ -114,7 +126,7 @@ ${DOMAIN} {
 		health_interval 10s
 		health_timeout 3s
 		transport http {
-			keepalive 2m
+			keepalive 55s
 			keepalive_idle_conns 512
 			dial_timeout 10s
 			read_timeout 0
@@ -129,7 +141,7 @@ ${LIVEKIT_HOST} {
 	reverse_proxy 127.0.0.1:7880 {
 		flush_interval -1
 		transport http {
-			keepalive 2m
+			keepalive 55s
 			keepalive_idle_conns 256
 			dial_timeout 10s
 			read_timeout 0

@@ -2,6 +2,7 @@ import { prisma } from '@/lib/db';
 import { resolveRoomAccess } from '@/lib/auth';
 import { ensureRedis, keys } from '@/lib/redis';
 import { chatVisibleTo, type ChatPush } from '@/lib/chatBus';
+import { subscribeChat } from '@/lib/chatHub';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -34,9 +35,18 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   }
 
   const encoder = new TextEncoder();
-  const redis = await ensureRedis();
-  const sub = redis.duplicate();
   let closed = false;
+  let unsubscribe: (() => void) | null = null;
+  let ping: ReturnType<typeof setInterval> | null = null;
+  const cleanup = () => {
+    closed = true;
+    if (ping) clearInterval(ping);
+    ping = null;
+    unsubscribe?.();
+    unsubscribe = null;
+    req.signal.removeEventListener('abort', onAbort);
+  };
+  let onAbort = () => cleanup();
   const stream = new ReadableStream({
     async start(controller) {
       const send = (line: string) => {
@@ -44,41 +54,45 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
         try {
           controller.enqueue(encoder.encode(line));
         } catch {
-          closed = true;
+          cleanup();
         }
       };
-      send('retry: 2000\n\n');
-      send(`data: ${JSON.stringify({ type: 'ready' })}\n\n`);
-      sub.on('message', (_channel: string, raw: string) => {
-        let push: ChatPush;
-        try {
-          push = JSON.parse(raw) as ChatPush;
-        } catch {
-          return;
-        }
-        if (!push?.message || !chatVisibleTo(push, { isTeacher, participantId })) return;
-        send(`data: ${JSON.stringify({ type: 'message', message: push.message })}\n\n`);
-      });
-      try {
-        if (sub.status === 'wait' || sub.status === 'end') await sub.connect();
-        await sub.subscribe(keys.chatChannel(code));
-      } catch (e) {
-        console.warn('chat subscribe', e);
-      }
-      const ping = setInterval(() => send(': ping\n\n'), 15000);
-      const close = () => {
+      onAbort = () => {
         if (closed) return;
-        closed = true;
-        clearInterval(ping);
-        void sub.unsubscribe().catch(() => undefined);
-        sub.disconnect();
+        cleanup();
         try {
           controller.close();
         } catch {
           /* already closed */
         }
       };
-      req.signal.addEventListener('abort', close);
+      if (req.signal.aborted) return onAbort();
+      req.signal.addEventListener('abort', onAbort);
+      // Padding so proxies flush the first bytes at once.
+      send(`:${' '.repeat(2048)}\n`);
+      send('retry: 2000\n\n');
+      send(`data: ${JSON.stringify({ type: 'ready' })}\n\n`);
+      try {
+        const off = await subscribeChat(ensureRedis, keys.chatChannel(code), (raw) => {
+          let push: ChatPush;
+          try {
+            push = JSON.parse(raw) as ChatPush;
+          } catch {
+            return;
+          }
+          if (!push?.message || !chatVisibleTo(push, { isTeacher, participantId })) return;
+          send(`data: ${JSON.stringify({ type: 'message', message: push.message })}\n\n`);
+        });
+        if (closed) off();
+        else unsubscribe = off;
+      } catch (e) {
+        console.warn('chat subscribe', e);
+      }
+      // Under Caddy/LB idle timeouts (and keeps NAT mappings alive).
+      if (!closed) ping = setInterval(() => send(': ping\n\n'), 15000);
+    },
+    cancel() {
+      cleanup();
     },
   });
   return new Response(stream, {
@@ -86,6 +100,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
     },
   });
 }

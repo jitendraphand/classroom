@@ -16,10 +16,23 @@
 
 {
 	# email admin@example.com
+	servers {
+		timeouts {
+			read_body 30s
+			read_header 15s
+			# 0 = no write deadline, so long SSE streams are not cut.
+			write 0
+			idle 5m
+		}
+		keepalive_interval 30s
+	}
 }
 
 example.com {
-	encode zstd gzip
+	# Never compress SSE: the encoder buffers it and Caddy logs an
+	# incomplete response when the stream ends mid-chunk.
+	@compressible not path */messages/stream
+	encode @compressible zstd gzip
 	# Hashed build assets never change: cache for a year.
 	@immutable path /_next/static/*
 	header @immutable Cache-Control "public, max-age=31536000, immutable"
@@ -35,8 +48,10 @@ example.com {
 		health_uri /api/health
 		health_interval 10s
 		health_timeout 3s
+		# Upstream keepalive (55s) stays below Node's keepAliveTimeout (65s,
+		# cluster.js) so Caddy never reuses a socket Node is closing.
 		transport http {
-			keepalive 2m
+			keepalive 55s
 			keepalive_idle_conns 512
 			dial_timeout 10s
 			read_timeout 0
@@ -50,7 +65,7 @@ livekit.example.com {
 	reverse_proxy 127.0.0.1:7880 {
 		flush_interval -1
 		transport http {
-			keepalive 2m
+			keepalive 55s
 			keepalive_idle_conns 256
 			dial_timeout 10s
 			read_timeout 0

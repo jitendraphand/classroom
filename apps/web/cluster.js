@@ -54,7 +54,7 @@ function workerPlan() {
 }
 
 function patchHttpTimeouts() {
-  // Keepalive must outlive Caddy's (default 60s) or Caddy reuses a closing socket
+  // Keepalive must outlive Caddy's upstream keepalive (infra/Caddyfile: 55s) or Caddy reuses a closing socket
   // and the client sees a 502. headersTimeout must be > keepAliveTimeout.
   const keepAlive = positiveInt(process.env.NODE_KEEPALIVE_MS, 65_000);
   const headersTimeout = positiveInt(process.env.NODE_HEADERS_TIMEOUT_MS, 66_000);
@@ -65,6 +65,11 @@ function patchHttpTimeouts() {
     server.keepAliveTimeout = keepAlive;
     server.headersTimeout = headersTimeout;
     server.maxHeadersCount = maxHeaders;
+    // Node 18+ kills any request after requestTimeout (default 300 s), which
+    // cut the chat SSE stream every 5 minutes ("incomplete response" in
+    // Caddy). Long-lived streams are bounded by keepalive pings instead.
+    server.requestTimeout = 0;
+    server.timeout = 0;
     return server;
   };
 }
