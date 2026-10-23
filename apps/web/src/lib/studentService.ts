@@ -1,3 +1,4 @@
+import { JoinTokenError } from './schoolJwt';
 import { isSecondDevice } from './deviceTakeover';
 import { takeOverSeat } from './deviceTakeoverServer';
 import type { ClassSession, Room, Student } from '@prisma/client';
@@ -35,6 +36,36 @@ type StudentStore = {
  * update name / grade / division (e.g. promotion to a new grade). Optional
  * fields (roll, email, phone) are only overwritten when the link carries them.
  */
+/**
+ * Item 9: STUDENT_REGISTRY=open (old behaviour: any SID creates a student),
+ * strict (only SIDs already on the list), or auto (default: strict as soon as
+ * the admin has imported a student list, open before that).
+ */
+export type StudentRegistryMode = 'open' | 'strict' | 'auto';
+export function studentRegistryModeFromEnv(env: Record<string, string | undefined> = process.env): StudentRegistryMode {
+  const v = (env.STUDENT_REGISTRY || 'auto').trim().toLowerCase();
+  return v === 'open' || v === 'strict' ? v : 'auto';
+}
+
+type RegistryStore = {
+  student: {
+    findUnique: (a: { where: { externalId: string }; select: { id: true } }) => Promise<{ id: string } | null>;
+    findFirst: (a: { where: { source: string }; select: { id: true } }) => Promise<{ id: string } | null>;
+  };
+};
+
+/** Does this SID have to be on the list, and is it? Throws `unknown_student` when not. */
+export async function assertKnownStudent(
+  studentId: string,
+  mode: StudentRegistryMode = studentRegistryModeFromEnv(),
+  db: RegistryStore = prisma as unknown as RegistryStore,
+): Promise<void> {
+  if (mode === 'open') return;
+  if (await db.student.findUnique({ where: { externalId: studentId }, select: { id: true } })) return;
+  if (mode === 'auto' && !(await db.student.findFirst({ where: { source: 'import' }, select: { id: true } }))) return;
+  throw new JoinTokenError('unknown_student', 'sid');
+}
+
 export async function upsertStudentFromClaims(
   c: JoinClaims & { campus: string },
   db: StudentStore = prisma as unknown as StudentStore

@@ -32,7 +32,9 @@ export type JoinErrorCode =
   | 'unsigned_disabled'
   // No Campus in the link and the school has several (or no) campuses.
   | 'campus_required'
-  | 'rate_limited';
+  | 'rate_limited'
+  // The SID is not on the school's student list (STUDENT_REGISTRY).
+  | 'unknown_student';
 
 export class JoinTokenError extends Error {
   constructor(public code: JoinErrorCode, detail?: string) {
@@ -266,6 +268,10 @@ export const JOIN_ERROR_TEXT: Record<JoinErrorCode, { title: string; body: strin
   unsigned_disabled: {
     title: 'This link is not valid',
     body: 'This classroom only accepts secure links from the school app. Go back to the school app and tap "Join class" again.',
+  },
+  unknown_student: {
+    title: 'Student ID not recognised',
+    body: 'Your student ID is not on this school\'s student list, so you cannot join the class. Check the ID in the school app or ask your school office to add you.',
   },
   rate_limited: {
     title: 'Too many attempts',

@@ -10,7 +10,7 @@ import {
   schoolJoinModeFromEnv,
 } from '@/lib/schoolJoin';
 import { JoinTokenError, schoolJwtConfigFromEnv } from '@/lib/schoolJwt';
-import { upsertStudentFromClaims } from '@/lib/studentService';
+import { assertKnownStudent, upsertStudentFromClaims } from '@/lib/studentService';
 import { resolveJoinCampus } from '@/lib/campusLogic';
 import { loadCampuses } from '@/lib/campusMaster';
 import { resolveAppUrl } from '@/lib/url';
@@ -64,6 +64,7 @@ export async function GET(req: Request) {
     // No Campus in the link: the school's only campus (several → refused).
     const campus = resolveJoinCampus(claims.campus, await loadCampuses());
     if (!campus) throw new JoinTokenError('campus_required', 'campus');
+    await assertKnownStudent(claims.studentId);
     const student = await upsertStudentFromClaims({ ...claims, campus });
     // Shared devices: drop any previous student's class seat on this browser.
     await clearStudentCookie();
