@@ -58,7 +58,7 @@ import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { TEACHER_ABSENCE_GRACE_MS } from '@/lib/graceTimer';
 import { MIC_CAPTURE, keepShareAudio } from '@/lib/audioPolicy';
-import { STUCK_RECONNECT_MS, rejoinDelayMs, rejoinOutcome, shouldAutoRejoin } from '@/lib/rejoinPolicy';
+import { STUCK_RECONNECT_MS, classroomReconnectPolicy, isOwnStaleDuplicate, rejoinDelayMs, rejoinOutcome, shouldAutoRejoin } from '@/lib/rejoinPolicy';
 import { SESSION_CHECK_EVENT, SESSION_ENDED_EVENT, isEndedReason, loginHref } from '@/lib/sessionClient';
 import { useRoomState, type RosterInfo } from '@/hooks/useRoomState';
 import { compactViewport, studentChatBox, usePseudoFullscreen, useViewport } from '@/hooks/useStudentLayout';
@@ -2161,6 +2161,9 @@ function enqueueLocalPublish(task: () => Promise<void>): Promise<void> {
 const viewportW = () => (typeof window === 'undefined' ? 1280 : window.innerWidth);
 const viewportH = () => (typeof window === 'undefined' ? 800 : window.innerHeight);
 
+/** A share parked behind the whiteboard is really stopped after this long. */
+const PARK_MAX_MS = 20 * 60_000;
+
 function screenCaptureLive(pub?: LocalTrackPublication | null): boolean {
   const media = pub?.track?.mediaStreamTrack;
   return !!media && media.readyState !== 'ended';
@@ -3464,6 +3467,98 @@ function RoomInner({
   );
 
   /**
+   * Share ↔ whiteboard swap without a republish (load test: unpublishing the
+   * share in front of ~2,000 subscribers renegotiated every subscriber at once
+   * and set off a reconnect storm). Opening the board MUTES the screen
+   * publication and keeps the capture; going back to the share unmutes it. Only
+   * a mute flag travels to subscribers, no SDP renegotiation, and the LiveKit
+   * connection is never touched. A parked share is released (really
+   * unpublished) when the board closes some other way, when the capture ends,
+   * or after PARK_MAX_MS.
+   */
+  const parkedShareRef = useRef<{ timer: number } | null>(null);
+  const releaseParkedShare = useCallback(async () => {
+    const p = parkedShareRef.current;
+    if (!p) return;
+    parkedShareRef.current = null;
+    window.clearTimeout(p.timer);
+    if (!localParticipant) return;
+    stageSwitchRef.current = true;
+    try {
+      await enqueueLocalPublish(async () => {
+        try {
+          await localParticipant.setScreenShareEnabled(false);
+        } catch {
+          /* ignore */
+        }
+      });
+    } finally {
+      stageSwitchRef.current = false;
+    }
+    endShareSession();
+  }, [localParticipant, endShareSession]);
+
+  /** true = the share is parked (muted, still published); false = caller must unpublish. */
+  const parkShare = useCallback(async (): Promise<boolean> => {
+    if (!localParticipant || maskRef.current || parkedShareRef.current) return false;
+    const pub = localParticipant.getTrackPublication(Track.Source.ScreenShare);
+    if (!pub?.track || !screenCaptureLive(pub)) return false;
+    stageSwitchRef.current = true;
+    try {
+      await pub.mute();
+      await screenAudioRef.current?.track.mute().catch(() => undefined);
+    } catch {
+      return false;
+    } finally {
+      stageSwitchRef.current = false;
+    }
+    shareWantedRef.current = false;
+    attachShareSurface(null);
+    closeAllSideWindows();
+    setScreenOn(false);
+    setHudOpen(false);
+    parkedShareRef.current = { timer: window.setTimeout(() => void releaseParkedShare(), PARK_MAX_MS) };
+    const media = pub.track.mediaStreamTrack;
+    media?.addEventListener('ended', () => void releaseParkedShare(), { once: true });
+    void postStage('idle');
+    return true;
+  }, [localParticipant, attachShareSurface, releaseParkedShare, postStage]);
+
+  /**
+   * Called synchronously from the share click: true = the parked share is
+   * coming back (no getDisplayMedia). The controls window opens in the same
+   * turn so the user gesture is not spent.
+   */
+  const resumeParkedShare = useCallback((): boolean => {
+    const p = parkedShareRef.current;
+    if (!p || !localParticipant) return false;
+    const pub = localParticipant.getTrackPublication(Track.Source.ScreenShare);
+    if (!pub?.track || !screenCaptureLive(pub)) {
+      void releaseParkedShare();
+      return false;
+    }
+    parkedShareRef.current = null;
+    window.clearTimeout(p.timer);
+    const controlsPromise = beginShareControls();
+    void (async () => {
+      try {
+        await pub.unmute();
+        await screenAudioRef.current?.track.unmute().catch(() => undefined);
+      } catch (e) {
+        console.warn('resume share', e);
+      }
+      shareWantedRef.current = true;
+      setScreenOn(true);
+      setChatOpen(false);
+      setRosterOpen(false);
+      const controls = await controlsPromise.catch(() => null);
+      attachShareSurface(controls);
+      await postStage('screen');
+    })();
+    return true;
+  }, [localParticipant, releaseParkedShare, attachShareSurface, postStage]);
+
+  /**
    * The click fires getDisplayMedia and the controls window in the same turn,
    * before any await. Awaiting either one first spends the user gesture, and
    * the other call is rejected.
@@ -3490,6 +3585,7 @@ function RoomInner({
     }
 
     if (shareStartRef.current) return;
+    if (resumeParkedShare()) return;
 
     if (!canShareScreen()) {
       setHudNotice(screenShareErrorMessage(null));
@@ -3761,7 +3857,7 @@ function RoomInner({
       void postStage('idle');
     };
     media.addEventListener('ended', onMediaEnded);
-  }, [localParticipant, screenOn, isTeacher, postStage, endShareSession, attachShareSurface, room]);
+  }, [localParticipant, screenOn, isTeacher, postStage, endShareSession, attachShareSurface, room, resumeParkedShare]);
 
   async function leave() {
     // Student: show "You left" first (the server's removal from LiveKit would
@@ -3894,10 +3990,12 @@ function RoomInner({
     else void roomFetch(code, '/whiteboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'off' }) });
   }, [isTeacher, state, code]);
   const wbStopRef = useRef<(() => void) | null>(null);
-  const closeWhiteboard = useCallback(() => {
+  const closeWhiteboard = useCallback((opts?: { keepParkedShare?: boolean }) => {
     setWbOpen(false);
+    // Board closed without going back to the share: really stop the parked share.
+    if (!opts?.keepParkedShare) void releaseParkedShare();
     void roomFetch(code, '/whiteboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'off' }) });
-  }, [code]);
+  }, [code, releaseParkedShare]);
 
   // Waiting room toggle (per class session, saved on the server). Off admits
   // everyone waiting and lets new students straight in (still muted).
@@ -4274,7 +4372,7 @@ function RoomInner({
     onToggleCam: () => setCamOn((v) => !v),
     onToggleScreen: () => {
       // Screen share and whiteboard are exclusive: starting a share closes the board.
-      if (!screenOn && wbOpen) closeWhiteboard();
+      if (!screenOn && wbOpen) closeWhiteboard({ keepParkedShare: true });
       void toggleScreen();
     },
     whiteboardOn: wbOpen,
@@ -4290,20 +4388,27 @@ function RoomInner({
             setWbOpen(true);
             return;
           }
-          let opened = false;
-          const onUnpub = (pub: LocalTrackPublication) => {
-            if (pub?.source !== Track.Source.ScreenShare) return;
-            if (opened) return;
-            opened = true;
-            room.off(RoomEvent.LocalTrackUnpublished, onUnpub);
-            setWbOpen(true);
+          const unpublishThenOpen = () => {
+            let opened = false;
+            const onUnpub = (pub: LocalTrackPublication) => {
+              if (pub?.source !== Track.Source.ScreenShare) return;
+              if (opened) return;
+              opened = true;
+              room.off(RoomEvent.LocalTrackUnpublished, onUnpub);
+              setWbOpen(true);
+            };
+            room.on(RoomEvent.LocalTrackUnpublished, onUnpub);
+            void toggleScreen().finally(() => {
+              if (opened) return;
+              opened = true;
+              room.off(RoomEvent.LocalTrackUnpublished, onUnpub);
+              setWbOpen(true);
+            });
           };
-          room.on(RoomEvent.LocalTrackUnpublished, onUnpub);
-          void toggleScreen().finally(() => {
-            if (opened) return;
-            opened = true;
-            room.off(RoomEvent.LocalTrackUnpublished, onUnpub);
-            setWbOpen(true);
+          // Preferred: park the share (mute only, no republish / renegotiation).
+          void parkShare().then((parked) => {
+            if (parked) setWbOpen(true);
+            else unpublishThenOpen();
           });
         }
       : undefined,
@@ -5437,6 +5542,8 @@ export function ClassroomRoom({ code }: { code: string }) {
   const [connKey, setConnKey] = useState(0);
   const [rejoining, setRejoining] = useState(false);
   const rejoinRef = useRef<{ running: boolean; unmounted: boolean }>({ running: false, unmounted: false });
+  /** When this tab last (re)built its Room; see isOwnStaleDuplicate. */
+  const connectedAtRef = useRef<number | null>(null);
   useEffect(() => {
     const r = rejoinRef.current;
     r.unmounted = false;
@@ -5493,6 +5600,7 @@ export function ClassroomRoom({ code }: { code: string }) {
           return;
         }
         setTokenData(body);
+        connectedAtRef.current = Date.now();
         setConnKey((k) => k + 1);
         return;
       }
@@ -5510,6 +5618,8 @@ export function ClassroomRoom({ code }: { code: string }) {
         return;
       }
       if (reason === DisconnectReason.DUPLICATE_IDENTITY) {
+        // Our own previous connection being evicted by this tab's rejoin: not another device.
+        if (isOwnStaleDuplicate({ rejoining: rejoinRef.current.running, connectedAt: connectedAtRef.current, now: Date.now() })) return;
         if (!isTeacher) {
           setFinished((f) => f ?? 'replaced');
           setTokenData(null);
@@ -5829,6 +5939,8 @@ export function ClassroomRoom({ code }: { code: string }) {
         adaptiveStream: { pauseVideoInBackground: false, pixelDensity: subscriberPixelDensity() },
         // Publishers stop encoding simulcast layers nobody is receiving.
         dynacast: true,
+        // Jittered exponential backoff: a mass drop must not retry in lockstep.
+        reconnectPolicy: classroomReconnectPolicy(),
         // Per-track options in SelectivePublisher / screen share override these.
         publishDefaults: {
           simulcast: false,
