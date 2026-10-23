@@ -100,4 +100,8 @@ echo "[classroom] Starting Next.js (cluster, WEB_WORKERS=${WEB_WORKERS:-auto})..
 if [ "$#" -gt 0 ]; then
   exec "$@"
 fi
-exec node cluster.js
+# Lower the web workers' CPU priority below LiveKit on a shared box. Raising
+# the nice value needs no privilege; failures fall back to normal priority.
+NICE_LEVEL="${WEB_NICE:-5}"
+case "$NICE_LEVEL" in ''|0|*[!0-9]*) exec node cluster.js ;; esac
+exec nice -n "$NICE_LEVEL" node cluster.js

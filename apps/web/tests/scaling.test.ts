@@ -36,6 +36,14 @@ test('webWorkerCount defaults to CPU count and caps to fit Postgres', () => {
   const explicit = webWorkerCount({ env: { WEB_WORKERS: '4' }, cpuCount: 32 });
   assert.equal(explicit.workers, 4);
   assert.equal(explicit.capped, false);
+  // 32-core A1: all cores, pool shrinks to fit instead of dropping workers.
+  const a1 = webWorkerCount({ env: {}, cpuCount: 32 });
+  assert.equal(a1.workers, 32);
+  assert.equal(a1.poolPerWorker, 8);
+  const a64 = webWorkerCount({ env: { WEB_WORKERS: 'auto' }, cpuCount: 64 });
+  assert.equal(a64.workers, 64);
+  assert.equal(a64.poolPerWorker, 4);
+  assert.ok(a64.workers * a64.poolPerWorker <= DEFAULT_POSTGRES_MAX_CONNECTIONS - POSTGRES_HEADROOM);
 });
 
 test('withPoolParams appends connection_limit and pool_timeout once', () => {

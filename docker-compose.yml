@@ -66,7 +66,7 @@ services:
       - --port
       - "6379"
       - --maxmemory
-      - ${REDIS_MAXMEMORY:-192mb}
+      - ${REDIS_MAXMEMORY:-1gb}
       - --maxmemory-policy
       - allkeys-lru
       - --tcp-keepalive
@@ -90,6 +90,10 @@ services:
     image: livekit/livekit-server:v1.13.9
     restart: unless-stopped
     network_mode: host
+    # Media first on a shared box: under CPU contention LiveKit gets 8× the
+    # web workers' share (Docker default is 1024). Idle cores are still used
+    # by everyone; this only decides who wins when all cores are busy.
+    cpu_shares: 8192
     command: ["--config", "/etc/livekit.yaml"]
     ulimits:
       nofile:
@@ -115,6 +119,8 @@ services:
         NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
     restart: unless-stopped
     network_mode: host
+    # Lower CPU weight than LiveKit (cpu_shares 8192), plus WEB_NICE below.
+    cpu_shares: 512
     env_file:
       - .env
     # Admin bootstrap password file (gitignored ./secrets, mode 700, owned by the
@@ -136,9 +142,12 @@ services:
       NODE_ENV: production
       PORT: "3000"
       HOSTNAME: "0.0.0.0"
-      # Empty = CPU count, capped to fit POSTGRES_MAX_CONNECTIONS (cluster.js).
-      WEB_WORKERS: ${WEB_WORKERS:-}
-      DB_POOL_PER_WORKER: ${DB_POOL_PER_WORKER:-8}
+      # auto = one worker per CPU; the Prisma pool per worker shrinks to fit
+      # POSTGRES_MAX_CONNECTIONS (cluster.js / src/lib/webWorkers.ts).
+      WEB_WORKERS: ${WEB_WORKERS:-auto}
+      DB_POOL_PER_WORKER: ${DB_POOL_PER_WORKER:-auto}
+      # Web workers run at this nice level so LiveKit stays ahead (0 = off).
+      WEB_NICE: ${WEB_NICE:-5}
       DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-10}
       POSTGRES_MAX_CONNECTIONS: ${POSTGRES_MAX_CONNECTIONS:-280}
     ulimits:

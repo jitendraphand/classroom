@@ -17,10 +17,12 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 
+// Mirrors src/lib/webWorkers.ts (tests/scaling.test.ts checks both agree).
 const DEFAULT_POOL = 8;
+const MIN_AUTO_POOL = 3;
 const DEFAULT_MAX_CONN = 280;
 const HEADROOM = 24;
-const MAX_WORKERS = 64;
+const MAX_WORKERS = 128;
 
 function positiveInt(raw, fallback) {
   if (raw == null || String(raw).trim() === '') return fallback;
@@ -28,21 +30,27 @@ function positiveInt(raw, fallback) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-function workerCount() {
-  const cpus = Math.max(1, os.cpus().length);
-  const pool = Math.min(64, positiveInt(process.env.DB_POOL_PER_WORKER, DEFAULT_POOL));
+function isSet(v) {
+  return v != null && String(v).trim() !== '' && String(v).trim().toLowerCase() !== 'auto';
+}
+
+/** { workers, pool }: one worker per core; the Prisma pool shrinks to fit Postgres. */
+function workerPlan() {
+  const cpus = Math.max(1, (typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length) || 1);
   const maxConn = positiveInt(process.env.POSTGRES_MAX_CONNECTIONS, DEFAULT_MAX_CONN);
-  const fit = Math.max(1, Math.floor((maxConn - HEADROOM) / pool));
-  const explicit = process.env.WEB_WORKERS != null && String(process.env.WEB_WORKERS).trim() !== '';
+  const budget = Math.max(1, maxConn - HEADROOM);
+  const explicit = isSet(process.env.WEB_WORKERS);
   let n = explicit ? positiveInt(process.env.WEB_WORKERS, cpus) : cpus;
   n = Math.max(1, Math.min(MAX_WORKERS, n));
+  const pool = isSet(process.env.DB_POOL_PER_WORKER)
+    ? Math.min(64, positiveInt(process.env.DB_POOL_PER_WORKER, DEFAULT_POOL))
+    : Math.max(MIN_AUTO_POOL, Math.min(DEFAULT_POOL, Math.floor(budget / n)));
+  const fit = Math.max(1, Math.floor(budget / pool));
   if (!explicit && n > fit) {
-    console.warn(
-      `[classroom] capping WEB_WORKERS ${n} → ${fit} so ${fit}×${pool} Prisma pools fit max_connections=${maxConn}`
-    );
+    console.warn(`[classroom] capping WEB_WORKERS ${n} → ${fit} so ${fit}×${pool} Prisma pools fit max_connections=${maxConn}`);
     n = fit;
   }
-  return n;
+  return { workers: n, pool };
 }
 
 function patchHttpTimeouts() {
@@ -71,11 +79,14 @@ function startWorker() {
   require(standalone);
 }
 
-const n = workerCount();
+const plan = workerPlan();
+const n = plan.workers;
 const port = process.env.PORT || '3000';
+// Workers read DB_POOL_PER_WORKER (src/lib/dbUrl.ts): hand them the computed size.
+process.env.DB_POOL_PER_WORKER = String(plan.pool);
 
 if (cluster.isPrimary && n > 1) {
-  console.log(`[classroom] primary ${process.pid} starting ${n} web workers on :${port}`);
+  console.log(`[classroom] primary ${process.pid} starting ${n} web workers on :${port} (Prisma pool ${plan.pool} each)`);
   for (let i = 0; i < n; i++) cluster.fork();
   cluster.on('exit', (worker, code, signal) => {
     if (worker.exitedAfterDisconnect) return;

@@ -111,8 +111,10 @@ export const ERROR_FIELDS: Record<string, string> = {
 };
 
 /**
- * Per-IP fixed window for /join (no secrets needed). Generous by default
- * because a whole school can sit behind one NAT address. Fails open.
+ * Optional per-IP fixed window for /join. OFF by default: a whole school (up
+ * to ~2,000 students) can sit behind one NAT address and join within a minute,
+ * so the hardware is the only limit. Set JOIN_RATE_LIMIT_PER_MINUTE > 0 to
+ * turn it on. Fails open.
  */
 export async function joinRateLimited(
   ip: string,
@@ -132,5 +134,5 @@ export async function joinRateLimited(
 
 export function joinRateLimitFromEnv(env: Record<string, string | undefined> = process.env): number {
   const n = Number(env.JOIN_RATE_LIMIT_PER_MINUTE);
-  return Number.isFinite(n) && env.JOIN_RATE_LIMIT_PER_MINUTE?.trim() ? Math.max(0, Math.floor(n)) : 120;
+  return Number.isFinite(n) && env.JOIN_RATE_LIMIT_PER_MINUTE?.trim() ? Math.max(0, Math.floor(n)) : 0;
 }

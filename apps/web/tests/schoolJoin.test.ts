@@ -224,7 +224,8 @@ test('per-IP join rate limit (fixed window, fails open)', async () => {
   assert.equal(await joinRateLimited('5.6.7.8', redis, 3), false);
   const broken = { incr: async () => { throw new Error('down'); }, expire: async () => 1 };
   assert.equal(await joinRateLimited('1.2.3.4', broken, 3), false);
-  assert.equal(joinRateLimitFromEnv({}), 120);
+  assert.equal(joinRateLimitFromEnv({}), 0);
+  assert.equal(joinRateLimitFromEnv({ JOIN_RATE_LIMIT_PER_MINUTE: '120' }), 120);
   assert.equal(joinRateLimitFromEnv({ JOIN_RATE_LIMIT_PER_MINUTE: '0' }), 0);
 });
 
