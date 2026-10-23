@@ -82,6 +82,27 @@ function startWorker() {
     process.exit(1);
   }
   require(standalone);
+  watchMemory();
+}
+
+// A worker whose RSS passes WEB_WORKER_MAX_RSS_MB (default: 35% of RAM / workers, 512–1536; 0 = off)
+// asks the primary to replace it: a fresh worker starts first, then the old
+// one stops taking connections and drains. One recycle at a time, so a slow
+// leak never takes capacity down. The heap cap (WEB_WORKER_HEAP_MB) is the
+// hard stop if a leak outruns this check.
+function watchMemory() {
+  const limitMb = Number.parseInt(process.env.WEB_WORKER_MAX_RSS_MB || '1536', 10);
+  if (!cluster.isWorker || !(limitMb > 0) || typeof process.send !== 'function') return;
+  let asked = false;
+  const t = setInterval(() => {
+    const rssMb = process.memoryUsage.rss() / 1048576;
+    if (!asked && rssMb > limitMb) {
+      asked = true;
+      console.warn(`[classroom] worker ${process.pid} rss ${Math.round(rssMb)} MB > ${limitMb} MB; asking to recycle`);
+      process.send({ type: 'classroom:recycle' });
+    }
+  }, 30_000 + Math.floor(Math.random() * 10_000));
+  t.unref();
 }
 
 const plan = workerPlan();
@@ -92,7 +113,31 @@ process.env.DB_POOL_PER_WORKER = String(plan.pool);
 
 if (cluster.isPrimary && n > 1) {
   console.log(`[classroom] primary ${process.pid} starting ${n} web workers on :${port} (Prisma pool ${plan.pool} each)`);
+  // Memory budget: all web workers together get ~35% of RAM by default
+  // (LiveKit, Postgres and Redis need the rest), 512–1536 MB per worker.
+  const autoRss = Math.max(512, Math.min(1536, Math.floor((os.totalmem() / 1048576) * 0.35 / n)));
+  if (!process.env.WEB_WORKER_MAX_RSS_MB) process.env.WEB_WORKER_MAX_RSS_MB = String(autoRss);
+  const heapMb = positiveInt(process.env.WEB_WORKER_HEAP_MB, Math.max(384, Math.floor(autoRss * 0.75)));
+  console.log(`[classroom] per-worker memory: recycle above ${process.env.WEB_WORKER_MAX_RSS_MB} MB RSS, heap cap ${heapMb} MB`);
+  cluster.setupPrimary({ execArgv: [...process.execArgv, `--max-old-space-size=${heapMb}`] });
   for (let i = 0; i < n; i++) cluster.fork();
+  let recycling = false;
+  cluster.on('message', (worker, msg) => {
+    if (!msg || msg.type !== 'classroom:recycle' || recycling) return;
+    recycling = true;
+    const fresh = cluster.fork();
+    fresh.once('listening', () => {
+      worker.disconnect();
+      const kill = setTimeout(() => worker.process.kill('SIGTERM'), 60_000);
+      worker.once('exit', () => {
+        clearTimeout(kill);
+        recycling = false;
+      });
+    });
+    fresh.once('exit', () => {
+      recycling = false;
+    });
+  });
   cluster.on('exit', (worker, code, signal) => {
     if (worker.exitedAfterDisconnect) return;
     console.error(`[classroom] worker ${worker.process.pid} stopped (${signal || code}); restarting`);

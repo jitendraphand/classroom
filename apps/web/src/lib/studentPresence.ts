@@ -42,6 +42,15 @@ function armHeartbeatWatch(code: string, identity: string) {
   heartbeatWatches.set(key, { reconnecting, stale });
 }
 
+function clearHeartbeatWatch(code: string, identity: string) {
+  const key = watchKey(code, identity);
+  const w = heartbeatWatches.get(key);
+  if (!w) return;
+  clearTimeout(w.reconnecting);
+  clearTimeout(w.stale);
+  heartbeatWatches.delete(key);
+}
+
 async function nudgeIfHeartbeatPhase(code: string, identity: string, want: 'reconnecting' | 'gone') {
   try {
     const view = await studentRosterPresence(code);
@@ -52,6 +61,22 @@ async function nudgeIfHeartbeatPhase(code: string, identity: string, want: 'reco
   } catch {
     /* Redis blip: the teacher's slow poll still refreshes. */
   }
+}
+
+// Timers are bucketed per room per second, not one pair per leave: 2,000
+// students leaving at the bell used to create 4,000 timers (each a nudge).
+// Each leaver is still covered: its bucket fires just after its own grace.
+const goneNudges = new Set<string>();
+function scheduleGoneNudge(code: string, now = Date.now()) {
+  const due = Math.ceil((now + STUDENT_GONE_GRACE_MS) / 1000) * 1000;
+  const key = `${code}\0${due}`;
+  if (goneNudges.has(key)) return;
+  goneNudges.add(key);
+  setTimeout(() => {
+    goneNudges.delete(key);
+    nudgeRoomState(code, 'teacher');
+    setTimeout(() => nudgeRoomState(code, 'teacher'), 1500).unref?.();
+  }, due - now).unref?.();
 }
 
 export async function recordStudentConnection(code: string, identity: string, kind: 'joined' | 'left', sid: string, at = Date.now()) {
@@ -67,9 +92,9 @@ export async function recordStudentConnection(code: string, identity: string, ki
   }
   await multi.exec();
   if (kind === 'left') {
+    clearHeartbeatWatch(code, identity);
     // The roster drops them once the grace has passed: tell the teacher then.
-    setTimeout(() => nudgeRoomState(code, 'teacher'), STUDENT_GONE_GRACE_MS).unref?.();
-    setTimeout(() => nudgeRoomState(code, 'teacher'), STUDENT_GONE_GRACE_MS + 1500).unref?.();
+    scheduleGoneNudge(code);
   } else {
     armHeartbeatWatch(code, identity);
     nudgeRoomState(code, 'teacher');

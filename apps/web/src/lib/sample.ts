@@ -107,6 +107,10 @@ function enqueueSampleSync(roomCode: string, before: string[], after: string[]) 
       if (sampleChanged(before, after)) nudgeRoomState(roomCode, 'all');
     });
   livekitSyncTail.set(roomCode, job);
+  // Drop the tail once it is the last job, so ended rooms do not stay in the map.
+  void job.then(() => {
+    if (livekitSyncTail.get(roomCode) === job) livekitSyncTail.delete(roomCode);
+  });
 }
 
 function sampleChanged(a: string[], b: string[]) {

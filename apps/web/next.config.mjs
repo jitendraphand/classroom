@@ -2,6 +2,9 @@
 const nextConfig = {
   output: 'standalone',
   reactStrictMode: true,
+  // Bound the per-worker in-memory ISR/fetch cache (default 50 MB × N workers;
+  // routes here are dynamic so it buys little).
+  cacheMaxMemorySize: 16 * 1024 * 1024,
   experimental: {
     serverActions: {
       bodySizeLimit: '2mb',
