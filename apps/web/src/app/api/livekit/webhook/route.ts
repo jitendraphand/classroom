@@ -14,6 +14,7 @@ import {
 import { handlePresenceEvent, parseLivekitRoomName } from '@/lib/teacherPresenceLogic';
 import { recordStudentConnection } from '@/lib/studentPresence';
 import { recordConnectionEvent } from '@/lib/attendanceService';
+import { HANDLED_WEBHOOK_EVENTS, KeyedWorkQueue, TtlCache } from '@/lib/webhookQueue';
 
 /** Event time from the webhook (seconds, int64), falling back to now if absent/odd. */
 function eventTime(createdAt: unknown): Date {
@@ -60,12 +61,74 @@ async function recordAttendance(event: {
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
+type QueuedEvent = {
+  event: string;
+  room: { name: string } | null;
+  participant: { identity: string; sid: string; metadata?: string; state?: number } | null;
+  createdAt?: unknown;
+};
+
+type RoomRow = { code: string; sessionId: string | null; status: string };
+/** One room lookup per room per 3 s, not one per student join (2,000 joins in a minute). */
+const roomCache = new TtlCache<RoomRow | null>(3_000, 500);
+async function findRoomCached(code: string) {
+  const hit = roomCache.get(code);
+  if (hit !== undefined) return hit;
+  const row = await prisma.room.findUnique({
+    where: { code },
+    select: { code: true, sessionId: true, status: true },
+  });
+  roomCache.set(code, row as RoomRow | null);
+  return row;
+}
+
+async function processEvent(event: QueuedEvent) {
+  if (event.event === 'room_finished' && event.room?.name) {
+    const parsed = parseLivekitRoomName(event.room.name);
+    if (parsed) roomCache.delete(parsed.code);
+  }
+  try {
+    await handlePresenceEvent(
+      { event: event.event, room: event.room, participant: event.participant },
+      {
+        findRoom: findRoomCached as Parameters<typeof handlePresenceEvent>[1]['findRoom'],
+        listParticipants: listRoomParticipants,
+        isTeacherPresent: (room) => isTeacherPresent(room.code, room),
+        recordPresence: (room, present) => recordTeacherPresence(room, present, 'webhook'),
+        applyStudentMicLock,
+        // 15 s grace before force-muting students when the teacher drops.
+        deferAbsence: deferTeacherAbsence,
+        cancelAbsence: cancelTeacherAbsence,
+        recordGrace: recordTeacherGrace,
+      }
+    );
+  } catch (e) {
+    console.error('LiveKit webhook handling failed', event.event, e instanceof Error ? e.message : e);
+  }
+  await recordAttendance(event);
+}
+
+const g = globalThis as unknown as { __lkWebhookQueue?: KeyedWorkQueue<QueuedEvent> };
+const queue = (g.__lkWebhookQueue ??= new KeyedWorkQueue<QueuedEvent>({
+  keyOf: (e) => e.room?.name ?? '',
+  handle: processEvent,
+  maxSize: Number(process.env.WEBHOOK_QUEUE_MAX) || 20_000,
+  batchSize: 64,
+  concurrency: Number(process.env.WEBHOOK_CONCURRENCY) || 16,
+  onDrop: (n) => console.warn(`[webhook] queue full, dropped ${n} oldest event(s)`),
+}));
+
 /**
  * LiveKit server webhook (configured in infra/livekit.yaml → webhook.urls).
  * Authenticated by the signed Authorization JWT + body sha256 that
  * WebhookReceiver verifies with the LiveKit API key/secret; exempt from the
  * browser CSRF guard (see lib/csrf.ts). Drives the "students are force-muted
- * while the teacher is not connected" rule.
+ * while the teacher is not connected" rule and attendance.
+ *
+ * Fast path: verify, enqueue, answer 200 immediately. Work runs in the
+ * background queue (lib/webhookQueue), so LiveKit's own webhook queue never
+ * backs up behind database writes. Events the classroom ignores
+ * (track_published, ...) are acked without queueing.
  */
 export async function POST(req: Request) {
   // Any registered media node may call (multi-server); each signs with its own key.
@@ -87,41 +150,19 @@ export async function POST(req: Request) {
   // Never echo why: bad signature, wrong key, tampered body.
   if (!event) return jsonError('Invalid webhook signature', 401);
 
-  try {
-    const outcome = await handlePresenceEvent(
-      {
-        event: event.event,
-        room: event.room ? { name: event.room.name } : null,
-        participant: event.participant
-          ? {
-              identity: event.participant.identity,
-              sid: event.participant.sid,
-              metadata: event.participant.metadata,
-              state: event.participant.state,
-            }
-          : null,
-      },
-      {
-        findRoom: (code) =>
-          prisma.room.findUnique({
-            where: { code },
-            select: { code: true, sessionId: true, status: true },
-          }),
-        listParticipants: listRoomParticipants,
-        isTeacherPresent: (room) => isTeacherPresent(room.code, room),
-        recordPresence: (room, present) => recordTeacherPresence(room, present, 'webhook'),
-        applyStudentMicLock,
-        // 15 s grace before force-muting students when the teacher drops.
-        deferAbsence: deferTeacherAbsence,
-        cancelAbsence: cancelTeacherAbsence,
-        recordGrace: recordTeacherGrace,
-      }
-    );
-    await recordAttendance(event);
-    return jsonOk({ ok: true, ...outcome });
-  } catch (e) {
-    console.error('LiveKit webhook handling failed', event.event, e instanceof Error ? e.message : e);
-    // 500 makes LiveKit retry the delivery.
-    return jsonError('Webhook handling failed', 500);
-  }
+  if (!HANDLED_WEBHOOK_EVENTS.has(event.event)) return jsonOk({ ok: true, queued: false });
+  queue.push({
+    event: event.event,
+    room: event.room ? { name: event.room.name } : null,
+    participant: event.participant
+      ? {
+          identity: event.participant.identity,
+          sid: event.participant.sid,
+          metadata: event.participant.metadata,
+          state: event.participant.state,
+        }
+      : null,
+    createdAt: event.createdAt,
+  });
+  return jsonOk({ ok: true, queued: true });
 }

@@ -34,6 +34,22 @@ webhook:
   api_key: __LIVEKIT_API_KEY__
   urls:
     - __LIVEKIT_WEBHOOK_URL__
+  # Load test 2026-10-22: 2,000 joins into one room overflowed the per-room
+  # webhook queue (default max_depth 200) -> "failed to notify webhook: queue
+  # is full". The web handler now acks at once and queues internally, and only
+  # the events it uses are sent at all.
+  resource_url_notifier:
+    max_depth: 10000
+    max_age: 120s
+  url_notifier:
+    num_workers: 32
+    queue_size: 10000
+  filter_params:
+    include_events:
+      - participant_joined
+      - participant_left
+      - participant_connection_aborted
+      - room_finished
 logging:
   level: info
 room:
@@ -63,6 +79,8 @@ room:
   departure_timeout: 10
   # 0 = unlimited. Capacity is ports, CPU and egress, not this flag.
   max_participants: 0
+# No other caps: livekit-server has no room-count limit, and limit.num_tracks /
+# limit.bytes_per_sec default to unlimited, so they are deliberately not set.
 
 # TURN relay for students behind strict firewalls / UDP-blocked networks.
 # TURN/TLS on 5349 uses the certificate Caddy obtained for the LiveKit host
