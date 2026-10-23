@@ -7,7 +7,7 @@ import { formatAudience } from './grades';
 import { prismaOccurrenceKeys, pickSessionForOccurrence } from './occurrenceRuns';
 import { formatHHMM, localDateOf, localMinuteOf } from './schedule';
 import { occurrencesForDate } from './scheduleService';
-import { attendanceRatio, averageAttendance, enrolledStudents } from './sessionStats';
+import { averageAttendance, sessionAttendance } from './sessionStats';
 import { appTimeZone } from './schoolConfig';
 import { latestRank } from './rankingService';
 
@@ -100,7 +100,8 @@ export async function adminPerformance(url: URL) {
   const grades = [...new Set(sessions.map((s) => s.grade))];
   const pupils = grades.length
     ? await prisma.student.findMany({
-        where: { grade: { in: grades } },
+        // Not filtered by the raw grade string: "5" and "Grade 5" are the same
+        // grade to audienceIncludes (normalised), but not to SQL.
         select: { id: true, campus: true, grade: true, division: true, createdAt: true, deletedAt: true },
       })
     : [];
@@ -115,8 +116,7 @@ export async function adminPerformance(url: URL) {
   for (const t of teachers) {
     const mine = sessions.filter((s) => s.teacherId === t.id);
     const ratios = mine.map((cs) => {
-      const present = cs.attendance.filter((a) => a.admittedAt).length;
-      return attendanceRatio(present, enrolledStudents(cs, pupils).length);
+      return sessionAttendance(cs, pupils).ratio;
     });
     const ratings: number[] = [];
     for (const cs of mine) {
