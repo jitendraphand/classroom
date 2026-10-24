@@ -56,6 +56,14 @@ class ScreenMaskProcessor : VideoProcessor {
     @Volatile
     var enabled: Boolean = true
 
+    /**
+     * Share paused (teacher back in the class screen): frames are dropped
+     * before any conversion or encoding, while the MediaProjection and its
+     * foreground service stay alive so resuming needs no new consent.
+     */
+    @Volatile
+    var paused: Boolean = false
+
     @Volatile
     var marginPx: Int = 24
 
@@ -76,7 +84,7 @@ class ScreenMaskProcessor : VideoProcessor {
      * display → buffer mapping is exact, then apply the adaptation.
      */
     override fun onFrameCaptured(frame: VideoFrame, parameters: VideoProcessor.FrameAdaptationParameters) {
-        if (parameters.drop) return
+        if (parameters.drop || paused) return
         val masked = maskedOrNull(frame) ?: run {
             if (needsMask(frame)) return // conversion failed: never leak the unmasked frame
             frame.retain()
@@ -95,6 +103,7 @@ class ScreenMaskProcessor : VideoProcessor {
     }
 
     override fun onFrameCaptured(frame: VideoFrame) {
+        if (paused) return
         val out = sink ?: return
         val masked = maskedOrNull(frame)
         if (masked == null) {

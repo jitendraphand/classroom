@@ -33,6 +33,9 @@ data class ToolbarState(
     val focusAlerts: Int = 0,
     /** Black box over the bubble in the share (off for an Android 14 single-app share). */
     val maskOn: Boolean = true,
+    /** Students asking to draw / drawing now (share ink). */
+    val drawRequests: Int = 0,
+    val drawing: Int = 0,
 )
 
 /**
@@ -41,7 +44,8 @@ data class ToolbarState(
  * waiting room, raised hands, new chat and not-fullscreen students, with a
  * short pulse whenever one of them goes up.
  *
- * Tap: back to the app (and, while sharing, stop the share).
+ * Tap: back to the app (while sharing, the share pauses; the capture stays
+ * granted so resuming needs no new consent).
  * Long-press: a mini menu (mic, open app and keep sharing, stop sharing).
  *
  * Its on-screen rect is reported on every layout / drag so
@@ -49,13 +53,16 @@ data class ToolbarState(
  */
 class FloatingToolbar(private val context: Context, private val listener: Listener) {
     interface Listener {
-        /** Tap: reopen the app; stop the share if one is running. */
+        /** Tap: reopen the app; pause the share if one is running. */
         fun onBubbleTap()
         fun onToggleMic()
         /** Mini menu: open the app but keep sharing. */
         fun onOpenApp()
         fun onStopShare()
         fun onMaskToggle(on: Boolean)
+        fun onAllowAllDraw()
+        fun onClearDrawing()
+        fun onStopDrawing()
         /** Screen rect of the bubble window (display px), or null when it is gone. */
         fun onRectChanged(rect: IntRect?)
     }
@@ -76,6 +83,9 @@ class FloatingToolbar(private val context: Context, private val listener: Listen
     private lateinit var micBtn: MaterialButton
     private lateinit var stopBtn: MaterialButton
     private lateinit var maskBtn: MaterialButton
+    private lateinit var allowDrawBtn: MaterialButton
+    private lateinit var clearDrawBtn: MaterialButton
+    private lateinit var stopDrawBtn: MaterialButton
 
     val isShowing: Boolean get() = root != null
 
@@ -138,20 +148,26 @@ class FloatingToolbar(private val context: Context, private val listener: Listen
         addBadge(R.drawable.ic_hand, s.hands, Palette.AMBER, "raised hands")
         addBadge(R.drawable.ic_chat, s.unreadChat, 0xFF3B82F6.toInt(), "new messages")
         addBadge(R.drawable.ic_bubble, s.focusAlerts, 0xFFF97316.toInt(), "not in fullscreen")
+        addBadge(R.drawable.ic_screen_share, s.drawRequests, 0xFFA78BFA.toInt(), "asking to draw")
         badgeRow.visibility = if (badgeRow.childCount > 0) View.VISIBLE else View.GONE
         val parts = buildList {
             if (s.waiting > 0) add("${s.waiting} waiting")
             if (s.hands > 0) add("${s.hands} hands raised")
             if (s.unreadChat > 0) add("${s.unreadChat} new messages")
             if (s.focusAlerts > 0) add("${s.focusAlerts} not in fullscreen")
+            if (s.drawRequests > 0) add("${s.drawRequests} asking to draw")
         }
-        pill.contentDescription = (if (s.sharing) "Sharing. Tap to stop and return to the class" else "Tap to return to the class") +
+        pill.contentDescription = (if (s.sharing) "Sharing. Tap to pause and return to the class" else "Tap to return to the class") +
             (if (parts.isEmpty()) "" else ". " + parts.joinToString(", ")) + ". Long-press for more."
         micBtn.text = if (s.micOn) "Mic off" else "Mic on"
         stopBtn.visibility = if (s.sharing) View.VISIBLE else View.GONE
         maskBtn.visibility = if (s.sharing) View.VISIBLE else View.GONE
+        allowDrawBtn.visibility = if (s.sharing && s.drawRequests > 0) View.VISIBLE else View.GONE
+        allowDrawBtn.text = "Allow all asking to draw (${s.drawRequests})"
+        clearDrawBtn.visibility = if (s.sharing && s.drawing > 0) View.VISIBLE else View.GONE
+        stopDrawBtn.visibility = if (s.sharing && s.drawing > 0) View.VISIBLE else View.GONE
         maskBtn.text = if (s.maskOn) "Hide bubble in share: on" else "Hide bubble in share: off"
-        if (pulse && (s.waiting > prev.waiting || s.hands > prev.hands || s.unreadChat > prev.unreadChat || s.focusAlerts > prev.focusAlerts)) {
+        if (pulse && (s.waiting > prev.waiting || s.hands > prev.hands || s.unreadChat > prev.unreadChat || s.focusAlerts > prev.focusAlerts || s.drawRequests > prev.drawRequests)) {
             pulse()
         }
         root?.post { reportRect() }
@@ -219,7 +235,7 @@ class FloatingToolbar(private val context: Context, private val listener: Listen
     private fun reportEstimate() {
         val p = params ?: return
         val w = dp(if (menuOpen) 220 else 200)
-        val h = if (menuOpen) dp(260) else dp(64)
+        val h = if (menuOpen) dp(420) else dp(64)
         listener.onRectChanged(IntRect(p.x, p.y, p.x + maxOf(w, root?.width ?: 0), p.y + maxOf(h, root?.height ?: 0)))
     }
 
@@ -283,6 +299,18 @@ class FloatingToolbar(private val context: Context, private val listener: Listen
             backgroundTintList = ColorStateList.valueOf(Palette.DANGER)
         }
         menu.addView(stopBtn)
+        allowDrawBtn = menuButton("Allow all asking to draw") { setMenu(false); listener.onAllowAllDraw() }.apply { visibility = View.GONE }
+        menu.addView(allowDrawBtn)
+        clearDrawBtn = menuButton("Clear drawing") { listener.onClearDrawing() }.apply {
+            visibility = View.GONE
+            backgroundTintList = ColorStateList.valueOf(Palette.SURFACE_2)
+        }
+        menu.addView(clearDrawBtn)
+        stopDrawBtn = menuButton("Stop student drawing") { setMenu(false); listener.onStopDrawing() }.apply {
+            visibility = View.GONE
+            backgroundTintList = ColorStateList.valueOf(Palette.SURFACE_2)
+        }
+        menu.addView(stopDrawBtn)
         maskBtn = menuButton("Hide bubble in share: on") { listener.onMaskToggle(!state.maskOn) }.apply {
             backgroundTintList = ColorStateList.valueOf(Palette.SURFACE_2)
         }

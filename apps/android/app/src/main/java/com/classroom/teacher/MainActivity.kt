@@ -49,6 +49,8 @@ import io.livekit.android.room.track.CameraPosition
 import io.livekit.android.room.track.CustomVideoPreset
 import io.livekit.android.room.track.LocalScreencastVideoTrack
 import io.livekit.android.room.track.LocalVideoTrack
+import io.livekit.android.room.track.LocalTrackPublication
+import io.livekit.android.room.track.DataPublishReliability
 import io.livekit.android.room.track.LocalVideoTrackOptions
 import io.livekit.android.room.track.Track
 import io.livekit.android.room.track.VideoCaptureParameter
@@ -63,6 +65,13 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.channels.Channel
 import org.json.JSONArray
+import org.json.JSONObject
+import com.classroom.teacher.wb.Doc
+import com.classroom.teacher.wb.Item
+import com.classroom.teacher.wb.Wb
+import com.classroom.teacher.wb.WbHost
+import com.classroom.teacher.wb.WbOps
+import com.classroom.teacher.wb.WhiteboardScreen
 
 /**
  * Teacher client for Android. Mobile browsers do not implement getDisplayMedia,
@@ -145,6 +154,31 @@ class MainActivity : AppCompatActivity() {
     private var toastJob: Job? = null
     private var waitingRoomOn = true
 
+    // Share pause (projection kept), spotlight, speaking queue, drawing.
+    private var sharePaused = false
+    private var keepSharingOnReturn = false
+    private var spotlightId: String? = null
+    private var spotlightName: String? = null
+    private var micQueue: List<ClassLogic.MicWaiter> = emptyList()
+    private val drawAllowed = HashMap<String, Long>()
+    private var inkStrokes: MutableList<Realtime.InkStroke> = ArrayList()
+    private var inkOverlay: InkOverlay? = null
+    private var chatMessages: List<JSONObject> = emptyList()
+    private var chatSince: String? = null
+    private var videoPanelSent: Boolean? = null
+    private val errorReporter = ErrorReporter()
+
+    // Whiteboard (this device hosts it).
+    private var wbHost: WbHost? = null
+    private var wbScreen: WhiteboardScreen? = null
+    private var wbServerOn = false
+    private var wbSaveJob: Job? = null
+    private var wbStoreJob: Job? = null
+    private var wbSavedVersion = -1
+    private var wbStoredVersion = -1
+    private var wbLastStore = 0L
+    private lateinit var railBoard: RailButton
+
     /** Display rotations / size changes reach the application even while this activity is in the background. */
     private val displayCallbacks = object : ComponentCallbacks {
         override fun onConfigurationChanged(newConfig: Configuration) {
@@ -207,6 +241,7 @@ class MainActivity : AppCompatActivity() {
             v.updatePadding(left = bars.left, top = bars.top, right = bars.right, bottom = bars.bottom)
             WindowInsetsCompat.CONSUMED
         }
+        installCrashReporter()
         buildClassScreen()
         applyResponsiveLayout()
 
@@ -255,26 +290,34 @@ class MainActivity : AppCompatActivity() {
         updateDisplaySize()
     }
 
-    /** Notification "back to class" while sharing: open the app and stop the share. */
+    /** Notification "back to class" while sharing: open the app and pause the share (capture stays granted). */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (intent.getBooleanExtra(EXTRA_STOP_SHARE, false)) {
             intent.removeExtra(EXTRA_STOP_SHARE)
-            if (sharing) lifecycleScope.launch { stopScreenShare() }
+            if (sharing && !sharePaused) lifecycleScope.launch { pauseShare() }
         }
     }
 
     override fun onStart() {
         super.onStart()
         appVisible = true
+        // Back in the app while sharing: pause (students would otherwise see
+        // this screen), unless the teacher chose "Open app (keep sharing)".
+        if (sharing && !sharePaused && !keepSharingOnReturn) lifecycleScope.launch { pauseShare() }
+        keepSharingOnReturn = false
         updateToolbar()
         renderVideos() // resubscribe the shown cameras
+        syncVideoPanel()
+        pollWake.trySend(Unit) // back to the visible poll cadence now
     }
 
     override fun onStop() {
         appVisible = false
         updateToolbar()
         renderVideos() // drops student camera subscriptions while hidden
+        syncVideoPanel()
+        flushWhiteboardSave()
         super.onStop()
     }
 
@@ -524,6 +567,14 @@ class MainActivity : AppCompatActivity() {
         visibleIdentities = emptyList()
         stickySpeakers.clear()
         speakingId = null
+        chatMessages = emptyList()
+        chatSince = null
+        videoPanelSent = null
+        spotlightId = null
+        spotlightName = null
+        micQueue = emptyList()
+        drawAllowed.clear()
+        inkStrokes = ArrayList()
         renderRail()
         renderVideos()
         lifecycleScope.launch {
@@ -553,6 +604,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 if (needsNotificationPermission()) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                syncVideoPanel()
                 startPolling()
             } catch (e: SessionEndedException) {
                 sessionEnded(e)
@@ -581,15 +633,23 @@ class MainActivity : AppCompatActivity() {
                     is RoomEvent.TrackPublished, is RoomEvent.TrackUnpublished,
                     is RoomEvent.TrackSubscribed, is RoomEvent.TrackUnsubscribed,
                     is RoomEvent.TrackMuted, is RoomEvent.TrackUnmuted,
-                    is RoomEvent.ParticipantConnected, is RoomEvent.ParticipantDisconnected,
+                    is RoomEvent.ParticipantDisconnected,
                     -> renderVideos()
-                    // Only the server sends these topics (participant == null).
-                    is RoomEvent.DataReceived -> if (event.participant == null) {
-                        when (event.topic) {
-                            STATE_TOPIC -> pollWake.trySend(Unit)
-                            CHAT_TOPIC -> { chatDue = true; pollWake.trySend(Unit) }
-                        }
+                    is RoomEvent.ParticipantConnected -> {
+                        renderVideos()
+                        // Late joiner: send the open whiteboard straight away.
+                        event.participant.identity?.value?.let { id -> wbHost?.sendSnapshot(listOf(id)) }
                     }
+                    is RoomEvent.Reconnecting -> {
+                        binding.classStatus.text = "Reconnecting…"
+                        showToast("Reconnecting…")
+                    }
+                    is RoomEvent.Reconnected -> {
+                        binding.classStatus.text = if (sharing && !sharePaused) "Sharing this device's screen with the class" else "In class · students join muted"
+                        wbHost?.sendSnapshot()
+                        pollWake.trySend(Unit)
+                    }
+                    is RoomEvent.DataReceived -> onData(event.participant?.identity?.value, event.topic, event.data)
                     else -> Unit
                 }
             }
@@ -759,19 +819,29 @@ class MainActivity : AppCompatActivity() {
                 maskProcessor,
             ) { lifecycleScope.launch { onShareStoppedBySystem() } }
             track.startForegroundService(Notifications.SHARE_ID, Notifications.screenShare(this))
+            maskProcessor.paused = false
             track.startCapture()
+            // Top layer ~2 Mbps at 15 fps; plus a 720p layer (~1 Mbps) so
+            // phones / weak links get a readable share (web screenShareSimulcastFor).
+            val low = Realtime.shareLowLayer(cw, ch)
             val ok = connected.localParticipant.publishVideoTrack(
                 track,
                 VideoTrackPublishOptions(
                     name = "screen",
-                    videoEncoding = VideoEncoding(1_500_000, 15),
-                    simulcast = false,
+                    videoEncoding = VideoEncoding(2_000_000, 15),
+                    simulcast = low != null,
                     source = Track.Source.SCREEN_SHARE,
+                    simulcastLayers = if (low != null) {
+                        listOf(CustomVideoPreset(VideoCaptureParameter(low.first, low.second, 15, true), VideoEncoding(1_000_000, 15)))
+                    } else {
+                        emptyList()
+                    },
                 ),
             )
             if (!ok) throw ApiException("Screen share did not start (state: ${connected.state.name.lowercase()})")
             screenTrack = track
             sharing = true
+            sharePaused = false
             renderRail()
             updateToolbar()
             binding.classStatus.text = "Sharing this device's screen with the class"
@@ -787,7 +857,8 @@ class MainActivity : AppCompatActivity() {
             // Give the teacher time to read the hint when there is no bubble.
             delay(if (bubble) 350 else 3000)
             if (sharing) moveTaskToBack(true)
-            withContext(Dispatchers.IO) { api?.stage(code, "screen") }
+            startInk()
+            withContext(Dispatchers.IO) { api?.stage(code, "screen", desktopInk = inkOverlay?.shown == true) }
         } catch (e: SessionEndedException) {
             sessionEnded(e)
         } catch (e: CancellationException) {
@@ -826,8 +897,11 @@ class MainActivity : AppCompatActivity() {
             screenTrack = null
             disposeScreenTrack(it, room, unpublish = true)
         }
+        maskProcessor.paused = false
+        stopInk()
         val was = sharing
         sharing = false
+        sharePaused = false
         renderRail()
         updateToolbar()
         if (room != null) binding.classStatus.text = "Screen share stopped"
@@ -1013,9 +1087,8 @@ class MainActivity : AppCompatActivity() {
             b.setOnClickListener { onClick() }
             rail.addView(b, LinearLayout.LayoutParams(dp(52), dp(52)).apply { topMargin = dp(gapBefore) })
         }
-        railShare = add(R.drawable.ic_screen_share, "Share screen", 0) {
-            if (sharing) lifecycleScope.launch { stopScreenShare() } else requestScreenShare()
-        }
+        railShare = add(R.drawable.ic_screen_share, "Share screen", 0) { onShareButton() }
+        railBoard = add(R.drawable.ic_board, "Whiteboard") { if (wbHost != null) showWhiteboardView() else openWhiteboard() }
         railMic = add(R.drawable.ic_mic_off, "Turn microphone on") { ensureMicThenToggle() }
         railCamera = add(R.drawable.ic_videocam_off, "Turn camera on") { ensureCameraThenToggle() }
         railSwitch = add(R.drawable.ic_cameraswitch, "Switch camera") { switchCamera() }
@@ -1076,6 +1149,7 @@ class MainActivity : AppCompatActivity() {
             width = (minOf(420, maxOf(300, (cfg.screenWidthDp * 0.36f).toInt())) * resources.displayMetrics.density).toInt()
         }
         panelKind?.let { placePanel() }
+        wbScreen?.setCompact(windowClass() == WindowClass.COMPACT)
     }
 
     private fun ensurePanel(): ClassPanel = panel ?: ClassPanel(this, panelListener).also { panel = it }
@@ -1146,16 +1220,35 @@ class MainActivity : AppCompatActivity() {
             showToast(if (on) "Waiting room on: you admit each student." else "Waiting room off: students enter directly, muted.")
             studentAction("Could not change the waiting room") { it.setWaitingRoom(code, on) }
         }
+        override fun onSpotlight(participantId: String?) = studentAction("Could not change the spotlight") { it.spotlight(code, participantId) }
+        override fun onDrawAllow(participantId: String) {
+            if (!canAllowDraw()) return showError("Share your screen or the whiteboard first")
+            studentAction("Could not allow drawing") { it.draw(code, "allow", participantId) }
+        }
+        override fun onDrawDeny(participantId: String) = studentAction("Could not answer the request") { it.draw(code, "revoke", participantId) }
+        override fun onDrawRevoke(participantId: String?) = studentAction("Could not stop the drawing") { it.draw(code, "revoke", participantId) }
+        override fun onDrawClear() = studentAction("Could not clear the drawing") { it.draw(code, "clear") }
     }
 
     private fun renderRosterPanel() {
         val p = panel ?: return
         if (panelKind != ClassPanel.Kind.ROSTER) return
-        p.renderRoster(waitingList, students, pinsFull = students.count { it.pinned } >= maxVisible, waitingRoomOn = waitingRoomOn)
+        p.renderRoster(
+            ClassPanel.Roster(
+                waiting = waitingList,
+                students = students,
+                pinsFull = students.count { it.pinned } >= maxVisible,
+                waitingRoomOn = waitingRoomOn,
+                spotlightId = spotlightId,
+                spotlightName = spotlightName,
+                micQueue = micQueue,
+                canAllowDraw = canAllowDraw(),
+            ),
+        )
     }
 
     /** Run a teacher action against the API, then refresh the class state. */
-    private fun studentAction(errorText: String, block: (ClassroomApi) -> Unit) {
+    private fun studentAction(errorText: String, admitting: Boolean = false, block: (ClassroomApi) -> Unit) {
         val client = api ?: return
         lifecycleScope.launch {
             try {
@@ -1164,12 +1257,13 @@ class MainActivity : AppCompatActivity() {
             } catch (e: SessionEndedException) {
                 sessionEnded(e)
             } catch (e: Exception) {
-                showError(e.message ?: errorText)
+                if (admitting && (e as? ApiException)?.status == 409) showError(Realtime.classFullMessage(e.message))
+                else showError(e.message ?: errorText)
             }
         }
     }
 
-    private fun admitOne(participantId: String) = studentAction("Could not admit") { it.admit(code, participantId) }
+    private fun admitOne(participantId: String) = studentAction("Could not admit", admitting = true) { it.admit(code, participantId) }
 
     private fun pinStudent(participantId: String, pinned: Boolean) {
         if (pinned && students.count { it.pinned } >= maxVisible) {
@@ -1186,11 +1280,13 @@ class MainActivity : AppCompatActivity() {
             menu.add(0, 1, 0, if (s.pinned) "Unpin ${s.name}" else "Pin ${s.name} (keep in view)")
             menu.add(0, 2, 1, if (s.muted) "Unmute ${s.name}" else "Mute ${s.name}")
             if (s.handRaised) menu.add(0, 3, 2, "Lower hand")
+            menu.add(0, 4, 3, if (spotlightId == s.id) "Stop spotlight" else "Spotlight ${s.name}")
             setOnMenuItemClickListener { item ->
                 when (item.itemId) {
                     1 -> pinStudent(s.id, !s.pinned)
                     2 -> panelListener.onMuteStudent(s.id, !s.muted)
                     3 -> panelListener.onLowerHand(s.id)
+                    4 -> panelListener.onSpotlight(if (spotlightId == s.id) null else s.id)
                 }
                 true
             }
@@ -1202,10 +1298,23 @@ class MainActivity : AppCompatActivity() {
     private fun renderRail() {
         if (!::railShare.isInitialized) return
         val connected = room != null && room?.state == Room.State.CONNECTED
-        railShare.setIcon(if (sharing) R.drawable.ic_stop_screen_share else R.drawable.ic_screen_share)
-        railShare.label = if (sharing) "Stop sharing" else "Share screen"
-        railShare.setStyle(if (sharing) RailButton.Style.DANGER else RailButton.Style.NEUTRAL)
+        railShare.setIcon(if (sharing && !sharePaused) R.drawable.ic_stop_screen_share else R.drawable.ic_screen_share)
+        railShare.label = when {
+            sharing && sharePaused -> "Share paused. Tap to resume or stop"
+            sharing -> "Sharing. Tap to pause or stop"
+            else -> "Share screen"
+        }
+        railShare.setStyle(
+            when {
+                sharing && sharePaused -> RailButton.Style.OFF_WARN
+                sharing -> RailButton.Style.DANGER
+                else -> RailButton.Style.NEUTRAL
+            },
+        )
         railShare.isEnabled = connected || sharing
+        railBoard.setStyle(if (wbHost != null) RailButton.Style.ACTIVE else RailButton.Style.NEUTRAL)
+        railBoard.label = if (wbHost != null) "Whiteboard open. Tap to show it" else "Open the whiteboard"
+        railBoard.isEnabled = connected || wbHost != null
         railMic.setIcon(if (micOn) R.drawable.ic_mic else R.drawable.ic_mic_off)
         railMic.label = if (micOn) "Microphone on. Tap to mute" else "Microphone off. Tap to speak"
         railMic.setStyle(if (micOn) RailButton.Style.ON else RailButton.Style.OFF_WARN)
@@ -1219,7 +1328,7 @@ class MainActivity : AppCompatActivity() {
         railChat.setStyle(if (panelKind == ClassPanel.Kind.CHAT) RailButton.Style.ACTIVE else RailButton.Style.NEUTRAL)
         railChat.setBadge(unreadChat, 0xFF3B82F6.toInt())
         railRoster.setStyle(if (panelKind == ClassPanel.Kind.ROSTER) RailButton.Style.ACTIVE else RailButton.Style.NEUTRAL)
-        railRoster.setBadge(waitingList.size + handsRaised)
+        railRoster.setBadge(waitingList.size + handsRaised + students.count { it.drawRequested && !it.drawing })
         railMuteAll.isEnabled = room != null
         railAllowUnmute.isEnabled = room != null
         val canOverlay = Settings.canDrawOverlays(this)
@@ -1230,6 +1339,7 @@ class MainActivity : AppCompatActivity() {
         }
         railBubble.setStyle(if (canOverlay && toolbarWanted) RailButton.Style.ACTIVE else RailButton.Style.NEUTRAL)
         railBubble.setBadge(if (canOverlay) 0 else 1, Palette.DANGER)
+        renderBoardButtons()
     }
 
     private fun onSpeakers(speakers: List<Participant>) {
@@ -1292,13 +1402,15 @@ class MainActivity : AppCompatActivity() {
         }
         // Keep a stable rotation order; new publishers join at the end.
         rotationOrder = rotationOrder.filter { it in pool } + pool.filter { it !in rotationOrder }.shuffled()
-        val pins = ClassLogic.pinOrder(students)
+        val spot = students.firstOrNull { it.id == spotlightId }?.identity
+        val pins = listOfNotNull(spot) + ClassLogic.pinOrder(students).filter { it != spot }
         val shown = ClassLogic.pickTiles(pool, pins, speakingId, stickySpeakers, rotationOrder, ClassLogic.STUDENT_TILES)
         // Subscribe only to the shown cameras, at the lowest layer.
         for ((id, _) in byIdentity) {
             val pub = cameraPub(id) ?: continue
             // In the background (e.g. sharing another app) receive no student video.
-            val want = appVisible && id in shown
+            // Nor while the whiteboard covers the tiles.
+            val want = appVisible && wbScreen?.visibility != View.VISIBLE && id in shown
             try {
                 if (pub.subscribed != want) pub.setSubscribed(want)
                 if (want) pub.setVideoQuality(VideoQuality.LOW)
@@ -1322,6 +1434,8 @@ class MainActivity : AppCompatActivity() {
             val info = students.firstOrNull { it.identity == id }
             val p = byIdentity[id]
             val chip = when {
+                info?.reconnecting == true -> "Reconnecting"
+                id == spot -> "Spotlight"
                 info?.handRaised == true -> "✋ Hand up"
                 info?.focus == "away" -> "Switched away"
                 info?.focus == "left" -> "Not fullscreen"
@@ -1376,8 +1490,8 @@ class MainActivity : AppCompatActivity() {
 
     private val toolbarListener = object : FloatingToolbar.Listener {
         override fun onBubbleTap() {
-            // Back to the class; while sharing this also stops the share.
-            if (sharing) lifecycleScope.launch { stopScreenShare() }
+            // Back to the class; a running share pauses in onStart (the
+            // capture stays granted, so resuming needs no new prompt).
             openAppWith(null)
         }
 
@@ -1386,7 +1500,10 @@ class MainActivity : AppCompatActivity() {
             toggleMic()
         }
 
-        override fun onOpenApp() = openAppWith(null)
+        override fun onOpenApp() {
+            keepSharingOnReturn = sharing && !sharePaused
+            openAppWith(null)
+        }
 
         override fun onStopShare() {
             lifecycleScope.launch { stopScreenShare() }
@@ -1396,6 +1513,15 @@ class MainActivity : AppCompatActivity() {
             maskProcessor.enabled = on
             renderToolbar()
         }
+
+        override fun onAllowAllDraw() {
+            val ids = students.filter { it.drawRequested && !it.drawing }.map { it.id }
+            studentAction("Could not allow drawing") { c -> ids.forEach { c.draw(code, "allow", it) } }
+        }
+
+        override fun onClearDrawing() = studentAction("Could not clear the drawing") { it.draw(code, "clear") }
+
+        override fun onStopDrawing() = studentAction("Could not stop the drawing") { it.draw(code, "revoke") }
 
         override fun onRectChanged(rect: IntRect?) {
             updateDisplaySize()
@@ -1419,7 +1545,7 @@ class MainActivity : AppCompatActivity() {
     /** Shown while sharing, or in class while the app is in the background; gone otherwise. */
     private fun updateToolbar() {
         val inClass = room != null
-        val want = toolbarWanted && Settings.canDrawOverlays(this) && inClass && (sharing || !appVisible)
+        val want = toolbarWanted && Settings.canDrawOverlays(this) && inClass && ((sharing && !sharePaused) || !appVisible)
         if (!want) {
             toolbar?.hide()
             maskProcessor.maskRect = null
@@ -1438,13 +1564,15 @@ class MainActivity : AppCompatActivity() {
         if (!bar.isShowing) return
         bar.render(
             ToolbarState(
-                sharing = sharing,
+                sharing = sharing && !sharePaused,
                 micOn = micOn,
                 waiting = waitingList.size,
                 hands = handsRaised,
                 unreadChat = unreadChat,
                 focusAlerts = focusAlerts,
                 maskOn = maskProcessor.enabled,
+                drawRequests = students.count { it.drawRequested && !it.drawing },
+                drawing = students.count { it.drawing },
             ),
         )
     }
@@ -1477,7 +1605,8 @@ class MainActivity : AppCompatActivity() {
             } catch (e: SessionEndedException) {
                 sessionEnded(e)
             } catch (e: Exception) {
-                showError(e.message ?: "Could not admit students")
+                if ((e as? ApiException)?.status == 409) showError(Realtime.classFullMessage(e.message))
+                else showError(e.message ?: "Could not admit students")
             }
         }
     }
@@ -1508,6 +1637,7 @@ class MainActivity : AppCompatActivity() {
     private suspend fun endClass() {
         try {
             if (sharing) stopScreenShare()
+            closeWhiteboard(clearSave = true)
             withContext(Dispatchers.IO) { api?.end(code) }
         } catch (e: SessionEndedException) {
             return sessionEnded(e)
@@ -1521,6 +1651,7 @@ class MainActivity : AppCompatActivity() {
     private suspend fun leaveClass() {
         try {
             if (sharing) stopScreenShare()
+            saveWhiteboardLocal() // the board stays on for the class; reopened from this copy on rejoin
             withContext(Dispatchers.IO) { api?.leave(code) }
         } catch (_: Exception) {
         }
@@ -1541,6 +1672,12 @@ class MainActivity : AppCompatActivity() {
         }
         setMic(false)
         sharing = false
+        sharePaused = false
+        stopInk()
+        closeWhiteboardView()
+        wbHost = null
+        wbSaveJob?.cancel()
+        wbStoreJob?.cancel()
         renderRail()
         updateToolbar()
         waitingList = emptyList()
@@ -1548,6 +1685,8 @@ class MainActivity : AppCompatActivity() {
         rotationJob?.cancel()
         closePanel()
         chatIds = emptyList()
+        chatMessages = emptyList()
+        chatSince = null
         lastSeenChatId = null
         unreadChat = 0
     }
@@ -1582,7 +1721,9 @@ class MainActivity : AppCompatActivity() {
                     binding.classStatus.text = "Reconnecting to the server…"
                 }
                 tick++
-                withTimeoutOrNull(if (live) LIVE_POLL_MS else FAST_POLL_MS) { pollWake.receive() }
+                // 2 s while pushes cannot arrive, 5 s safety net while they can,
+                // 30 s in the background (pushes still wake it at once).
+                withTimeoutOrNull(Realtime.pollMs(appVisible, fast = !live)) { pollWake.receive() }
             }
         }
     }
@@ -1607,6 +1748,15 @@ class MainActivity : AppCompatActivity() {
         focusAlerts = students.count { it.focusAlert }
         maxVisible = state.optInt("maxVisibleVideos", ClassLogic.STUDENT_TILES).coerceIn(1, 6)
         waitingRoomOn = state.optBoolean("waitingRoomOn", true)
+        val spot = state.optJSONObject("spotlight")
+        spotlightId = spot?.optString("participantId")?.takeIf { it.isNotBlank() }
+        spotlightName = spot?.optString("name")?.takeIf { it.isNotBlank() }
+        micQueue = ClassLogic.parseMicQueue(state.optJSONArray("micQueue"))
+        val now = System.currentTimeMillis()
+        drawAllowed.entries.removeAll { it.value < now }
+        wbServerOn = state.optBoolean("whiteboard")
+        // The board is on for the class but not open here (app restarted): reopen it from the local copy.
+        if (wbServerOn && wbHost == null && !wbClosing) openWhiteboard(fromServerState = true)
         val vis = state.optJSONArray("visibleIdentities") ?: JSONArray()
         visibleIdentities = (0 until vis.length()).map { vis.optString(it) }
         // Students muted by the teacher drop their sticky speaker slot.
@@ -1638,8 +1788,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private suspend fun refreshChat() {
-        val payload = withContext(Dispatchers.IO) { api?.messages(code) } ?: return
-        val messages = payload.optJSONArray("messages") ?: JSONArray()
+        val payload = withContext(Dispatchers.IO) { api?.messages(code, chatSince) } ?: return
+        val freshArr = payload.optJSONArray("messages") ?: JSONArray()
+        val fresh = (0 until freshArr.length()).mapNotNull { freshArr.optJSONObject(it) }
+        // Only newer messages come back (5 s overlap): merge by id, keep the last 500.
+        chatMessages = Realtime.mergeById(chatMessages, fresh, { m -> m.optString("id").ifBlank { "${m.optString("createdAt")}:${m.optString("body").hashCode()}" } })
+        chatMessages.lastOrNull()?.optString("createdAt")?.takeIf { it.isNotBlank() }?.let { chatSince = it }
+        if (fresh.isEmpty() && chatIds.isNotEmpty()) return
+        val messages = JSONArray(chatMessages)
         val lines = buildString {
             for (i in 0 until messages.length()) {
                 val m = messages.getJSONObject(i)
@@ -1679,6 +1835,7 @@ class MainActivity : AppCompatActivity() {
         listOf(binding.loginGroup, binding.homeGroup, binding.handoffGroup)
             .forEach { it.visibility = if (it === group) View.VISIBLE else View.GONE }
         val inClass = group === binding.classScreen
+        if (!inClass) closeWhiteboardView()
         binding.classScreen.visibility = if (inClass) View.VISIBLE else View.GONE
         binding.scroll.visibility = if (inClass) View.GONE else View.VISIBLE
         if (!inClass) closePanel()
@@ -1705,6 +1862,392 @@ class MainActivity : AppCompatActivity() {
     private fun clearError() {
         binding.errorText.text = ""
     }
+
+    // ---- Share pause / resume ---------------------------------------------
+    //
+    // The MediaProjection grant and the foreground service live as long as the
+    // capture track, so pausing only drops frames (ScreenMaskProcessor.paused)
+    // and mutes the publication: going back to the share never re-prompts.
+
+    private fun onShareButton() {
+        if (!sharing) return requestScreenShare()
+        val items = if (sharePaused) arrayOf("Resume sharing", "Stop sharing") else arrayOf("Pause sharing (stay in the app)", "Stop sharing")
+        AlertDialog.Builder(this)
+            .setTitle(if (sharePaused) "Screen share paused" else "Sharing your screen")
+            .setItems(items) { _, which ->
+                lifecycleScope.launch {
+                    when {
+                        which == 1 -> stopScreenShare()
+                        sharePaused -> resumeShare()
+                        else -> pauseShare()
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun screenPublication() = room?.localParticipant?.getTrackPublication(Track.Source.SCREEN_SHARE) as? LocalTrackPublication
+
+    private suspend fun pauseShare() {
+        if (!sharing || sharePaused) return
+        sharePaused = true
+        maskProcessor.paused = true
+        try {
+            screenPublication()?.muted = true
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "mute share", e)
+        }
+        stopInk()
+        binding.classStatus.text = "Share paused · students see the class view"
+        renderRail()
+        updateToolbar()
+        try {
+            withContext(Dispatchers.IO) { api?.stage(code, "idle") }
+        } catch (_: Exception) {
+        }
+    }
+
+    private suspend fun resumeShare() {
+        if (!sharing || !sharePaused) return
+        sharePaused = false
+        maskProcessor.paused = false
+        try {
+            screenPublication()?.muted = false
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "unmute share", e)
+        }
+        binding.classStatus.text = "Sharing this device's screen with the class"
+        renderRail()
+        moveTaskToBack(true)
+        updateToolbar()
+        startInk()
+        try {
+            withContext(Dispatchers.IO) { api?.stage(code, "screen", desktopInk = inkOverlay?.shown == true) }
+        } catch (_: Exception) {
+        }
+    }
+
+    // ---- Student ink on the share -------------------------------------------
+
+    /** Show allowed students' ink over the shared screen (burned into the capture, so students fade their copy). */
+    private fun startInk() {
+        val o = inkOverlay ?: InkOverlay(applicationContext).also { inkOverlay = it }
+        if (!o.available) return
+        o.show()
+        o.update(inkStrokes)
+        val c = api ?: return
+        val cc = code
+        lifecycleScope.launch {
+            try {
+                val st = withContext(Dispatchers.IO) { c.drawState(cc) }
+                inkStrokes = Realtime.parseInkStrokes(st.optJSONArray("strokes"))
+                inkOverlay?.update(inkStrokes)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun stopInk() {
+        inkOverlay?.hide()
+    }
+
+    private fun canAllowDraw() = (sharing && !sharePaused) || wbHost != null
+
+    private fun drawHolders(): Set<String> {
+        val now = System.currentTimeMillis()
+        return students.filter { it.drawing }.map { it.identity }.toSet() + drawAllowed.filterValues { it > now }.keys
+    }
+
+    /** Data packets: server pushes (no participant), student signals, ink and whiteboard packets. */
+    private fun onData(sender: String?, topic: String?, data: ByteArray) {
+        when (topic) {
+            STATE_TOPIC -> if (sender == null) pollWake.trySend(Unit)
+            CHAT_TOPIC -> if (sender == null) { chatDue = true; pollWake.trySend(Unit) }
+            Realtime.SIGNAL_TOPIC -> {
+                val s = Realtime.decodeSignal(data) ?: return
+                if (!Realtime.signalTrusted(s, sender)) return
+                if (s is Realtime.Signal.DrawAllow) {
+                    if (s.on) drawAllowed[s.identity] = s.until else drawAllowed.remove(s.identity)
+                }
+                if (s is Realtime.Signal.DrawReq && s.on && appVisible) showToast("A student asks to draw")
+                pollWake.trySend(Unit)
+            }
+            Realtime.DRAW_TOPIC -> {
+                if (!sharing) return
+                val o = try { JSONObject(String(data, Charsets.UTF_8)) } catch (_: Exception) { return }
+                val p = Realtime.decodeInk(o) ?: return
+                if (!Realtime.inkTrusted(p, sender)) return
+                if (p is Realtime.Ink.Pts && sender != null && sender !in drawHolders()) return
+                Realtime.applyInk(inkStrokes, p)
+                inkOverlay?.update(inkStrokes)
+            }
+            Wb.TOPIC -> {
+                val h = wbHost ?: return
+                if (h.receive(data, sender, drawHolders())) {
+                    wbScreen?.changed()
+                    scheduleWbSave()
+                }
+            }
+        }
+    }
+
+    /** Students see the teacher's camera panel only while the teacher is in the app and not on the board. */
+    private fun syncVideoPanel() {
+        val c = api ?: return
+        if (room == null) return
+        val want = appVisible && wbHost == null && !(sharing && !sharePaused)
+        if (videoPanelSent == want) return
+        videoPanelSent = want
+        val cc = code
+        lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) { c.videoPanel(cc, want) }
+            } catch (_: Exception) {
+                if (videoPanelSent == want) videoPanelSent = null
+            }
+        }
+    }
+
+    // ---- Whiteboard ---------------------------------------------------------
+
+    private var wbClosing = false
+    private fun wbFile() = java.io.File(filesDir, "whiteboard-${code.uppercase()}.json")
+
+    private fun openWhiteboard(fromServerState: Boolean = false) {
+        val r = room ?: return
+        if (wbHost != null) return showWhiteboardView()
+        val saved = try { wbFile().takeIf { it.exists() }?.readText() } catch (_: Exception) { null }
+        val doc = WbHost.restore(saved) ?: Doc.empty()
+        val host = WbHost(doc) { packets, to -> sendWb(r, packets, to) }
+        wbHost = host
+        wbSavedVersion = host.version
+        wbStoredVersion = -1
+        wbLastStore = 0L
+        if (sharing && !sharePaused) lifecycleScope.launch { pauseShare() }
+        showWhiteboardView()
+        val c = api
+        val cc = code
+        lifecycleScope.launch {
+            if (!fromServerState) {
+                try {
+                    withContext(Dispatchers.IO) { c?.whiteboard(cc, "on") }
+                } catch (e: Exception) {
+                    showError(e.message ?: "Could not open the whiteboard for the class")
+                }
+            }
+            // Students may still be loading the board: send it a few times.
+            for (d in longArrayOf(0, 500, 1000)) {
+                delay(d)
+                if (wbHost !== host) return@launch
+                host.sendSnapshot()
+            }
+            storeWhiteboard(force = true)
+        }
+        syncVideoPanel()
+        renderRail()
+    }
+
+    private fun showWhiteboardView() {
+        val host = wbHost ?: return
+        val screen = wbScreen ?: WhiteboardScreen(this, boardListener).also { wbScreen = it }
+        screen.host = host
+        screen.board.me = "teacher"
+        if (screen.parent == null) {
+            // Under the panels / toast so chat and the roster still open over the board.
+            binding.classScreen.addView(screen, 1, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        screen.visibility = View.VISIBLE
+        screen.setCompact(windowClass() == WindowClass.COMPACT)
+        screen.changed()
+        renderBoardButtons()
+        renderVideos() // drops student video under the board
+    }
+
+    /** Remove the board view (the session itself ends in [closeWhiteboard]). */
+    private fun closeWhiteboardView() {
+        wbScreen?.let { (it.parent as? ViewGroup)?.removeView(it) }
+        wbScreen = null
+    }
+
+    private fun closeWhiteboard(clearSave: Boolean) {
+        val had = wbHost != null
+        wbHost = null
+        wbSaveJob?.cancel()
+        wbStoreJob?.cancel()
+        closeWhiteboardView()
+        if (clearSave) try { wbFile().delete() } catch (_: Exception) {}
+        if (had) {
+            wbClosing = true
+            val c = api
+            val cc = code
+            lifecycleScope.launch {
+                try {
+                    withContext(Dispatchers.IO) { c?.whiteboard(cc, "off") }
+                } catch (_: Exception) {
+                }
+                wbClosing = false
+            }
+        }
+        renderVideos()
+        syncVideoPanel()
+        renderRail()
+    }
+
+    private fun sendWb(r: Room, packets: List<ByteArray>, to: List<String>?) {
+        lifecycleScope.launch {
+            for (b in packets) {
+                try {
+                    r.localParticipant.publishData(
+                        b,
+                        DataPublishReliability.RELIABLE,
+                        Wb.TOPIC,
+                        to?.map { Participant.Identity(it) } ?: emptyList(),
+                    )
+                } catch (e: Exception) {
+                    android.util.Log.w(TAG, "wb send", e)
+                }
+            }
+        }
+    }
+
+    /** Local copy debounced 3 s; server copy at most every 5 s (late joiners, other devices). */
+    private fun scheduleWbSave() {
+        val h = wbHost ?: return
+        if (h.version == wbSavedVersion && h.version == wbStoredVersion) return
+        if (wbSaveJob?.isActive != true) {
+            wbSaveJob = lifecycleScope.launch {
+                delay(3000)
+                saveWhiteboardLocal()
+            }
+        }
+        if (wbStoreJob?.isActive != true) {
+            wbStoreJob = lifecycleScope.launch {
+                delay(maxOf(0L, 5000L - (System.currentTimeMillis() - wbLastStore)))
+                storeWhiteboard(force = false)
+            }
+        }
+    }
+
+    private suspend fun saveWhiteboardLocal() {
+        val h = wbHost ?: return
+        if (h.version == wbSavedVersion) return
+        val v = h.version
+        val json = h.doc.toJson().toString()
+        val f = wbFile()
+        withContext(Dispatchers.IO) {
+            try {
+                val tmp = java.io.File(f.parentFile, f.name + ".tmp")
+                tmp.writeText(json)
+                tmp.renameTo(f)
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "wb save", e)
+            }
+        }
+        wbSavedVersion = v
+    }
+
+    private fun flushWhiteboardSave() {
+        if (wbHost == null) return
+        lifecycleScope.launch { saveWhiteboardLocal() }
+    }
+
+    private suspend fun storeWhiteboard(force: Boolean) {
+        val h = wbHost ?: return
+        if (!force && h.version == wbStoredVersion) return
+        val v = h.version
+        val packets = withContext(Dispatchers.Default) { WbHost.storable(h.snapshotPackets()) }
+        wbLastStore = System.currentTimeMillis()
+        if (packets == null) return // too big for the server copy; students still get live snapshots
+        try {
+            withContext(Dispatchers.IO) { api?.whiteboard(code, "snap", packets) }
+            wbStoredVersion = v
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun renderBoardButtons() {
+        val s = wbScreen ?: return
+        s.micButton.setIcon(if (micOn) R.drawable.ic_mic else R.drawable.ic_mic_off)
+        s.micButton.setStyle(if (micOn) RailButton.Style.ON else RailButton.Style.OFF_WARN)
+        s.micButton.label = if (micOn) "Microphone on. Tap to mute" else "Microphone off. Tap to speak"
+        s.chatButton.setBadge(unreadChat, 0xFF3B82F6.toInt())
+        s.rosterButton.setBadge(waitingList.size + handsRaised + students.count { it.drawRequested && !it.drawing })
+    }
+
+    private val boardListener = object : WhiteboardScreen.Listener {
+        override fun onCloseBoard() {
+            AlertDialog.Builder(this@MainActivity)
+                .setTitle("Close the whiteboard?")
+                .setMessage("Students go back to the class view. The board is not kept after you close it.")
+                .setPositiveButton("Close board") { _, _ -> closeWhiteboard(clearSave = true) }
+                .setNeutralButton("Hide (keep it open)") { _, _ ->
+                    wbScreen?.visibility = View.GONE
+                    renderVideos()
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
+        override fun onBoardMic() = ensureMicThenToggle()
+        override fun onBoardChat() = togglePanel(ClassPanel.Kind.CHAT)
+        override fun onBoardRoster() = togglePanel(ClassPanel.Kind.ROSTER)
+        override fun onBoardText(x: Int, y: Int) {
+            val host = wbHost ?: return
+            val input = android.widget.EditText(this@MainActivity).apply { hint = "Text"; maxLines = 4 }
+            AlertDialog.Builder(this@MainActivity)
+                .setTitle("Add text")
+                .setView(input)
+                .setPositiveButton("Add") { _, _ ->
+                    val t = input.text.toString().trim().take(500)
+                    if (t.isEmpty()) return@setPositiveButton
+                    val pg = host.doc.pages[host.doc.cur]
+                    val size = maxOf(24, (wbScreen?.board?.penWidth ?: 4) * 8)
+                    host.local(listOf(WbOps.add(pg.id, Item.Text(Wb.newId("t"), "teacher", wbScreen?.board?.color ?: "#111111", size, x, y, t))))
+                    wbScreen?.changed()
+                    scheduleWbSave()
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
+        override fun onBoardChanged() = scheduleWbSave()
+    }
+
+    // ---- Window size classes (Material: compact < 600dp ≤ medium < 840dp ≤ expanded) ----
+
+    private enum class WindowClass { COMPACT, MEDIUM, EXPANDED }
+
+    private fun windowClass(): WindowClass = ClassLogic.windowClass(resources.configuration.screenWidthDp).let {
+        when (it) { 0 -> WindowClass.COMPACT; 1 -> WindowClass.MEDIUM; else -> WindowClass.EXPANDED }
+    }
+
+    // ---- Crash reports ------------------------------------------------------
+
+    /** Uncaught exceptions go to /api/client-error (scrubbed, ≤ 5 a minute, each once), then to the default handler. */
+    private fun installCrashReporter() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        if (previous is CrashHandler) return
+        Thread.setDefaultUncaughtExceptionHandler(CrashHandler(previous))
+    }
+
+    private inner class CrashHandler(private val previous: Thread.UncaughtExceptionHandler?) : Thread.UncaughtExceptionHandler {
+        override fun uncaughtException(t: Thread, e: Throwable) {
+            try { reportError(e, wait = true) } catch (_: Throwable) {}
+            previous?.uncaughtException(t, e)
+        }
+    }
+
+    private fun reportError(e: Throwable, wait: Boolean = false) {
+        val c = api ?: return
+        val key = e.javaClass.name + ":" + (e.stackTrace.firstOrNull()?.toString() ?: "")
+        if (!errorReporter.admit(key)) return
+        val ua = "ClassroomTeacher-Android/${BuildConfig.VERSION_NAME} (Android ${android.os.Build.VERSION.RELEASE}; SDK ${android.os.Build.VERSION.SDK_INT}; ${android.os.Build.MODEL})"
+        val body = ErrorReporter.payload(e, code, "android://teacher/${if (room != null) "class" else "home"}", ua)
+        // Never network on the crashing (possibly main) thread; wait briefly so the report leaves before the process dies.
+        val th = Thread { try { c.clientError(body) } catch (_: Exception) {} }
+        th.start()
+        if (wait) th.join(2500)
+    }
+
 
     companion object {
         private const val TAG = "ClassroomTeacher"

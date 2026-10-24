@@ -115,6 +115,13 @@ object ClassLogic {
 
     data class MicWaiter(val id: String, val name: String, val position: Int)
 
+    /** Material window size class by width: 0 compact (< 600dp), 1 medium (< 840dp), 2 expanded. */
+    fun windowClass(widthDp: Int): Int = when {
+        widthDp < 600 -> 0
+        widthDp < 840 -> 1
+        else -> 2
+    }
+
     fun parseMicQueue(arr: JSONArray?): List<MicWaiter> {
         if (arr == null) return emptyList()
         return (0 until arr.length()).mapNotNull { i ->

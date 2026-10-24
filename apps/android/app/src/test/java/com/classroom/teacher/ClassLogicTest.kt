@@ -58,4 +58,13 @@ class ClassLogicTest {
         )
         assertEquals(listOf("Bob", "Amy", "Cat", "abe", "Zed"), sorted.map { it.name })
     }
+
+    @Test
+    fun windowClassBreakpoints() {
+        assertEquals(0, ClassLogic.windowClass(360))
+        assertEquals(0, ClassLogic.windowClass(599))
+        assertEquals(1, ClassLogic.windowClass(600))
+        assertEquals(1, ClassLogic.windowClass(839))
+        assertEquals(2, ClassLogic.windowClass(840))
+    }
 }
