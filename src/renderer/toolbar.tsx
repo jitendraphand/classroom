@@ -1,3 +1,5 @@
+import { installErrorReporter } from './errorReporter';
+installErrorReporter('toolbar');
 /**
  * Share controls: the same buttons, order, icons and labels as the website's
  * share HUD (TeacherShareHud): Live · mic · camera · videos · Video | chat ·

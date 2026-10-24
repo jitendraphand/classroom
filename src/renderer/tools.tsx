@@ -1,3 +1,5 @@
+import { installErrorReporter } from './errorReporter';
+installErrorReporter('tools');
 /**
  * Teacher share toolbar ("Annotate tools"): one compact grouped bar in its own
  * small, opaque, capture-EXCLUDED window (see WINDOW_CAPTURE_DECISIONS in

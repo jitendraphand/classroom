@@ -299,9 +299,14 @@ export type AdmittedPerson = {
   drawRequestedAt: number | null;
   /** Allowed to draw now. */
   drawing: boolean;
+  /** Server presence: dropped off LiveKit and may come back (web roster 'Reconnecting'). */
+  reconnecting?: boolean;
 };
 
 export type WaitingPerson = { id: string; displayName: string; createdAt: string | null; gradeDivision: string | null; late: boolean };
+
+export type SpotlightInfo = { participantId: string; identity: string; name: string };
+export type MicQueueEntry = { id: string; name: string; position: number };
 
 export type DrawHolderInfo = { participantId: string; identity: string; name: string; until: number };
 
@@ -324,6 +329,11 @@ export type RoomSnapshot = {
   drawHolders: DrawHolderInfo[];
   drawRequestCount: number;
   desktopInk: boolean;
+  /** One student whose camera the class sees (null = none). */
+  spotlight: SpotlightInfo | null;
+  /** Students waiting for an open mic slot (only when a mic limit is set). */
+  micQueue: MicQueueEntry[];
+  micLimit: number;
 };
 
 export function parseRoomState(data: unknown): RoomSnapshot | null {
@@ -353,6 +363,7 @@ export function parseRoomState(data: unknown): RoomSnapshot | null {
       drawRequested: p.drawRequested === true,
       drawRequestedAt: typeof p.drawRequestedAt === 'number' ? p.drawRequestedAt : null,
       drawing: p.drawing === true,
+      reconnecting: p.reconnecting === true,
     };
   });
   const waiting: WaitingPerson[] = waitingRaw.map((item) => {
@@ -392,7 +403,31 @@ export function parseRoomState(data: unknown): RoomSnapshot | null {
         : [],
     drawRequestCount: typeof d.drawRequestCount === 'number' ? d.drawRequestCount : admitted.filter((p) => p.drawRequested).length,
     desktopInk: d.desktopInk === true,
+    spotlight: parseSpotlight(d.spotlight),
+    micQueue: Array.isArray(d.micQueue) ? d.micQueue.map(parseMicQueueEntry).filter((q): q is MicQueueEntry => !!q) : [],
+    micLimit: typeof d.micLimit === 'number' && Number.isFinite(d.micLimit) ? d.micLimit : 0,
   };
+}
+
+function parseSpotlight(raw: unknown): SpotlightInfo | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const s = raw as Record<string, unknown>;
+  if (typeof s.participantId !== 'string' || !s.participantId) return null;
+  return { participantId: s.participantId, identity: typeof s.identity === 'string' ? s.identity : '', name: typeof s.name === 'string' ? s.name : 'Student' };
+}
+
+function parseMicQueueEntry(raw: unknown): MicQueueEntry | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const q = raw as Record<string, unknown>;
+  if (typeof q.id !== 'string' || !q.id) return null;
+  return { id: q.id, name: typeof q.name === 'string' ? q.name : 'Student', position: typeof q.position === 'number' ? q.position : 0 };
+}
+
+/** Admit answered 409: the class hit its seat limit (web CLASS_FULL_MESSAGE). */
+export function admitFailureNotice(status: number, data: unknown): string | null {
+  if (status !== 409) return null;
+  const err = data && typeof data === 'object' && typeof (data as { error?: unknown }).error === 'string' ? (data as { error: string }).error : '';
+  return `${err || 'This class is full.'} Remove a student or raise the class size limit to admit more.`;
 }
 
 function parseHolder(raw: unknown): DrawHolderInfo | null {
@@ -427,4 +462,11 @@ export function regionFrameRect(
   const x1 = Math.max(x0 + 2, Math.min(frame.width, Math.ceil(sx + sw)));
   const y1 = Math.max(y0 + 2, Math.min(frame.height, Math.ceil(sy + sh)));
   return { sx: x0, sy: y0, sw: x1 - x0, sh: y1 - y0 };
+}
+
+/** `/messages` after the first load asks only for newer rows (`?since`, web chatThread); the server overlaps a little and we merge by id. */
+export function chatPollSuffix(messages: { createdAt: string }[]): string {
+  let newest = '';
+  for (const m of messages) if (m.createdAt > newest && Number.isFinite(Date.parse(m.createdAt))) newest = m.createdAt;
+  return newest ? `/messages?since=${encodeURIComponent(newest)}` : '/messages';
 }

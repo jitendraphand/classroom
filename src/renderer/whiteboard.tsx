@@ -1,3 +1,5 @@
+import { installErrorReporter } from './errorReporter';
+installErrorReporter('whiteboard');
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { PanelSnapshot } from '../shared/actions';

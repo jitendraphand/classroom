@@ -1,3 +1,5 @@
+import { installErrorReporter } from './errorReporter';
+installErrorReporter('panel');
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { PanelSnapshot, TeacherAction } from '../shared/actions';

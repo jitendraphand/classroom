@@ -1,3 +1,5 @@
+import { installErrorReporter } from './errorReporter';
+installErrorReporter('annotate');
 /**
  * Transparent annotation overlay over the shared monitor. NOT capture-excluded
  * (REPORT.md "Window protection"): what is drawn here is in the share.

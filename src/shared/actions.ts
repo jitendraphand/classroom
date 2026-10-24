@@ -3,7 +3,7 @@
  * Structured-cloneable: no tracks, no functions.
  */
 
-import type { AdmittedPerson, ChatMessage, WaitingPerson } from './apiModel';
+import type { AdmittedPerson, ChatMessage, MicQueueEntry, SpotlightInfo, WaitingPerson } from './apiModel';
 import type { CaptureMode, ShareKind } from './capture';
 import type { SlotCount } from './classLogic';
 
@@ -60,6 +60,8 @@ export type PanelSnapshot = {
   devices: DeviceInfo[];
   micId: string;
   camId: string;
+  spotlight?: SpotlightInfo | null;
+  micQueue?: MicQueueEntry[];
 };
 
 export type TeacherAction =
@@ -77,6 +79,7 @@ export type TeacherAction =
   | { type: 'draw-clear' }
   | { type: 'admit'; id: string }
   | { type: 'admit-all' }
+  | { type: 'spotlight'; id: string | null }
   | { type: 'waiting-room'; on: boolean }
   | { type: 'mute-all'; muted: boolean }
   | { type: 'mute-one'; id: string; muted: boolean }

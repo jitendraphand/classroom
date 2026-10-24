@@ -1,3 +1,5 @@
+import { installErrorReporter } from './errorReporter';
+installErrorReporter('region');
 type Rect = { x: number; y: number; w: number; h: number };
 
 /**

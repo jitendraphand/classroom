@@ -1,3 +1,5 @@
+import { installErrorReporter } from './errorReporter';
+installErrorReporter('engine');
 import type { BootInfo, DisplayInfo, SourceInfo, TeacherAction } from '../shared/actions';
 import {
   adhocBody,

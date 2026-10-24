@@ -1,3 +1,5 @@
+import { installErrorReporter } from './errorReporter';
+installErrorReporter('videos');
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { videoGrid } from '../shared/classLogic';

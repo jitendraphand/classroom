@@ -169,6 +169,24 @@ export function RosterView({ snap, send, showLayout = false }: { snap: PanelSnap
           )}
         </div>
       )}
+      {(snap.micQueue?.length ?? 0) > 0 && (
+        <div className="mic-queue" data-testid="mic-queue">
+          <h3 className="mic-queue-title">Speaking queue</h3>
+          <ul>
+            {snap.micQueue!.map((q) => (
+              <li key={q.id} className="mic-queue-row">
+                <span className="roster-name">{q.name}</span>
+                <span className="roster-meta">waiting to speak</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {snap.spotlight && (
+        <p className="spotlight-line" data-testid="spotlight-line">
+          Spotlight: {snap.spotlight.name}
+        </p>
+      )}
       <label className="roster-search">
         <Icon name="search" size={13} />
         <input
@@ -197,14 +215,14 @@ export function RosterView({ snap, send, showLayout = false }: { snap: PanelSnap
         )}
         {students.length > 0 && shown.length === 0 && <li className="roster-none">No student matches “{query.trim()}”.</li>}
         {shown.map((p) => (
-          <RosterRow key={p.id} p={p} send={send} sharing={sharing} />
+          <RosterRow key={p.id} p={p} send={send} sharing={sharing} spotlit={snap.spotlight?.participantId === p.id} />
         ))}
       </ul>
     </div>
   );
 }
 
-function RosterRow({ p, send, sharing }: { p: AdmittedPerson; send: Send; sharing: boolean }) {
+function RosterRow({ p, send, sharing, spotlit = false }: { p: AdmittedPerson; send: Send; sharing: boolean; spotlit?: boolean }) {
   const raised = p.handRaised;
   const focus = focusLabel(p.focus);
   return (
@@ -232,7 +250,21 @@ function RosterRow({ p, send, sharing }: { p: AdmittedPerson; send: Send; sharin
         </span>
       )}
       {p.late && <span className="roster-chip roster-chip-red">Late</span>}
+      {p.reconnecting && (
+        <span className="roster-chip roster-chip-warn" title="Connection dropped; waiting for them to come back">
+          Reconnecting
+        </span>
+      )}
       <span className="roster-actions">
+        <button
+          type="button"
+          className={'roster-chip' + (spotlit ? ' roster-chip-warn' : '')}
+          data-testid="spotlight"
+          title={spotlit ? `Stop showing ${p.displayName}'s camera to the class` : `Show ${p.displayName}'s camera to the class`}
+          onClick={() => send({ type: 'spotlight', id: spotlit ? null : p.id })}
+        >
+          {spotlit ? 'Stop spotlight' : 'Spotlight'}
+        </button>
         <IconBtn
           label={p.mutedByTeacher ? `Unmute ${p.displayName}` : `Mute ${p.displayName}`}
           tone={p.mutedByTeacher ? 'warn' : 'plain'}

@@ -31,7 +31,8 @@ import {
 } from 'livekit-client';
 import type { ChromeBounds, DeviceInfo, PanelSnapshot } from '../shared/actions';
 import {
-  STATE_TOPIC,
+  admitFailureNotice,
+  chatPollSuffix,
   chatPollMs,
   mergeMessages,
   parseRoomState,
@@ -62,7 +63,9 @@ import { DRAW_TOPIC, applyPacket, decodePacket, isDrawColor, validStrokeId, type
 import { SHARE_CODEC, shareProfile } from '../shared/web/videoQuality';
 import type { VideoCell, VideoModel } from '../shared/videoModel';
 import { openWgcTrack, type WgcHandle } from './wgcTrack';
+import { setReportClassCode } from './errorReporter';
 import { applyDrawBytes } from '../shared/studentInk';
+import { CONNECT_RETRY_NOTICE, connectRetryDelayMs } from '../shared/connectRetry';
 import { drawIdentitySet, routeLivePacket } from '../shared/livePackets';
 import {
   liveStudentPool,
@@ -432,6 +435,7 @@ export class ClassController {
   async start(code: string): Promise<void> {
     await this.stopRoom();
     this.code = code.toUpperCase();
+    setReportClassCode(this.code);
     this.panelReporter.reset();
     this.ended = false;
     this.handoff = null;
@@ -447,21 +451,7 @@ export class ClassController {
     const gen = this.gen;
     this.emit();
     desktop().setClassActive(true);
-    const tokenRes = await desktop().api('GET', `/api/rooms/${encodeURIComponent(this.code)}/token`);
-    if (this.gen !== gen) return;
-    if (tokenRes.status === 401) {
-      const reason = tokenRes.data && typeof tokenRes.data === 'object' && 'reason' in tokenRes.data ? String((tokenRes.data as { reason: unknown }).reason) : null;
-      await this.enterHandoff('session', reason);
-      return;
-    }
-    const body = (tokenRes.data ?? {}) as { token?: unknown; url?: unknown; error?: unknown };
-    if (tokenRes.status !== 200 || typeof body.token !== 'string' || typeof body.url !== 'string') {
-      this.connecting = false;
-      this.notice = errorText(tokenRes.data, 'Could not join the class.');
-      this.emit();
-      return;
-    }
-    const room = new Room({
+    const makeRoom = () => new Room({
       disconnectOnPageLeave: false,
       // Off on purpose: during a share no <video> is attached in this window,
       // so adaptive stream reported every camera as invisible (0x0) and paused
@@ -478,18 +468,56 @@ export class ClassController {
         screenShareEncoding: { maxBitrate: SCREEN_SHARE.encoding.maxBitrate, maxFramerate: SCREEN_SHARE.encoding.maxFramerate },
       },
     });
-    this.room = room;
-    this.bindRoom(room);
-    try {
-      await room.connect(body.url, body.token, { autoSubscribe: true, peerConnectionTimeout: 20_000 });
-      await room.startAudio().catch(() => undefined);
-    } catch (err) {
-      console.warn('connect failed');
-      this.connecting = false;
-      this.notice = 'Could not connect to the class.';
+    // Should-change: a failed first connect retries with a fresh token and backoff.
+    let room: Room | null = null;
+    for (let attempt = 0; ; attempt++) {
+      const tokenRes = await desktop().api('GET', `/api/rooms/${encodeURIComponent(this.code)}/token`);
+      if (this.gen !== gen) return;
+      if (tokenRes.status === 401) {
+        const reason = tokenRes.data && typeof tokenRes.data === 'object' && 'reason' in tokenRes.data ? String((tokenRes.data as { reason: unknown }).reason) : null;
+        await this.enterHandoff('session', reason);
+        return;
+      }
+      const body = (tokenRes.data ?? {}) as { token?: unknown; url?: unknown; error?: unknown };
+      const tokenOk = tokenRes.status === 200 && typeof body.token === 'string' && typeof body.url === 'string';
+      // 4xx other than 401 (ended / forbidden / not found) will not get better: stop now.
+      if (!tokenOk && tokenRes.status >= 400 && tokenRes.status < 500) {
+        this.connecting = false;
+        this.notice = errorText(tokenRes.data, 'Could not join the class.');
+        this.emit();
+        return;
+      }
+      if (tokenOk) {
+        const r = makeRoom();
+        this.room = r;
+        this.bindRoom(r);
+        try {
+          await r.connect(body.url as string, body.token as string, { autoSubscribe: true, peerConnectionTimeout: 20_000 });
+          await r.startAudio().catch(() => undefined);
+          room = r;
+        } catch {
+          console.warn('connect failed', { attempt });
+          this.expectDisconnect = true;
+          await r.disconnect().catch(() => undefined);
+          this.expectDisconnect = false;
+          if (this.room === r) this.room = null;
+        }
+      }
+      if (this.gen !== gen) return;
+      if (room) break;
+      const wait = connectRetryDelayMs(attempt);
+      if (wait === null) {
+        this.connecting = false;
+        this.notice = tokenOk ? 'Could not connect to the class.' : errorText(tokenRes.data, 'Could not join the class.');
+        this.emit();
+        return;
+      }
+      this.notice = CONNECT_RETRY_NOTICE;
       this.emit();
-      return;
+      await new Promise((r) => window.setTimeout(r, wait));
+      if (this.gen !== gen) return;
     }
+    if (this.notice === CONNECT_RETRY_NOTICE) this.notice = '';
     if (this.gen !== gen) return;
     this.connecting = false;
     this.audioBlocked = room.canPlaybackAudio === false;
@@ -689,10 +717,13 @@ export class ClassController {
         if (typeof action.id === 'string') void this.roomApi('POST', '/hand', { participantId: action.id, raised: false }).then(() => this.pollState());
         return;
       case 'admit':
-        if (typeof action.id === 'string') void this.roomApi('POST', '/admit', { participantIds: [action.id] }).then(() => this.pollState());
+        if (typeof action.id === 'string') void this.admit({ participantIds: [action.id] });
         return;
       case 'admit-all':
-        void this.roomApi('POST', '/admit', { all: true }).then(() => this.pollState());
+        void this.admit({ all: true });
+        return;
+      case 'spotlight':
+        if (action.id === null || typeof action.id === 'string') void this.setSpotlight(action.id);
         return;
       case 'send-chat':
         if (typeof action.text === 'string' && typeof action.to === 'string') void this.sendChat(action.text, action.to);
@@ -2268,7 +2299,7 @@ export class ClassController {
 
   private async pollChat(): Promise<void> {
     if (!this.code || !this.room) return;
-    const res = await this.roomApi('GET', '/messages');
+    const res = await this.roomApi('GET', chatPollSuffix(this.messages));
     if (!res || res.status >= 400) return;
     const list = res.data && typeof res.data === 'object' && Array.isArray((res.data as { messages?: unknown }).messages)
       ? ((res.data as { messages: ChatMessage[] }).messages)
@@ -2318,6 +2349,26 @@ export class ClassController {
       else if (event.type === 'focus') desktop().notify(event.label, event.name);
       else desktop().notify(`Message from ${event.name}`, event.text);
     }
+  }
+
+  private async admit(body: { participantIds: string[] } | { all: true }): Promise<void> {
+    const res = await this.roomApi('POST', '/admit', body);
+    const full = res ? admitFailureNotice(res.status, res.data) : null;
+    if (full) {
+      this.notice = full;
+      this.emit();
+    }
+    await this.pollState();
+  }
+
+  /** One spotlighted student (their camera goes to the class); null stops it. */
+  private async setSpotlight(participantId: string | null): Promise<void> {
+    const res = await this.roomApi('POST', '/spotlight', { participantId });
+    if (res && res.status >= 400) {
+      this.notice = errorText(res.data, 'Could not change spotlight');
+      this.emit();
+    }
+    await this.pollState();
   }
 
   private async roomApi(method: string, suffix: string, body?: unknown): Promise<{ status: number; data: unknown } | null> {
@@ -2403,6 +2454,8 @@ export class ClassController {
       devices: this.devices,
       micId: this.opts.micId,
       camId: this.opts.camId,
+      spotlight: this.snap?.spotlight ?? null,
+      micQueue: this.snap && this.snap.micLimit > 0 ? this.snap.micQueue : [],
     };
   }
 
