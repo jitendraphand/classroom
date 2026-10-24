@@ -1,6 +1,26 @@
+import java.util.Properties
+import java.text.SimpleDateFormat
+import java.util.Date
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+}
+
+// Every build gets a fresh version: code = 100 + commit count, name = 1.1.0-<date>.
+val gitCommits: Int = try {
+    val p = ProcessBuilder("git", "rev-list", "--count", "HEAD").directory(rootDir).redirectErrorStream(true).start()
+    p.inputStream.bufferedReader().readText().trim().toInt().also { p.waitFor() }
+} catch (_: Exception) {
+    0
+}
+val buildDate: String = SimpleDateFormat("yyyyMMdd").format(Date())
+
+// Release signing: a properties file outside the repo (storeFile / storePassword /
+// keyAlias / keyPassword), path in CLASSROOM_SIGNING. Without it, release is unsigned.
+val signingProps: Properties? = System.getenv("CLASSROOM_SIGNING")?.let { path ->
+    val f = file(path)
+    if (f.exists()) Properties().also { pr -> f.inputStream().use { pr.load(it) } } else null
 }
 
 android {
@@ -11,12 +31,24 @@ android {
         applicationId = "com.classroom.teacher"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 100 + gitCommits
+        versionName = "1.1.0-$buildDate"
+    }
+
+    signingConfigs {
+        if (signingProps != null) {
+            create("release") {
+                storeFile = file(signingProps.getProperty("storeFile"))
+                storePassword = signingProps.getProperty("storePassword")
+                keyAlias = signingProps.getProperty("keyAlias")
+                keyPassword = signingProps.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
         release {
+            if (signingProps != null) signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -36,6 +68,7 @@ android {
 
     buildFeatures {
         viewBinding = true
+        buildConfig = true
     }
 }
 
