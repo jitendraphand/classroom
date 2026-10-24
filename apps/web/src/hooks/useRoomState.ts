@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { RoomEvent, type Room } from 'livekit-client';
 import { roomFetch, getClassroomRole } from '@/lib/classroomClient';
-import { STATE_TOPIC, statePollMs } from '@/lib/pollPolicy';
+import { STATE_TOPIC, jitterMs, nudgeDelayMs, statePollMs } from '@/lib/pollPolicy';
 import { isClassEndedPacket, noteClassEnded } from '@/lib/classEnded';
 import {
   SIGNAL_TOPIC,
@@ -243,7 +243,8 @@ export function useRoomState(code: string, intervalMs = 2000, room?: Room | null
   useEffect(() => {
     const role = typeof window !== 'undefined' ? getClassroomRole(code) : null;
     const base = statePollMs({ role, hidden, pushLive });
-    const ms = pushLive || hidden ? base : role === 'student' ? Math.min(intervalMs, 2000) : intervalMs;
+    // Jittered per mount so a whole class does not poll in lock-step.
+    const ms = jitterMs(pushLive || hidden ? base : role === 'student' ? Math.max(intervalMs, base) : intervalMs);
     // Tick at a third of the period and skip when a push-driven refresh ran
     // recently, so pushes push the safety poll back instead of adding to it.
     const t = setInterval(() => {
@@ -303,7 +304,14 @@ export function useRoomState(code: string, intervalMs = 2000, room?: Room | null
           );
           return;
         }
-        if (!stopped.current) void refresh();
+        if (stopped.current) return;
+        // Class-wide nudges carry a spread: students refetch at a random
+        // moment within it (the server caches their view per version).
+        const wait = nudgeDelayMs(raw, getClassroomRole(code));
+        if (wait <= 0) void refresh();
+        else setTimeout(() => {
+          if (!stopped.current) void refresh();
+        }, wait);
         return;
       }
       if (topic !== SIGNAL_TOPIC) return;
@@ -321,7 +329,7 @@ export function useRoomState(code: string, intervalMs = 2000, room?: Room | null
     return () => {
       room.off(RoomEvent.DataReceived, onData);
     };
-  }, [room, refresh]);
+  }, [room, refresh, code]);
 
   return { state, error, refresh, stopped: stopped.current };
 }
