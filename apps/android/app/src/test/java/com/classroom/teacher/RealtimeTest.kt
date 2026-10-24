@@ -83,3 +83,18 @@ class RealtimeTest {
         assertTrue(r.admit("g"))
     }
 }
+
+class RosterFieldsTest {
+    @org.junit.Test
+    fun parsesNewStudentFields() {
+        val arr = org.json.JSONArray("""[{"id":"a","role":"STUDENT","livekitIdentity":"student_a","displayName":"Asha","drawRequested":true,"drawRequestedAt":5,"drawing":false,"reconnecting":true,"micWaiting":true,"sid":"S12"},{"id":"t","role":"TEACHER"}]""")
+        val s = ClassLogic.parseStudents(arr)
+        org.junit.Assert.assertEquals(1, s.size)
+        org.junit.Assert.assertTrue(s[0].drawRequested && s[0].reconnecting && s[0].micWaiting)
+        org.junit.Assert.assertEquals("S12", s[0].sid)
+        org.junit.Assert.assertTrue(ClassLogic.matches(s[0], "s1"))
+        org.junit.Assert.assertFalse(ClassLogic.matches(s[0], "zz"))
+        val q = ClassLogic.parseMicQueue(org.json.JSONArray("""[{"id":"b","name":"B","position":2},{"id":"a","name":"A","position":1}]"""))
+        org.junit.Assert.assertEquals(listOf("a", "b"), q.map { it.id })
+    }
+}

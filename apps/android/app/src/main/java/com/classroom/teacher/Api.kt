@@ -163,8 +163,50 @@ class ClassroomApi(rawBase: String) {
 
     fun token(code: String): JSONObject = call("GET", "/api/rooms/${code.uppercase()}/token", null)
 
-    fun stage(code: String, mode: String) {
-        call("POST", "/api/rooms/${code.uppercase()}/stage", JSONObject().put("mode", mode))
+    /** Stage mode; [desktopInk] = the teacher burns student ink into the captured screen (web viewers skip their overlay). */
+    fun stage(code: String, mode: String, desktopInk: Boolean? = null) {
+        val body = JSONObject().put("mode", mode)
+        if (desktopInk != null) body.put("desktopInk", desktopInk)
+        call("POST", "/api/rooms/${code.uppercase()}/stage", body)
+    }
+
+    /** Student-video panel open/closed (students only publish cameras while someone watches). */
+    fun videoPanel(code: String, open: Boolean) {
+        call("POST", "/api/rooms/${code.uppercase()}/video-panel", JSONObject().put("open", open))
+    }
+
+    /** Spotlight one student for everyone (null = stop). */
+    fun spotlight(code: String, participantId: String?) {
+        call("POST", "/api/rooms/${code.uppercase()}/spotlight", JSONObject().put("participantId", participantId ?: JSONObject.NULL))
+    }
+
+    /** Screen / whiteboard drawing: allow, revoke (null id = everyone), clear, erase. */
+    fun draw(code: String, action: String, participantId: String? = null, ids: List<String>? = null): JSONObject {
+        val body = JSONObject().put("action", action)
+        if (participantId != null) body.put("participantId", participantId)
+        if (ids != null) body.put("ids", JSONArray(ids))
+        return call("POST", "/api/rooms/${code.uppercase()}/draw", body)
+    }
+
+    /** Draw holders + strokes (late join). */
+    fun drawState(code: String): JSONObject = call("GET", "/api/rooms/${code.uppercase()}/draw", null)
+
+    /** Whiteboard: on / off, or store the latest snapshot (base64 wire packets). */
+    fun whiteboard(code: String, action: String, packets: List<String>? = null) {
+        val body = JSONObject().put("action", action)
+        if (packets != null) body.put("packets", JSONArray(packets))
+        call("POST", "/api/rooms/${code.uppercase()}/whiteboard", body)
+    }
+
+    /** Crash report (no auth, best effort, never throws). */
+    fun clientError(report: JSONObject) {
+        try {
+            val text = report.toString()
+            if (text.length > 15_000) return
+            val req = Request.Builder().url("$base/api/client-error").post(text.toRequestBody(jsonType)).build()
+            client.newCall(req).execute().close()
+        } catch (_: Exception) {
+        }
     }
 
     fun muteAll(code: String, muted: Boolean) {
@@ -195,7 +237,11 @@ class ClassroomApi(rawBase: String) {
         call("PATCH", "/api/rooms/${code.uppercase()}/settings", JSONObject().put("maxVisibleVideos", max))
     }
 
-    fun messages(code: String): JSONObject = call("GET", "/api/rooms/${code.uppercase()}/messages", null)
+    /** Chat; [since] (ISO) returns only newer messages (server keeps a 5 s overlap). */
+    fun messages(code: String, since: String? = null): JSONObject {
+        val q = if (since.isNullOrBlank()) "" else "?since=" + java.net.URLEncoder.encode(since, "UTF-8")
+        return call("GET", "/api/rooms/${code.uppercase()}/messages$q", null)
+    }
 
     fun sendBroadcast(code: String, text: String) {
         call("POST", "/api/rooms/${code.uppercase()}/messages", JSONObject().put("text", text).put("to", "all"))

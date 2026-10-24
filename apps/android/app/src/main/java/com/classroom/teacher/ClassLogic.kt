@@ -15,6 +15,16 @@ data class StudentInfo(
     val muted: Boolean = false,
     /** "left" / "away" = not in fullscreen (web students). */
     val focus: String? = null,
+    val drawRequested: Boolean = false,
+    val drawRequestedAt: Long? = null,
+    /** Allowed to draw on the share / whiteboard now. */
+    val drawing: Boolean = false,
+    /** Heartbeat late: still listed, shown as "Reconnecting". */
+    val reconnecting: Boolean = false,
+    /** In the speaking queue (mic limit reached). */
+    val micWaiting: Boolean = false,
+    /** School SID (externalId), for search. */
+    val sid: String? = null,
 ) {
     val focusAlert: Boolean get() = focus == "left" || focus == "away"
 }
@@ -60,7 +70,7 @@ object ClassLogic {
     /** Raised hands first (earliest raise first, unknown times last), then by name. */
     fun sortRoster(students: List<StudentInfo>): List<StudentInfo> =
         students.sortedWith(
-            compareBy<StudentInfo>({ !it.handRaised }, { if (it.handRaised) it.handRaisedAt ?: Long.MAX_VALUE else 0L })
+            compareBy<StudentInfo>({ !it.handRaised }, { if (it.handRaised) it.handRaisedAt ?: Long.MAX_VALUE else 0L }, { !it.drawRequested })
                 .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name },
         )
 
@@ -84,10 +94,33 @@ object ClassLogic {
                     pinnedAt = a.optLongOrNull("pinnedAt"),
                     muted = a.optBoolean("mutedByTeacher"),
                     focus = a.optString("focus").ifBlank { null },
+                    drawRequested = a.optBoolean("drawRequested"),
+                    drawRequestedAt = a.optLongOrNull("drawRequestedAt"),
+                    drawing = a.optBoolean("drawing"),
+                    reconnecting = a.optBoolean("reconnecting"),
+                    micWaiting = a.optBoolean("micWaiting"),
+                    sid = if (a.isNull("sid")) null else a.optString("sid").ifBlank { null },
                 ),
             )
         }
         return out
+    }
+
+    /** Roster search: name or SID, case-insensitive (Windows "Search name or SID…"). */
+    fun matches(s: StudentInfo, query: String): Boolean {
+        val q = query.trim().lowercase()
+        if (q.isEmpty()) return true
+        return s.name.lowercase().contains(q) || (s.sid?.lowercase()?.contains(q) ?: false)
+    }
+
+    data class MicWaiter(val id: String, val name: String, val position: Int)
+
+    fun parseMicQueue(arr: JSONArray?): List<MicWaiter> {
+        if (arr == null) return emptyList()
+        return (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            MicWaiter(o.optString("id"), o.optString("name", "Student"), o.optInt("position", i + 1))
+        }.sortedBy { it.position }
     }
 
     private fun JSONObject.optLongOrNull(key: String): Long? =
