@@ -178,6 +178,7 @@ import { TeacherMediaDemand } from './TeacherMediaDemand';
 import { ClassInfoButton } from './ClassInfoButton';
 import { FeedbackForm } from './FeedbackForm';
 import { SpotlightFloat } from './SpotlightFloat';
+import { clientConnectDelayMs, isNegotiationError, withNegotiationRetry } from '@/lib/joinPacingLogic';
 import {
   nextStudentVideoMode,
   parseStudentVideoMode,
@@ -193,6 +194,12 @@ import {
   nextPresencePhase,
   type PresencePhase,
 } from '@/lib/studentPresenceLogic';
+
+/** Wait the server-assigned connect slot (lib/joinPacingLogic). */
+function sleepConnectDelay(body: unknown): Promise<void> {
+  const ms = clientConnectDelayMs(body);
+  return ms > 0 ? new Promise((r) => window.setTimeout(r, ms)) : Promise.resolve();
+}
 
 type TokenPayload = {
   token: string;
@@ -2322,8 +2329,8 @@ function SelectivePublisher({
       const clone = source.clone();
       const track = new LocalVideoTrack(clone, undefined, true);
       try {
-        await participant.publishTrack(
-          track,
+        // Retry a negotiation timeout (join waves) instead of giving up the camera.
+        const camOpts =
           isTeacher
             ? {
                 source: Track.Source.Camera,
@@ -2337,8 +2344,13 @@ function SelectivePublisher({
                 source: Track.Source.Camera,
                 simulcast: STUDENT_CAMERA.simulcast,
                 videoEncoding: STUDENT_CAMERA.encoding,
-              }
-        );
+              };
+        await withNegotiationRetry(() => participant.publishTrack(track, camOpts), {
+          beforeRetry: async () => {
+            await participant.unpublishTrack(track, false).catch(() => undefined);
+          },
+          shouldContinue: () => gen === videoGen.current,
+        });
       } catch (e) {
         console.warn('publish video', e);
         await unpublishThenStop(participant, track);
@@ -2414,15 +2426,25 @@ function SelectivePublisher({
             return;
           }
           try {
-            await participant.publishTrack(track, {
-              source: Track.Source.Microphone,
-              audioPreset: AudioPresets.speech,
-              dtx: true,
-              // RED re-sends every Opus frame (~2x audio bitrate). Worth it for
-              // the one teacher voice; students hear each other, so N student
-              // mics with RED cost every listener 2N streams of audio.
-              red: isTeacher,
-            });
+            // Retry a negotiation timeout (join waves) before giving up the mic.
+            await withNegotiationRetry(
+              () =>
+                participant.publishTrack(track, {
+                  source: Track.Source.Microphone,
+                  audioPreset: AudioPresets.speech,
+                  dtx: true,
+                  // RED re-sends every Opus frame (~2x audio bitrate). Worth it for
+                  // the one teacher voice; students hear each other, so N student
+                  // mics with RED cost every listener 2N streams of audio.
+                  red: isTeacher,
+                }),
+              {
+                beforeRetry: async () => {
+                  await participant.unpublishTrack(track, false).catch(() => undefined);
+                },
+                shouldContinue: () => !cancelled && !mutedByTeacher,
+              }
+            );
           } catch (e) {
             safeStop(track);
             throw e;
@@ -5589,6 +5611,8 @@ export function ClassroomRoom({ code }: { code: string }) {
   const rejoinRef = useRef<{ running: boolean; unmounted: boolean }>({ running: false, unmounted: false });
   /** When this tab last (re)built its Room; see isOwnStaleDuplicate. */
   const connectedAtRef = useRef<number | null>(null);
+  /** This LiveKitRoom mount reached Connected at least once (a failed first connect is retried). */
+  const everConnectedRef = useRef(false);
   useEffect(() => {
     const r = rejoinRef.current;
     r.unmounted = false;
@@ -5644,6 +5668,9 @@ export function ClassroomRoom({ code }: { code: string }) {
           setTokenData(null);
           return;
         }
+        await sleepConnectDelay(body);
+        if (r.unmounted) return;
+        everConnectedRef.current = false;
         setTokenData(body);
         connectedAtRef.current = Date.now();
         setConnKey((k) => k + 1);
@@ -5853,6 +5880,8 @@ export function ClassroomRoom({ code }: { code: string }) {
       setError(tok.error || 'Could not get media token');
       return;
     }
+    // Join-wave pacing slot from the server (students only; 0 when quiet).
+    await sleepConnectDelay(tok);
     setTokenData(tok);
   }, [code, router]);
 
@@ -6001,7 +6030,15 @@ export function ClassroomRoom({ code }: { code: string }) {
       // students' cameras. The teacher keeps auto-subscribe (sampled cameras).
       connectOptions={{ peerConnectionTimeout: 20_000, autoSubscribe: isTeacher }}
       className="h-[100dvh] overflow-hidden"
-      onError={(e) => console.error('LiveKit', e)}
+      onConnected={() => {
+        everConnectedRef.current = true;
+      }}
+      onError={(e) => {
+        console.error('LiveKit', e);
+        // Join wave: the first connect (or its negotiation) timed out. Retry
+        // quickly with a fresh token instead of leaving the student stuck.
+        if (!everConnectedRef.current && (isNegotiationError(e) || e?.name === 'ConnectionError')) void rejoin();
+      }}
       onDisconnected={onDisconnected}
     >
       {!isTeacher && <StudentLeaveOnPageHide />}

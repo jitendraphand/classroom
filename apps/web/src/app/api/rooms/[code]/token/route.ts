@@ -7,6 +7,7 @@ import { ensureSampleFresh } from '@/lib/sample';
 import { ensureRedis, keys } from '@/lib/redis';
 import { isTeacherPresent } from '@/lib/teacherPresence';
 import { clearStage } from '@/lib/sessionKick';
+import { nextConnectDelayMs } from '@/lib/joinPacing';
 
 export const dynamic = 'force-dynamic';
 
@@ -109,7 +110,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     void redis.scard(keys.admitted(code)).then((n) => noteRoomLoad(roomName, n)).catch(() => undefined);
   }
 
+  // Join-wave pacing: students wait for a slot before connecting to LiveKit.
+  const connectDelayMs = isTeacher ? 0 : await nextConnectDelayMs();
+
   return jsonOk({
+    connectDelayMs,
     token,
     url: await mediaUrlForRoom(roomName, req),
     roomName,
