@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { CLASS_FINISHED_EVENT } from '@/lib/classFinishEvent';
 import { isLiveSession, onLiveSessionChange, onReportedActivity } from '@/lib/liveSession';
+import { jitterMs } from '@/lib/pollPolicy';
 
 /** 15 minutes of no pointer/keyboard/touch activity → sign out. */
 const IDLE_MS = 15 * 60 * 1000;
@@ -32,6 +33,10 @@ const ACTIVITY_EVENTS: Array<keyof WindowEventMap> = [
  * the pop-out / PiP window also counts. The 15-minute timer applies everywhere
  * else (dashboard, lobby, login pages) and restarts when the class ends.
  */
+/** auth/me re-check period (was 60 s) and, during a live class, the slower one. */
+export const AUTH_POLL_MS = 120_000;
+export const AUTH_POLL_LIVE_MS = 600_000;
+
 export function useIdleLogout() {
   const router = useRouter();
   const pathname = usePathname();
@@ -43,7 +48,9 @@ export function useIdleLogout() {
   useEffect(() => {
     let cancelled = false;
 
+    let lastAuthAt = 0;
     async function refreshAuth() {
+      lastAuthAt = Date.now();
       try {
         const res = await fetch('/api/auth/me', { cache: 'no-store' });
         const data = await res.json();
@@ -104,9 +111,12 @@ export function useIdleLogout() {
 
     void refreshAuth();
     // Re-check auth when route changes (login → dashboard, join → classroom).
+    // Every ~2 min (jittered so a class does not align). In a live class the
+    // idle timer is off anyway: re-check only every AUTH_POLL_LIVE_MS there.
     const authPoll = window.setInterval(() => {
+      if (isLiveSession() && Date.now() - lastAuthAt < AUTH_POLL_LIVE_MS) return;
       void refreshAuth();
-    }, 60_000);
+    }, jitterMs(AUTH_POLL_MS));
 
     for (const ev of ACTIVITY_EVENTS) {
       window.addEventListener(ev, onActivity, { passive: true, capture: true });

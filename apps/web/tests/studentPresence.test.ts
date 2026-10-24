@@ -49,6 +49,9 @@ test('heartbeat: interval ≥30s with jitter; a late beat stays listed; no beat 
   assert.equal(heartbeatPeriodMs(0), HEARTBEAT_INTERVAL_MS);
   assert.equal(heartbeatPeriodMs(1), HEARTBEAT_INTERVAL_MS + HEARTBEAT_JITTER_MS);
   assert.ok(HEARTBEAT_RECONNECTING_MS > HEARTBEAT_INTERVAL_MS);
+  // one missed beat (two slowest periods) still reads 'ok'
+  assert.ok(HEARTBEAT_RECONNECTING_MS > 2 * (HEARTBEAT_INTERVAL_MS + HEARTBEAT_JITTER_MS));
+  assert.ok(HEARTBEAT_INTERVAL_MS >= 40_000);
   assert.ok(HEARTBEAT_RECONNECTING_MS < HEARTBEAT_STALE_MS);
   assert.equal(LOST_GRACE_MS, 5_000);
   const live = { sid: 'PA_1' };

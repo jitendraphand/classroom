@@ -18,23 +18,23 @@
  */
 export const STUDENT_GONE_GRACE_MS = 2_500;
 
-/** How often the student client posts /heartbeat (≥30s; jitter added on the client). */
-export const HEARTBEAT_INTERVAL_MS = 30_000;
+/** How often the student client posts /heartbeat (≥40s; jitter added on the client). */
+export const HEARTBEAT_INTERVAL_MS = 40_000;
 /** Extra delay mixed into each client's period so heartbeats do not align. */
-export const HEARTBEAT_JITTER_MS = 5_000;
+export const HEARTBEAT_JITTER_MS = 10_000;
 /**
  * Last beat this old → show "reconnecting", but keep the seat. One missed
  * post (a brief glitch) stays under this.
  */
-export const HEARTBEAT_RECONNECTING_MS = 50_000;
+export const HEARTBEAT_RECONNECTING_MS = 105_000;
 /**
  * A beat this old used to drop the roster. It no longer does: a late beat
  * stays "reconnecting" and the seat stays. LiveKit leave is what removes them.
  * The constant remains so the reconnecting window stays below it.
  */
-export const HEARTBEAT_STALE_MS = 80_000;
+export const HEARTBEAT_STALE_MS = 140_000;
 
-/** Period for one client: 30s plus 0..jitter ms. `rand` in [0, 1]. */
+/** Period for one client: 40s plus 0..jitter ms. `rand` in [0, 1]. */
 export function heartbeatPeriodMs(rand = Math.random()): number {
   const r = Number.isFinite(rand) ? Math.min(1, Math.max(0, rand)) : 0;
   return HEARTBEAT_INTERVAL_MS + Math.floor(r * HEARTBEAT_JITTER_MS);

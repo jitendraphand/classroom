@@ -31,7 +31,7 @@ export const STUDENT_UNLIVE_POLL_MS = 5000;
 export function chatPollMs(opts: { hidden: boolean; pushLive: boolean }): number {
   // Messages arrive as server data packets; the poll only repairs gaps.
   if (opts.pushLive) return 60000;
-  return opts.hidden ? 10000 : 3000;
+  return opts.hidden ? 15000 : 6000;
 }
 
 /** Waiting-room poll (student not yet in LiveKit): back off while hidden. */

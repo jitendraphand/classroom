@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { prisma } from '@/lib/db';
+import { roomRowCached } from '@/lib/roomStateCache';
 import { resolveRoomAccess } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
 import { livekitRoomName, sendRoomData } from '@/lib/livekit';
@@ -27,7 +28,7 @@ async function resolveAccess(
   code: string,
   preloaded?: Awaited<ReturnType<typeof prisma.room.findUnique>>,
 ): Promise<AccessCtx | null> {
-  const room = preloaded ?? (await prisma.room.findUnique({ where: { code } }));
+  const room = preloaded ?? (await roomRowCached(code));
   if (!room) return null;
 
   const url = new URL(req.url);

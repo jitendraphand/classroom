@@ -41,6 +41,17 @@ export function memo<T>(key: string, ttlMs: number, fn: () => Promise<T>, now = 
   return p;
 }
 
+/**
+ * The Room row by code, shared for a few seconds (heartbeat, messages): it
+ * changes rarely (status/settings), and those routes only need it for access
+ * checks. A student's own participant status is still read per request.
+ */
+export const ROOM_ROW_TTL_MS = 3_000;
+export async function roomRowCached(code: string) {
+  const { prisma } = await import('./db');
+  return memo(`room-row:${code}`, ROOM_ROW_TTL_MS, () => prisma.room.findUnique({ where: { code } }));
+}
+
 export function clearStateMemo() {
   store.clear();
 }

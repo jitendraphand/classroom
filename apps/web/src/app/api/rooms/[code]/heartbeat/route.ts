@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { prisma } from '@/lib/db';
+import { roomRowCached } from '@/lib/roomStateCache';
 import { resolveRoomAccess } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
 import { recordStudentHeartbeat } from '@/lib/studentPresence';
@@ -21,7 +21,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
   const forceStudent =
     url.searchParams.get('as') === 'student' || req.headers.get('x-classroom-as') === 'student';
 
-  const room = await prisma.room.findUnique({ where: { code } });
+  const room = await roomRowCached(code);
   if (!room) return jsonError('Room not found', 404);
   if (room.status === 'ENDED') return jsonError('Class ended', 410);
 

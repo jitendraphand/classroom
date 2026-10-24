@@ -7,7 +7,7 @@ import { useRoomContext } from '@livekit/components-react';
 import { ConnectionState, RoomEvent, DataPacket_Kind } from 'livekit-client';
 import { replyTargetFor, resolveChatRecipient } from '@/lib/chatReply';
 import { getClassroomRole, roomFetch } from '@/lib/classroomClient';
-import { chatPollMs } from '@/lib/pollPolicy';
+import { chatPollMs, jitterMs } from '@/lib/pollPolicy';
 import { CHAT_TOPIC, chatPacketTrusted } from '@/lib/realtimePackets';
 import { usePageHidden, usePushLive } from '@/hooks/usePollSignals';
 
@@ -172,7 +172,7 @@ export function useChatThread({
   }, [code, stopped, ended, mergeMessages, pushLive]);
   useEffect(() => {
     if (stopped) return;
-    const t = setInterval(fetchMessages, chatPollMs({ hidden, pushLive: sseLive || pushLive }));
+    const t = setInterval(fetchMessages, jitterMs(chatPollMs({ hidden, pushLive: sseLive || pushLive })));
     return () => clearInterval(t);
   }, [fetchMessages, stopped, hidden, pushLive, sseLive]);
 

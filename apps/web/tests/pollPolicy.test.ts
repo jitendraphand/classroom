@@ -17,7 +17,7 @@ test('teacher never slows down when hidden (share HUD needs counts)', () => {
 
 test('chat and waiting polls', () => {
   assert.equal(chatPollMs({ hidden: false, pushLive: true }), 60000);
-  assert.equal(chatPollMs({ hidden: false, pushLive: false }), 3000);
+  assert.equal(chatPollMs({ hidden: false, pushLive: false }), 6000);
   assert.equal(waitingPollMs(false), 3000);
   assert.equal(waitingPollMs(true), 8000);
 });
