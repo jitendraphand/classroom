@@ -16,23 +16,54 @@ export function statePollMs(opts: { role: PollRole; hidden: boolean; pushLive: b
   if (role === 'teacher') {
     // A sharing teacher's tab is usually hidden behind the shared window, and the
     // share HUD still needs hands / waiting counts: never slow down on hidden.
-    // Every change the teacher sees is pushed (STATE_TOPIC nudges, chat
-    // packets): the poll is only a 30 s safety net while connected.
-    return pushLive ? 30000 : 2000;
+    // Every change the teacher sees is pushed (STATE_TOPIC / SIGNAL_TOPIC,
+    // chat packets): the poll is only a 60 s safety net while connected.
+    return pushLive ? 60000 : 2000;
   }
-  if (pushLive) return hidden ? 60000 : 30000;
-  return hidden ? 10000 : 2000;
+  if (pushLive) return hidden ? 120000 : 60000;
+  // Connecting / reconnecting: during a join wave of 1,500 students a 2 s poll
+  // was most of the /state load. 5 s (jittered) is enough to see admit/end.
+  return hidden ? 15000 : STUDENT_UNLIVE_POLL_MS;
 }
+
+/** Student /state poll while LiveKit is not connected yet. */
+export const STUDENT_UNLIVE_POLL_MS = 5000;
 
 export function chatPollMs(opts: { hidden: boolean; pushLive: boolean }): number {
   // Messages arrive as server data packets; the poll only repairs gaps.
   if (opts.pushLive) return 60000;
-  return opts.hidden ? 10000 : 3000;
+  return opts.hidden ? 15000 : 6000;
 }
 
 /** Waiting-room poll (student not yet in LiveKit): back off while hidden. */
 export function waitingPollMs(hidden: boolean): number {
-  return hidden ? 6000 : 2000;
+  return hidden ? 8000 : 3000;
+}
+
+/**
+ * Spread a period by ±frac so thousands of clients that started together do
+ * not stay in lock-step. `rnd` in [0,1).
+ */
+export function jitterMs(ms: number, frac = 0.2, rnd: number = Math.random()): number {
+  return Math.max(0, Math.round(ms * (1 - frac + 2 * frac * rnd)));
+}
+
+/** Default student refetch spread after a class-wide "state changed" push. */
+export const NUDGE_SPREAD_MS = 3000;
+
+/** Spread the server puts in a nudge: class-wide nudges spread, targeted ones do not. */
+export function nudgeSpreadMs(audience: NudgeAudience, env: Record<string, string | undefined> = process.env): number {
+  if (audience !== 'all') return 0;
+  const n = Number.parseInt(env.STATE_PUSH_SPREAD_MS ?? '', 10);
+  return Number.isFinite(n) && n >= 0 ? Math.min(n, 10_000) : NUDGE_SPREAD_MS;
+}
+
+/** How long a client waits before refetching after a nudge (teacher: now). */
+export function nudgeDelayMs(packet: unknown, role: PollRole, rnd: number = Math.random()): number {
+  if (role === 'teacher') return 0;
+  const spread = (packet as { spread?: unknown } | null)?.spread;
+  const s = typeof spread === 'number' && Number.isFinite(spread) ? Math.min(Math.max(spread, 0), 10_000) : 0;
+  return Math.floor(s * rnd);
 }
 
 /** Requests per minute for a fixed interval (for docs / tests). */

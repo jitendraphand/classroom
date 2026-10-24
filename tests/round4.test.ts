@@ -114,8 +114,8 @@ test('media settings match the web upgrade (673b46b)', () => {
   assert.match(cs, /audioPreset: AudioPresets\.music,\s*dtx: false/);
 });
 
-test('push-driven refresh: pushLive while connected, 30 s / 60 s safety polls, coalesced /state', () => {
-  assert.equal(statePollMs({ role: 'teacher', hidden: false, pushLive: true }), 30000);
+test('push-driven refresh: pushLive while connected, 60 s safety polls, coalesced /state', () => {
+  assert.equal(statePollMs({ role: 'teacher', hidden: false, pushLive: true }), 60000);
   assert.equal(chatPollMs({ hidden: false, pushLive: true }), 60000);
   const cs = src('renderer/classSession.ts');
   assert.match(cs, /get pushLive\(\): boolean \{\s*return this\.room\?\.state === ConnectionState\.Connected;/);

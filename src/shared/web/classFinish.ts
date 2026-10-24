@@ -24,7 +24,7 @@ export function finishCopy(r: FinishReason): { title: string; body: string } {
     case 'removed':
       return { title: 'You were removed from the class', body: 'Your teacher removed you from this class. You can close this tab.' };
     case 'left':
-      return { title: 'You left the class', body: 'You can close this tab.' };
+      return { title: 'You left the class', body: 'You can rejoin while the class is still on, or close this tab.' };
     default:
       return { title: 'Class ended', body: 'Your teacher has ended this class. You can close this tab.' };
   }

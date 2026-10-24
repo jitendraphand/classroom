@@ -607,6 +607,9 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
     { id: 'color', label: 'Colour and size', icon: <span aria-hidden style={{ width: 18, height: 18, borderRadius: 9, background: color, border: '2px solid #e2e8f0', display: 'block' }} />, content: colorGrid },
     { id: 'undo', label: 'Undo / redo', icon: glyph('↶'), content: undoRedo },
   ];
+  // 54px. Must match WB_TOOL_COLUMN_PX in lib/floatGeometry.ts. Kept as a
+  // literal: this file is also bundled by the Windows renderer, which does not
+  // resolve the web app's `@/` alias.
   const barW = 54;
 
   return (

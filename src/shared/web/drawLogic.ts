@@ -12,11 +12,10 @@
  * - The allowed student draws freehand on THEIR view of the share. Points are
  *   normalised to the shared picture (0..1 of the video content box, not of
  *   the element, so letterboxing on any screen shape lands in the same spot)
- *   and posted in small batches (~12/s) to the server, which checks the
- *   holder, stores them in Redis and relays them to everyone as a LiveKit
- *   data packet on topic `draw`. Only the server sends that topic: clients
- *   ignore a `draw` packet that names a participant, so students never get a
- *   data-publish grant.
+ *   and published in small batches (~12/s) on LiveKit topic `draw` (the
+ *   server also stores them in Redis for late joiners; `relay: false` skips
+ *   a second fan-out). Recipients trust `pts` only from the matching student
+ *   identity or the server. del/clear stay server-relayed.
  * - Everyone (teacher in-page preview, share-controls Drawing panel, every
  *   student's share view, admin observers) renders the same strokes as an
  *   overlay over the video. Nothing is drawn on the teacher's real desktop and

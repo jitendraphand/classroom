@@ -23,12 +23,12 @@ test('shared web modules are byte copies of the web app (run scripts/sync-web.mj
 });
 
 test('teacher poll intervals are the web values', () => {
-  // Pushes (cls-state nudges, chat packets) drive refreshes; polls are 30 s / 60 s safety nets.
-  assert.equal(statePollMs({ role: 'teacher', hidden: true, pushLive: true }), 30000);
+  // Pushes (cls-state nudges, chat packets) drive refreshes; polls are 60 s safety nets (web 97b3bab).
+  assert.equal(statePollMs({ role: 'teacher', hidden: true, pushLive: true }), 60000);
   assert.equal(statePollMs({ role: 'teacher', hidden: false, pushLive: false }), 2000);
   assert.equal(chatPollMs({ hidden: false, pushLive: true }), 60000);
   assert.equal(chatPollMs({ hidden: true, pushLive: true }), 60000);
-  assert.equal(chatPollMs({ hidden: false, pushLive: false }), 3000);
+  assert.equal(chatPollMs({ hidden: false, pushLive: false }), 6000);
 });
 
 test('search matches name or SID like the web roster and chat', () => {
