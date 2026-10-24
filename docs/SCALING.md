@@ -25,14 +25,32 @@ Written after the 2026-10-24 trial (1,500 students, 64 vCPU / 48 GB): 1,390 HTTP
 - `auth/me`: every 120 s, jittered. During a live class it runs every 10 min.
 
 ## 4. Join waves
-- The token route gives each student a `connectDelayMs` slot from the Redis key `join:pace` (`JOIN_CONNECT_RATE` per second, at most `JOIN_SPREAD_MAX_MS`). Teachers get 0.
+- The token route gives each student a `connectDelayMs` slot from the Redis key `join:pace` (`JOIN_CONNECT_RATE` per second). Teachers get 0.
+- The window grows with the room: `max(JOIN_SPREAD_MAX_MS, admitted / JOIN_CONNECT_RATE s)`, capped at `JOIN_SPREAD_CAP_MS`. At the defaults (30/s, 15 s, 90 s) a 1,500-student wave is spread over 50 s, not 15 s.
 - The client waits for that delay before connecting.
 - Mic and camera publishes retry negotiation timeouts twice with backoff, unpublishing between attempts.
-- A first connect that fails with a negotiation or connection error triggers a rejoin with a fresh token.
+- A first connect that fails with a negotiation or connection error triggers a rejoin with a fresh token (and a fresh pacing slot) after a backoff that grows with each failure in a row: 2, 4, 8, 16, 32, 45 s (50–100% jitter). A successful connect resets it.
 
 ## 5. Cores and connections
 - `WEB_CPU_FRACTION` of CPUs go to web workers; the rest are left for LiveKit. Boxes with 8 or fewer CPUs use them all.
 - Prisma pool: `DB_POOL_PER_WORKER`. Postgres `max_connections` is 400. Keep workers × pool below that, with headroom.
+
+## 6. Web worker memory
+- Web workers share `WEB_MEM_FRACTION` (default 0.5) of available RAM (the container's cgroup limit when lower). Each worker's recycle threshold is that share (512–4096 MB), and its V8 heap cap (`--max-old-space-size`) is 80% of it.
+- 48 GB with 16 workers gives 1,536 MB RSS and a 1,228 MB heap. Before, it was 1,051 MB and 788 MB; trial 2 had 5 heap OOM restarts.
+- Override with `WEB_WORKER_MAX_RSS_MB` (0 turns recycling off) or `WEB_WORKER_HEAP_MB`.
+- The student `/state` memo is keyed by room version. Expired entries are now swept every second (max 256), so stale 1,500-row rosters don't pile up during the join ramp.
+
+## 7. LiveKit CPU above ~1,200 students
+Trial 2 ran 1,500 students on one Oracle A1 server (32 OCPU, 48 GB). LiveKit hit 1600–2200% CPU during the join ramp, and 83 bot connects timed out between 1,200 and 1,400 students. Most of that cost is the connect itself (ICE/DTLS handshakes and the first subscriptions). Steady state is much cheaper.
+
+Options, cheapest first:
+1. **Spread the ramp.** This is the default now (§4). For bigger rooms, lower `JOIN_CONNECT_RATE` to 20 so 1,500 students spread over 75 s, and raise `JOIN_SPREAD_CAP_MS` if needed.
+2. **Give LiveKit more cores on the shared box.** On a 32-core box, the default `WEB_CPU_FRACTION=0.5` gives web 16 workers. Web peaked at about 1 core per worker, so set `WEB_CPU_FRACTION=0.375` (12 workers) or `WEB_WORKERS=12`, which leaves about 20 cores for LiveKit. For hard isolation, pin with `cpuset` in `docker-compose.yml`: LiveKit on cores 0–19, web/Postgres/Redis on 20–31. LiveKit already has `cpu_shares: 8192`, and web runs at `nice` `WEB_NICE` (5).
+   - Rough sizing from trial 2: about 1.5 LiveKit cores per 100 students at peak join, and well under that once steady. For 1,500 students, plan for about 20 dedicated LiveKit cores.
+3. **Second media node.** `docker-compose.media.yml` plus `LIVEKIT_SERVERS` (docs/MULTI-SERVER.md) runs LiveKit on a separate VM.
+   - Rooms are assigned to a node whole. That moves all SFU CPU off the web box (best for one huge class), or splits *several* classes across nodes.
+   - It does not split a single room across nodes. For one room well above ~2,000 students, use a bigger media VM. A 1,500-student room fits on one dedicated 16–32-core media VM.
 
 ## Env vars
 | Var | Default | Meaning |
@@ -44,8 +62,12 @@ Written after the 2026-10-24 trial (1,500 students, 64 vCPU / 48 GB): 1,390 HTTP
 | `STATE_PUSH_SPREAD_MS` | 3000 | Spread of student refetch after a push |
 | `ATTENDANCE_FLUSH_MS` | 2000 | Attendance flush interval |
 | `ATTENDANCE_FLUSH_BATCH` | 500 | Events per flush |
-| `JOIN_CONNECT_RATE` | 40 | Student LiveKit connects per second |
-| `JOIN_SPREAD_MAX_MS` | 15000 | Max join delay (0 = off) |
+| `JOIN_CONNECT_RATE` | 30 | Student LiveKit connects per second |
+| `JOIN_SPREAD_MAX_MS` | 15000 | Minimum pacing window for small rooms (0 = pacing off) |
+| `JOIN_SPREAD_CAP_MS` | 90000 | Max pacing window for big rooms (max 180000) |
+| `WEB_MEM_FRACTION` | 0.5 | Share of RAM for all web workers (max 0.9) |
+| `WEB_WORKER_MAX_RSS_MB` | auto | Per-worker recycle threshold (0 = off) |
+| `WEB_WORKER_HEAP_MB` | auto (80% of RSS) | Per-worker V8 heap cap |
 
 ## Trade-offs
 - Student state can be up to about 1 s stale.
@@ -53,5 +75,5 @@ Written after the 2026-10-24 trial (1,500 students, 64 vCPU / 48 GB): 1,390 HTTP
 - A small replay window remains after a crash.
 - 400 Postgres connections use more memory.
 - Big boxes run fewer web workers.
-- A join can be delayed up to 15 s.
+- A join can be delayed up to 15 s in small rooms, and up to `JOIN_SPREAD_CAP_MS` (90 s) in big ones.
 - "Reconnecting" shows later (105 s).
