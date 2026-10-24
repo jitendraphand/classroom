@@ -6,6 +6,11 @@ import { FeedbackForm } from './FeedbackForm';
 import { classEndedCopy, finishFromState } from '@/lib/classFinish';
 import { classEndedNoted, noteClassEnded } from '@/lib/classEnded';
 import { roomFetch } from '@/lib/classroomClient';
+import {
+  AUTO_RECOVER_DELAY_MS,
+  buildClientErrorReport,
+  shouldAutoRecover,
+} from '@/lib/clientError';
 
 type Props = { code: string; children: ReactNode };
 type Phase = 'checking' | 'ended' | 'failed';
@@ -23,7 +28,18 @@ export class ClassroomGuard extends Component<Props, State> {
     return { error: true, phase: 'checking' };
   }
 
-  componentDidCatch() {
+  /** Times of automatic remounts (recover from a one-off render throw). */
+  private recovered: number[] = [];
+  private recoverTimer: ReturnType<typeof setTimeout> | null = null;
+
+  componentWillUnmount() {
+    if (this.recoverTimer) clearTimeout(this.recoverTimer);
+  }
+
+  componentDidCatch(error: unknown, info?: { componentStack?: string | null }) {
+    // Log the real error: console + server container log ([client-error]).
+    console.error('[classroom] crash', error, info?.componentStack);
+    this.report(error, info?.componentStack);
     if (classEndedNoted(this.props.code)) {
       this.setState({ phase: 'ended' });
       void this.checkSchool();
@@ -31,6 +47,26 @@ export class ClassroomGuard extends Component<Props, State> {
     }
     void this.probe();
   }
+
+  report = (error: unknown, componentStack: string | null | undefined) => {
+    try {
+      const body = buildClientErrorReport(this.props.code, error, componentStack, {
+        url: typeof location !== 'undefined' ? location.pathname : '',
+        ua: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+        attempt: this.recovered.length,
+      });
+      void fetch('/api/client-error', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        keepalive: true,
+      }).catch(() => {});
+    } catch {
+      /* never throw from the boundary */
+    }
+  };
+
+  retry = () => this.setState({ error: false, phase: 'checking', school: false });
 
   checkSchool = async () => {
     try {
@@ -55,6 +91,13 @@ export class ClassroomGuard extends Component<Props, State> {
       }
     } catch {
       /* show the calm failure below */
+    }
+    // Class still live: remount once or twice automatically before asking.
+    const now = Date.now();
+    if (shouldAutoRecover(this.recovered, now)) {
+      this.recovered = [...this.recovered.filter((t) => now - t < 60_000), now];
+      this.recoverTimer = setTimeout(this.retry, AUTO_RECOVER_DELAY_MS);
+      return;
     }
     this.setState({ phase: 'failed' });
   };
@@ -89,7 +132,7 @@ export class ClassroomGuard extends Component<Props, State> {
         <p className="text-sm text-slate-300">Something went wrong in the classroom</p>
         <Button
           variant="secondary"
-          onClick={() => this.setState({ error: false, phase: 'checking', school: false })}
+          onClick={this.retry}
         >
           Try again
         </Button>

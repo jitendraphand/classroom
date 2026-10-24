@@ -189,7 +189,15 @@ export function TeacherInkProvider({
       if (!participant.identity.startsWith('teacher_')) return;
       try {
         const msg = decodeInk(JSON.parse(new TextDecoder().decode(payload)));
-        if (msg) setStrokes((s) => applyInk(s, msg));
+        // Updaters run during render: a throw here would crash the classroom.
+        if (msg)
+          setStrokes((s) => {
+            try {
+              return applyInk(s, msg);
+            } catch {
+              return s;
+            }
+          });
       } catch {
         /* ignore */
       }

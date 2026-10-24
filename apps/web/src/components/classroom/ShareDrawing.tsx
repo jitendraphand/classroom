@@ -140,7 +140,14 @@ export function ShareDrawingProvider({
         // My own points are already drawn locally (an echo could briefly cut
         // the points drawn since that batch).
         if (p.t === 'pts' && p.by === meRef.current) return;
-        setStrokesState((s) => applyPacket(s, p));
+        // Updaters run during render: a throw here would crash the classroom.
+        setStrokesState((s) => {
+          try {
+            return applyPacket(s, p);
+          } catch {
+            return s;
+          }
+        });
       } catch {
         /* ignore */
       }
