@@ -11,13 +11,43 @@
 /** Students per second admitted to the SFU when a wave arrives. */
 export function joinConnectRate(env: Record<string, string | undefined> = process.env): number {
   const n = Number(env.JOIN_CONNECT_RATE);
-  return Number.isFinite(n) && n > 0 ? Math.min(n, 10_000) : 40;
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 10_000) : DEFAULT_JOIN_CONNECT_RATE;
+}
+
+/**
+ * Trial 2 (1,500 students, 32 OCPU): at 40/s within a fixed 15 s window,
+ * everyone past ~600 landed in the same window and LiveKit hit 1600–2200% CPU
+ * with 83 connect timeouts at 1,200–1,400 students. Defaults are now 30/s and
+ * the window grows with the room (roomSize / rate), up to JOIN_SPREAD_CAP_MS.
+ */
+export const DEFAULT_JOIN_CONNECT_RATE = 30;
+export const DEFAULT_JOIN_SPREAD_MAX_MS = 15_000;
+export const DEFAULT_JOIN_SPREAD_CAP_MS = 90_000;
+export const JOIN_SPREAD_HARD_CAP_MS = 180_000;
+
+/** Upper bound for the room-size-scaled window (ms). */
+export function joinSpreadCapMs(env: Record<string, string | undefined> = process.env): number {
+  const n = Number.parseInt(env.JOIN_SPREAD_CAP_MS ?? '', 10);
+  return Number.isFinite(n) && n >= 0 ? Math.min(n, JOIN_SPREAD_HARD_CAP_MS) : DEFAULT_JOIN_SPREAD_CAP_MS;
+}
+
+/**
+ * The pacing window for a room of `roomSize` students: at least
+ * JOIN_SPREAD_MAX_MS, else long enough for the whole room at JOIN_CONNECT_RATE
+ * (roomSize / rate seconds), capped at JOIN_SPREAD_CAP_MS. 0 when pacing is off.
+ */
+export function joinSpreadForRoom(roomSize: number, env: Record<string, string | undefined> = process.env): number {
+  const base = joinSpreadMaxMs(env);
+  if (base <= 0) return 0;
+  const size = Number.isFinite(roomSize) && roomSize > 0 ? roomSize : 0;
+  const scaled = Math.ceil((size / joinConnectRate(env)) * 1000);
+  return Math.max(base, Math.min(Math.max(base, joinSpreadCapMs(env)), scaled));
 }
 
 /** The longest a student is asked to wait before connecting. 0 disables pacing. */
 export function joinSpreadMaxMs(env: Record<string, string | undefined> = process.env): number {
   const n = Number.parseInt(env.JOIN_SPREAD_MAX_MS ?? '', 10);
-  return Number.isFinite(n) && n >= 0 ? Math.min(n, 60_000) : 15_000;
+  return Number.isFinite(n) && n >= 0 ? Math.min(n, 60_000) : DEFAULT_JOIN_SPREAD_MAX_MS;
 }
 
 /**
@@ -47,7 +77,7 @@ return delay
 export function clientConnectDelayMs(body: unknown): number {
   const v = (body as { connectDelayMs?: unknown } | null)?.connectDelayMs;
   if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) return 0;
-  return Math.min(Math.round(v), 20_000);
+  return Math.min(Math.round(v), JOIN_SPREAD_HARD_CAP_MS);
 }
 
 /** LiveKit publish / connect failures that a quick retry usually fixes. */

@@ -1,11 +1,15 @@
 import { ensureRedis } from './redis';
-import { PACE_LUA, joinConnectRate, joinSpreadMaxMs } from './joinPacingLogic';
+import { PACE_LUA, joinConnectRate, joinSpreadForRoom } from './joinPacingLogic';
 
 const CLOCK_KEY = 'join:pace';
 
-/** A student's connect delay (ms) for the current join wave; 0 when idle or Redis is down. */
-export async function nextConnectDelayMs(now = Date.now()): Promise<number> {
-  const max = joinSpreadMaxMs();
+/**
+ * A student's connect delay (ms) for the current join wave; 0 when idle or
+ * Redis is down. `roomSize` (students admitted so far) widens the window for
+ * big rooms (joinSpreadForRoom).
+ */
+export async function nextConnectDelayMs(now = Date.now(), roomSize = 0): Promise<number> {
+  const max = joinSpreadForRoom(roomSize);
   if (max <= 0) return 0;
   const gap = 1000 / joinConnectRate();
   try {

@@ -30,10 +30,10 @@ test('paceSlot: never more than the max spread', () => {
   assert.equal(r.next, 15_025);
 });
 
-test('pacing env: defaults 40/s within 15 s; 0 disables', () => {
-  assert.equal(joinConnectRate({}), 40);
+test('pacing env: defaults 30/s within 15 s; 0 disables', () => {
+  assert.equal(joinConnectRate({}), 30);
   assert.equal(joinConnectRate({ JOIN_CONNECT_RATE: '100' }), 100);
-  assert.equal(joinConnectRate({ JOIN_CONNECT_RATE: '-1' }), 40);
+  assert.equal(joinConnectRate({ JOIN_CONNECT_RATE: '-1' }), 30);
   assert.equal(joinSpreadMaxMs({}), 15_000);
   assert.equal(joinSpreadMaxMs({ JOIN_SPREAD_MAX_MS: '0' }), 0);
 });
@@ -41,7 +41,7 @@ test('pacing env: defaults 40/s within 15 s; 0 disables', () => {
 test('client connect delay is clamped; old servers mean no wait', () => {
   assert.equal(clientConnectDelayMs({}), 0);
   assert.equal(clientConnectDelayMs({ connectDelayMs: 1234.4 }), 1234);
-  assert.equal(clientConnectDelayMs({ connectDelayMs: 1e9 }), 20_000);
+  assert.equal(clientConnectDelayMs({ connectDelayMs: 1e9 }), 180_000);
   assert.equal(clientConnectDelayMs({ connectDelayMs: 'x' }), 0);
   assert.equal(clientConnectDelayMs(null), 0);
 });
@@ -84,7 +84,7 @@ test('withNegotiationRetry: other errors and exhausted retries rethrow; cancelle
 
 test('token route paces students only; client waits before connecting', () => {
   const route = readFileSync(new URL('../src/app/api/rooms/[code]/token/route.ts', import.meta.url), 'utf8');
-  assert.match(route, /isTeacher \? 0 : await nextConnectDelayMs\(\)/);
+  assert.match(route, /isTeacher \? 0 : await nextConnectDelayMs\(Date\.now\(\), roomSize\)/);
   const room = readFileSync(new URL('../src/components/classroom/ClassroomRoom.tsx', import.meta.url), 'utf8');
   assert.equal((room.match(/await sleepConnectDelay\(/g) || []).length, 2);
   assert.equal((room.match(/withNegotiationRetry\(/g) || []).length, 2);

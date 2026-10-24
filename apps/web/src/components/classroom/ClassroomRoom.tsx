@@ -58,7 +58,7 @@ import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { TEACHER_ABSENCE_GRACE_MS } from '@/lib/graceTimer';
 import { MIC_CAPTURE, keepShareAudio } from '@/lib/audioPolicy';
-import { STUCK_RECONNECT_MS, classroomReconnectPolicy, isOwnStaleDuplicate, rejoinDelayMs, rejoinOutcome, shouldAutoRejoin } from '@/lib/rejoinPolicy';
+import { STUCK_RECONNECT_MS, classroomReconnectPolicy, connectRetryDelayMs, isOwnStaleDuplicate, rejoinDelayMs, rejoinOutcome, shouldAutoRejoin } from '@/lib/rejoinPolicy';
 import { SESSION_CHECK_EVENT, SESSION_ENDED_EVENT, isEndedReason, loginHref } from '@/lib/sessionClient';
 import { useRoomState, type RosterInfo } from '@/hooks/useRoomState';
 import { compactViewport, studentChatBox, usePseudoFullscreen, useViewport } from '@/hooks/useStudentLayout';
@@ -5613,6 +5613,8 @@ export function ClassroomRoom({ code }: { code: string }) {
   const connectedAtRef = useRef<number | null>(null);
   /** This LiveKitRoom mount reached Connected at least once (a failed first connect is retried). */
   const everConnectedRef = useRef(false);
+  /** Consecutive failed first connects (reset on Connected): drives connectRetryDelayMs. */
+  const connectFailuresRef = useRef(0);
   useEffect(() => {
     const r = rejoinRef.current;
     r.unmounted = false;
@@ -5627,14 +5629,18 @@ export function ClassroomRoom({ code }: { code: string }) {
    * network, fetches a fresh token and mounts a new Room, retrying with
    * backoff until it works or the class is over.
    */
-  const rejoin = useCallback(async () => {
+  const rejoin = useCallback(async (opts?: { connectFailures?: number }) => {
     const r = rejoinRef.current;
     if (r.running) return;
     r.running = true;
     setRejoining(true);
+    const failures = opts?.connectFailures ?? 0;
     try {
       for (let attempt = 0; !r.unmounted; attempt++) {
-        await new Promise((res) => window.setTimeout(res, rejoinDelayMs(attempt)));
+        // A failed connect backs off by how many connects failed in a row (the
+        // SFU is likely overloaded); other rejoins use the normal schedule.
+        const wait = failures > 0 ? connectRetryDelayMs(failures + attempt) : rejoinDelayMs(attempt);
+        await new Promise((res) => window.setTimeout(res, wait));
         if (r.unmounted) return;
         if (typeof navigator !== 'undefined' && navigator.onLine === false) {
           await new Promise<void>((res) => {
@@ -6032,12 +6038,18 @@ export function ClassroomRoom({ code }: { code: string }) {
       className="h-[100dvh] overflow-hidden"
       onConnected={() => {
         everConnectedRef.current = true;
+        connectFailuresRef.current = 0;
       }}
       onError={(e) => {
         console.error('LiveKit', e);
         // Join wave: the first connect (or its negotiation) timed out. Retry
         // quickly with a fresh token instead of leaving the student stuck.
-        if (!everConnectedRef.current && (isNegotiationError(e) || e?.name === 'ConnectionError')) void rejoin();
+        // Retry with a fresh token (and a fresh pacing slot) after a backoff that
+        // grows with each consecutive failure, so an overloaded SFU is not hammered.
+        if (!everConnectedRef.current && (isNegotiationError(e) || e?.name === 'ConnectionError')) {
+          connectFailuresRef.current += 1;
+          void rejoin({ connectFailures: connectFailuresRef.current });
+        }
       }}
       onDisconnected={onDisconnected}
     >

@@ -105,13 +105,16 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     },
   });
 
+  let roomSize = 0;
   if (!isTeacher) {
+    roomSize = await redis.scard(keys.admitted(code)).catch(() => 0);
     // Multi-server load accounting (no-op with one media node).
-    void redis.scard(keys.admitted(code)).then((n) => noteRoomLoad(roomName, n)).catch(() => undefined);
+    void noteRoomLoad(roomName, roomSize).catch(() => undefined);
   }
 
-  // Join-wave pacing: students wait for a slot before connecting to LiveKit.
-  const connectDelayMs = isTeacher ? 0 : await nextConnectDelayMs();
+  // Join-wave pacing: students wait for a slot before connecting to LiveKit;
+  // the window grows with the room (lib/joinPacingLogic joinSpreadForRoom).
+  const connectDelayMs = isTeacher ? 0 : await nextConnectDelayMs(Date.now(), roomSize);
 
   return jsonOk({
     connectDelayMs,
