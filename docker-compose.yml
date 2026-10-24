@@ -33,7 +33,7 @@ services:
       - -c
       - max_wal_size=${POSTGRES_MAX_WAL_SIZE:-512MB}
       - -c
-      - max_connections=${POSTGRES_MAX_CONNECTIONS:-280}
+      - max_connections=${POSTGRES_MAX_CONNECTIONS:-400}
     shm_size: 256mb
     ulimits:
       nofile:
@@ -142,14 +142,16 @@ services:
       NODE_ENV: production
       PORT: "3000"
       HOSTNAME: "0.0.0.0"
-      # auto = one worker per CPU; the Prisma pool per worker shrinks to fit
-      # POSTGRES_MAX_CONNECTIONS (cluster.js / src/lib/webWorkers.ts).
+      # auto = every CPU on ≤ 8-CPU boxes, else WEB_CPU_FRACTION (0.5) of them
+      # so LiveKit keeps the rest; the Prisma pool per worker (default 10)
+      # shrinks to fit POSTGRES_MAX_CONNECTIONS (docs/SCALING.md).
       WEB_WORKERS: ${WEB_WORKERS:-auto}
+      WEB_CPU_FRACTION: ${WEB_CPU_FRACTION:-0.5}
       DB_POOL_PER_WORKER: ${DB_POOL_PER_WORKER:-auto}
       # Web workers run at this nice level so LiveKit stays ahead (0 = off).
       WEB_NICE: ${WEB_NICE:-5}
       DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-10}
-      POSTGRES_MAX_CONNECTIONS: ${POSTGRES_MAX_CONNECTIONS:-280}
+      POSTGRES_MAX_CONNECTIONS: ${POSTGRES_MAX_CONNECTIONS:-400}
     ulimits:
       nofile:
         soft: 1048576

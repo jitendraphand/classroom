@@ -1,22 +1,27 @@
 /**
  * How many Next.js workers to run, sized from the core count.
  *
- * - Workers: WEB_WORKERS when set to a number, else one per CPU (all cores).
- *   LiveKit keeps priority on a shared box through Docker cpu_shares / nice
- *   (docker-compose.yml), not by leaving cores idle.
+ * - Workers: WEB_WORKERS when set to a number. Auto: every CPU on small boxes
+ *   (≤ 8 CPUs); on bigger boxes WEB_CPU_FRACTION of them (default 0.5, at
+ *   least 8), so LiveKit keeps the other half. Trial 2026-10-24 (64 vCPU):
+ *   64 workers + LiveKit pushed load average to 50-60 and /state to 503s.
+ *   LiveKit also keeps priority through Docker cpu_shares / nice.
  * - Prisma pool per worker: DB_POOL_PER_WORKER when set, else the share of
  *   Postgres max_connections (minus headroom) each worker gets, between
- *   MIN_AUTO_POOL and DEFAULT_DB_POOL_PER_WORKER. A 32-core box gets 8 each
- *   (256 of 280); a 64-core box gets 4 each instead of losing workers.
+ *   MIN_AUTO_POOL and DEFAULT_DB_POOL_PER_WORKER. A 64-vCPU box runs 32
+ *   workers × 10 = 320 of 400; a 32-vCPU box 16 × 10.
  * - Only if even that does not fit (explicit pool, or the minimum pool) are
  *   auto-sized workers capped. An explicit WEB_WORKERS is honoured as-is:
  *   raise Postgres max_connections to match.
  */
 
-export const DEFAULT_DB_POOL_PER_WORKER = 8;
+export const DEFAULT_DB_POOL_PER_WORKER = 10;
 export const MIN_AUTO_POOL = 3;
 export const DEFAULT_DB_POOL_TIMEOUT = 10;
-export const DEFAULT_POSTGRES_MAX_CONNECTIONS = 280;
+export const DEFAULT_POSTGRES_MAX_CONNECTIONS = 400;
+/** Share of CPUs the web cluster takes on boxes with more than SMALL_BOX_CPUS. */
+export const DEFAULT_WEB_CPU_FRACTION = 0.5;
+export const SMALL_BOX_CPUS = 8;
 /** Connections left for superuser, migrate, and ad-hoc psql. */
 export const POSTGRES_HEADROOM = 24;
 export const MAX_WEB_WORKERS = 128;
@@ -38,6 +43,15 @@ export type WorkerPlan = {
 
 const isSet = (v: string | undefined) => v != null && String(v).trim() !== '' && String(v).trim().toLowerCase() !== 'auto';
 
+/** Auto worker count: all CPUs on small boxes, else WEB_CPU_FRACTION of them (≥ SMALL_BOX_CPUS). */
+export function autoWebWorkers(cpuCount: number, fractionRaw?: string): number {
+  const cpus = Math.max(1, cpuCount | 0);
+  if (cpus <= SMALL_BOX_CPUS) return cpus;
+  const f = Number.parseFloat(String(fractionRaw ?? ''));
+  const frac = Number.isFinite(f) && f > 0 && f <= 1 ? f : DEFAULT_WEB_CPU_FRACTION;
+  return Math.max(SMALL_BOX_CPUS, Math.round(cpus * frac));
+}
+
 export function webWorkerCount(opts: {
   env?: Record<string, string | undefined>;
   cpuCount: number;
@@ -47,7 +61,7 @@ export function webWorkerCount(opts: {
   const maxConnections = parsePositiveInt(env.POSTGRES_MAX_CONNECTIONS, DEFAULT_POSTGRES_MAX_CONNECTIONS);
   const budget = Math.max(1, maxConnections - POSTGRES_HEADROOM);
   const explicitWorkers = isSet(env.WEB_WORKERS);
-  let workers = explicitWorkers ? parsePositiveInt(env.WEB_WORKERS, cpuCount) : cpuCount;
+  let workers = explicitWorkers ? parsePositiveInt(env.WEB_WORKERS, cpuCount) : autoWebWorkers(cpuCount, env.WEB_CPU_FRACTION);
   workers = Math.max(1, Math.min(MAX_WEB_WORKERS, workers));
   const explicitPool = isSet(env.DB_POOL_PER_WORKER);
   const poolPerWorker = explicitPool

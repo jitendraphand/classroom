@@ -13,13 +13,13 @@ Target for this generation: **2,500 concurrent students** on one large server (o
 | **Web (Next.js cluster)** | ~1 HTTP keepalive while in class; no SSE while LiveKit is up; safety poll every 60 s | CPU: 16 workers × one core. Was 1 process at 2.2 cores / 500 connections. **2,500 HTTP idle sockets + rare polls should fit.** Unproven at 2,500. |
 | **SSE / chat stream** | 0 while LiveKit is connected (fallback only) | Previously 1 Redis subscriber + 1 HTTP stream per student — that path is what 502'd at ~500. |
 | **Redis** | ~1–3 KB room hashes (heartbeat, mute, hands) + pub/sub for fallback SSE | Memory: a few tens of MB. Default `REDIS_MAXMEMORY=1gb`; set `192mb` on a 2 GB VPS. |
-| **Postgres** | Token/join writes at arrival; chat persist; `/state` on join and 60 s safety | Connections: `WEB_WORKERS × DB_POOL_PER_WORKER`. Auto: one worker per CPU, and the pool per worker is the share of `POSTGRES_MAX_CONNECTIONS` (default 280, minus 24 headroom) clamped to 3–8. So 32 cores gets 32 × 8 = 256, and 64 cores gets 64 × 4. |
+| **Postgres** | Token/join writes at arrival; chat persist; `/state` on join and 60 s safety | Connections: `WEB_WORKERS × DB_POOL_PER_WORKER`. Auto: every CPU on ≤ 8-CPU boxes, else `WEB_CPU_FRACTION` (0.5) of the CPUs; the pool per worker is the share of `POSTGRES_MAX_CONNECTIONS` (default 400, minus 24 headroom) clamped to 3–10. So 64 vCPU gets 32 × 10 = 320. See docs/SCALING.md. |
 | **LiveKit CPU** | Mix of audio + teacher camera + optional share. Whiteboard is data-only. | Load test: 4.1 cores at ~410. Linear guess ~25 cores at 2,500 — **tight on 32 OCPU if everyone gets video share.** Whiteboard-only is much cheaper. |
 | **LiveKit bandwidth** | ~0.15 Mbps whiteboard lesson; ~0.6 Mbps slides+camera (see [BANDWIDTH.md](BANDWIDTH.md)); ~1.1–1.6 Mbps video-share | 2,500 × 0.6 Mbps = **1.5 Gbps egress**. The 32 OCPU test peaked at 380 Mbps / 410. **Egress is the likely hard limit** unless the lesson is whiteboard/audio. |
 | **LiveKit UDP ports** | 1–2 ports per participant with `port_range 50000–60000` (~10k ports) | 2,500 × 2 = 5,000 < 10,000. Alternative: `rtc.udp_port` single-port mux (see `infra/livekit.example.yaml`). |
 | **File descriptors** | 1 LiveKit WS + 1 HTTP keepalive per student, plus workers × (Postgres + Redis) | Compose sets `ulimits.nofile` 1048576 on web/livekit/caddy/redis/postgres. Host `fs.file-max` must allow it. |
 
-LiveKit and the web workers share all cores. LiveKit gets priority when the CPU is contended: compose gives it `cpu_shares: 8192` against the web container's `512`, and the web workers also run at `nice` `WEB_NICE` (default 5). Idle cores are never left unused. There are no software caps on per-class or per-room counts, total participants, or join rate (`JOIN_RATE_LIMIT_PER_MINUTE` is off by default). The only optional cap is the school's own *max students per class* setting, which is empty (unlimited) by default.
+Since 2026-10-24 the web cluster takes only half the CPUs on big boxes (docs/SCALING.md); previously LiveKit and the web workers shared all cores. LiveKit gets priority when the CPU is contended: compose gives it `cpu_shares: 8192` against the web container's `512`, and the web workers also run at `nice` `WEB_NICE` (default 5). Idle cores are never left unused. There are no software caps on per-class or per-room counts, total participants, or join rate (`JOIN_RATE_LIMIT_PER_MINUTE` is off by default). The only optional cap is the school's own *max students per class* setting, which is empty (unlimited) by default.
 
 `room.max_participants` is **0** (unlimited) in `infra/livekit.example.yaml`. The process does not reject a join before ports, CPU or egress run out.
 
@@ -36,9 +36,9 @@ sudo ufw allow 50000:60000/udp
 
 | Env | Default | 2 GB VPS | 32 OCPU / 64 GB aiming at 2,500 |
 |---|---|---|---|
-| `WEB_WORKERS` | CPU count, capped to fit Postgres | `1` or `2` | `16` |
-| `DB_POOL_PER_WORKER` | `8` | `8` | `8` (16×8=128) |
-| `POSTGRES_MAX_CONNECTIONS` | `280` | `50` | `200` |
+| `WEB_WORKERS` | all CPUs ≤ 8, else CPUs × `WEB_CPU_FRACTION` (0.5), capped to fit Postgres | `1` or `2` | `16` |
+| `DB_POOL_PER_WORKER` | `10` | `8` | `8` (16×8=128) |
+| `POSTGRES_MAX_CONNECTIONS` | `400` | `50` | `200` |
 | `POSTGRES_SHARED_BUFFERS` | `256MB` | `256MB` | `8GB` |
 | `POSTGRES_EFFECTIVE_CACHE_SIZE` | `1536MB` | `1536MB` | `48GB` |
 | `REDIS_MAXMEMORY` | `192mb` | `192mb` | `1gb` |

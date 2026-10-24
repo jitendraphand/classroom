@@ -1,6 +1,7 @@
 'use strict';
 /**
- * Production entry: fork WEB_WORKERS Node processes (default = CPU count)
+ * Production entry: fork WEB_WORKERS Node processes (default: all CPUs on
+ * ≤ 8-CPU boxes, else WEB_CPU_FRACTION (0.5) of them; see src/lib/webWorkers.ts)
  * sharing PORT (default 3000). Each worker loads Next.js standalone server.js.
  *
  * Local `next dev` does not use this file — it already serves :3000 as a
@@ -18,9 +19,11 @@ const path = require('path');
 const fs = require('fs');
 
 // Mirrors src/lib/webWorkers.ts (tests/scaling.test.ts checks both agree).
-const DEFAULT_POOL = 8;
+const DEFAULT_POOL = 10;
 const MIN_AUTO_POOL = 3;
-const DEFAULT_MAX_CONN = 280;
+const DEFAULT_MAX_CONN = 400;
+const DEFAULT_WEB_CPU_FRACTION = 0.5;
+const SMALL_BOX_CPUS = 8;
 const HEADROOM = 24;
 const MAX_WORKERS = 128;
 
@@ -34,13 +37,21 @@ function isSet(v) {
   return v != null && String(v).trim() !== '' && String(v).trim().toLowerCase() !== 'auto';
 }
 
+/** All CPUs on small boxes, else WEB_CPU_FRACTION of them (≥ 8): LiveKit keeps the rest. */
+function autoWorkers(cpus) {
+  if (cpus <= SMALL_BOX_CPUS) return cpus;
+  const f = Number.parseFloat(String(process.env.WEB_CPU_FRACTION ?? ''));
+  const frac = Number.isFinite(f) && f > 0 && f <= 1 ? f : DEFAULT_WEB_CPU_FRACTION;
+  return Math.max(SMALL_BOX_CPUS, Math.round(cpus * frac));
+}
+
 /** { workers, pool }: one worker per core; the Prisma pool shrinks to fit Postgres. */
 function workerPlan() {
   const cpus = Math.max(1, (typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length) || 1);
   const maxConn = positiveInt(process.env.POSTGRES_MAX_CONNECTIONS, DEFAULT_MAX_CONN);
   const budget = Math.max(1, maxConn - HEADROOM);
   const explicit = isSet(process.env.WEB_WORKERS);
-  let n = explicit ? positiveInt(process.env.WEB_WORKERS, cpus) : cpus;
+  let n = explicit ? positiveInt(process.env.WEB_WORKERS, cpus) : autoWorkers(cpus);
   n = Math.max(1, Math.min(MAX_WORKERS, n));
   const pool = isSet(process.env.DB_POOL_PER_WORKER)
     ? Math.min(64, positiveInt(process.env.DB_POOL_PER_WORKER, DEFAULT_POOL))
