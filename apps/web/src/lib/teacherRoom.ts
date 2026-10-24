@@ -270,6 +270,10 @@ export async function onClassSessionEnded(classSessionId: string, at: Date) {
     where: { id: classSessionId, endedAt: null },
     data: { endedAt: at },
   });
+  // Write queued joins/leaves first so a student who left before the end is
+  // not closed "at the end" (feedback goes only to students present then).
+  const { flushAttendanceQueue } = await import('./attendanceQueue');
+  await flushAttendanceQueue({ wait: true }).catch((e) => console.error('attendance flush at end', e));
   const { closeSessionAttendance } = await import('./attendanceService');
   await closeSessionAttendance(classSessionId, at);
 }

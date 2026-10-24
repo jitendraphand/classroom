@@ -13,7 +13,7 @@ import {
 } from '@/lib/teacherPresence';
 import { handlePresenceEvent, parseLivekitRoomName } from '@/lib/teacherPresenceLogic';
 import { recordStudentConnection } from '@/lib/studentPresence';
-import { recordConnectionEvent } from '@/lib/attendanceService';
+import { enqueueConnectionEvent } from '@/lib/attendanceQueue';
 import { HANDLED_WEBHOOK_EVENTS, KeyedWorkQueue, TtlCache } from '@/lib/webhookQueue';
 
 /** Event time from the webhook (seconds, int64), falling back to now if absent/odd. */
@@ -52,7 +52,7 @@ async function recordAttendance(event: {
     console.error('student presence webhook', event.event, e instanceof Error ? e.message : e);
   }
   try {
-    await recordConnectionEvent(kind, identity, sid, eventTime(event.createdAt));
+    await enqueueConnectionEvent(kind, identity, sid, eventTime(event.createdAt));
   } catch (e) {
     console.error('attendance webhook', event.event, e instanceof Error ? e.message : e);
   }

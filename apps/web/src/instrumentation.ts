@@ -10,6 +10,8 @@ export async function register() {
     startRankScheduler();
     const { startAbsenceSweeper } = await import('./lib/teacherPresence');
     startAbsenceSweeper();
+    const { startAttendanceFlusher } = await import('./lib/attendanceQueue');
+    startAttendanceFlusher();
     try {
       const { schoolJoinModeFromEnv, signedModeProblem } = await import('./lib/schoolJoin');
       const { schoolJwtConfigFromEnv } = await import('./lib/schoolJwt');

@@ -109,6 +109,24 @@ export async function recordConnectionEvent(
   return true;
 }
 
+/**
+ * Apply several queued connection events for one student in one short locked
+ * transaction (lib/attendanceQueue.ts). Events must be in time order; joins
+ * and leaves are idempotent per SID, so replaying a batch is safe.
+ */
+export async function applyConnectionEvents(
+  classSessionId: string,
+  studentId: string,
+  events: { kind: 'joined' | 'left'; sid: string; at: Date }[]
+) {
+  if (!events.length) return;
+  await withLockedRecord(classSessionId, studentId, (r) => {
+    let s = toConn(r);
+    for (const e of events) s = e.kind === 'joined' ? applyJoin(s, e.sid, e.at) : applyLeave(s, e.sid, e.at);
+    return s;
+  });
+}
+
 /** Explicit leave / removal of one participant. */
 export async function closeParticipantAttendance(participant: { studentId: string | null; classSessionId: string | null }, at = new Date()) {
   if (!participant.studentId || !participant.classSessionId) return;
