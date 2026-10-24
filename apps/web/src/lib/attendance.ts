@@ -58,6 +58,17 @@ export function closeAll(s: ConnState, at: Date): ConnState {
   };
 }
 
+/**
+ * After a class has ended, a record must not stay open or without a leave
+ * time: a late-flushed join (queue drained after the end close) or a lost
+ * participant_left would otherwise leave it open forever. Closes at the end.
+ */
+export function settleAfterEnd(s: ConnState, endedAt: Date | null): ConnState {
+  if (!endedAt) return s;
+  if (s.openSids.length || s.connectedSince || !s.leftAt) return closeAll(s, endedAt);
+  return s;
+}
+
 /** Total including a still-open interval. */
 export function totalConnectedMs(s: Pick<ConnState, 'connectedMs' | 'connectedSince'>, now: Date): number {
   return s.connectedMs + elapsed(s.connectedSince, now);

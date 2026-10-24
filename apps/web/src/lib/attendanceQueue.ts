@@ -100,7 +100,12 @@ async function flushBatch(): Promise<number> {
       endedAt.get(g.cs) ?? null
     );
     try {
-      await applyConnectionEvents(g.cs, g.st, evs.map((e) => ({ kind: e.kind, sid: e.sid, at: new Date(e.at) })));
+      await applyConnectionEvents(
+        g.cs,
+        g.st,
+        evs.map((e) => ({ kind: e.kind, sid: e.sid, at: new Date(e.at) })),
+        endedAt.get(g.cs) ?? null
+      );
       done.push(...g.events.map(eventId));
     } catch (e) {
       console.error('[attendance] batch write failed', e instanceof Error ? e.message : e);

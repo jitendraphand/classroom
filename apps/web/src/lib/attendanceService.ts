@@ -1,6 +1,6 @@
 import type { AttendanceRecord, ClassSession, Prisma } from '@prisma/client';
 import { prisma } from './db';
-import { applyJoin, applyLeave, closeAll, isLate, lateThreshold, type ConnState } from './attendance';
+import { applyJoin, applyLeave, closeAll, isLate, lateThreshold, settleAfterEnd, type ConnState } from './attendance';
 import { lateGraceMinutes } from './schoolConfig';
 
 function toConn(r: AttendanceRecord): ConnState {
@@ -117,13 +117,16 @@ export async function recordConnectionEvent(
 export async function applyConnectionEvents(
   classSessionId: string,
   studentId: string,
-  events: { kind: 'joined' | 'left'; sid: string; at: Date }[]
+  events: { kind: 'joined' | 'left'; sid: string; at: Date }[],
+  sessionEndedAt: Date | null = null
 ) {
   if (!events.length) return;
   await withLockedRecord(classSessionId, studentId, (r) => {
     let s = toConn(r);
     for (const e of events) s = e.kind === 'joined' ? applyJoin(s, e.sid, e.at) : applyLeave(s, e.sid, e.at);
-    return s;
+    // Flushed after the class ended (e.g. the end-time flush could not get the
+    // lock): never leave the record open; close it at the end time.
+    return settleAfterEnd(s, sessionEndedAt);
   });
 }
 
@@ -133,7 +136,15 @@ export async function closeParticipantAttendance(participant: { studentId: strin
   await withLockedRecord(participant.classSessionId, participant.studentId, (r) => closeAll(toConn(r), at));
 }
 
-/** Class ended: close every open interval. */
+/**
+ * Class ended: close every open interval, and give every record still without
+ * a leave time the end time.
+ *
+ * Trial 2 left 106 rows with leftAt = null: only rows with an open interval
+ * were closed here, so students who arrived (lobby / admitted) but never had a
+ * LiveKit connection recorded (83 connect timeouts in the join ramp, failed
+ * page joins, a lost participant_joined) were skipped. Returns counts.
+ */
 export async function closeSessionAttendance(classSessionId: string, at = new Date()) {
   const open = await prisma.attendanceRecord.findMany({
     where: { classSessionId, OR: [{ connectedSince: { not: null } }, { openSids: { isEmpty: false } }] },
@@ -142,4 +153,10 @@ export async function closeSessionAttendance(classSessionId: string, at = new Da
   for (const r of open) {
     await withLockedRecord(classSessionId, r.studentId, (rec) => closeAll(toConn(rec), at));
   }
+  // No interval open and no leave time: nothing to add to connectedMs, just stamp it.
+  const stamped = await prisma.attendanceRecord.updateMany({
+    where: { classSessionId, leftAt: null, connectedSince: null, openSids: { isEmpty: true } },
+    data: { leftAt: at },
+  });
+  return { closed: open.length, stamped: stamped.count };
 }
