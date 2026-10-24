@@ -15,7 +15,25 @@ import { ensureRedis } from './redis';
 
 type Entry<T> = { exp: number; p: Promise<T> };
 const store = new Map<string, Entry<unknown>>();
-const MAX_ENTRIES = 2_000;
+/**
+ * Keys carry the room version, which every nudge bumps, so each bump strands
+ * the previous entry (a full ~1,500-row roster). Trial 2: expired entries were
+ * only dropped once 2,000 had piled up, so a worker could hold hundreds of MB
+ * of dead rosters during the join ramp and hit its heap cap (5 OOM restarts).
+ * Expired entries are now swept at most every SWEEP_MS, and the map is small.
+ */
+const MAX_ENTRIES = 256;
+const SWEEP_MS = 1_000;
+let lastSweep = 0;
+
+function sweep(now: number) {
+  for (const [k, e] of store) if (e.exp <= now) store.delete(k);
+  lastSweep = now;
+}
+
+export function memoSize() {
+  return store.size;
+}
 
 export function stateCacheMs(env: Record<string, string | undefined> = process.env): number {
   const n = Number.parseInt(env.STATE_CACHE_MS ?? '', 10);
@@ -28,10 +46,8 @@ export function memo<T>(key: string, ttlMs: number, fn: () => Promise<T>, now = 
   if (ttlMs <= 0) return fn();
   const hit = store.get(key) as Entry<T> | undefined;
   if (hit && hit.exp > now) return hit.p;
-  if (store.size >= MAX_ENTRIES) {
-    for (const [k, e] of store) if (e.exp <= now) store.delete(k);
-    if (store.size >= MAX_ENTRIES) store.clear();
-  }
+  if (now - lastSweep >= SWEEP_MS || store.size >= MAX_ENTRIES) sweep(now);
+  if (store.size >= MAX_ENTRIES) store.clear();
   const p = fn();
   const entry: Entry<T> = { exp: now + ttlMs, p };
   store.set(key, entry);
@@ -54,6 +70,7 @@ export async function roomRowCached(code: string) {
 
 export function clearStateMemo() {
   store.clear();
+  lastSweep = 0;
 }
 
 export const roomVersionKey = (code: string) => `roomver:${code}`;

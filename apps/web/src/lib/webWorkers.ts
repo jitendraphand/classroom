@@ -80,3 +80,26 @@ export function webWorkerCount(opts: {
   }
   return { workers, capped: false, cpuCount, poolPerWorker, maxConnections };
 }
+
+/**
+ * Per-worker memory: WEB_MEM_FRACTION (default 0.5) of available RAM (cgroup
+ * limit when lower than physical RAM) is split across the web workers. The
+ * recycle threshold (WEB_WORKER_MAX_RSS_MB) is that share, 512–4096 MB; the V8
+ * heap cap (--max-old-space-size, WEB_WORKER_HEAP_MB) is 80% of it, ≥ 384 MB.
+ * Trial 2 (48 GB, 16 workers): 35% / 75% gave a 788 MB heap and 5 worker OOMs.
+ * cluster.js mirrors this (tests/scaling.test.ts).
+ */
+export const DEFAULT_WEB_MEM_FRACTION = 0.5;
+export const HEAP_OF_RSS = 0.8;
+export function workerMemoryPlan(opts: { env?: Record<string, string | undefined>; availableMb: number; workers: number }) {
+  const env = opts.env ?? {};
+  const f = Number.parseFloat(String(env.WEB_MEM_FRACTION ?? ''));
+  const frac = Number.isFinite(f) && f > 0 && f <= 0.9 ? f : DEFAULT_WEB_MEM_FRACTION;
+  const n = Math.max(1, opts.workers | 0);
+  const autoRss = Math.max(512, Math.min(4096, Math.floor((opts.availableMb * frac) / n)));
+  const rssMb = env.WEB_WORKER_MAX_RSS_MB != null && String(env.WEB_WORKER_MAX_RSS_MB).trim() !== ''
+    ? Number.parseInt(String(env.WEB_WORKER_MAX_RSS_MB), 10) || 0
+    : autoRss;
+  const heapMb = parsePositiveInt(env.WEB_WORKER_HEAP_MB, Math.max(384, Math.floor((rssMb > 0 ? rssMb : autoRss) * HEAP_OF_RSS)));
+  return { rssMb, heapMb, frac };
+}

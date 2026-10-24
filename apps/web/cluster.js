@@ -26,6 +26,23 @@ const DEFAULT_WEB_CPU_FRACTION = 0.5;
 const SMALL_BOX_CPUS = 8;
 const HEADROOM = 24;
 const MAX_WORKERS = 128;
+const DEFAULT_WEB_MEM_FRACTION = 0.5;
+const HEAP_OF_RSS = 0.8;
+
+/** Physical RAM, or the container's cgroup memory limit when lower. */
+function availableMemMb() {
+  let mb = os.totalmem() / 1048576;
+  for (const f of ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes']) {
+    try {
+      const raw = fs.readFileSync(f, 'utf8').trim();
+      const b = Number(raw);
+      if (raw !== 'max' && Number.isFinite(b) && b > 0 && b / 1048576 < mb) mb = b / 1048576;
+    } catch {
+      /* not in a cgroup / not readable */
+    }
+  }
+  return Math.floor(mb);
+}
 
 function positiveInt(raw, fallback) {
   if (raw == null || String(raw).trim() === '') return fallback;
@@ -96,7 +113,7 @@ function startWorker() {
   watchMemory();
 }
 
-// A worker whose RSS passes WEB_WORKER_MAX_RSS_MB (default: 35% of RAM / workers, 512–1536; 0 = off)
+// A worker whose RSS passes WEB_WORKER_MAX_RSS_MB (default: WEB_MEM_FRACTION of RAM / workers, 512–4096; 0 = off)
 // asks the primary to replace it: a fresh worker starts first, then the old
 // one stops taking connections and drains. One recycle at a time, so a slow
 // leak never takes capacity down. The heap cap (WEB_WORKER_HEAP_MB) is the
@@ -124,11 +141,15 @@ process.env.DB_POOL_PER_WORKER = String(plan.pool);
 
 if (cluster.isPrimary && n > 1) {
   console.log(`[classroom] primary ${process.pid} starting ${n} web workers on :${port} (Prisma pool ${plan.pool} each)`);
-  // Memory budget: all web workers together get ~35% of RAM by default
-  // (LiveKit, Postgres and Redis need the rest), 512–1536 MB per worker.
-  const autoRss = Math.max(512, Math.min(1536, Math.floor((os.totalmem() / 1048576) * 0.35 / n)));
+  // Memory budget (mirrors workerMemoryPlan in src/lib/webWorkers.ts): web workers
+  // together get WEB_MEM_FRACTION (default 0.5) of available RAM, 512–4096 MB
+  // each; the V8 heap cap is 80% of that. Overrides: WEB_WORKER_MAX_RSS_MB, WEB_WORKER_HEAP_MB.
+  const mf = Number.parseFloat(String(process.env.WEB_MEM_FRACTION ?? ''));
+  const memFrac = Number.isFinite(mf) && mf > 0 && mf <= 0.9 ? mf : DEFAULT_WEB_MEM_FRACTION;
+  const autoRss = Math.max(512, Math.min(4096, Math.floor((availableMemMb() * memFrac) / n)));
   if (!process.env.WEB_WORKER_MAX_RSS_MB) process.env.WEB_WORKER_MAX_RSS_MB = String(autoRss);
-  const heapMb = positiveInt(process.env.WEB_WORKER_HEAP_MB, Math.max(384, Math.floor(autoRss * 0.75)));
+  const rssForHeap = Number.parseInt(process.env.WEB_WORKER_MAX_RSS_MB, 10) > 0 ? Number.parseInt(process.env.WEB_WORKER_MAX_RSS_MB, 10) : autoRss;
+  const heapMb = positiveInt(process.env.WEB_WORKER_HEAP_MB, Math.max(384, Math.floor(rssForHeap * HEAP_OF_RSS)));
   console.log(`[classroom] per-worker memory: recycle above ${process.env.WEB_WORKER_MAX_RSS_MB} MB RSS, heap cap ${heapMb} MB`);
   cluster.setupPrimary({ execArgv: [...process.execArgv, `--max-old-space-size=${heapMb}`] });
   for (let i = 0; i < n; i++) cluster.fork();
