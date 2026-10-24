@@ -63,6 +63,7 @@ import { SHARE_CODEC, shareProfile } from '../shared/web/videoQuality';
 import type { VideoCell, VideoModel } from '../shared/videoModel';
 import { openWgcTrack, type WgcHandle } from './wgcTrack';
 import { applyDrawBytes } from '../shared/studentInk';
+import { drawIdentitySet, routeLivePacket } from '../shared/livePackets';
 import {
   liveStudentPool,
   orderedPins,
@@ -184,6 +185,8 @@ export class ClassController {
   private code = '';
   private gen = 0;
   private snap: RoomSnapshot | null = null;
+  /** draw-allow pushes seen since the last /state (identity → on). */
+  private drawAllowPushes = new Map<string, boolean>();
   private messages: ChatMessage[] = [];
   private chatTo = 'all';
   private lastRead: string | null = null;
@@ -1344,10 +1347,16 @@ export class ClassController {
     room.on(RoomEvent.ParticipantConnected, () => this.ensureStudentCameras());
     room.on(RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
       if (participant?.isLocal) return;
-      if (topic === STATE_TOPIC) this.kickState();
-      else if (topic === 'chat') this.kickChat();
-      // Only the server sends `draw`; a packet naming a participant is forged.
-      else if (topic === DRAW_TOPIC && !participant) this.onDrawPacket(payload);
+      const action = routeLivePacket(topic, participant?.identity, payload, {
+        drawTopic: DRAW_TOPIC,
+        drawIdentities: drawIdentitySet(this.snap?.drawHolders ?? [], this.drawAllowPushes),
+      });
+      if (action.kind === 'state') this.kickState();
+      else if (action.kind === 'chat') this.kickChat();
+      else if (action.kind === 'signal') {
+        if (action.allow) this.drawAllowPushes.set(action.allow.identity, action.allow.on);
+        this.kickState();
+      } else if (action.kind === 'draw') this.onDrawPacket(payload);
     });
     room.on(RoomEvent.Reconnected, () => {
       if (this.sharing) void this.loadDrawing();
@@ -2247,6 +2256,7 @@ export class ClassController {
       return;
     }
     this.snap = snap;
+    this.drawAllowPushes.clear();
     this.noteDrawRequests(snap);
     if (!this.clearedStaleStage && snap.stageMode === 'screen' && !this.sharing) {
       this.clearedStaleStage = true;

@@ -119,7 +119,7 @@ test('push-driven refresh: pushLive while connected, 60 s safety polls, coalesce
   assert.equal(chatPollMs({ hidden: false, pushLive: true }), 60000);
   const cs = src('renderer/classSession.ts');
   assert.match(cs, /get pushLive\(\): boolean \{\s*return this\.room\?\.state === ConnectionState\.Connected;/);
-  assert.match(cs, /topic === STATE_TOPIC\) this\.kickState\(\)/);
+  assert.match(cs, /action.kind === 'state'\) this\.kickState\(\)/);
   assert.match(cs, /this\.stateAgain = true/);
 });
 
