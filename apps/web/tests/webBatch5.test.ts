@@ -7,6 +7,7 @@ import { createEraseBatcher, eraseBatchBodies, ERASE_BATCH_MAX } from '../src/li
 import { isSmallScreen, shareLayerFor, shouldDeclineVp9, withoutVp9 } from '../src/lib/subscriberCodecs';
 import { createStepUp } from '../src/lib/reconnectQuality';
 import { SHARE_CODEC } from '../src/lib/videoQuality';
+import { classroomViewSource } from './helpers/classroomSource';
 
 const src = (p: string) => readFileSync(new URL(`../src/${p}`, import.meta.url), 'utf8');
 const root = (p: string) => readFileSync(new URL(`../../../${p}`, import.meta.url), 'utf8');
@@ -51,7 +52,7 @@ test('1. one device per SID: second device = different cookie; toast notices', (
   const state = src('app/api/rooms/[code]/state/route.ts');
   assert.match(state, /replaced: true/);
   assert.match(state, /takeovers: isTeacher \? await recentTakeovers\(code\)/);
-  assert.match(src('components/classroom/ClassroomRoom.tsx'), /data-testid="takeover-toast"/);
+  assert.match(classroomViewSource(), /data-testid="takeover-toast"/);
 });
 
 test('2. finished student view: reasons, copy, static screen, window.close', () => {
@@ -61,7 +62,7 @@ test('2. finished student view: reasons, copy, static screen, window.close', () 
   assert.equal(finishFromState({ status: 'LIVE' }), null);
   assert.equal(finishCopy('replaced').title, 'You joined from another device');
   assert.match(finishCopy('ended').body, /close this tab/);
-  const room = src('components/classroom/ClassroomRoom.tsx');
+  const room = classroomViewSource();
   assert.match(room, /function StudentFinished/);
   assert.match(room, /window\.close\(\)/);
   assert.match(room, /onFinished\('left'\)/);
@@ -151,7 +152,7 @@ test('8. reconnect: low while recovering, step up after a quiet period', () => {
 });
 
 test('8. chat UI is lazy-loaded; the thread hook is not', () => {
-  const room = src('components/classroom/ClassroomRoom.tsx');
+  const room = classroomViewSource();
   assert.match(room, /const ChatView = dynamic\(\(\) => import\('\.\/Chat'\)/);
   assert.match(room, /import \{ useChatThread \} from '\.\/chatThread'/);
   assert.doesNotMatch(room, /from '\.\/Chat';/);

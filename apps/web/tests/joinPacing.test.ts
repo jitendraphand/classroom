@@ -9,6 +9,7 @@ import {
   paceSlot,
   withNegotiationRetry,
 } from '../src/lib/joinPacingLogic';
+import { classroomViewSource } from './helpers/classroomSource';
 
 test('paceSlot: a wave is spaced at the rate; a quiet room connects at once', () => {
   const gap = 25; // 40/s
@@ -85,7 +86,7 @@ test('withNegotiationRetry: other errors and exhausted retries rethrow; cancelle
 test('token route paces students only; client waits before connecting', () => {
   const route = readFileSync(new URL('../src/app/api/rooms/[code]/token/route.ts', import.meta.url), 'utf8');
   assert.match(route, /isTeacher \? 0 : await nextConnectDelayMs\(Date\.now\(\), roomSize\)/);
-  const room = readFileSync(new URL('../src/components/classroom/ClassroomRoom.tsx', import.meta.url), 'utf8');
+  const room = classroomViewSource();
   assert.equal((room.match(/await sleepConnectDelay\(/g) || []).length, 2);
   assert.equal((room.match(/withNegotiationRetry\(/g) || []).length, 2);
   // students still never auto-subscribe (no classmates' video)

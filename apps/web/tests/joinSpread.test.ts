@@ -1,11 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { joinSpreadForRoom, joinSpreadCapMs, clientConnectDelayMs } from '../src/lib/joinPacingLogic';
 import { connectRetryDelayMs, CONNECT_RETRY_MAX_MS } from '../src/lib/rejoinPolicy';
-
-const root = (p: string) => readFileSync(join(__dirname, '..', p), 'utf8');
+import { classroomViewSource } from './helpers/classroomSource';
 
 test('join spread scales with room size, bounded by base and cap', () => {
   assert.equal(joinSpreadForRoom(0, {}), 15_000);
@@ -25,7 +22,7 @@ test('connect retry backoff grows per consecutive failure, jittered, capped', ()
   assert.equal(connectRetryDelayMs(3, () => 1), 8_000);
   assert.equal(connectRetryDelayMs(50, () => 1), CONNECT_RETRY_MAX_MS);
   assert.ok(connectRetryDelayMs(2, () => 0.5) >= 2_000);
-  const room = root('src/components/classroom/ClassroomRoom.tsx');
+  const room = classroomViewSource();
   assert.match(room, /connectFailuresRef\.current \+= 1/);
   assert.match(room, /connectFailuresRef\.current = 0/);
 });

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { ensureRedis } from '@/lib/redis';
-import { PEER_HEADER, ipMatches, trustedProxies } from '@/lib/clientIp';
+import { clientIpFrom, ipMatches } from '@/lib/clientIp';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,9 +31,10 @@ export async function GET(req: Request) {
     ok = false;
   }
 
-  // Loopback without a proxy hop: Docker's / Caddy's own checks, or the operator on the host.
-  const peer = req.headers.get(PEER_HEADER) || '';
-  const local = !peer || (trustedProxies({}).some((r) => ipMatches(peer, r)) && !req.headers.get('x-forwarded-for'));
+  // The resolved client is loopback: Docker's / Caddy's own checks, or the
+  // operator on the host (a browser behind Caddy resolves to its own IP).
+  const client = clientIpFrom(req.headers);
+  const local = ['127.0.0.0/8', '::1'].some((r) => ipMatches(client, r));
   const status = ok ? 'healthy' : 'degraded';
   const body = local
     ? {

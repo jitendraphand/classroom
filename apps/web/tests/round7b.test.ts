@@ -15,6 +15,7 @@ import { studentVideoModeShortLabel } from '../src/lib/studentVideoMode';
 import { displayDivision } from '../src/lib/grades';
 import { canSeeSystemTab, privilegeSetFrom, visibleAdminTabs } from '../src/lib/privileges';
 import { occurrencesBetween, type SlotLike } from '../src/lib/schedule';
+import { classroomViewSource } from './helpers/classroomSource';
 
 const src = (p: string) => readFileSync(new URL(`../src/${p}`, import.meta.url), 'utf8');
 
@@ -132,7 +133,7 @@ test('Live dashboard tab; System Control hidden when the sub-admin has none of i
 test('whiteboard is full width; class videos float instead of embedding in a side column', () => {
   const host = src('components/classroom/Whiteboard.tsx');
   assert.doesNotMatch(host, /wb-video-slot/);
-  const room = src('components/classroom/ClassroomRoom.tsx');
+  const room = classroomViewSource();
   assert.doesNotMatch(room, /embedHost=\{wbOpen/);
   assert.match(room, /dock=\{wbOpen \? null : dockArea\}/);
 });
@@ -151,7 +152,7 @@ test('admin students search matches name or student ID case-insensitively', () =
 });
 
 test('share/draw: request banner clears when the student is allowed; in-tab dock is top-left', () => {
-  const room = src('components/classroom/ClassroomRoom.tsx');
+  const room = classroomViewSource();
   assert.match(room, /stillAsking/);
   assert.match(room, /share-draw-actions/);
   const hud = src('components/classroom/TeacherShareHud.tsx');
@@ -160,7 +161,7 @@ test('share/draw: request banner clears when the student is allowed; in-tab dock
 });
 
 test('dropped students: teacher reports ParticipantDisconnected; students disconnect on page leave', () => {
-  const room = src('components/classroom/ClassroomRoom.tsx');
+  const room = classroomViewSource();
   assert.match(room, /StudentLeaveOnPageHide/);
   assert.match(room, /disconnectOnPageLeave: !isTeacher/);
   assert.match(room, /\/presence'/);

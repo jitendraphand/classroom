@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { isRosterDropped, selectTeacherVideos, videoHidden } from '../src/lib/droppedVideos';
+import { classroomViewSource } from './helpers/classroomSource';
 
 const src = (p: string) => readFileSync(new URL(`../src/${p}`, import.meta.url), 'utf8');
 const now = 1_700_000_000_000;
@@ -73,7 +74,7 @@ test('visible-video selection drops crashed students, collapses duplicates, and 
 });
 
 test('teacher video surfaces use the same drop as the roster', () => {
-  const room = src('components/classroom/ClassroomRoom.tsx');
+  const room = classroomViewSource();
   assert.match(room, /selectTeacherVideos\(/);
   assert.match(room, /visibleIdentities=\{shownVisibles\}/);
   assert.match(room, /hiddenIdentities=\{hiddenVideoList\}/);

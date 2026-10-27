@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { camWanted, effectiveCamWanted, panelShown } from '../src/lib/camOnDemand';
 import { nextDataSaver, parseDataSaver, teacherVideoDemand } from '../src/lib/dataSaver';
 import { mergeAudience } from '../src/lib/pollPolicy';
+import { classroomViewSource } from './helpers/classroomSource';
 
 const src = (p: string) => readFileSync(new URL(`../src/${p}`, import.meta.url), 'utf8');
 
@@ -29,7 +30,7 @@ test('cameras on demand: state, route and client wiring', () => {
   const route = src('app/api/rooms/[code]/video-panel/route.ts');
   assert.match(route, /getTeacherSession/);
   assert.match(route, /redis\.del\(keys\.videoPanel/);
-  const room = src('components/classroom/ClassroomRoom.tsx');
+  const room = classroomViewSource();
   assert.match(room, /track\.pauseUpstream\(\)/);
   assert.match(room, /track\.resumeUpstream\(\)/);
   assert.match(room, /'\/video-panel'/);
@@ -56,13 +57,13 @@ test('targeted nudges merge; all wins', () => {
 });
 
 test('audio: student mic speech + DTX without RED; share audio music without DTX', () => {
-  const room = src('components/classroom/ClassroomRoom.tsx');
+  const room = classroomViewSource();
   assert.match(room, /audioPreset: AudioPresets\.speech,\s*dtx: true,[\s\S]{0,300}red: isTeacher/);
   assert.match(room, /audioPreset: AudioPresets\.music,\s*dtx: false/);
 });
 
 test('adaptive stream + dynacast on; video mode manual and off by default', () => {
-  const room = src('components/classroom/ClassroomRoom.tsx');
+  const room = classroomViewSource();
   assert.match(room, /adaptiveStream: \{/);
   assert.match(room, /dynacast: true/);
   assert.match(room, /useState\(false\);\n/);

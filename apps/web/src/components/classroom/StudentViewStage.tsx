@@ -13,7 +13,8 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 const SCREEN_SIDECAR_SUFFIX = '__screen';
 import { IconScreen } from '@/components/ui/Icons';
 import { cn } from '@/lib/cn';
-import { isTeacherParticipant, TeacherScreenStage } from './ClassroomRoom';
+import { TeacherScreenStage } from './ClassroomRoom';
+import { isTeacherParticipant } from './participantRoles';
 import { useFloatDrag } from './FloatingPanel';
 
 /**
