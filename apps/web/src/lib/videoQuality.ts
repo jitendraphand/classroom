@@ -139,6 +139,7 @@ export type ShareProfile = {
 export const SLIDES_MAX_FPS = 15;
 
 export function shareProfile(videoMode: boolean): ShareProfile {
+  if (activeProfile === 'low') return videoMode ? LOW_SHARE_VIDEO_MODE : LOW_SHARE_SLIDES;
   if (videoMode) return SCREEN_SHARE_VIDEO_MODE;
   const low = SCREEN_SHARE.layers[0];
   return {
@@ -170,6 +171,85 @@ export function shareEncodingsFor<E extends { maxBitrate?: number; maxFramerate?
   });
 }
 
+// ------------------------------------------------------------ media profile
+
+/**
+ * Deployment-wide media profile (MEDIA_PROFILE on the server, handed to every
+ * client with its LiveKit token):
+ * - 'standard': the settings above.
+ * - 'low': for servers with little egress bandwidth or CPU (a small VPS, a
+ *   shared school uplink). The SFU forwards the teacher's streams to every
+ *   student, so its egress is roughly students × these bitrates: the teacher
+ *   camera drops to one 180p layer (~120 kbps), slides to 10 fps at ≤1 Mbps,
+ *   video mode to 720p15 ≤800 kbps, student cameras to ≤100 kbps; students
+ *   start in data-saver "low" (they can still change it).
+ * See docs/CONSTRAINED-DEPLOY.md for the numbers.
+ */
+export type MediaProfile = 'standard' | 'low';
+
+export function parseMediaProfile(v: unknown): MediaProfile {
+  return typeof v === 'string' && v.trim().toLowerCase() === 'low' ? 'low' : 'standard';
+}
+
+let activeProfile: MediaProfile = 'standard';
+
+/** Set once per page from the token response, before anything is published. */
+export function setMediaProfile(p: MediaProfile) {
+  activeProfile = p;
+}
+
+export function mediaProfile(): MediaProfile {
+  return activeProfile;
+}
+
+export const LOW_TEACHER_CAMERA = {
+  capture: { width: { ideal: 320 }, height: { ideal: 180 }, frameRate: { ideal: 12, max: 12 } },
+  encoding: { maxBitrate: 120_000, maxFramerate: 12 },
+  simulcast: false,
+  layers: [] as Layer[],
+} as const;
+
+export const LOW_STUDENT_CAMERA = {
+  capture: { width: { ideal: 320 }, height: { ideal: 180 }, frameRate: { ideal: 10 } },
+  encoding: { maxBitrate: 100_000, maxFramerate: 10 },
+  simulcast: false,
+} as const;
+
+/** Low-profile share: same capture (text stays sharp), fewer frames and bits. */
+export const LOW_SCREEN_SHARE = {
+  ...SCREEN_SHARE,
+  encoding: { maxBitrate: 1_000_000, maxFramerate: 10 },
+  layers: [{ width: 1280, height: 720, maxBitrate: 600_000, maxFramerate: 10 }] satisfies Layer[],
+} as const;
+
+export const LOW_SHARE_SLIDES: ShareProfile = {
+  capture: { frameRate: { ideal: 10, max: 10 }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+  top: { maxBitrate: 1_000_000, maxFramerate: 10 },
+  low: { maxBitrate: 600_000, maxFramerate: 10 },
+  degradationPreference: 'maintain-resolution',
+  contentHint: 'detail',
+};
+
+export const LOW_SHARE_VIDEO_MODE: ShareProfile = {
+  capture: { frameRate: { ideal: 15, max: 15 }, height: { max: 720 }, width: { max: 1280 } },
+  top: { maxBitrate: 800_000, maxFramerate: 15 },
+  low: { maxBitrate: 500_000, maxFramerate: 15 },
+  degradationPreference: 'maintain-resolution',
+  contentHint: 'motion',
+};
+
+export function teacherCamera() {
+  return activeProfile === 'low' ? LOW_TEACHER_CAMERA : TEACHER_CAMERA;
+}
+
+export function studentCamera() {
+  return activeProfile === 'low' ? LOW_STUDENT_CAMERA : STUDENT_CAMERA;
+}
+
+export function screenShare() {
+  return activeProfile === 'low' ? LOW_SCREEN_SHARE : SCREEN_SHARE;
+}
+
 export function cameraProfile(isTeacher: boolean) {
-  return isTeacher ? TEACHER_CAMERA : STUDENT_CAMERA;
+  return isTeacher ? teacherCamera() : studentCamera();
 }

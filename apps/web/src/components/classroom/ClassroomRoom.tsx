@@ -162,12 +162,14 @@ import {
 } from '@/lib/peerWindow';
 import {
   cameraProfile,
-  SCREEN_SHARE,
+  parseMediaProfile,
+  screenShare,
   screenShareSimulcastFor,
+  setMediaProfile,
   shareEncodingsFor,
   shareProfile,
-  STUDENT_CAMERA,
-  TEACHER_CAMERA,
+  studentCamera,
+  teacherCamera,
   SHARE_CODEC,
   shareUsesVp9,
 } from '@/lib/videoQuality';
@@ -208,6 +210,8 @@ type TokenPayload = {
   canPublishVideo: boolean;
   visibleIdentities: string[];
   mutedByTeacher: boolean;
+  /** Server MEDIA_PROFILE (lib/videoQuality): applied before anything is published. */
+  mediaProfile?: string;
 };
 
 /**
@@ -729,7 +733,7 @@ function captureScreen(videoMode = false): Promise<MediaStream> {
   if (safari) return bare();
 
   const withHints = {
-    video: { ...SCREEN_SHARE.capture, ...shareProfile(videoMode).capture },
+    video: { ...screenShare().capture, ...shareProfile(videoMode).capture },
     // Tab audio (any Chromium OS) or system audio (entire screen, Windows /
     // ChromeOS). The picker shows a "Share audio" checkbox; unticked = no track.
     audio: SCREEN_SHARE_AUDIO_CAPTURE,
@@ -2334,16 +2338,16 @@ function SelectivePublisher({
           isTeacher
             ? {
                 source: Track.Source.Camera,
-                simulcast: TEACHER_CAMERA.simulcast,
-                videoEncoding: TEACHER_CAMERA.encoding,
-                videoSimulcastLayers: TEACHER_CAMERA.layers.map(
+                simulcast: teacherCamera().simulcast,
+                videoEncoding: teacherCamera().encoding,
+                videoSimulcastLayers: teacherCamera().layers.map(
                   (l) => new VideoPreset(l.width, l.height, l.maxBitrate, l.maxFramerate)
                 ),
               }
             : {
                 source: Track.Source.Camera,
-                simulcast: STUDENT_CAMERA.simulcast,
-                videoEncoding: STUDENT_CAMERA.encoding,
+                simulcast: studentCamera().simulcast,
+                videoEncoding: studentCamera().encoding,
               };
         await withNegotiationRetry(() => participant.publishTrack(track, camOpts), {
           beforeRetry: async () => {
@@ -3760,7 +3764,7 @@ function RoomInner({
     try {
       const published = new LocalVideoTrack(mask ? mask.track : media, undefined, true);
       const { width: capW, height: capH } = media.getSettings();
-      const simulcast = SCREEN_SHARE.simulcast && screenShareSimulcastFor(capW, capH);
+      const simulcast = screenShare().simulcast && screenShareSimulcastFor(capW, capH);
       // Slides: text must stay sharp, so under CPU/bandwidth pressure drop
       // frames, not pixels. Video mode: the reverse (smooth 30 fps).
       const profile = shareProfile(videoModeRef.current);
@@ -3785,7 +3789,7 @@ function RoomInner({
         screenShareEncoding: profile.top,
         degradationPreference: profile.degradationPreference as RTCDegradationPreference,
         screenShareSimulcastLayers: layered
-          ? SCREEN_SHARE.layers.map(
+          ? screenShare().layers.map(
               (l) => new VideoPreset(l.width, l.height, profile.low.maxBitrate, profile.low.maxFramerate)
             )
           : undefined,
@@ -5677,6 +5681,7 @@ export function ClassroomRoom({ code }: { code: string }) {
         await sleepConnectDelay(body);
         if (r.unmounted) return;
         everConnectedRef.current = false;
+        setMediaProfile(parseMediaProfile(body.mediaProfile));
         setTokenData(body);
         connectedAtRef.current = Date.now();
         setConnKey((k) => k + 1);
@@ -5888,6 +5893,7 @@ export function ClassroomRoom({ code }: { code: string }) {
     }
     // Join-wave pacing slot from the server (students only; 0 when quiet).
     await sleepConnectDelay(tok);
+    setMediaProfile(parseMediaProfile(tok.mediaProfile));
     setTokenData(tok);
   }, [code, router]);
 
@@ -6027,8 +6033,8 @@ export function ClassroomRoom({ code }: { code: string }) {
           dtx: true,
           red: true,
           audioPreset: AudioPresets.speech,
-          videoEncoding: STUDENT_CAMERA.encoding,
-          screenShareEncoding: SCREEN_SHARE.encoding,
+          videoEncoding: studentCamera().encoding,
+          screenShareEncoding: screenShare().encoding,
         },
       }}
       // Students never auto-subscribe: StudentMediaPrivacy subscribes them to

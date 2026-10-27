@@ -90,16 +90,31 @@ export function webWorkerCount(opts: {
  * cluster.js mirrors this (tests/scaling.test.ts).
  */
 export const DEFAULT_WEB_MEM_FRACTION = 0.5;
+/** Share of the web container's OWN memory limit (cgroup) the workers may use together. */
+export const DEFAULT_WEB_LIMIT_FRACTION = 0.85;
 export const HEAP_OF_RSS = 0.8;
-export function workerMemoryPlan(opts: { env?: Record<string, string | undefined>; availableMb: number; workers: number }) {
+export function workerMemoryPlan(opts: {
+  env?: Record<string, string | undefined>;
+  availableMb: number;
+  workers: number;
+  /**
+   * availableMb is the container's memory limit (WEB_MEM_LIMIT), not the
+   * host's RAM: the web workers own all of it, so they take
+   * WEB_MEM_LIMIT_FRACTION (0.85) of it instead of WEB_MEM_FRACTION of the host.
+   */
+  limited?: boolean;
+}) {
   const env = opts.env ?? {};
-  const f = Number.parseFloat(String(env.WEB_MEM_FRACTION ?? ''));
-  const frac = Number.isFinite(f) && f > 0 && f <= 0.9 ? f : DEFAULT_WEB_MEM_FRACTION;
+  const raw = opts.limited ? env.WEB_MEM_LIMIT_FRACTION : env.WEB_MEM_FRACTION;
+  const f = Number.parseFloat(String(raw ?? ''));
+  const frac = Number.isFinite(f) && f > 0 && f <= 0.95 ? f : opts.limited ? DEFAULT_WEB_LIMIT_FRACTION : DEFAULT_WEB_MEM_FRACTION;
   const n = Math.max(1, opts.workers | 0);
-  const autoRss = Math.max(512, Math.min(4096, Math.floor((opts.availableMb * frac) / n)));
+  // Inside a container limit the floor is lower: a small box runs 1-2 workers in ~600 MB each.
+  const floor = opts.limited ? 256 : 512;
+  const autoRss = Math.max(floor, Math.min(4096, Math.floor((opts.availableMb * frac) / n)));
   const rssMb = env.WEB_WORKER_MAX_RSS_MB != null && String(env.WEB_WORKER_MAX_RSS_MB).trim() !== ''
     ? Number.parseInt(String(env.WEB_WORKER_MAX_RSS_MB), 10) || 0
     : autoRss;
-  const heapMb = parsePositiveInt(env.WEB_WORKER_HEAP_MB, Math.max(384, Math.floor((rssMb > 0 ? rssMb : autoRss) * HEAP_OF_RSS)));
+  const heapMb = parsePositiveInt(env.WEB_WORKER_HEAP_MB, Math.max(opts.limited ? 192 : 384, Math.floor((rssMb > 0 ? rssMb : autoRss) * HEAP_OF_RSS)));
   return { rssMb, heapMb, frac };
 }

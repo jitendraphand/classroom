@@ -8,6 +8,7 @@ import { ensureRedis, keys } from '@/lib/redis';
 import { isTeacherPresent } from '@/lib/teacherPresence';
 import { clearStage } from '@/lib/sessionKick';
 import { nextConnectDelayMs } from '@/lib/joinPacing';
+import { parseMediaProfile } from '@/lib/videoQuality';
 
 export const dynamic = 'force-dynamic';
 
@@ -117,6 +118,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   const connectDelayMs = isTeacher ? 0 : await nextConnectDelayMs(Date.now(), roomSize);
 
   return jsonOk({
+    mediaProfile: parseMediaProfile(process.env.MEDIA_PROFILE),
     connectDelayMs,
     token,
     url: await mediaUrlForRoom(roomName, req),

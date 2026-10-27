@@ -27,21 +27,26 @@ const SMALL_BOX_CPUS = 8;
 const HEADROOM = 24;
 const MAX_WORKERS = 128;
 const DEFAULT_WEB_MEM_FRACTION = 0.5;
+const DEFAULT_WEB_LIMIT_FRACTION = 0.85;
 const HEAP_OF_RSS = 0.8;
 
-/** Physical RAM, or the container's cgroup memory limit when lower. */
-function availableMemMb() {
+/** Physical RAM, or the container's cgroup memory limit when lower (`limited`). */
+function availableMem() {
   let mb = os.totalmem() / 1048576;
+  let limited = false;
   for (const f of ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes']) {
     try {
       const raw = fs.readFileSync(f, 'utf8').trim();
       const b = Number(raw);
-      if (raw !== 'max' && Number.isFinite(b) && b > 0 && b / 1048576 < mb) mb = b / 1048576;
+      if (raw !== 'max' && Number.isFinite(b) && b > 0 && b / 1048576 < mb) {
+        mb = b / 1048576;
+        limited = true;
+      }
     } catch {
       /* not in a cgroup / not readable */
     }
   }
-  return Math.floor(mb);
+  return { mb: Math.floor(mb), limited };
 }
 
 function positiveInt(raw, fallback) {
@@ -206,17 +211,24 @@ const port = process.env.PORT || '3000';
 // Workers read DB_POOL_PER_WORKER (src/lib/dbUrl.ts): hand them the computed size.
 process.env.DB_POOL_PER_WORKER = String(plan.pool);
 
-if (cluster.isPrimary && n > 1) {
+// Even one worker runs under the primary (a ~35 MB supervisor): the worker
+// gets the heap cap and RSS recycling, and a crash restarts it in place
+// instead of taking the container down. WEB_SINGLE_PROCESS=1 skips it.
+if (cluster.isPrimary && (n > 1 || process.env.WEB_SINGLE_PROCESS !== '1')) {
   console.log(`[classroom] primary ${process.pid} starting ${n} web workers on :${port} (Prisma pool ${plan.pool} each)`);
   // Memory budget (mirrors workerMemoryPlan in src/lib/webWorkers.ts): web workers
   // together get WEB_MEM_FRACTION (default 0.5) of available RAM, 512–4096 MB
   // each; the V8 heap cap is 80% of that. Overrides: WEB_WORKER_MAX_RSS_MB, WEB_WORKER_HEAP_MB.
-  const mf = Number.parseFloat(String(process.env.WEB_MEM_FRACTION ?? ''));
-  const memFrac = Number.isFinite(mf) && mf > 0 && mf <= 0.9 ? mf : DEFAULT_WEB_MEM_FRACTION;
-  const autoRss = Math.max(512, Math.min(4096, Math.floor((availableMemMb() * memFrac) / n)));
+  // Inside a container memory limit (WEB_MEM_LIMIT) the workers own that
+  // limit: WEB_MEM_LIMIT_FRACTION (0.85) of it, not WEB_MEM_FRACTION of the host.
+  const mem = availableMem();
+  const mf = Number.parseFloat(String((mem.limited ? process.env.WEB_MEM_LIMIT_FRACTION : process.env.WEB_MEM_FRACTION) ?? ''));
+  const memFrac = Number.isFinite(mf) && mf > 0 && mf <= 0.95 ? mf : mem.limited ? DEFAULT_WEB_LIMIT_FRACTION : DEFAULT_WEB_MEM_FRACTION;
+  const floor = mem.limited ? 256 : 512;
+  const autoRss = Math.max(floor, Math.min(4096, Math.floor((mem.mb * memFrac) / n)));
   if (!process.env.WEB_WORKER_MAX_RSS_MB) process.env.WEB_WORKER_MAX_RSS_MB = String(autoRss);
   const rssForHeap = Number.parseInt(process.env.WEB_WORKER_MAX_RSS_MB, 10) > 0 ? Number.parseInt(process.env.WEB_WORKER_MAX_RSS_MB, 10) : autoRss;
-  const heapMb = positiveInt(process.env.WEB_WORKER_HEAP_MB, Math.max(384, Math.floor(rssForHeap * HEAP_OF_RSS)));
+  const heapMb = positiveInt(process.env.WEB_WORKER_HEAP_MB, Math.max(mem.limited ? 192 : 384, Math.floor(rssForHeap * HEAP_OF_RSS)));
   console.log(`[classroom] per-worker memory: recycle above ${process.env.WEB_WORKER_MAX_RSS_MB} MB RSS, heap cap ${heapMb} MB`);
   cluster.setupPrimary({ execArgv: [...process.execArgv, `--max-old-space-size=${heapMb}`] });
   for (let i = 0; i < n; i++) cluster.fork();
@@ -224,6 +236,18 @@ if (cluster.isPrimary && n > 1) {
   cluster.on('message', (worker, msg) => {
     if (!msg || msg.type !== 'classroom:recycle' || recycling) return;
     recycling = true;
+    if (mem.limited && n === 1) {
+      // One worker inside a container limit: there is no room for a second
+      // process next to a bloated one. Stop it (SIGTERM drains), then start
+      // a fresh one; clients retry for the few seconds in between.
+      worker.once('exit', () => {
+        cluster.fork();
+        recycling = false;
+      });
+      worker.disconnect();
+      setTimeout(() => worker.process.kill('SIGTERM'), 15_000).unref();
+      return;
+    }
     const fresh = cluster.fork();
     fresh.once('listening', () => {
       worker.disconnect();
@@ -275,6 +299,6 @@ if (cluster.isPrimary && n > 1) {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 } else {
-  if (n === 1) console.log(`[classroom] single web process ${process.pid} on :${port}`);
+  if (cluster.isPrimary) console.log(`[classroom] single web process ${process.pid} on :${port}`);
   startWorker();
 }

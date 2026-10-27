@@ -32,3 +32,16 @@ test('state memo sweeps expired versioned entries instead of hoarding them', asy
   assert.ok(memoSize() <= 256);
   clearStateMemo();
 });
+
+test('worker memory plan inside a container limit (small box): the workers own the limit', () => {
+  // WEB_MEM_LIMIT=600m, one worker: 85% of the limit, heap 80% of that.
+  const one = workerMemoryPlan({ availableMb: 600, workers: 1, limited: true });
+  assert.equal(one.rssMb, 510);
+  assert.equal(one.heapMb, 408);
+  // Two workers in 1,280 MB.
+  assert.equal(workerMemoryPlan({ availableMb: 1280, workers: 2, limited: true }).rssMb, 544);
+  // Host RAM (no container limit) keeps the old behaviour.
+  assert.equal(workerMemoryPlan({ availableMb: 4096, workers: 8 }).rssMb, 512);
+  const cluster = root('cluster.js');
+  assert.match(cluster, /DEFAULT_WEB_LIMIT_FRACTION = 0\.85;/);
+});

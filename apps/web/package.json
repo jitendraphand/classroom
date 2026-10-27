@@ -26,6 +26,7 @@
     "livekit-server-sdk": "^2.7.0",
     "nanoid": "^5.0.8",
     "next": "15.5.27",
+    "prisma": "^5.22.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "zod": "^3.23.8"
@@ -37,7 +38,6 @@
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.20",
     "postcss": "^8.5.28",
-    "prisma": "^5.22.0",
     "tailwindcss": "^3.4.15",
     "tsx": "^4.23.15",
     "typescript": "^5.6.3"
