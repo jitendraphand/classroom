@@ -141,7 +141,10 @@ services:
       SPEAKER_PIN_TTL_SECONDS: ${SPEAKER_PIN_TTL_SECONDS:-18}
       NODE_ENV: production
       PORT: "3000"
-      HOSTNAME: "0.0.0.0"
+      # 0.0.0.0 for bare-IP deploys (browsers reach :3000); 127.0.0.1 behind
+      # Caddy (scripts/configure-domain-tls.sh sets it) so :3000 is never
+      # reachable from outside, whatever the firewall says.
+      HOSTNAME: ${WEB_HOSTNAME:-0.0.0.0}
       # auto = every CPU on ≤ 8-CPU boxes, else WEB_CPU_FRACTION (0.5) of them
       # so LiveKit keeps the rest; the Prisma pool per worker (default 10)
       # shrinks to fit POSTGRES_MAX_CONNECTIONS (docs/SCALING.md).

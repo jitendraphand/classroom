@@ -68,6 +68,8 @@ upsert LIVEKIT_INTERNAL_URL "http://127.0.0.1:7880"
 upsert LIVEKIT_USE_EXTERNAL_IP "true"
 upsert LIVEKIT_NODE_IP "$PUBLIC_IP"
 upsert COOKIE_SECURE "true"
+# Only Caddy (loopback) talks to the web app: never listen on the public NIC.
+upsert WEB_HOSTNAME "127.0.0.1"
 if [[ -n "$ACME_EMAIL" ]]; then
   upsert ACME_EMAIL "$ACME_EMAIL"
 fi

@@ -81,6 +81,12 @@ function workerPlan() {
   return { workers: n, pool };
 }
 
+/** HTTP servers created in this process (Next's), for graceful shutdown. */
+const servers = [];
+
+/** Header carrying the TCP peer address to the app (lib/clientIp.ts). Never trusted from the client. */
+const PEER_HEADER = 'x-classroom-peer';
+
 function patchHttpTimeouts() {
   // Keepalive must outlive Caddy's upstream keepalive (infra/Caddyfile: 55s) or Caddy reuses a closing socket
   // and the client sees a 502. headersTimeout must be > keepAliveTimeout.
@@ -98,12 +104,73 @@ function patchHttpTimeouts() {
     // Caddy). Long-lived streams are bounded by keepalive pings instead.
     server.requestTimeout = 0;
     server.timeout = 0;
+    // Stamp the real TCP peer before Next sees the request (overwriting any
+    // client-sent value): the app trusts X-Forwarded-For only when this peer
+    // is a configured proxy (TRUSTED_PROXIES, default loopback = Caddy).
+    server.prependListener('request', (req) => {
+      req.headers[PEER_HEADER] = req.socket?.remoteAddress || '';
+    });
+    servers.push(server);
     return server;
   };
 }
 
+/**
+ * Worker shutdown (SIGTERM from the primary, or Docker in single-process
+ * mode): stop accepting connections, let in-flight requests finish, then
+ * close what is left (chat SSE streams never finish on their own; clients
+ * reconnect) and exit. Next's own handler waits for every connection to end,
+ * which an SSE stream never does, so it is turned off (NEXT_MANUAL_SIG_HANDLE).
+ */
+function installWorkerShutdown() {
+  const graceMs = positiveInt(process.env.WEB_SHUTDOWN_GRACE_MS, 10_000);
+  let stopping = false;
+  const stop = (sig) => {
+    if (stopping) return;
+    stopping = true;
+    console.log(`[classroom] worker ${process.pid} ${sig}: draining (up to ${graceMs} ms)`);
+    for (const s of servers) {
+      try {
+        s.close();
+        s.closeIdleConnections?.();
+      } catch {
+        /* already closed */
+      }
+    }
+    const hooks = globalThis.__classroomShutdownHooks || [];
+    const done = Promise.allSettled(hooks.map((fn) => Promise.resolve().then(fn)));
+    const timer = setTimeout(() => finish('grace elapsed'), graceMs);
+    timer.unref();
+    done.then(() => {
+      // In-flight requests get the rest of the grace period.
+      const waitIdle = setInterval(() => {
+        if (servers.every((s) => !s.listening)) {
+          clearInterval(waitIdle);
+          finish('drained');
+        }
+      }, 250);
+      waitIdle.unref();
+    });
+  };
+  const finish = (why) => {
+    for (const s of servers) {
+      try {
+        s.closeAllConnections?.();
+      } catch {
+        /* ignore */
+      }
+    }
+    console.log(`[classroom] worker ${process.pid} exiting (${why})`);
+    process.exit(0);
+  };
+  process.on('SIGTERM', () => stop('SIGTERM'));
+  process.on('SIGINT', () => stop('SIGINT'));
+}
+
 function startWorker() {
   patchHttpTimeouts();
+  process.env.NEXT_MANUAL_SIG_HANDLE = '1';
+  installWorkerShutdown();
   const standalone = path.join(__dirname, 'server.js');
   if (!fs.existsSync(standalone)) {
     console.error('[classroom] server.js missing. Build with `next build` (output: standalone) or start via Docker.');
@@ -170,22 +237,43 @@ if (cluster.isPrimary && n > 1) {
       recycling = false;
     });
   });
+  let shuttingDown = false;
   cluster.on('exit', (worker, code, signal) => {
+    if (shuttingDown) {
+      if (!Object.keys(cluster.workers || {}).length) {
+        console.log('[classroom] all workers stopped');
+        process.exit(0);
+      }
+      return;
+    }
     if (worker.exitedAfterDisconnect) return;
     console.error(`[classroom] worker ${worker.process.pid} stopped (${signal || code}); restarting`);
     cluster.fork();
   });
-  const shutdown = () => {
-    for (const id of Object.keys(cluster.workers || {})) {
+  // Graceful stop: every worker drains (installWorkerShutdown) and exits; the
+  // primary exits when the last one is gone, well inside Docker's
+  // stop_grace_period. Nothing is restarted while shutting down.
+  const shutdown = (sig) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    const workers = Object.values(cluster.workers || {});
+    console.log(`[classroom] primary ${sig}: stopping ${workers.length} worker(s)`);
+    for (const w of workers) {
       try {
-        cluster.workers[id]?.process.kill('SIGTERM');
+        w?.process.kill('SIGTERM');
       } catch {
-        /* ignore */
+        /* already gone */
       }
     }
+    if (!workers.length) process.exit(0);
+    const hardStop = positiveInt(process.env.WEB_SHUTDOWN_GRACE_MS, 10_000) + 5_000;
+    setTimeout(() => {
+      console.warn('[classroom] workers did not stop in time; exiting');
+      process.exit(0);
+    }, hardStop).unref();
   };
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 } else {
   if (n === 1) console.log(`[classroom] single web process ${process.pid} on :${port}`);
   startWorker();

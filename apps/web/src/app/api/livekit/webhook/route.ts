@@ -116,6 +116,13 @@ const queue = (g.__lkWebhookQueue ??= new KeyedWorkQueue<QueuedEvent>({
   onDrop: (n) => console.warn(`[webhook] queue full, dropped ${n} oldest event(s)`),
 }));
 
+// Graceful worker stop (cluster.js): let queued presence work finish first, bounded.
+const hooks = ((globalThis as unknown as { __classroomShutdownHooks?: (() => Promise<unknown>)[] }).__classroomShutdownHooks ??= []);
+if (!(g as { __lkWebhookDrainHook?: boolean }).__lkWebhookDrainHook) {
+  (g as { __lkWebhookDrainHook?: boolean }).__lkWebhookDrainHook = true;
+  hooks.push(() => Promise.race([queue.idle(), new Promise((r) => setTimeout(r, 5_000))]));
+}
+
 /**
  * LiveKit server webhook (configured in infra/livekit.yaml → webhook.urls).
  * Authenticated by the signed Authorization JWT + body sha256 that

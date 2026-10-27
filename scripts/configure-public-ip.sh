@@ -55,6 +55,8 @@ upsert LIVEKIT_URL "ws://127.0.0.1:${LIVEKIT_PORT}"
 upsert LIVEKIT_INTERNAL_URL "http://127.0.0.1:${LIVEKIT_PORT}"
 upsert LIVEKIT_USE_EXTERNAL_IP "true"
 upsert LIVEKIT_NODE_IP "$PUBLIC_IP"
+# Browsers connect straight to :3000 on a bare-IP deploy.
+upsert WEB_HOSTNAME "0.0.0.0"
 if [[ "$SCHEME" == "https" ]]; then
   upsert COOKIE_SECURE "true"
 else

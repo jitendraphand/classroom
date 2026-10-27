@@ -101,7 +101,7 @@ sudo ufw enable
 sudo ufw status
 ```
 
-> **Note:** The `web` service still listens on `0.0.0.0:3000` (host networking). Binding it to localhost-only when the `tls` profile is active is not wired in Compose; rely on the cloud/host firewall to keep 3000/7880 off the public internet.
+> **Note:** `scripts/configure-domain-tls.sh` sets `WEB_HOSTNAME=127.0.0.1`, so the `web` service listens on loopback only and `:3000` is unreachable from outside even if the firewall is open. Rate limits then take the client address from Caddy's `X-Forwarded-For` (Caddy on loopback is the only trusted proxy; add others with `TRUSTED_PROXIES`). LiveKit's `:7880` still listens on all interfaces; keep it closed in the firewall.
 
 ## 3. Configure and start
 
