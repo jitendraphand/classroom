@@ -124,7 +124,8 @@ export default function TeacherDashboard() {
     const first = gradeDivs[0]?.name;
     if (first && !adhoc.all && adhoc.divisions.length === 0 && !adhoc.extra)
       setAdhoc((a) => (a.divisions.length || a.all ? a : { ...a, divisions: [first] }));
-    // Only when the grade (and so its divisions) changes.
+    // Only when the grade (and so its divisions) changes, not on every tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adhoc.campus, adhoc.grade, gradeDivs.length]);
   const [adhocError, setAdhocError] = useState('');
 

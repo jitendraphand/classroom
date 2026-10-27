@@ -253,7 +253,7 @@ export function createPointBatcher(
   intervalMs = DRAW_SEND_MS,
   schedule: (fn: () => void, ms: number) => unknown = (fn, ms) => setTimeout(fn, ms)
 ) {
-  let queue: { id: string; color: DrawColor; from: number; pts: number[] }[] = [];
+  const queue: { id: string; color: DrawColor; from: number; pts: number[] }[] = [];
   const sent = new Map<string, number>();
   let inFlight = false;
   let timer = false;

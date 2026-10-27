@@ -199,7 +199,8 @@ export function Controls({
             type="button"
             data-testid="video-panel"
             aria-label="Video panel"
-            aria-description={videoPanelLabel || 'Video panel'}
+            // The full sentence is the title, which assistive tech also reads
+            // as the description (aria-description is not valid on a button).
             title={videoPanelLabel || 'Video panel'}
             onClick={onCycleVideoPanel}
             className={cn(

@@ -107,7 +107,7 @@ export default function JoinRoomPage() {
     if (!hidden) void poll();
     const t = setInterval(poll, waitingPollMs(hidden));
     return () => clearInterval(t);
-  }, [waiting, poll, hidden, lobbyEnded]);
+  }, [waiting, poll, hidden, lobbyEnded, left]);
 
   async function leaveWaiting() {
     const school = !!roomInfo?.me?.viaSchoolApp;

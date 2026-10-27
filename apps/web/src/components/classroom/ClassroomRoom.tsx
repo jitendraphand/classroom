@@ -25,7 +25,6 @@ import {
   useRoomContext,
 } from '@livekit/components-react';
 import '@livekit/components-styles';
-import type { TrackReference } from '@livekit/components-react';
 import {
   Track,
   LocalVideoTrack,
@@ -329,7 +328,7 @@ function ParticipantGrid({
     { onlySubscribed: true }
   );
 
-  const teacherSet = new Set(teacherIdentities);
+  const teacherSet = useMemo(() => new Set(teacherIdentities), [teacherIdentities]);
 
   const screenShares = tracks.filter((t) => {
     if (t.source !== Track.Source.ScreenShare) return false;
@@ -575,7 +574,7 @@ export function TeacherScreenStage({ teacherIdentities, zoomable = false, drawin
     [{ source: Track.Source.ScreenShare, withPlaceholder: false }],
     { onlySubscribed: true }
   );
-  const teacherSet = new Set(teacherIdentities);
+  const teacherSet = useMemo(() => new Set(teacherIdentities), [teacherIdentities]);
   const screens = tracks.filter((t) => {
     if (t.source !== Track.Source.ScreenShare) return false;
     if (t.participant.isLocal) return false;
@@ -833,7 +832,7 @@ function TeacherCameraFloat({
 }) {
   const room = useRoomContext();
   const [dataSaver] = useDataSaver();
-  const teacherSet = new Set(teacherIdentities);
+  const teacherSet = useMemo(() => new Set(teacherIdentities), [teacherIdentities]);
   const [tick, setTick] = useState(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const selfVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -899,7 +898,7 @@ function TeacherCameraFloat({
       room.off(RoomEvent.TrackSubscriptionFailed, ensure);
       window.clearInterval(iv);
     };
-  }, [room, teacherIdentities]);
+  }, [room, teacherSet]);
 
   void tick;
 
@@ -1116,7 +1115,7 @@ function TeacherPeersFloat({
   onDockSpace?: (space: { left: number; top: number }) => void;
 }) {
   const room = useRoomContext();
-  const teacherSet = new Set(teacherIdentities);
+  const teacherSet = useMemo(() => new Set(teacherIdentities), [teacherIdentities]);
   const paneRef = useRef<HTMLDivElement | null>(null);
   const sizeRef = useRef({ w: 372, h: 250 });
   const stickySpeakersRef = useRef<Set<string>>(new Set());
@@ -1424,7 +1423,7 @@ function TeacherPeersFloat({
     return () => {
       room.off(RoomEvent.ActiveSpeakersChanged, onSpeakers);
     };
-  }, [room, teacherIdentities, isMicMuted]);
+  }, [room, teacherSet, isMicMuted]);
 
   // Ensure peer cameras in sample are subscribed
   useEffect(() => {
@@ -1471,7 +1470,7 @@ function TeacherPeersFloat({
       room.off(RoomEvent.TrackUnsubscribed, onEvent);
       window.clearInterval(iv);
     };
-  }, [room, teacherIdentities, visibleIdentities, isMicMuted]);
+  }, [room, teacherSet, visibleIdentities, isMicMuted]);
 
   void tick;
   void stickyVersion;
@@ -1547,6 +1546,9 @@ function TeacherPeersFloat({
       rotation: mosaic,
       studentSlots,
     });
+    // `tick` and `stickyVersion` are recompute triggers: the rotation and sticky
+    // speakers live in refs this memo reads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     visibleIdentities,
     teacherIdentities,
@@ -2084,7 +2086,7 @@ function useHasTeacherScreen(teacherIdentities: string[]) {
     [{ source: Track.Source.ScreenShare, withPlaceholder: false }],
     { onlySubscribed: true }
   );
-  const teacherSet = new Set(teacherIdentities);
+  const teacherSet = useMemo(() => new Set(teacherIdentities), [teacherIdentities]);
   return tracks.some((t) => {
     if (t.source !== Track.Source.ScreenShare) return false;
     if (t.participant.isLocal) return false;
@@ -2173,8 +2175,6 @@ function enqueueLocalPublish(task: () => Promise<void>): Promise<void> {
   return run;
 }
 
-const viewportW = () => (typeof window === 'undefined' ? 1280 : window.innerWidth);
-const viewportH = () => (typeof window === 'undefined' ? 800 : window.innerHeight);
 
 /** A share parked behind the whiteboard is really stopped after this long. */
 const PARK_MAX_MS = 20 * 60_000;
@@ -2472,7 +2472,7 @@ function SelectivePublisher({
     return () => {
       cancelled = true;
     };
-  }, [micDesired, mutedByTeacher, localParticipant]);
+  }, [micDesired, mutedByTeacher, localParticipant, isTeacher]);
 
   return null;
 }
@@ -2967,12 +2967,18 @@ function RoomInner({
   const rawStage = state?.stageMode ?? 'idle';
   // Whiteboard product surface removed — treat legacy redis value as idle.
   const stageMode: 'idle' | 'screen' = rawStage === 'screen' ? 'screen' : 'idle';
-  const teacherIdentities = (state?.admitted ?? [])
+  // Stable arrays (same contents → same identity) so the children's LiveKit
+  // listeners are not torn down and re-added on every render of this view.
+  const teacherKey = (state?.admitted ?? [])
     .filter((a) => a.role === 'TEACHER')
-    .map((a) => a.livekitIdentity);
-  const studentIdentities = (state?.admitted ?? [])
+    .map((a) => a.livekitIdentity)
+    .join(',');
+  const studentKey = (state?.admitted ?? [])
     .filter((a) => a.role === 'STUDENT')
-    .map((a) => a.livekitIdentity);
+    .map((a) => a.livekitIdentity)
+    .join(',');
+  const teacherIdentities = useMemo(() => (teacherKey ? teacherKey.split(',') : []), [teacherKey]);
+  const studentIdentities = useMemo(() => (studentKey ? studentKey.split(',') : []), [studentKey]);
   // Fallback: if teacher screen track(s) exist, treat as screen present even if redis idle
   const hasTeacherScreen = useHasTeacherScreen(teacherIdentities);
   const effectiveStage: 'idle' | 'screen' =
@@ -3059,7 +3065,7 @@ function RoomInner({
       }
       onClassEnded();
     }
-  }, [state?.status, state?.ended, room, onClassEnded]);
+  }, [state?.status, state?.ended, room, onClassEnded, code]);
 
   useEffect(() => {
     if (!isTeacher || !room) return;
@@ -6222,48 +6228,6 @@ function rosterLabel(p: { displayName: string } & RosterInfo): string {
   if (p.viaSchoolApp && !p.onTimetable) bits.push(p.adHocClass ? 'outside class audience' : 'not on timetable');
   if (!p.viaSchoolApp) bits.push('guest');
   return bits.join(' · ');
-}
-
-/** Fullscreen / focus status under a student's name (teacher roster). */
-function FocusChip({ focus, iphone }: { focus?: import('@/lib/focusStatus').FocusStatus; iphone?: boolean }) {
-  const label = focusLabel(focus, iphone);
-  if (!label) return null;
-  return (
-    <span
-      className={cn(
-        'mt-0.5 inline-flex rounded px-1 text-2xs font-semibold',
-        isFocusAlert(focus) ? 'bg-amber-500/20 text-amber-200' : 'bg-white/10 text-slate-300'
-      )}
-    >
-      {label}
-    </span>
-  );
-}
-
-/** Roll number, grade-division and timetable / late markers under a student's name (teacher roster). */
-function RosterMeta({ info }: { info: RosterInfo }) {
-  if (info.viaSchoolApp === undefined) return null;
-  return (
-    <span className="mt-0.5 flex flex-wrap items-center gap-1 text-2xs text-slate-400">
-      {info.rollNumber && <span>Roll {info.rollNumber}</span>}
-      {info.gradeDivision && <span>· {info.gradeDivision}</span>}
-      {info.viaSchoolApp ? (
-        info.onTimetable ? (
-          // Ad-hoc classes are not on the timetable: matching students need no tag.
-          info.adHocClass ? null : (
-            <span className="rounded bg-emerald-500/15 px-1 font-semibold text-emerald-200">On timetable</span>
-          )
-        ) : info.adHocClass ? (
-          <span className="rounded bg-amber-500/15 px-1 font-semibold text-amber-100">Outside class audience</span>
-        ) : (
-          <span className="rounded bg-amber-500/15 px-1 font-semibold text-amber-100">Not on timetable</span>
-        )
-      ) : (
-        <span className="rounded bg-white/10 px-1 font-semibold text-slate-300">Guest (no school ID)</span>
-      )}
-      {info.late && <span className="rounded bg-red-500/15 px-1 font-semibold text-red-200">Late</span>}
-    </span>
-  );
 }
 
 /** Small square icon button for roster rows, with tooltip and aria-label. */

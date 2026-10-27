@@ -5,7 +5,7 @@ import { prisma } from '@/lib/db';
 import { generateRoomCode, generateIdentity, generateSessionToken } from '@/lib/codes';
 import { ensureRedis, keys, legacyKeys } from '@/lib/redis';
 import { clampMaxVisible } from '@/lib/sample';
-import { forgetLivekitRoomName, roomService, livekitRoomName, sendRoomData } from '@/lib/livekit';
+import { forgetLivekitRoomName, livekitRoomName, sendRoomData } from '@/lib/livekit';
 import { STATE_TOPIC } from '@/lib/pollPolicy';
 
 /** Allocate a unique permanent class code not used by any teacher or room. */
