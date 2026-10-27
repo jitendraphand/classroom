@@ -9,7 +9,9 @@
  * - Prisma pool per worker: DB_POOL_PER_WORKER when set, else the share of
  *   Postgres max_connections (minus headroom) each worker gets, between
  *   MIN_AUTO_POOL and DEFAULT_DB_POOL_PER_WORKER. A 64-vCPU box runs 32
- *   workers × 10 = 320 of 400; a 32-vCPU box 16 × 10.
+ *   workers × 10 = 320 of 400; a 32-vCPU box 16 × 10 (scripts/configure-resources.sh
+ *   writes POSTGRES_MAX_CONNECTIONS=400 for such "large" boxes; the compose
+ *   default of 100 suits a small one).
  * - Only if even that does not fit (explicit pool, or the minimum pool) are
  *   auto-sized workers capped. An explicit WEB_WORKERS is honoured as-is:
  *   raise Postgres max_connections to match.
@@ -18,7 +20,7 @@
 export const DEFAULT_DB_POOL_PER_WORKER = 10;
 export const MIN_AUTO_POOL = 3;
 export const DEFAULT_DB_POOL_TIMEOUT = 10;
-export const DEFAULT_POSTGRES_MAX_CONNECTIONS = 400;
+export const DEFAULT_POSTGRES_MAX_CONNECTIONS = 100;
 /** Share of CPUs the web cluster takes on boxes with more than SMALL_BOX_CPUS. */
 export const DEFAULT_WEB_CPU_FRACTION = 0.5;
 export const SMALL_BOX_CPUS = 8;

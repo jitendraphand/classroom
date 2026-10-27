@@ -230,9 +230,9 @@ Other deploy notes for this release:
 See [CAPACITY.md](CAPACITY.md) for the math. On this host:
 
 1. Set `WEB_WORKERS` (default = CPU count, capped so Prisma pools fit Postgres). The web container runs Node cluster on `:3000` (`apps/web/cluster.js`). Local `next dev` is still a single process on `:3000`.
-2. Set `DB_POOL_PER_WORKER` (default 10) and `POSTGRES_MAX_CONNECTIONS` (default 400; see docs/SCALING.md). Prisma appends `connection_limit` / `pool_timeout` in `lib/db.ts` if they are missing from `DATABASE_URL`.
-3. Postgres `shared_buffers` / `effective_cache_size` / `max_wal_size` are env-driven in compose. A 2 GB VPS should set `POSTGRES_MAX_CONNECTIONS=50`.
-4. Redis `maxmemory` is `REDIS_MAXMEMORY` (default 192mb). AOF is `everysec`.
+2. Run `./scripts/configure-resources.sh` (docs/CONSTRAINED-DEPLOY.md): it sets `WEB_WORKERS`, `DB_POOL_PER_WORKER` and `POSTGRES_MAX_CONNECTIONS` (compose default 100) for the host. Prisma appends `connection_limit` / `pool_timeout` in `lib/db.ts` if they are missing from `DATABASE_URL`.
+3. Postgres `shared_buffers` / `effective_cache_size` / `max_wal_size` are env-driven in compose. `configure-resources.sh` sizes them, and the container memory limits, for the host.
+4. Redis `maxmemory` is `REDIS_MAXMEMORY` (default 256mb; the script sizes it). AOF `everysec`, no RDB snapshots, `volatile-ttl` eviction.
 5. Compose sets `ulimits.nofile` 1048576 on web, livekit, caddy, redis, postgres.
 6. LiveKit: `port_range 50000–60000`, `max_participants 0`, `empty_timeout` 300, `departure_timeout` 10. Optional single-port mux: `rtc.udp_port` in `infra/livekit.example.yaml`. LiveKit uses all cores — leave some for the web workers.
 7. PgBouncer is optional and off. Prisma interactive transactions in this repo are not safe in transaction-pooling mode until audited.

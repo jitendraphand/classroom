@@ -36,19 +36,24 @@ test('webWorkerCount: all CPUs on small boxes, half on big ones; caps to fit Pos
   const explicit = webWorkerCount({ env: { WEB_WORKERS: '4' }, cpuCount: 32 });
   assert.equal(explicit.workers, 4);
   assert.equal(explicit.capped, false);
+  // Large boxes (configure-resources.sh "large" writes POSTGRES_MAX_CONNECTIONS=400).
+  const LARGE = { POSTGRES_MAX_CONNECTIONS: '400' };
   // 32 vCPU: half the cores for web, LiveKit keeps the rest.
-  const a1 = webWorkerCount({ env: {}, cpuCount: 32 });
+  const a1 = webWorkerCount({ env: { ...LARGE }, cpuCount: 32 });
   assert.equal(a1.workers, 16);
   assert.equal(a1.poolPerWorker, 10);
   // Trial box (32 OCPU = 64 vCPU): 32 workers × 10 connections.
-  const a64 = webWorkerCount({ env: { WEB_WORKERS: 'auto' }, cpuCount: 64 });
+  const a64 = webWorkerCount({ env: { ...LARGE, WEB_WORKERS: 'auto' }, cpuCount: 64 });
   assert.equal(a64.workers, 32);
   assert.equal(a64.poolPerWorker, 10);
-  assert.ok(a64.workers * a64.poolPerWorker <= DEFAULT_POSTGRES_MAX_CONNECTIONS - POSTGRES_HEADROOM);
+  assert.ok(a64.workers * a64.poolPerWorker <= 400 - POSTGRES_HEADROOM);
+  // Untuned big box with the small-box default (100): still fits Postgres.
+  const untuned = webWorkerCount({ env: {}, cpuCount: 64 });
+  assert.ok(untuned.workers * untuned.poolPerWorker <= DEFAULT_POSTGRES_MAX_CONNECTIONS - POSTGRES_HEADROOM);
   // Tunable split.
-  assert.equal(webWorkerCount({ env: { WEB_CPU_FRACTION: '0.25' }, cpuCount: 64 }).workers, 16);
-  assert.equal(webWorkerCount({ env: { WEB_CPU_FRACTION: 'junk' }, cpuCount: 64 }).workers, 32);
-  assert.equal(webWorkerCount({ env: { WEB_CPU_FRACTION: '0.05' }, cpuCount: 64 }).workers, 8);
+  assert.equal(webWorkerCount({ env: { ...LARGE, WEB_CPU_FRACTION: '0.25' }, cpuCount: 64 }).workers, 16);
+  assert.equal(webWorkerCount({ env: { ...LARGE, WEB_CPU_FRACTION: 'junk' }, cpuCount: 64 }).workers, 32);
+  assert.equal(webWorkerCount({ env: { ...LARGE, WEB_CPU_FRACTION: '0.05' }, cpuCount: 64 }).workers, 8);
   assert.equal(autoWebWorkers(4), 4);
   assert.equal(autoWebWorkers(12), 8);
   // Old 280-connection deploys still fit: pool shrinks.
@@ -76,8 +81,7 @@ test('withPoolParams appends connection_limit and pool_timeout once', () => {
   const c = withPoolParams('postgresql://u:p@127.0.0.1:5432/db?connection_limit=4&pool_timeout=5');
   assert.equal(c, 'postgresql://u:p@127.0.0.1:5432/db?connection_limit=4&pool_timeout=5');
   assert.equal(DEFAULT_DB_POOL_PER_WORKER, 10);
-  assert.equal(DEFAULT_POSTGRES_MAX_CONNECTIONS, 400);
-  assert.ok(DEFAULT_POSTGRES_MAX_CONNECTIONS >= 200);
+  assert.equal(DEFAULT_POSTGRES_MAX_CONNECTIONS, 100);
 });
 
 test('leader lock release is compare-and-delete', () => {

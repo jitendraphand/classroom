@@ -21,7 +21,7 @@ const fs = require('fs');
 // Mirrors src/lib/webWorkers.ts (tests/scaling.test.ts checks both agree).
 const DEFAULT_POOL = 10;
 const MIN_AUTO_POOL = 3;
-const DEFAULT_MAX_CONN = 400;
+const DEFAULT_MAX_CONN = 100;
 const DEFAULT_WEB_CPU_FRACTION = 0.5;
 const SMALL_BOX_CPUS = 8;
 const HEADROOM = 24;

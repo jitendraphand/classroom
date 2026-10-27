@@ -12,8 +12,8 @@ Target for this generation: **2,500 concurrent students** on one large server (o
 |---|---|---|
 | **Web (Next.js cluster)** | ~1 HTTP keepalive while in class; no SSE while LiveKit is up; safety poll every 60 s | CPU: 16 workers × one core. Was 1 process at 2.2 cores / 500 connections. **2,500 HTTP idle sockets + rare polls should fit.** Unproven at 2,500. |
 | **SSE / chat stream** | 0 while LiveKit is connected (fallback only) | Previously 1 Redis subscriber + 1 HTTP stream per student — that path is what 502'd at ~500. |
-| **Redis** | ~1–3 KB room hashes (heartbeat, mute, hands) + pub/sub for fallback SSE | Memory: a few tens of MB. Default `REDIS_MAXMEMORY=1gb`; set `192mb` on a 2 GB VPS. |
-| **Postgres** | Token/join writes at arrival; chat persist; `/state` on join and 60 s safety | Connections: `WEB_WORKERS × DB_POOL_PER_WORKER`. Auto: every CPU on ≤ 8-CPU boxes, else `WEB_CPU_FRACTION` (0.5) of the CPUs; the pool per worker is the share of `POSTGRES_MAX_CONNECTIONS` (default 400, minus 24 headroom) clamped to 3–10. So 64 vCPU gets 32 × 10 = 320. See docs/SCALING.md. |
+| **Redis** | ~1–3 KB room hashes (heartbeat, mute, hands) + pub/sub for fallback SSE | Memory: a few tens of MB. Default `REDIS_MAXMEMORY=256mb`; `scripts/configure-resources.sh` sets 96–128 MB on small boxes and 1 GB on large ones. |
+| **Postgres** | Token/join writes at arrival; chat persist; `/state` on join and 60 s safety | Connections: `WEB_WORKERS × DB_POOL_PER_WORKER`. Auto: every CPU on ≤ 8-CPU boxes, else `WEB_CPU_FRACTION` (0.5) of the CPUs; the pool per worker is the share of `POSTGRES_MAX_CONNECTIONS` (compose default 100; `configure-resources.sh` writes 400 on large boxes; minus 24 headroom) clamped to 3–10. So 64 vCPU at 400 gets 32 × 10 = 320. See docs/SCALING.md. |
 | **LiveKit CPU** | Mix of audio + teacher camera + optional share. Whiteboard is data-only. | Load test: 4.1 cores at ~410. Linear guess ~25 cores at 2,500 — **tight on 32 OCPU if everyone gets video share.** Whiteboard-only is much cheaper. |
 | **LiveKit bandwidth** | ~0.15 Mbps whiteboard lesson; ~0.6 Mbps slides+camera (see [BANDWIDTH.md](BANDWIDTH.md)); ~1.1–1.6 Mbps video-share | 2,500 × 0.6 Mbps = **1.5 Gbps egress**. The 32 OCPU test peaked at 380 Mbps / 410. **Egress is the likely hard limit** unless the lesson is whiteboard/audio. |
 | **LiveKit UDP ports** | 1–2 ports per participant with `port_range 50000–60000` (~10k ports) | 2,500 × 2 = 5,000 < 10,000. Alternative: `rtc.udp_port` single-port mux (see `infra/livekit.example.yaml`). |
@@ -38,10 +38,10 @@ sudo ufw allow 50000:60000/udp
 |---|---|---|---|
 | `WEB_WORKERS` | all CPUs ≤ 8, else CPUs × `WEB_CPU_FRACTION` (0.5), capped to fit Postgres | `1` or `2` | `16` |
 | `DB_POOL_PER_WORKER` | `10` | `8` | `8` (16×8=128) |
-| `POSTGRES_MAX_CONNECTIONS` | `400` | `50` | `200` |
+| `POSTGRES_MAX_CONNECTIONS` | `100` | `~30` (script) | `200` |
 | `POSTGRES_SHARED_BUFFERS` | `256MB` | `256MB` | `8GB` |
 | `POSTGRES_EFFECTIVE_CACHE_SIZE` | `1536MB` | `1536MB` | `48GB` |
-| `REDIS_MAXMEMORY` | `192mb` | `192mb` | `1gb` |
+| `REDIS_MAXMEMORY` | `256mb` | `96mb` (script) | `1gb` |
 
 Prisma `connection_limit` and `pool_timeout` are appended in `lib/db.ts` when missing from `DATABASE_URL`.
 

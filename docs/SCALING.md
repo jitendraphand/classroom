@@ -33,7 +33,7 @@ Written after the 2026-10-24 trial (1,500 students, 64 vCPU / 48 GB): 1,390 HTTP
 
 ## 5. Cores and connections
 - `WEB_CPU_FRACTION` of CPUs go to web workers; the rest are left for LiveKit. Boxes with 8 or fewer CPUs use them all.
-- Prisma pool: `DB_POOL_PER_WORKER`. Postgres `max_connections` is 400. Keep workers × pool below that, with headroom.
+- Prisma pool: `DB_POOL_PER_WORKER`. Postgres `max_connections` is `POSTGRES_MAX_CONNECTIONS` (compose default 100; `scripts/configure-resources.sh` sizes it per host, 400 on large boxes). Keep workers × pool below that, with headroom.
 
 ## 6. Web worker memory
 - Web workers share `WEB_MEM_FRACTION` (default 0.5) of available RAM (the container's cgroup limit when lower). Each worker's recycle threshold is that share (512–4096 MB), and its V8 heap cap (`--max-old-space-size`) is 80% of it.
@@ -57,7 +57,7 @@ Options, cheapest first:
 |---|---|---|
 | `WEB_CPU_FRACTION` | 0.5 | Share of CPUs for web workers (`WEB_WORKERS` still overrides) |
 | `DB_POOL_PER_WORKER` | 10 | Prisma connections per worker |
-| `POSTGRES_MAX_CONNECTIONS` | 400 | Postgres `max_connections` |
+| `POSTGRES_MAX_CONNECTIONS` | 100 (400 via configure-resources.sh on large boxes) | Postgres `max_connections` |
 | `STATE_CACHE_MS` | 1000 | Student `/state` cache (0 = off, max 5000) |
 | `STATE_PUSH_SPREAD_MS` | 3000 | Spread of student refetch after a push |
 | `ATTENDANCE_FLUSH_MS` | 2000 | Attendance flush interval |
