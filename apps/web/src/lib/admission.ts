@@ -1,7 +1,7 @@
-import type { Room } from '@prisma/client';
+import type { Prisma, Room } from '@prisma/client';
 import { prisma } from './db';
 import { ensureRedis, keys } from './redis';
-import { rotateVisibleSample } from './sample';
+import { clampMaxVisible, rotateVisibleSample } from './sample';
 import { markAdmitted } from './attendanceService';
 import { CLASS_FULL_MESSAGE, classCapacity, seatsLeft } from './capacity';
 import { getSchoolSettings } from './schoolSettings';
@@ -13,52 +13,77 @@ export class ClassFullError extends Error {
   }
 }
 
-/**
- * Admit waiting students (ids, or every waiting student with `all`). Keeps the
- * Redis waiting / admitted sets in sync, records attendance and refreshes the
- * camera sample. Admitted students keep `mutedByTeacher` (they join muted).
- */
-export async function admitWaiting(room: Pick<Room, 'id' | 'code' | 'status'>, opts: { ids?: string[]; all?: boolean }) {
-  const where = opts.all
-    ? { roomId: room.id, role: 'STUDENT' as const, status: 'WAITING' as const }
-    : { roomId: room.id, role: 'STUDENT' as const, status: 'WAITING' as const, id: { in: opts.ids || [] } };
+type Tx = Prisma.TransactionClient;
+type WaitingWhere = Prisma.ParticipantWhereInput;
 
-  const waiting = await prisma.participant.findMany({ where, select: { id: true } });
-  if (waiting.length === 0 && !opts.all) return 0;
+/** WAITING → ADMITTED for these rows; returns the ids this call admitted. */
+async function flipToAdmitted(tx: Tx, where: WaitingWhere, limit: number | null): Promise<string[]> {
+  const waiting = await tx.participant.findMany({ where, select: { id: true }, orderBy: { createdAt: 'asc' } });
+  const ids = (limit == null ? waiting : waiting.slice(0, limit)).map((p) => p.id);
+  if (!ids.length) return [];
+  await tx.participant.updateMany({ where: { ...where, id: { in: ids } }, data: { status: 'ADMITTED' } });
+  return ids;
+}
+
+/**
+ * Admit waiting students (ids, or every waiting student with `all`).
+ *
+ * - With a class-size cap, the count-then-admit runs under a per-room
+ *   Postgres advisory lock, so concurrent admits (teacher clicks, waiting room
+ *   off and students arriving at once) cannot overshoot the cap.
+ * - The Redis waiting / admitted sets are updated incrementally (SREM/SADD of
+ *   the admitted ids). Rebuilding them from two full roster reads on every
+ *   admit was O(class size) per student and lost concurrent updates.
+ * - The camera sample is only re-drawn while it has a free slot.
+ *
+ * Admitted students keep `mutedByTeacher` (they join muted).
+ */
+export async function admitWaiting(
+  room: Pick<Room, 'id' | 'code' | 'status'> & Partial<Pick<Room, 'maxVisibleVideos'>>,
+  opts: { ids?: string[]; all?: boolean }
+) {
+  const where: WaitingWhere = opts.all
+    ? { roomId: room.id, role: 'STUDENT', status: 'WAITING' }
+    : { roomId: room.id, role: 'STUDENT', status: 'WAITING', id: { in: opts.ids || [] } };
+  if (!opts.all && !opts.ids?.length) return 0;
+
   const settings = await getSchoolSettings();
   const cap = classCapacity(settings.maxStudentsPerClass);
-  let ids = waiting.map((p) => p.id);
-  if (cap != null && ids.length) {
-    const admittedCount = await prisma.participant.count({
-      where: { roomId: room.id, role: 'STUDENT', status: 'ADMITTED' },
+
+  let ids: string[];
+  if (cap == null) {
+    ids = await flipToAdmitted(prisma, where, null);
+  } else {
+    ids = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`admit:${room.id}`}))`;
+      const pending = await tx.participant.count({ where });
+      if (!pending) return [];
+      const admittedCount = await tx.participant.count({
+        where: { roomId: room.id, role: 'STUDENT', status: 'ADMITTED' },
+      });
+      const seats = seatsLeft(cap, admittedCount, pending);
+      if (seats.full) throw new ClassFullError();
+      return flipToAdmitted(tx, where, seats.admit);
     });
-    const seats = seatsLeft(cap, admittedCount, ids.length);
-    if (seats.full) throw new ClassFullError();
-    ids = ids.slice(0, seats.admit);
   }
   if (ids.length === 0) return 0;
-  const updated = await prisma.participant.updateMany({
-    where: { ...where, id: { in: ids } },
-    data: { status: 'ADMITTED' },
-  });
+
   await markAdmitted(ids).catch((e) => console.error('attendance admit', e));
 
   if (room.status === 'WAITING') {
-    await prisma.room.update({ where: { id: room.id }, data: { status: 'LIVE' } });
+    await prisma.room.updateMany({ where: { id: room.id, status: 'WAITING' }, data: { status: 'LIVE' } });
   }
 
-  const [admitted, stillWaiting] = await Promise.all([
-    prisma.participant.findMany({ where: { roomId: room.id, role: 'STUDENT', status: 'ADMITTED' }, select: { id: true } }),
-    prisma.participant.findMany({ where: { roomId: room.id, role: 'STUDENT', status: 'WAITING' }, select: { id: true } }),
-  ]);
   const redis = await ensureRedis();
-  const pipe = redis.multi();
-  pipe.del(keys.waiting(room.code));
-  if (stillWaiting.length) pipe.sadd(keys.waiting(room.code), ...stillWaiting.map((p) => p.id));
-  pipe.del(keys.admitted(room.code));
-  if (admitted.length) pipe.sadd(keys.admitted(room.code), ...admitted.map((p) => p.id));
-  await pipe.exec();
+  await redis
+    .multi()
+    .srem(keys.waiting(room.code), ...ids)
+    .sadd(keys.admitted(room.code), ...ids)
+    .exec();
 
-  await rotateVisibleSample(room.code);
-  return updated.count;
+  // A full sample stays as it is (rotation brings newcomers in); a sample with
+  // a free slot takes the new students right away.
+  const max = clampMaxVisible(room.maxVisibleVideos);
+  if ((await redis.scard(keys.visible(room.code))) < max) await rotateVisibleSample(room.code);
+  return ids.length;
 }

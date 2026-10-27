@@ -24,7 +24,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     const body = schema.parse(await req.json());
     const count = await admitWaiting(room, { ids: body.participantIds, all: body.all });
 
-    nudgeRoomState(room.code, 'all');
+    // Admitted students are still in the lobby (not on LiveKit: they see the
+    // admit on their lobby poll); the class's other students are unaffected.
+    nudgeRoomState(room.code, 'teacher');
     return jsonOk({ admitted: count, roomStatus: 'LIVE' });
   } catch (e) {
     if (e instanceof z.ZodError) return jsonError(e.errors[0]?.message || 'Invalid input');

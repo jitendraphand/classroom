@@ -79,17 +79,8 @@ export function flushIntervalMs(env: Record<string, string | undefined> = proces
   return Number.isFinite(n) && n >= 250 ? Math.min(n, 60_000) : 2_000;
 }
 
+/** Events per claimed batch (max 2,000: the claim script unpacks the batch onto the Lua stack). */
 export function flushBatchSize(env: Record<string, string | undefined> = process.env): number {
   const n = Number.parseInt(env.ATTENDANCE_FLUSH_BATCH ?? '', 10);
-  return Number.isFinite(n) && n > 0 ? Math.min(n, 5_000) : 500;
-}
-
-/** Stable id of one event, used to skip events already written on a replay. */
-export function eventId(e: QueuedConnEvent): string {
-  return `${e.kind}:${e.identity}:${e.sid}:${e.at}`;
-}
-
-/** Drop events whose id is already marked applied (replay after a crash). */
-export function notYetApplied(events: QueuedConnEvent[], applied: Set<string>): QueuedConnEvent[] {
-  return events.filter((e) => !applied.has(eventId(e)));
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 2_000) : 500;
 }

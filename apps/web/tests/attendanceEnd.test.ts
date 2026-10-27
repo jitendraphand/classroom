@@ -32,8 +32,10 @@ test('settleAfterEnd: keeps an early leave and no-ops before the end', () => {
 
 test('class end stamps leftAt on every record; queue flush settles after the end', () => {
   const svc = root('src/lib/attendanceService.ts');
-  assert.match(svc, /leftAt: null, connectedSince: null, openSids: \{ isEmpty: true \}/);
+  assert.match(svc, /"leftAt" IS NULL AND "connectedSince" IS NULL\s+AND cardinality\(COALESCE\("openSids"/);
   assert.match(svc, /return settleAfterEnd\(s, sessionEndedAt\)/);
   const q = root('src/lib/attendanceQueue.ts');
-  assert.match(q, /applyConnectionEvents\([\s\S]{0,200}endedAt\.get\(g\.cs\) \?\? null\s*\);/);
+  // The flush passes the session's end time so late joins settle at the end.
+  assert.match(q, /const ended = endedAt\.get\(g\.cs\) \?\? null;/);
+  assert.match(q, /applyConnectionEvents\([\s\S]{0,200}ended\s*\);/);
 });

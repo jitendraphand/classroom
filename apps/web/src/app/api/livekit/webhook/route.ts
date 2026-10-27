@@ -24,37 +24,34 @@ function eventTime(createdAt: unknown): Date {
   return Number.isFinite(ms) && ms > 0 && Math.abs(ms - now) < 6 * 3600_000 ? new Date(ms) : new Date(now);
 }
 
-/**
- * Student connect/disconnect → attendance connected time. Idempotent per
- * participant SID, so a LiveKit retry cannot double count. Never fails the
- * webhook (presence handling is what LiveKit should retry).
- */
-async function recordAttendance(event: {
+type ConnEvent = { kind: 'joined' | 'left'; identity: string; sid: string; at: Date; roomName?: string };
+
+/** A student connect/disconnect, or null for any other event. */
+function studentConnection(event: {
   event?: string;
   room?: { name?: string } | null;
   createdAt?: unknown;
   participant?: { identity?: string; sid?: string } | null;
-}) {
+}): ConnEvent | null {
   const identity = event.participant?.identity;
   const sid = event.participant?.sid;
-  if (!identity || !sid || !identity.startsWith('student_')) return;
+  if (!identity || !sid || !identity.startsWith('student_')) return null;
   const kind =
     event.event === 'participant_joined'
       ? 'joined'
       : event.event === 'participant_left' || event.event === 'participant_connection_aborted'
         ? 'left'
         : null;
-  if (!kind) return;
+  return kind ? { kind, identity, sid, at: eventTime(event.createdAt), roomName: event.room?.name } : null;
+}
+
+/** Roster presence (Redis, self-healing via the student heartbeat). Never fails the queue item. */
+async function recordPresence(c: ConnEvent) {
   try {
-    const room = parseLivekitRoomName(event.room?.name);
-    if (room) await recordStudentConnection(room.code, identity, kind, sid);
+    const room = parseLivekitRoomName(c.roomName);
+    if (room) await recordStudentConnection(room.code, c.identity, c.kind, c.sid);
   } catch (e) {
-    console.error('student presence webhook', event.event, e instanceof Error ? e.message : e);
-  }
-  try {
-    await enqueueConnectionEvent(kind, identity, sid, eventTime(event.createdAt));
-  } catch (e) {
-    console.error('attendance webhook', event.event, e instanceof Error ? e.message : e);
+    console.error('student presence webhook', c.kind, e instanceof Error ? e.message : e);
   }
 }
 
@@ -105,7 +102,8 @@ async function processEvent(event: QueuedEvent) {
   } catch (e) {
     console.error('LiveKit webhook handling failed', event.event, e instanceof Error ? e.message : e);
   }
-  await recordAttendance(event);
+  const conn = studentConnection(event);
+  if (conn) await recordPresence(conn);
 }
 
 const g = globalThis as unknown as { __lkWebhookQueue?: KeyedWorkQueue<QueuedEvent> };
@@ -125,9 +123,11 @@ const queue = (g.__lkWebhookQueue ??= new KeyedWorkQueue<QueuedEvent>({
  * browser CSRF guard (see lib/csrf.ts). Drives the "students are force-muted
  * while the teacher is not connected" rule and attendance.
  *
- * Fast path: verify, enqueue, answer 200 immediately. Work runs in the
- * background queue (lib/webhookQueue), so LiveKit's own webhook queue never
- * backs up behind database writes. Events the classroom ignores
+ * Fast path: verify, push the attendance event onto the Redis queue (one
+ * RPUSH; durable before LiveKit gets its 200, so a restart cannot lose it),
+ * answer. Presence work runs in the in-memory background queue
+ * (lib/webhookQueue), which is best effort: presence self-heals from the
+ * student heartbeat and the absence sweeper. Events the classroom ignores
  * (track_published, ...) are acked without queueing.
  */
 export async function POST(req: Request) {
@@ -151,6 +151,16 @@ export async function POST(req: Request) {
   if (!event) return jsonError('Invalid webhook signature', 401);
 
   if (!HANDLED_WEBHOOK_EVENTS.has(event.event)) return jsonOk({ ok: true, queued: false });
+  const conn = studentConnection(event);
+  if (conn) {
+    try {
+      await enqueueConnectionEvent(conn.kind, conn.identity, conn.sid, conn.at);
+    } catch (e) {
+      // Neither Redis nor the database took it: let LiveKit retry the delivery.
+      console.error('attendance webhook', conn.kind, e instanceof Error ? e.message : e);
+      return jsonError('Attendance unavailable', 503);
+    }
+  }
   queue.push({
     event: event.event,
     room: event.room ? { name: event.room.name } : null,
