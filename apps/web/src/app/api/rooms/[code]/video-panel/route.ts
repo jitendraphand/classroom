@@ -5,6 +5,7 @@ import { getTeacherSession } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
 import { ensureRedis, keys } from '@/lib/redis';
 import { VIDEO_PANEL_TTL_S } from '@/lib/camOnDemand';
+import { getVisibleSample } from '@/lib/sample';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,6 +30,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
   const prev = (await redis.get(keys.videoPanel(code))) !== '0';
   if (parsed.data.open) await redis.del(keys.videoPanel(code));
   else await redis.set(keys.videoPanel(code), '0', 'EX', VIDEO_PANEL_TTL_S);
-  if (prev !== parsed.data.open) nudgeRoomState(code, 'all');
+  if (prev !== parsed.data.open) {
+    // Only the students in the video sample change what they send (camWanted).
+    const { visible } = await getVisibleSample(code);
+    const ids = visible.length
+      ? (await prisma.participant.findMany({ where: { livekitIdentity: { in: visible } }, select: { id: true } })).map((p) => p.id)
+      : [];
+    nudgeRoomState(code, ids.length ? { participantIds: ids } : 'teacher');
+  }
   return jsonOk({ ok: true, open: parsed.data.open });
 }

@@ -116,9 +116,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     const stageRaw = await redis.get(keys.stage(code));
     const stageMode =
       stageRaw === 'screen' ? 'screen' : 'idle';
-    const raisedHands = (await redis.smembers(keys.hands(code))).map(String);
 
     if (me?.status !== 'ADMITTED') {
+      const myHand = me ? (await redis.sismember(keys.hands(code), me.id)) === 1 : false;
       const settings = await getSchoolSettings();
       const cap = classCapacity(settings.maxStudentsPerClass);
       const admittedCount = room.participants.filter((p) => p.role === 'STUDENT' && p.status === 'ADMITTED').length;
@@ -142,7 +142,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
               mutedByTeacher: false,
               canPublishVideo: false,
               inVisibleSample: false,
-              handRaised: raisedHands.includes(me.id),
+              handRaised: myHand,
             }
           : null,
         admitted: [],
@@ -335,7 +335,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       }
     : null;
 
-  const admittedView = () => admitted.map((p) => ({
+  const admittedView = (list: typeof admitted) => list.map((p) => ({
       id: p.id,
       displayName: p.displayName,
       role: p.role,
@@ -359,8 +359,30 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       ...rosterInfo(p),
       ...focusOf(p),
     }));
-  // Students all get the same roster (no teacher-only fields): share it per version.
-  const admittedOut = isTeacher ? admittedView() : await memo(`state-adm:${code}:${ver}`, cacheMs, async () => admittedView());
+  // Students do not get the class roster: their view needs the teacher(s),
+  // the students whose video or ink is on screen (sample, spotlight, drawing)
+  // and themselves. Sending all ~2,000 rows to every student was ~400 KB of
+  // JSON per poll. The shared part is computed once per room version.
+  let admittedOut: ReturnType<typeof admittedView>;
+  if (isTeacher) {
+    admittedOut = admittedView(admitted);
+  } else {
+    const visibleSet = new Set(visible);
+    const shared = await memo(`state-adm:${code}:${ver}`, cacheMs, async () =>
+      admittedView(
+        admitted.filter(
+          (p) =>
+            p.role === 'TEACHER' ||
+            visibleSet.has(p.livekitIdentity) ||
+            p.id === spotlight?.participantId ||
+            drawingIds.has(p.id)
+        )
+      )
+    );
+    const mine = me && me.status === 'ADMITTED' && !shared.some((p) => p.id === me.id) ? admittedView([me]) : [];
+    admittedOut = mine.length ? [...shared, ...mine] : shared;
+  }
+  const admittedStudentCount = admitted.filter((p) => p.role === 'STUDENT').length;
 
   return jsonOk({
     code: room.code,
@@ -390,6 +412,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       : null,
     classInfo,
     admitted: admittedOut,
+    /** Students in the class (students get a trimmed `admitted` list). */
+    admittedStudentCount,
     visibleIdentities: visibleForView,
     visibleCount: visibleForView.length,
     raisedHands,

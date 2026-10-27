@@ -21,6 +21,7 @@ import type { JoinClaims } from './schoolJwt';
 
 type StudentStore = {
   student: {
+    findUnique: (args: { where: { externalId: string } }) => Promise<Student | null>;
     upsert: (args: {
       where: { externalId: string };
       create: Record<string, unknown> & { externalId: string };
@@ -30,12 +31,6 @@ type StudentStore = {
   };
 };
 
-/**
- * Create/refresh the student from join claims (signed JWT or unsigned link),
- * keyed on the school's permanent student ID (externalId = SID). Later joins
- * update name / grade / division (e.g. promotion to a new grade). Optional
- * fields (roll, email, phone) are only overwritten when the link carries them.
- */
 /**
  * Item 9: STUDENT_REGISTRY=open (old behaviour: any SID creates a student),
  * strict (only SIDs already on the list), or auto (default: strict as soon as
@@ -66,10 +61,40 @@ export async function assertKnownStudent(
   throw new JoinTokenError('unknown_student', 'sid');
 }
 
+/**
+ * SCHOOL_JOIN_UNSIGNED_UPDATES=true restores the old behaviour where an
+ * unsigned link also rewrites an existing student's name / grade / division
+ * (and restores a deleted student). Off by default: an unsigned link is not
+ * authenticated, so anyone who knows a SID could rewrite that record.
+ */
+export function unsignedUpdatesFromEnv(env: Record<string, string | undefined> = process.env): boolean {
+  return /^(1|true|yes)$/i.test(env.SCHOOL_JOIN_UNSIGNED_UPDATES?.trim() ?? '');
+}
+
+/**
+ * Create/refresh the student from join claims, keyed on the school's
+ * permanent student ID (externalId = SID).
+ * - Signed link (authenticated by the school app): later joins update name /
+ *   grade / division (e.g. promotion) and restore a deleted student. Optional
+ *   fields (roll, email, phone) are only overwritten when the link carries them.
+ * - Unsigned link: lookup only. An existing student keeps the details the
+ *   admin import / signed links gave them (only lastSeenAt moves); a deleted
+ *   student stays deleted. A new SID is created when the registry allows it
+ *   (assertKnownStudent). Set SCHOOL_JOIN_UNSIGNED_UPDATES to allow updates.
+ */
 export async function upsertStudentFromClaims(
   c: JoinClaims & { campus: string },
-  db: StudentStore = prisma as unknown as StudentStore
+  db: StudentStore = prisma as unknown as StudentStore,
+  opts: { signed?: boolean; allowUnsignedUpdates?: boolean } = {}
 ): Promise<Student> {
+  const trusted = opts.signed !== false || !!opts.allowUnsignedUpdates;
+  if (!trusted) {
+    const existing = await db.student.findUnique({ where: { externalId: c.studentId } });
+    if (existing) {
+      if (existing.deletedAt) throw new JoinTokenError('unknown_student', 'sid');
+      return db.student.update({ where: { externalId: c.studentId }, data: { lastSeenAt: new Date() } });
+    }
+  }
   const data = {
     name: c.name,
     campus: c.campus,

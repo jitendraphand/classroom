@@ -66,6 +66,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     }
   }
 
-  nudgeRoomState(code, 'all');
+  // The teacher's queue view, this student and anyone promoted; nobody else.
+  nudgeRoomState(code, { participantIds: promoted ? [me.id, promoted] : [me.id] });
   return jsonOk({ granted, waiting: next.waiting, position: next.position, limited: true });
 }

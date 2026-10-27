@@ -4,13 +4,16 @@ import { clientIp } from '@/lib/rateLimit';
 import { ensureRedis } from '@/lib/redis';
 import {
   ERROR_FIELDS,
+  isJoinNavigation,
   joinRateLimited,
   joinRateLimitFromEnv,
+  joinSidRateLimited,
+  joinSidRateLimitFromEnv,
   resolveSchoolJoin,
   schoolJoinModeFromEnv,
 } from '@/lib/schoolJoin';
 import { JoinTokenError, schoolJwtConfigFromEnv } from '@/lib/schoolJwt';
-import { assertKnownStudent, upsertStudentFromClaims } from '@/lib/studentService';
+import { assertKnownStudent, unsignedUpdatesFromEnv, upsertStudentFromClaims } from '@/lib/studentService';
 import { resolveJoinCampus } from '@/lib/campusLogic';
 import { loadCampuses } from '@/lib/campusMaster';
 import { resolveAppUrl } from '@/lib/url';
@@ -45,6 +48,14 @@ function errorPath(code: string, field?: string) {
  */
 export async function GET(req: Request) {
   const params = new URL(req.url).searchParams;
+  // Only a top-level navigation (the school app opening the link) may sign a
+  // student in; an embedded <img>/<iframe>/fetch from another page may not.
+  if (!isJoinNavigation(req.headers)) {
+    return new Response('Open this link from the school app.', {
+      status: 400,
+      headers: { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' },
+    });
+  }
 
   try {
     const redis = await ensureRedis();
@@ -56,16 +67,27 @@ export async function GET(req: Request) {
   }
 
   try {
-    const { claims } = await resolveSchoolJoin(params, {
+    const { claims, signed } = await resolveSchoolJoin(params, {
       mode: schoolJoinModeFromEnv(),
       jwt: schoolJwtConfigFromEnv(),
       claimJti,
     });
+    try {
+      if (await joinSidRateLimited(claims.studentId, await ensureRedis(), joinSidRateLimitFromEnv())) {
+        throw new JoinTokenError('rate_limited', 'sid');
+      }
+    } catch (e) {
+      if (e instanceof JoinTokenError) throw e;
+      /* Redis down: fail open */
+    }
     // No Campus in the link: the school's only campus (several → refused).
     const campus = resolveJoinCampus(claims.campus, await loadCampuses());
     if (!campus) throw new JoinTokenError('campus_required', 'campus');
     await assertKnownStudent(claims.studentId);
-    const student = await upsertStudentFromClaims({ ...claims, campus });
+    const student = await upsertStudentFromClaims({ ...claims, campus }, undefined, {
+      signed,
+      allowUnsignedUpdates: unsignedUpdatesFromEnv(),
+    });
     // Shared devices: drop any previous student's class seat on this browser.
     await clearStudentCookie();
     await setPupilCookie(student);

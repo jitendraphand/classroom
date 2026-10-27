@@ -95,6 +95,8 @@ export type RoomState = {
     /** In the speaking queue. */
     micWaiting?: boolean;
   } & RosterInfo)[];
+  /** Students in the class. Students get a trimmed `admitted` (teacher, on-screen students, themselves). */
+  admittedStudentCount?: number;
   /** Teacher only: the class session running in this room. */
   classSession?: { subject: string; audience: string; adHoc: boolean } | null;
   /** Class details for the student info button. Null when the room has none. */
