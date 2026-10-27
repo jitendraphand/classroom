@@ -35,8 +35,11 @@ WORKDIR /app
 RUN apt-get update -qq && apt-get install -y -qq openssl ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 COPY prisma ./prisma
+# Next itself, its SWC compilers and sharp (~475 MB) are dropped: the standalone
+# output copied below carries the traced subset the server actually loads.
 RUN npm ci --omit=dev --legacy-peer-deps --no-audit --no-fund \
   && DATABASE_URL="postgresql://placeholder:placeholder@127.0.0.1:5432/placeholder" npx prisma generate \
+  && rm -rf node_modules/next node_modules/@next node_modules/@img node_modules/sharp \
   && npm cache clean --force
 
 # ---------------------------------------------------------------- runtime

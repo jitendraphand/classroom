@@ -134,30 +134,32 @@ function installWorkerShutdown() {
     if (stopping) return;
     stopping = true;
     console.log(`[classroom] worker ${process.pid} ${sig}: draining (up to ${graceMs} ms)`);
-    for (const s of servers) {
-      try {
-        s.close();
-        s.closeIdleConnections?.();
-      } catch {
-        /* already closed */
-      }
-    }
+    // close(cb) fires once every connection has ended: in-flight requests
+    // finish, idle keep-alive sockets are closed now. A chat SSE stream never
+    // ends by itself, so the grace timer is the upper bound.
+    const closed = Promise.all(
+      servers.map(
+        (s) =>
+          new Promise((resolve) => {
+            try {
+              s.close(() => resolve());
+              s.closeIdleConnections?.();
+            } catch {
+              resolve();
+            }
+          })
+      )
+    );
     const hooks = globalThis.__classroomShutdownHooks || [];
-    const done = Promise.allSettled(hooks.map((fn) => Promise.resolve().then(fn)));
+    const hooksDone = Promise.allSettled(hooks.map((fn) => Promise.resolve().then(fn)));
     const timer = setTimeout(() => finish('grace elapsed'), graceMs);
     timer.unref();
-    done.then(() => {
-      // In-flight requests get the rest of the grace period.
-      const waitIdle = setInterval(() => {
-        if (servers.every((s) => !s.listening)) {
-          clearInterval(waitIdle);
-          finish('drained');
-        }
-      }, 250);
-      waitIdle.unref();
-    });
+    Promise.all([closed, hooksDone]).then(() => finish('drained'));
   };
+  let finished = false;
   const finish = (why) => {
+    if (finished) return;
+    finished = true;
     for (const s of servers) {
       try {
         s.closeAllConnections?.();
