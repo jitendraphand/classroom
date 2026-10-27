@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { TrackSource } from 'livekit-server-sdk';
 import { chatAudience, type AudiencePerson } from '../src/lib/chatAudience';
-import { classroomGrant, livekitRoomName, publishSourcesFor } from '../src/lib/livekit';
+import { classroomGrant, livekitRoomName, publishPermission, publishSourcesFor } from '../src/lib/livekit';
 
 const people: AudiencePerson[] = [
   { id: 't1', role: 'TEACHER', livekitIdentity: 'teacher_x' },
@@ -26,15 +26,26 @@ test('student → teacher message reaches only the teacher and the sender', () =
   assert.deepEqual(a.sort(), ['student_3', 'teacher_x']);
 });
 
-test('student grant: data publishing for strokes/chat/hand, no screen share', () => {
+test('student grant: no data publishing (server relays strokes/chat/hand), no screen share', () => {
   const g = classroomGrant({ role: 'STUDENT', roomName: 'r', allowCamera: true, mutedByTeacher: false });
-  assert.equal(g.canPublishData, true);
+  assert.equal(g.canPublishData, false);
+  assert.equal(g.canPublish, true);
   assert.deepEqual(g.canPublishSources, [TrackSource.CAMERA, TrackSource.MICROPHONE]);
 });
 
-test('student outside the sample and teacher-muted can publish nothing', () => {
+test('student outside the sample and teacher-muted can publish nothing (canPublish false, not an empty list)', () => {
+  // LiveKit reads an EMPTY canPublishSources as "every source allowed", so
+  // "nothing" must be canPublish: false.
   const g = classroomGrant({ role: 'STUDENT', roomName: 'r', allowCamera: false, mutedByTeacher: true });
+  assert.equal(g.canPublish, false);
   assert.deepEqual(g.canPublishSources, []);
+  const locked = classroomGrant({ role: 'STUDENT', roomName: 'r', allowCamera: false, mutedByTeacher: false, micLocked: true });
+  assert.equal(locked.canPublish, false);
+});
+
+test('publishPermission never returns canPublish with an empty source list', () => {
+  assert.deepEqual(publishPermission([]), { canPublish: false, canPublishSources: [] });
+  assert.deepEqual(publishPermission([TrackSource.MICROPHONE]), { canPublish: true, canPublishSources: [TrackSource.MICROPHONE] });
 });
 
 test('teacher grant: all sources, data publishing for the whiteboard', () => {

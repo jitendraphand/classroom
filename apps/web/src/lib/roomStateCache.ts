@@ -73,6 +73,11 @@ export function clearStateMemo() {
   lastSweep = 0;
 }
 
+/** Drop one memo entry on this worker (e.g. the room was reopened under a new session id). */
+export function forgetMemo(key: string) {
+  store.delete(key);
+}
+
 export const roomVersionKey = (code: string) => `roomver:${code}`;
 
 /** Current version of a room's state ('0' when unknown or Redis is down: TTL still bounds staleness). */

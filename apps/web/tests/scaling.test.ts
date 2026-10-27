@@ -11,7 +11,6 @@ import {
   drawPacketTrusted,
   senderKind,
   signalPacketTrusted,
-  wbStudentPacketAllowed,
 } from '../src/lib/realtimePackets';
 import {
   DEFAULT_DB_POOL_PER_WORKER,
@@ -86,40 +85,32 @@ test('leader lock release is compare-and-delete', () => {
   assert.match(LOCK_RELEASE_LUA, /ARGV\[1\]/);
 });
 
-test('chat packets: server and teacher trusted; student cannot broadcast', () => {
+test('chat packets: server and teacher trusted; students cannot publish data at all', () => {
   const msg = { senderRole: 'STUDENT', scope: 'TEACHER', senderParticipantId: 's1' };
   assert.equal(senderKind(undefined), 'server');
   assert.equal(senderKind('teacher_x'), 'teacher');
   assert.equal(senderKind('student_x'), 'student');
   assert.equal(chatPacketTrusted({ senderIdentity: null, message: { senderRole: 'TEACHER', scope: 'BROADCAST' } }), true);
+  assert.equal(chatPacketTrusted({ senderIdentity: null, message: msg }), true);
   assert.equal(
     chatPacketTrusted({ senderIdentity: 'teacher_1', message: { senderRole: 'TEACHER', scope: 'BROADCAST' } }),
     true
   );
-  assert.equal(chatPacketTrusted({ senderIdentity: 'student_1', message: msg, identityParticipantId: 's1' }), true);
+  assert.equal(chatPacketTrusted({ senderIdentity: 'teacher_1', message: msg }), false);
+  assert.equal(chatPacketTrusted({ senderIdentity: 'student_1', message: msg, identityParticipantId: 's1' }), false);
   assert.equal(
-    chatPacketTrusted({
-      senderIdentity: 'student_1',
-      message: { senderRole: 'TEACHER', scope: 'BROADCAST' },
-    }),
-    false
-  );
-  assert.equal(
-    chatPacketTrusted({
-      senderIdentity: 'student_1',
-      message: { senderRole: 'STUDENT', scope: 'BROADCAST' },
-    }),
+    chatPacketTrusted({ senderIdentity: 'student_1', message: { senderRole: 'TEACHER', scope: 'BROADCAST' } }),
     false
   );
 });
 
-test('signal packets: student may only name themselves; mute stays off this topic', () => {
+test('signal packets: server and teacher only; mute stays off this topic', () => {
   const hand = decodeSignalPacket({ v: 1, type: 'hand', raised: true, participantId: 'p1' });
   assert.deepEqual(hand, { v: 1, type: 'hand', raised: true, participantId: 'p1' });
   assert.equal(decodeSignalPacket({ v: 1, type: 'mute', muted: true }), null);
   assert.equal(signalPacketTrusted(hand!, null, 'p1'), true);
   assert.equal(signalPacketTrusted(hand!, 'teacher_t', 'other'), true);
-  assert.equal(signalPacketTrusted(hand!, 'student_s', 'p1'), true);
+  assert.equal(signalPacketTrusted(hand!, 'student_s', 'p1'), false);
   assert.equal(signalPacketTrusted(hand!, 'student_s', 'other'), false);
   const req = decodeSignalPacket({ v: 1, type: 'draw-req', on: true, participantId: 'p1' });
   assert.equal(req?.type, 'draw-req');
@@ -143,15 +134,13 @@ test('hand and draw-request pushes update local state without a full snapshot', 
   assert.equal(d.admitted[1]!.drawRequested, true);
 });
 
-test('draw overlay: student pts only from matching identity; wb students ops-only', () => {
+test('draw overlay: only server-relayed or teacher packets (no student self-publishing)', () => {
   assert.equal(drawPacketTrusted({ senderIdentity: null, packet: { t: 'clear' } }), true);
-  assert.equal(drawPacketTrusted({ senderIdentity: 'student_a', packet: { t: 'pts', by: 'student_a' } }), true);
+  assert.equal(drawPacketTrusted({ senderIdentity: null, packet: { t: 'pts', by: 'student_a' } }), true);
+  assert.equal(drawPacketTrusted({ senderIdentity: 'teacher_t', packet: { t: 'pts', by: 'teacher_t' } }), true);
+  assert.equal(drawPacketTrusted({ senderIdentity: 'student_a', packet: { t: 'pts', by: 'student_a' } }), false);
   assert.equal(drawPacketTrusted({ senderIdentity: 'student_a', packet: { t: 'pts', by: 'student_b' } }), false);
-  assert.equal(drawPacketTrusted({ senderIdentity: 'student_a', packet: { t: 'clear' } }), false);
-  assert.equal(drawPacketTrusted({ senderIdentity: 'student_a', packet: { t: 'del' } }), false);
-  assert.equal(wbStudentPacketAllowed('ops'), true);
-  assert.equal(wbStudentPacketAllowed('end'), false);
-  assert.equal(wbStudentPacketAllowed('snap'), false);
+  assert.equal(drawPacketTrusted({ senderIdentity: 'teacher_t__screen', packet: { t: 'clear' } }), false);
 });
 
 test('cluster entry, prisma pool, and redis leader keys are wired', () => {
@@ -168,7 +157,7 @@ test('cluster entry, prisma pool, and redis leader keys are wired', () => {
   assert.match(presence, /teacherAbsenceDue/);
   assert.match(presence, /startAbsenceSweeper/);
   const grant = src('lib/livekit.ts');
-  assert.match(grant, /canPublishData: true/);
+  assert.match(grant, /canPublishData: isTeacher/);
   const chat = src('components/classroom/chatThread.ts');
   assert.match(chat, /if \(pushLive\) \{/);
   const docker = root('Dockerfile');

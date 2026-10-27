@@ -4,11 +4,12 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRoomContext } from '@livekit/components-react';
-import { ConnectionState, RoomEvent, DataPacket_Kind } from 'livekit-client';
+import { RoomEvent, DataPacket_Kind } from 'livekit-client';
 import { replyTargetFor, resolveChatRecipient } from '@/lib/chatReply';
 import { getClassroomRole, roomFetch } from '@/lib/classroomClient';
 import { chatPollMs, jitterMs } from '@/lib/pollPolicy';
 import { CHAT_TOPIC, chatPacketTrusted } from '@/lib/realtimePackets';
+import { canPublishRoomData } from '@/lib/dataPublish';
 import { usePageHidden, usePushLive } from '@/hooks/usePollSignals';
 
 export { replyTargetFor, resolveChatRecipient };
@@ -285,7 +286,8 @@ export function useChatThread({
           // SFU fan-out so the web process is not on the hot path. Recipients
           // merge by id with the server backup sendData.
           try {
-            if (room?.localParticipant && room.state === ConnectionState.Connected) {
+            // Teacher only (students hold no data grant; the server pushes theirs).
+            if (canPublishRoomData(room)) {
               const bytes = new TextEncoder().encode(JSON.stringify({ v: 1, type: 'message', message: data.message }));
               void room.localParticipant.publishData(bytes as Uint8Array<ArrayBuffer>, { reliable: true, topic: CHAT_TOPIC });
             }

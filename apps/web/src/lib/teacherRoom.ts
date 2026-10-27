@@ -5,7 +5,7 @@ import { prisma } from '@/lib/db';
 import { generateRoomCode, generateIdentity, generateSessionToken } from '@/lib/codes';
 import { ensureRedis, keys, legacyKeys } from '@/lib/redis';
 import { clampMaxVisible } from '@/lib/sample';
-import { roomService, livekitRoomName, sendRoomData } from '@/lib/livekit';
+import { forgetLivekitRoomName, roomService, livekitRoomName, sendRoomData } from '@/lib/livekit';
 import { STATE_TOPIC } from '@/lib/pollPolicy';
 
 /** Allocate a unique permanent class code not used by any teacher or room. */
@@ -144,6 +144,8 @@ export async function startOrReopenTeacherRoom(
         maxVisibleVideos: clampMaxVisible(opts.maxVisibleVideos ?? room.maxVisibleVideos),
       },
     });
+    // Relays (strokes, nudges) must name the new LiveKit room at once on this worker.
+    forgetLivekitRoomName(code);
 
     const existingTeacher = await prisma.participant.findFirst({
       where: { roomId: room.id, role: 'TEACHER' },

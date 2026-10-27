@@ -1,7 +1,8 @@
 import type Redis from 'ioredis';
 import { ensureRedis, keys } from './redis';
 import { prisma } from './db';
-import { setParticipantCameraAllowed } from './livekit';
+import { pushStudentPermissions } from './livekit';
+import { LOCK_RELEASE_LUA, newLockToken } from './leaderLock';
 import { nudgeRoomState } from './roomNudge';
 import { allocateSample, freshSpeakerPins, type PinnedStudent } from './classSlots';
 
@@ -20,8 +21,9 @@ const ROTATION_SECONDS = Number(process.env.SAMPLE_ROTATION_SECONDS || 8);
 const PIN_RATE_LIMIT_MS = 2000;
 
 /**
- * Cap on remembered sticky speakers. Pins last until mute, so without a ceiling
- * a few very chatty students could hold every slot for the whole class.
+ * Cap on remembered speaker pins. Pins expire SPEAKER_PIN_TTL_SECONDS after the
+ * student last spoke (and on mute); the ceiling stops a burst of chatty
+ * students from holding every slot meanwhile.
  */
 const MAX_STICKY_PINS = 12;
 
@@ -34,56 +36,49 @@ export function clampMaxVisible(n: number | undefined | null): number {
 }
 
 /**
- * Push a student's effective publish permissions to LiveKit after a change in
- * visible-sample membership.
+ * Push effective publish permissions to LiveKit for every identity whose
+ * visible-sample membership changed: camera follows membership, mic follows
+ * the teacher-mute flags (both are sent together: writing canPublishSources
+ * replaces the whole list). One participant query, one Redis call and one
+ * bounded LiveKit batch per rotation (lib/livekit pushStudentPermissions).
  *
- * Camera permission follows sample membership; mic permission follows the
- * teacher-mute flags. Both are sent together because writing `canPublishSources`
- * replaces the whole list, so a camera-only update would silently re-grant mic
- * to a muted student (and vice versa).
+ * Returns the participant ids of the students whose membership changed, so
+ * only they (and the teacher) are told to refetch.
  *
  * Failures are swallowed: the next token mint (and every poll of `/state`)
- * carries the same truth, so this is a latency optimisation that also makes a
- * connected client drop the track immediately rather than at its next refresh.
+ * carries the same truth; this makes a connected client drop the track at once.
  */
-export async function syncCameraPermissionFor(
-  roomCode: string,
-  identity: string,
-  inSample: boolean
-): Promise<void> {
+export async function syncSampleMembership(roomCode: string, before: string[], after: string[]): Promise<string[]> {
+  const prev = new Set(before);
+  const next = new Set(after);
+  const changed = [...before.filter((id) => !next.has(id)), ...after.filter((id) => !prev.has(id))];
+  if (!changed.length) return [];
   try {
-    const part = await prisma.participant.findFirst({
-      where: { livekitIdentity: identity, role: 'STUDENT' },
-      select: { id: true, mutedByTeacher: true },
+    const parts = await prisma.participant.findMany({
+      where: { livekitIdentity: { in: changed }, role: 'STUDENT' },
+      select: { id: true, livekitIdentity: true, mutedByTeacher: true },
     });
-    if (!part) return;
+    if (!parts.length) return [];
     const redis = await ensureRedis();
-    const mutedIds = await redis.smembers(keys.muted(roomCode));
-    await setParticipantCameraAllowed(
+    const mutedFlags = await redis.smismember(keys.muted(roomCode), ...parts.map((p) => p.id));
+    await pushStudentPermissions(
       roomCode,
-      identity,
-      inSample,
-      !part.mutedByTeacher && !mutedIds.includes(part.id)
+      parts.map((p, i) => ({
+        identity: p.livekitIdentity,
+        allowCamera: next.has(p.livekitIdentity),
+        allowMic: !p.mutedByTeacher && mutedFlags[i] !== 1,
+      }))
     );
+    return parts.map((p) => p.id);
   } catch (e) {
-    console.warn('sample sync camera permission', roomCode, identity, e);
+    console.warn('sample sync camera permissions', roomCode, e instanceof Error ? e.message : e);
+    return [];
   }
 }
 
-/** Sync every identity whose sample membership changed between two samples. */
-async function syncSampleMembership(
-  roomCode: string,
-  before: string[],
-  after: string[]
-) {
-  const changed = new Set<string>();
-  const prev = new Set(before);
-  const next = new Set(after);
-  for (const id of before) if (!next.has(id)) changed.add(id);
-  for (const id of after) if (!prev.has(id)) changed.add(id);
-  await Promise.allSettled(
-    Array.from(changed).map((id) => syncCameraPermissionFor(roomCode, id, next.has(id)))
-  );
+/** One identity (kept for callers outside rotation). */
+export async function syncCameraPermissionFor(roomCode: string, identity: string, inSample: boolean): Promise<void> {
+  await syncSampleMembership(roomCode, inSample ? [] : [identity], inSample ? [identity] : []);
 }
 
 /**
@@ -100,11 +95,14 @@ function enqueueSampleSync(roomCode: string, before: string[], after: string[]) 
     .then(() => syncSampleMembership(roomCode, [...before], [...after]))
     .catch((e) => {
       console.warn('sample sync', roomCode, e);
+      return [] as string[];
     })
-    // Tell clients after the SFU permissions are in place, so a student who
-    // just entered the sample is allowed to publish when it reacts.
-    .then(() => {
-      if (sampleChanged(before, after)) nudgeRoomState(roomCode, 'all');
+    // Tell the students who entered or left the sample (and the teacher), after
+    // the SFU permissions are in place. Every other student's view is unchanged:
+    // a class-wide nudge here made 2,000 students refetch /state every rotation.
+    .then((ids) => {
+      if (ids.length) nudgeRoomState(roomCode, { participantIds: ids });
+      else if (sampleChanged(before, after)) nudgeRoomState(roomCode, 'teacher');
     });
   livekitSyncTail.set(roomCode, job);
   // Drop the tail once it is the last job, so ended rooms do not stay in the map.
@@ -129,8 +127,8 @@ function shuffle<T>(arr: T[]): T[] {
 }
 
 /**
- * Sticky speaker pins — no TTL expiry.
- * Unmuted speakers stay in the visible pool until muted (or leave).
+ * Speaker pins: identity -> last time they spoke. An unmuted speaker stays in
+ * the visible pool until muted, leaving, or SPEAKER_PIN_TTL_MS of silence.
  */
 async function getPinnedSpeakers(roomCode: string): Promise<Set<string>> {
   const redis = await ensureRedis();
@@ -261,29 +259,34 @@ export async function ensureSampleFresh(roomCode: string) {
     return sample;
   }
 
+  // Teacher's student-video panel hidden: sampled students do not send video
+  // (lib/camOnDemand), so rotating would only churn SFU permissions. Keep the
+  // current sample until the panel is shown again (pins still apply at once).
+  if (rotatedAt && (await redis.get(keys.videoPanel(roomCode))) === '0') {
+    return getVisibleSample(roomCode);
+  }
+
   // Stale (or missing) rotation marker. Every client polls this endpoint, so
   // without a lock a rotation boundary produces a stampede of concurrent
   // rotations — each a full participant read plus a clobbering write. Exactly
-  // one caller rotates; the rest read the existing sample and pick the new one
-  // up on their next poll.
-  const lock = await redis.set(keys.rotateLock(roomCode), '1', 'PX', ROTATE_LOCK_MS, 'NX');
-  if (!lock) {
-    const current = await getVisibleSample(roomCode);
-    // A rotation may already have landed; only re-rotate if the marker is still
-    // stale AND the sample is empty, otherwise report what is there.
-    if (!current.visible.length) return rotateVisibleSample(roomCode);
-    return current;
-  }
+  // one caller rotates; the rest report the existing sample (possibly empty)
+  // and pick the new one up on their next poll.
+  const token = newLockToken();
+  const lock = await redis.set(keys.rotateLock(roomCode), token, 'PX', ROTATE_LOCK_MS, 'NX');
+  if (!lock) return getVisibleSample(roomCode);
   try {
     return await rotateVisibleSample(roomCode);
   } finally {
-    await redis.del(keys.rotateLock(roomCode));
+    // Compare-and-delete: a rotation slower than the lock must not drop the
+    // next rotator's lock.
+    await redis.eval(LOCK_RELEASE_LUA, 1, keys.rotateLock(roomCode), token).catch(() => undefined);
   }
 }
 
 /**
  * Force a speaking (unmuted) student into the visible sample so the teacher sees them.
- * Sticky until muted — rate-limited per identity; no-op if already visible.
+ * Held while they keep speaking (expires SPEAKER_PIN_TTL_MS after the last
+ * pin, dropped on mute) — rate-limited per identity; no-op if already visible.
  */
 export async function pinSpeaker(roomCode: string, identity: string) {
   const redis = await ensureRedis();
@@ -424,7 +427,6 @@ export function sampleConfig() {
     maxVisible: DEFAULT_MAX,
     hardMaxVisible: HARD_MAX_VISIBLE_STUDENT_VIDEOS,
     rotationSeconds: ROTATION_SECONDS,
-    /** Pins last until mute (no TTL). Kept for health/docs compatibility. */
-    speakerPinUntilMute: true,
+    speakerPinTtlSeconds: SPEAKER_PIN_TTL_MS / 1000,
   };
 }

@@ -81,9 +81,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
           await redis.sadd(keys.muted(code), ...waiting);
         } else await redis.del(keys.muted(code));
         const openSet = new Set(openIds);
-        for (const s of students) {
-          void setParticipantMicAllowed(code, s.livekitIdentity, openSet.has(s.id), inSample.has(s.livekitIdentity));
-        }
+        const openIdentities = new Set(students.filter((s) => openSet.has(s.id)).map((s) => s.livekitIdentity));
+        void setManyParticipantMics(
+          code,
+          students.map((s) => s.livekitIdentity),
+          (identity) => openIdentities.has(identity),
+          (identity) => inSample.has(identity)
+        );
         pushMuteState(room.code, room.sessionId, students.filter((s) => openSet.has(s.id)).map((s) => s.livekitIdentity), false);
         pushMuteState(room.code, room.sessionId, students.filter((s) => !openSet.has(s.id)).map((s) => s.livekitIdentity), true);
         nudgeRoomState(room.code, 'all');
