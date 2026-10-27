@@ -6,7 +6,6 @@ import { finishCopy, finishFromState } from '../src/lib/classFinish';
 import { createEraseBatcher, eraseBatchBodies, ERASE_BATCH_MAX } from '../src/lib/eraseBatch';
 import { isSmallScreen, shareLayerFor, shouldDeclineVp9, withoutVp9 } from '../src/lib/subscriberCodecs';
 import { createStepUp } from '../src/lib/reconnectQuality';
-import { decodeCached, encodeCached } from '../src/lib/dbCache';
 import { SHARE_CODEC } from '../src/lib/videoQuality';
 
 const src = (p: string) => readFileSync(new URL(`../src/${p}`, import.meta.url), 'utf8');
@@ -125,16 +124,12 @@ test('5/7. Caddy compression + caching; TURN cert mount', () => {
   assert.match(root('infra/livekit.example.yaml'), /tls_port: 5349/);
 });
 
-test('6. db cache: dates round-trip; writes bump the version; state route reads through it', () => {
-  const v = { a: new Date('2026-10-10T10:00:00Z'), b: [{ c: new Date(0), d: 'x' }], e: null };
-  const back = decodeCached<typeof v>(encodeCached(v));
-  assert.ok(back.a instanceof Date && back.a.getTime() === v.a.getTime());
-  assert.ok(back.b[0]!.c instanceof Date);
-  assert.equal(back.e, null);
-  assert.match(src('lib/db.ts'), /WRITES\.has\(params\.action\)\) noteDbWrite\(\)/);
-  assert.match(src('lib/dbCacheVersion.ts'), /setTimeout\(\(\) => void bump\(\), 2000\)/);
-  assert.match(src('app/api/rooms/[code]/state/route.ts'), /cachedRead\(`room-state:\$\{code\}`/);
-  assert.match(src('lib/auth.ts'), /cachedRead\(`student-token:\$\{token\}`/);
+test('6. no global DB read cache: auth reads hit the indexed rows directly; no deprecated Prisma middleware', () => {
+  // The global-version Redis cache was invalidated by any write anywhere, so it
+  // almost never hit during school hours while adding Redis round trips.
+  assert.doesNotMatch(src('lib/db.ts'), /\$use\(/);
+  assert.doesNotMatch(src('lib/auth.ts'), /cachedRead/);
+  assert.doesNotMatch(src('app/api/rooms/[code]/state/route.ts'), /cachedRead/);
 });
 
 test('8. reconnect: low while recovering, step up after a quiet period', () => {

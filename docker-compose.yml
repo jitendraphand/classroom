@@ -51,9 +51,11 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     network_mode: host
-    # Loopback only, with a hard memory ceiling and LRU eviction. The previous
-    # config had maxmemory 0 + noeviction alongside AOF, so unbounded room keys
-    # could grow until the 2 GB host was OOM-killed.
+    # Loopback only, with a hard memory ceiling. Eviction is volatile-ttl: only
+    # keys with an expiry can go, shortest-lived first (short caches and
+    # throttles). The attendance queue, its in-flight batch, locks and room
+    # state are never evicted to make room (allkeys-lru could silently drop
+    # queued attendance events or single-use join-token markers).
     command:
       - redis-server
       - --appendonly
@@ -68,7 +70,7 @@ services:
       - --maxmemory
       - ${REDIS_MAXMEMORY:-1gb}
       - --maxmemory-policy
-      - allkeys-lru
+      - volatile-ttl
       - --tcp-keepalive
       - "60"
       # Soft/hard/seconds. Drop a stalled subscriber before Redis OOM.

@@ -2,7 +2,6 @@ import { whiteboardOn } from '@/lib/whiteboardServer';
 import { camWanted } from '@/lib/camOnDemand';
 import { prisma } from '@/lib/db';
 import { endedSessionReason, getStudentSessionToken, resolveRoomAccess } from '@/lib/auth';
-import { cachedRead } from '@/lib/dbCache';
 import { recentTakeovers, wasReplaced } from '@/lib/deviceTakeoverServer';
 import { jsonError, jsonOk } from '@/lib/response';
 import { clampMaxVisible, ensureSampleFresh, getVisibleSample } from '@/lib/sample';
@@ -52,9 +51,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   // Students share one snapshot per room version for STATE_CACHE_MS (lib/roomStateCache).
   const cacheMs = stateCacheMs();
   const ver = cacheMs > 0 ? await roomVersion(code) : '0';
-  let room = cacheMs > 0
-    ? await memo(`state-room:${code}:${ver}`, cacheMs, loadRoom)
-    : await cachedRead(`room-state:${code}`, loadRoom);
+  let room = cacheMs > 0 ? await memo(`state-room:${code}:${ver}`, cacheMs, loadRoom) : await loadRoom();
   if (!room) return jsonError('Room not found', 404);
 
   // Always surface ENDED quickly so clients can kick to ended UI without auth edge-cases
@@ -237,17 +234,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
         },
       });
     // These fields do not change during a class: students share them for 30 s.
-    classSession = isTeacher
-      ? await cachedRead(`class-session:v7:${csId}`, loadCs)
-      : await memo(`state-cs:${csId}`, cacheMs > 0 ? 30_000 : 0, loadCs);
+    classSession = await memo(`state-cs:${csId}`, cacheMs > 0 ? 30_000 : 0, loadCs);
     if (classSession && isTeacher) {
       const cid = classSession.id;
-      const recs = await cachedRead(`attendance-late:${cid}`, () =>
-        prisma.attendanceRecord.findMany({
-          where: { classSessionId: cid },
-          select: { studentId: true, late: true },
-        })
-      );
+      const recs = await prisma.attendanceRecord.findMany({
+        where: { classSessionId: cid },
+        select: { studentId: true, late: true },
+      });
       for (const r of recs) lateByStudent.set(r.studentId, r.late);
     }
   }

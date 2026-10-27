@@ -15,6 +15,7 @@ import { occurrencesForRange } from './scheduleService';
 import { addDays, forAudience, formatHHMM, localDateOf, type Occurrence } from './schedule';
 import { appTimeZone, earlyWindowMinutes } from './schoolConfig';
 import { decideRoute, routeSignature, type SessionState } from './studentRouting';
+import { memo } from './roomStateCache';
 import { admitWaiting, ClassFullError } from './admission';
 import { shouldAutoAdmit } from './admissionLogic';
 import type { JoinClaims } from './schoolJwt';
@@ -256,6 +257,13 @@ async function sessionInfo(cs: ClassSession): Promise<ClassInfo> {
   };
 }
 
+/** How long a worker reuses the expanded timetable (STUDENT_SCHEDULE_CACHE_MS, default 10 s, max 60 s). */
+export function scheduleCacheMs(env: Record<string, string | undefined> = process.env): number {
+  const n = Number.parseInt(env.STUDENT_SCHEDULE_CACHE_MS ?? '', 10);
+  return Number.isFinite(n) && n >= 0 ? Math.min(n, 60_000) : 10_000;
+}
+const LIVE_ROOMS_CACHE_MS = 2_000;
+
 /**
  * The routing decision for a student right now, with no side effects (no
  * check-in, no ClassSession created). Shared by routeStudent and the
@@ -272,15 +280,24 @@ export async function decideStudentRoute(student: Student) {
     division: normalizeDivision(student.division),
   };
 
-  // Yesterday too, so a class running past midnight is still found.
-  const occurrences = forAudience(await occurrencesForRange(addDays(today, -1), addDays(today, 7), tz), who);
+  // Yesterday too, so a class running past midnight is still found. The whole
+  // school's expanded timetable is the same for every student: shared per
+  // worker for a few seconds instead of recomputed on every student's poll.
+  const from = addDays(today, -1);
+  const to = addDays(today, 7);
+  const occurrences = forAudience(
+    await memo(`sched:${from}:${to}:${tz}`, scheduleCacheMs(), () => occurrencesForRange(from, to, tz)),
+    who
+  );
 
   const [sessions, liveRooms] = await Promise.all([
     prisma.classSession.findMany({
       where: prismaOccurrenceKeys(occurrences.map((o) => o.key)),
       include: { room: true },
     }),
-    prisma.room.findMany({ where: { status: { not: 'ENDED' }, classSessionId: { not: null } }, select: { classSessionId: true } }),
+    memo('live-rooms', LIVE_ROOMS_CACHE_MS, () =>
+      prisma.room.findMany({ where: { status: { not: 'ENDED' }, classSessionId: { not: null } }, select: { classSessionId: true } })
+    ),
   ]);
   const states = new Map<string, SessionState>();
   for (const o of occurrences) {
