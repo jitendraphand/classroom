@@ -25,3 +25,14 @@ test('extra trusted proxies (load balancer subnet)', () => {
   assert.equal(ipMatches('::1', '::1'), true);
   assert.equal(ipMatches('bad', '10.0.0.0/8'), false);
 });
+
+test('staff session lifetimes and retention knobs', async () => {
+  const { sessionTtlHours } = await import('../src/lib/sessionTokens');
+  const { participantRetentionDays } = await import('../src/lib/retention');
+  assert.equal(sessionTtlHours('teacher', {}), 24);
+  assert.equal(sessionTtlHours('teacher', { TEACHER_SESSION_HOURS: '168' }), 168);
+  assert.equal(sessionTtlHours('teacher', { TEACHER_SESSION_HOURS: 'x' }), 24);
+  assert.equal(sessionTtlHours('admin', {}), 12);
+  assert.equal(participantRetentionDays({}), 30);
+  assert.equal(participantRetentionDays({ PARTICIPANT_RETENTION_DAYS: '0' }), 0);
+});

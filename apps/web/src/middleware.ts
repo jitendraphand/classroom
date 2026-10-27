@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { allowsFormPost, checkCsrf, isCsrfExempt } from '@/lib/csrf';
+import { allowsCrossSiteGet, allowsFormPost, checkCsrf, isCsrfExempt } from '@/lib/csrf';
 import { hasUnsignedJoinParams } from '@/lib/joinParams';
 
 /**
@@ -7,9 +7,9 @@ import { hasUnsignedJoinParams } from '@/lib/joinParams';
  *   (unsigned mode): the school app's join link. Rewritten (URL kept) to the
  *   route handler that checks it, sets the student session and redirects to
  *   /student, so the query never reaches a page/Referer or the address bar.
- * - Origin + content-type guard for every state-changing API call. See
- *   `lib/csrf.ts` for the rules and why SameSite cookies are not enough on
- *   sslip.io deploys.
+ * - Origin + content-type guard for every state-changing API call, and a
+ *   Sec-Fetch-Site guard for every API call (GETs included). See `lib/csrf.ts`
+ *   for the rules and why SameSite cookies are not enough on sslip.io deploys.
  */
 export function middleware(req: NextRequest) {
   const { pathname, searchParams } = req.nextUrl;
@@ -26,6 +26,7 @@ export function middleware(req: NextRequest) {
   const result = checkCsrf({
     method: req.method,
     allowForm: allowsFormPost(pathname),
+    allowCrossSiteGet: allowsCrossSiteGet(pathname),
     headers: req.headers,
     configuredOrigins: [process.env.APP_URL, process.env.NEXT_PUBLIC_APP_URL],
   });

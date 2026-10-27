@@ -54,3 +54,18 @@ export async function clearLoginFailures(email: string): Promise<void> {
     /* ignore */
   }
 }
+
+/**
+ * Generic fixed window: true when `key` went over `limit` hits in `windowS`.
+ * Fails open (Redis down = allowed).
+ */
+export async function overRateLimit(key: string, limit: number, windowS: number): Promise<boolean> {
+  if (limit <= 0) return false;
+  try {
+    const redis = await ensureRedis();
+    const [[, n]] = (await redis.multi().incr(key).expire(key, windowS, 'NX').exec()) as [[unknown, number]];
+    return Number(n) > limit;
+  } catch {
+    return false;
+  }
+}

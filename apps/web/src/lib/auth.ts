@@ -9,6 +9,8 @@ import {
   sessionStatus,
   newSessionId,
   linkedTeacherOk,
+  sessionTtlHours,
+  STAFF_REFRESH_AFTER_S,
   type SessionStatus,
   type EndedSessionReason,
 } from './sessionTokens';
@@ -142,7 +144,32 @@ export async function endedSessionReason(): Promise<EndedSessionReason | undefin
 }
 
 export async function setTeacherCookie(token: string) {
-  (await cookies()).set(teacherCookieName(), token, cookieOptions(60 * 60 * 24 * 7));
+  (await cookies()).set(teacherCookieName(), token, cookieOptions(60 * 60 * sessionTtlHours('teacher')));
+}
+
+/**
+ * Sliding staff session: re-issue the teacher/admin cookie (same session id,
+ * same version) once it is STAFF_REFRESH_AFTER_S old and still valid. Called
+ * from /api/auth/me, which every signed-in page polls.
+ */
+export async function refreshStaffCookies(): Promise<void> {
+  const jar = await cookies();
+  const now = Date.now() / 1000;
+  const stale = (iat: unknown) => now - (typeof iat === 'number' ? iat : 0) >= STAFF_REFRESH_AFTER_S;
+
+  const t = await verifySession(jar.get(teacherCookieName())?.value, 'teacher').catch(() => null);
+  if (t && stale(t.iat)) {
+    const row = await prisma.teacher.findUnique({ where: { id: t.sub } });
+    if (row && sessionStatus(t, row) === 'ok' && !row.deletedAt) await setTeacherCookie(await createTeacherToken(row));
+  }
+  const a = await verifySession(jar.get(adminCookieName())?.value, 'admin').catch(() => null);
+  if (a && stale(a.iat)) {
+    const row = await prisma.admin.findUnique({ where: { id: a.sub } });
+    if (row && sessionStatus(a, row) === 'ok') {
+      const tv = typeof a.tv === 'number' ? a.tv : undefined;
+      await setAdminCookie(await createAdminToken(row, tv));
+    }
+  }
 }
 
 export async function clearTeacherCookie() {
@@ -229,7 +256,7 @@ export async function startLinkedAdminSession(adminId: string, teacherSessionVer
 
 
 export async function setAdminCookie(token: string) {
-  (await cookies()).set(adminCookieName(), token, cookieOptions(60 * 60 * 12));
+  (await cookies()).set(adminCookieName(), token, cookieOptions(60 * 60 * sessionTtlHours('admin')));
 }
 
 export async function clearAdminCookie() {

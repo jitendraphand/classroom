@@ -7,6 +7,7 @@ import { livekitRoomName, sendRoomData } from '@/lib/livekit';
 import { chatAudience } from '@/lib/chatAudience';
 import { publishChat } from '@/lib/chatBus';
 import { CHAT_TOPIC } from '@/lib/realtimePackets';
+import { overRateLimit } from '@/lib/rateLimit';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,6 +15,9 @@ const MAX_BODY = 2000;
 /** Newest N messages retained per client's view of a room. */
 const MAX_HISTORY = 500;
 const SINCE_OVERLAP_MS = 5_000;
+/** Chat send limits per 10 s window (students / teacher). */
+const STUDENT_MESSAGES_PER_10S = 5;
+const TEACHER_MESSAGES_PER_10S = 30;
 
 type AccessCtx = {
   room: { id: string; code: string; status: string; teacherId: string; sessionId: string };
@@ -208,6 +212,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
   }
   if (!ctx.admitted) return jsonError('Not admitted', 403);
   if (!ctx.participantId) return jsonError('No participant identity', 400);
+  // Each message is a row and a push to the teacher: cap the rate per sender.
+  if (
+    await overRateLimit(
+      `ratelimit:chat:${ctx.participantId}`,
+      ctx.isTeacher ? TEACHER_MESSAGES_PER_10S : STUDENT_MESSAGES_PER_10S,
+      10
+    )
+  ) {
+    return jsonError('You are sending messages too fast. Wait a few seconds.', 429);
+  }
 
   let body: z.infer<typeof postSchema>;
   try {

@@ -13,11 +13,26 @@ export type SessionRole = 'admin' | 'teacher' | 'pupil';
 
 export type SessionClaims = { sub: string; role: SessionRole; sv: number; [k: string]: unknown };
 
-const TTL: Record<SessionRole, string> = {
-  admin: '12h',
-  teacher: '7d',
-  pupil: '12h',
-};
+/**
+ * Token lifetimes in hours. Teacher and admin sessions slide: /api/auth/me
+ * (polled by every signed-in page) re-issues the cookie once it is an hour
+ * old, so an open dashboard or class never expires, while a cookie that stops
+ * being used (closed laptop, copied cookie) dies after this long.
+ * TEACHER_SESSION_HOURS (default 24, was a fixed 7 days), ADMIN_SESSION_HOURS
+ * (default 12).
+ */
+export function sessionTtlHours(role: SessionRole, env: Record<string, string | undefined> = process.env): number {
+  const pick = (raw: string | undefined, d: number) => {
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 1 ? Math.min(Math.floor(n), 24 * 30) : d;
+  };
+  if (role === 'teacher') return pick(env.TEACHER_SESSION_HOURS, 24);
+  if (role === 'admin') return pick(env.ADMIN_SESSION_HOURS, 12);
+  return 12;
+}
+
+/** Re-issue a staff cookie once it is this old (sliding session). */
+export const STAFF_REFRESH_AFTER_S = 60 * 60;
 
 export function sessionSecret(raw = process.env.NEXTAUTH_SECRET): Uint8Array {
   if (!raw) throw new Error('NEXTAUTH_SECRET is not set');
@@ -35,7 +50,7 @@ export async function signSession(
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject(sub)
     .setIssuedAt()
-    .setExpirationTime(TTL[role])
+    .setExpirationTime(`${sessionTtlHours(role)}h`)
     .sign(secret);
 }
 

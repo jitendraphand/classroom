@@ -1,10 +1,12 @@
 import { prisma } from '@/lib/db';
-import { endedSessionReason, getAdminSession, getTeacherSession, getStudentParticipant } from '@/lib/auth';
+import { endedSessionReason, getAdminSession, getTeacherSession, getStudentParticipant, refreshStaffCookies } from '@/lib/auth';
 import { jsonOk } from '@/lib/response';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
+  // Sliding teacher/admin session (lib/sessionTokens): keep an active one alive.
+  await refreshStaffCookies().catch(() => undefined);
   const admin = await getAdminSession({ allowPendingPasswordChange: true });
   if (admin) return jsonOk({ role: 'admin', ...admin });
 

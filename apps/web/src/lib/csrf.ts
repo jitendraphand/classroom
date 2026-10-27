@@ -6,6 +6,14 @@
  * `*.sslip.io` origin as the *same site*, so SameSite cookies alone do not stop
  * another sslip.io page from POSTing to this app with the teacher cookie.
  *
+ * Every method, including GET: a browser request that says it comes from
+ * another site (`Sec-Fetch-Site: cross-site` or `same-site`) is refused. Some
+ * GET routes have side effects (the teacher's /token resets the stage and
+ * presence), and SameSite=Strict cookies still travel on same-site requests
+ * from sibling sslip.io pages. The school-app join link is the one
+ * cross-site navigation allowed (CROSS_SITE_GET_PATHS; it checks for itself
+ * that it is a top-level navigation).
+ *
  * Rules for POST / PUT / PATCH / DELETE:
  *  1. If the browser sent `Origin`, its host must be this app's host (the
  *     request Host / X-Forwarded-Host, or APP_URL / NEXT_PUBLIC_APP_URL).
@@ -34,6 +42,13 @@ export function isCsrfExempt(pathname: string): boolean {
 
 export const STATE_CHANGING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
+/** GET routes another site may navigate to (the school app's join link). */
+export const CROSS_SITE_GET_PATHS = new Set(['/api/student/join']);
+
+export function allowsCrossSiteGet(pathname: string): boolean {
+  return CROSS_SITE_GET_PATHS.has(pathname.replace(/\/+$/, ''));
+}
+
 /**
  * Paths that also accept a native same-origin HTML form post
  * (application/x-www-form-urlencoded): the /login form's pre-hydration
@@ -54,6 +69,8 @@ function isFormContentType(value: string | null): boolean {
 export type CsrfInput = {
   /** Accept a same-origin urlencoded form post (see FORM_POST_PATHS). */
   allowForm?: boolean;
+  /** Accept a cross-site GET (see CROSS_SITE_GET_PATHS). */
+  allowCrossSiteGet?: boolean;
   method: string;
   headers: { get(name: string): string | null };
   /** Extra origins allowed besides the request host (APP_URL etc.). */
@@ -102,7 +119,13 @@ export function isJsonContentType(value: string | null): boolean {
 
 export function checkCsrf(input: CsrfInput): CsrfResult {
   const method = input.method.toUpperCase();
-  if (!STATE_CHANGING_METHODS.has(method)) return { ok: true };
+  if (!STATE_CHANGING_METHODS.has(method)) {
+    const site = input.headers.get('sec-fetch-site');
+    if (!input.allowCrossSiteGet && (site === 'cross-site' || site === 'same-site')) {
+      return { ok: false, status: 403, reason: 'Cross-site request blocked' };
+    }
+    return { ok: true };
+  }
 
   const origin = input.headers.get('origin');
   if (origin != null) {

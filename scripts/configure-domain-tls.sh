@@ -108,6 +108,9 @@ cat > "$CADDYFILE" << CADDY
 }
 
 ${DOMAIN} {
+	# HTTPS only from now on (this host is always served over TLS by Caddy).
+	header Strict-Transport-Security "max-age=31536000"
+	header -Server
 	# Never compress SSE: the encoder buffers it and Caddy logs an
 	# incomplete response when the stream ends mid-chunk.
 	@compressible not path */messages/stream

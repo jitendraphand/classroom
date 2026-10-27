@@ -12,6 +12,8 @@ export async function register() {
     startAbsenceSweeper();
     const { startAttendanceFlusher } = await import('./lib/attendanceQueue');
     startAttendanceFlusher();
+    const { startRetentionJob } = await import('./lib/retention');
+    startRetentionJob();
     try {
       const { schoolJoinModeFromEnv, signedModeProblem } = await import('./lib/schoolJoin');
       const { schoolJwtConfigFromEnv } = await import('./lib/schoolJwt');

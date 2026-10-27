@@ -63,13 +63,19 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
   });
   if (existing) return jsonError('You already sent feedback for this class', 409);
 
-  await prisma.classFeedback.create({
-    data: {
-      classSessionId: room.classSessionId,
-      studentId: pupil.id,
-      stars: body!.stars as number,
-      comment: normalizeFeedbackComment(body?.comment),
-    },
-  });
+  try {
+    await prisma.classFeedback.create({
+      data: {
+        classSessionId: room.classSessionId,
+        studentId: pupil.id,
+        stars: body!.stars as number,
+        comment: normalizeFeedbackComment(body?.comment),
+      },
+    });
+  } catch (e) {
+    // A double tap sent two requests: the unique (session, student) row exists.
+    if ((e as { code?: string }).code === 'P2002') return jsonError('You already sent feedback for this class', 409);
+    throw e;
+  }
   return jsonOk({ ok: true });
 }
