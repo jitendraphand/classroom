@@ -71,5 +71,7 @@ Reproduce with `scripts/loadtest/` (credentials from env only; see that README).
 - Students subscribe to **teacher tracks + classmate audio + the spotlight camera**. Never student-to-student video (`StudentMediaPrivacy`, `autoSubscribe: false`).
 - `adaptiveStream` + `dynacast` on.
 - Heartbeats every **≥30 s**, jittered.
-- High-frequency events (whiteboard ops, draw pts, chat, hand, draw-request) go over **LiveKit data channels**. The web process persists chat history and snapshots, batched.
+- High-frequency events (whiteboard ops, draw pts, chat, hand, draw-request) reach viewers over **LiveKit data channels**. Only the teacher publishes data directly; a student's strokes, ops, messages and hands go through the API, which checks the permission and relays them as server packets (students hold no data grant).
+- Permission pushes (mute all, teacher reconnect, sample rotation) are one batch per event with bounded concurrency (`PERMISSION_PUSH_CONCURRENCY`), and use the `updateParticipant` result instead of listing the room per student.
+- An empty `canPublishSources` means "everything" to LiveKit, so a student who may publish nothing gets `canPublish: false`.
 - Mute-all is still **server-side** (LiveKit `updateParticipant` / `mutePublishedTrack`). Clients only receive the signal.
