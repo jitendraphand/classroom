@@ -139,6 +139,7 @@ import {
 } from '@/lib/classroomClient';
 import { forwardActivityFrom, setLiveSession } from '@/lib/liveSession';
 import { filterPeople } from '@/lib/peopleSearch';
+import { ROSTER_PAGE, rosterWindow } from '@/lib/rosterWindow';
 import { peerWindowOuterSize } from '@/lib/peerWindow';
 import {
   parseMediaProfile,
@@ -942,6 +943,13 @@ function RoomInner({
   const videoModeRef = useRef(videoMode);
   /** Teacher roster search (name / SID). */
   const [rosterQuery, setRosterQuery] = useState('');
+  // Large classes: render the roster / waiting list a page at a time (lib/rosterWindow).
+  const [rosterLimit, setRosterLimit] = useState(ROSTER_PAGE);
+  const [waitingLimit, setWaitingLimit] = useState(ROSTER_PAGE);
+  useEffect(() => {
+    setRosterLimit(ROSTER_PAGE);
+    setWaitingLimit(ROSTER_PAGE);
+  }, [rosterQuery]);
   /** True while we intentionally change presentation stage (avoids teardown races). */
   const stageSwitchRef = useRef(false);
   /** Teacher still wants the screen shared across a LiveKit reconnect. */
@@ -2221,8 +2229,10 @@ function RoomInner({
     }))
   );
   const studentCount = rosterStudents.length;
-  const shownRoster = filterPeople(rosterStudents, rosterQuery);
-  const shownWaiting = filterPeople(state?.waiting ?? [], rosterQuery);
+  const rosterWin = rosterWindow(filterPeople(rosterStudents, rosterQuery), rosterLimit);
+  const waitingWin = rosterWindow(filterPeople(state?.waiting ?? [], rosterQuery), waitingLimit);
+  const shownRoster = rosterWin.shown;
+  const shownWaiting = waitingWin.shown;
   /** Raised hands, earliest first: shown in the chat panel so they stay in
    * sight while the roster is closed. */
   const raisedHands = rosterStudents
@@ -3177,6 +3187,13 @@ function RoomInner({
                       </span>
                     </li>
                   ))}
+                  {waitingWin.hidden > 0 && (
+                    <li>
+                      <button type="button" className="roster-more" onClick={() => setWaitingLimit((n) => n + ROSTER_PAGE)}>
+                        Show {waitingWin.next} more ({waitingWin.hidden} not shown; search finds anyone)
+                      </button>
+                    </li>
+                  )}
                 </ul>
               </div>
             )}
@@ -3340,6 +3357,13 @@ function RoomInner({
                   </li>
                 );
               })}
+              {rosterWin.hidden > 0 && (
+                <li>
+                  <button type="button" className="roster-more" data-testid="roster-more" onClick={() => setRosterLimit((n) => n + ROSTER_PAGE)}>
+                    Show {rosterWin.next} more ({rosterWin.hidden} not shown; search finds anyone)
+                  </button>
+                </li>
+              )}
             </ul>
           </div>
         </FloatingPanel>
