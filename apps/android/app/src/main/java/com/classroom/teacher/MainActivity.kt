@@ -72,6 +72,9 @@ import com.classroom.teacher.wb.Wb
 import com.classroom.teacher.wb.WbHost
 import com.classroom.teacher.wb.WbOps
 import com.classroom.teacher.wb.WhiteboardScreen
+import com.classroom.teacher.wb.WbCodec
+import com.classroom.teacher.wb.WbFiles
+import com.classroom.teacher.wb.WbStyle
 
 /**
  * Teacher client for Android. Mobile browsers do not implement getDisplayMedia,
@@ -215,6 +218,15 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         if (granted) toggleCamera() else showError("Camera permission is required to show your video.")
+    }
+
+    /** Whiteboard: insert a picture from the gallery / files. */
+    private val boardImagePicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri == null) return@registerForActivityResult
+        lifecycleScope.launch {
+            val bmp = withContext(Dispatchers.IO) { WbFiles.decodeImage(contentResolver, uri) }
+            if (bmp == null) showError("That picture could not be opened.") else wbScreen?.board?.insertImage(bmp)
+        }
     }
 
     private val captureLauncher = registerForActivityResult(
@@ -2103,6 +2115,8 @@ class MainActivity : AppCompatActivity() {
         val screen = wbScreen ?: WhiteboardScreen(this, boardListener).also { wbScreen = it }
         screen.host = host
         screen.board.me = "teacher"
+        // Laser pointer: lossy data on the board topic (a late laser point is useless).
+        screen.board.onLaser = { pts -> room?.let { r -> sendWbLossy(r, WbCodec.laserPacket(pts)) } }
         if (screen.parent == null) {
             // Under the panels / toast so chat and the roster still open over the board.
             binding.classScreen.addView(screen, 1, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -2142,6 +2156,15 @@ class MainActivity : AppCompatActivity() {
         renderVideos()
         syncVideoPanel()
         renderRail()
+    }
+
+    private fun sendWbLossy(r: Room, packet: ByteArray) {
+        lifecycleScope.launch {
+            try {
+                r.localParticipant.publishData(packet, DataPublishReliability.LOSSY, Wb.TOPIC)
+            } catch (_: Exception) {
+            }
+        }
     }
 
     private fun sendWb(r: Room, packets: List<ByteArray>, to: List<String>?) {
@@ -2251,7 +2274,7 @@ class MainActivity : AppCompatActivity() {
                     val t = input.text.toString().trim().take(500)
                     if (t.isEmpty()) return@setPositiveButton
                     val pg = host.doc.pages[host.doc.cur]
-                    val size = maxOf(24, (wbScreen?.board?.penWidth ?: 4) * 8)
+                    val size = WbStyle.textSize(wbScreen?.board?.penWidth ?: 4)
                     host.local(listOf(WbOps.add(pg.id, Item.Text(Wb.newId("t"), "teacher", wbScreen?.board?.color ?: "#111111", size, x, y, t))))
                     wbScreen?.changed()
                     scheduleWbSave()
@@ -2260,6 +2283,28 @@ class MainActivity : AppCompatActivity() {
                 .show()
         }
         override fun onBoardChanged() = scheduleWbSave()
+        override fun onBoardInsertImage() {
+            try {
+                boardImagePicker.launch("image/*")
+            } catch (_: Exception) {
+                showError("No app on this device can pick a picture.")
+            }
+        }
+        override fun onBoardExport(pdf: Boolean) {
+            val host = wbHost ?: return
+            val board = wbScreen?.board ?: return
+            lifecycleScope.launch {
+                try {
+                    val pages = if (pdf) host.doc.pages.toList() else listOf(host.doc.currentPage())
+                    val bitmaps = pages.map { board.renderPage(it) }
+                    val uri = withContext(Dispatchers.IO) { WbFiles.export(this@MainActivity, bitmaps, pdf, host.doc.cur + 1) }
+                    bitmaps.forEach { it.recycle() }
+                    startActivity(Intent.createChooser(WbFiles.shareIntent(uri, pdf), if (pdf) "Share the whiteboard PDF" else "Share the whiteboard page"))
+                } catch (e: Exception) {
+                    showError(e.message ?: "Could not export the whiteboard")
+                }
+            }
+        }
     }
 
     // ---- Window size classes (Material: compact < 600dp ≤ medium < 840dp ≤ expanded) ----

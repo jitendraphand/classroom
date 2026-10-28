@@ -31,7 +31,11 @@ object Wb {
     const val SNAP_STORE_MS = 5000L
     /** A stroke counts as growing for this long after its last points (web HOT_MS). */
     const val HOT_MS = 1500L
-    val BACKGROUNDS = listOf("white", "grid", "lined", "black")
+    val BACKGROUNDS = listOf("white", "grid", "lined", "dots", "graph", "black")
+    val SHAPE_KINDS = listOf("line", "arrow", "rect", "ellipse", "tri")
+    val FILLABLE = setOf("rect", "ellipse", "tri")
+    /** Laser trail point lifetime (web LASER_MS). */
+    const val LASER_MS = 900L
     val PALETTE = listOf("#111111", "#ffffff", "#e53935", "#fb8c00", "#fdd835", "#43a047", "#1e88e5", "#8e24aa")
 
     private val COLOR_RE = Regex("^#[0-9a-fA-F]{6}$")
@@ -61,6 +65,16 @@ object Wb {
         return min(hi.toLong(), max(lo.toLong(), v)).toInt()
     }
 
+    /** Stylus pressure list: 0–100 integers, at most [maxLen] (web cleanPr). Null when absent or empty. */
+    fun cleanPr(raw: Any?, maxLen: Int = MAX_POINTS_PER_STROKE): IntArray? {
+        val arr = raw as? JSONArray ?: return null
+        if (arr.length() == 0) return null
+        return IntArray(min(arr.length(), maxLen)) { clampN(arr.opt(it), 0, 100) }
+    }
+
+    /** Pressure 0–1 → the stored 0–100 integer (web pressurePct). */
+    fun pressurePct(p: Float): Int = clampN(if (p.isFinite()) p * 100.0 else 50.0, 0, 100)
+
     fun cleanPts(raw: Any?, maxLen: Int = MAX_POINTS_PER_STROKE * 2): IntArray? {
         val arr = raw as? JSONArray ?: return null
         val out = IntArrayList()
@@ -84,6 +98,7 @@ class IntArrayList(cap: Int = 16) {
         data[size++] = v
     }
     fun addAll(v: IntArray) { for (x in v) add(x) }
+    fun clear() { size = 0 }
     operator fun get(i: Int) = data[i]
     fun toArray(): IntArray = data.copyOf(size)
     fun copy(): IntArrayList = IntArrayList(max(16, size)).also { it.addAll(toArray()) }
@@ -94,13 +109,23 @@ sealed class Item {
     abstract val by: String
     abstract fun toJson(): JSONObject
 
-    class Stroke(override val id: String, override val by: String, val tool: String, val c: String, val w: Int, val pts: IntArrayList) : Item() {
-        override fun toJson() = JSONObject().put("k", "stroke").put("id", id).put("by", by).put("tool", tool).put("c", c).put("w", w)
-            .put("pts", JSONArray().also { a -> for (i in 0 until pts.size) a.put(pts[i]) })
+    /** [pr] = stylus pressure per point (pen strokes only), aligned with [pts]. */
+    class Stroke(override val id: String, override val by: String, val tool: String, val c: String, val w: Int, val pts: IntArrayList, val pr: IntArrayList? = null) : Item() {
+        override fun toJson(): JSONObject {
+            val o = JSONObject().put("k", "stroke").put("id", id).put("by", by).put("tool", tool).put("c", c).put("w", w)
+                .put("pts", JSONArray().also { a -> for (i in 0 until pts.size) a.put(pts[i]) })
+            if (pr != null) o.put("pr", JSONArray().also { a -> for (i in 0 until pr.size) a.put(pr[i]) })
+            return o
+        }
     }
-    class Shape(val k: String, override val id: String, override val by: String, val c: String, val w: Int, val x1: Int, val y1: Int, val x2: Int, val y2: Int) : Item() {
-        override fun toJson() = JSONObject().put("k", k).put("id", id).put("by", by).put("c", c).put("w", w)
-            .put("x1", x1).put("y1", y1).put("x2", x2).put("y2", y2)
+    /** [fl] = filled (rect, ellipse, triangle). */
+    class Shape(val k: String, override val id: String, override val by: String, val c: String, val w: Int, val x1: Int, val y1: Int, val x2: Int, val y2: Int, val fl: Boolean = false) : Item() {
+        override fun toJson(): JSONObject {
+            val o = JSONObject().put("k", k).put("id", id).put("by", by).put("c", c).put("w", w)
+                .put("x1", x1).put("y1", y1).put("x2", x2).put("y2", y2)
+            if (fl) o.put("fl", 1)
+            return o
+        }
     }
     class Text(override val id: String, override val by: String, val c: String, val size: Int, val x: Int, val y: Int, val text: String) : Item() {
         override fun toJson() = JSONObject().put("k", "text").put("id", id).put("by", by).put("c", c).put("size", size).put("x", x).put("y", y).put("text", text)
@@ -121,12 +146,19 @@ sealed class Item {
             return when (val k = o.optString("k")) {
                 "stroke" -> {
                     val pts = Wb.cleanPts(o.opt("pts")) ?: return null
-                    Stroke(id, by, if (o.optString("tool") == "hl") "hl" else "pen", c, Wb.clampN(o.opt("w"), 1, 80), IntArrayList(max(16, pts.size)).also { it.addAll(pts) })
+                    val tool = if (o.optString("tool") == "hl") "hl" else "pen"
+                    // Pressure only for pen strokes, exactly one value per point.
+                    val pr = if (tool == "pen") Wb.cleanPr(o.opt("pr"), pts.size / 2)?.takeIf { it.size == pts.size / 2 } else null
+                    Stroke(
+                        id, by, tool, c, Wb.clampN(o.opt("w"), 1, 80), IntArrayList(max(16, pts.size)).also { it.addAll(pts) },
+                        pr?.let { a -> IntArrayList(max(16, a.size)).also { it.addAll(a) } },
+                    )
                 }
-                "line", "arrow", "rect", "ellipse" -> Shape(
+                "line", "arrow", "rect", "ellipse", "tri" -> Shape(
                     k, id, by, c, Wb.clampN(o.opt("w"), 1, 80),
                     Wb.clampN(o.opt("x1"), -Wb.PAGE_W, Wb.PAGE_W * 2), Wb.clampN(o.opt("y1"), -Wb.PAGE_H, Wb.PAGE_H * 2),
                     Wb.clampN(o.opt("x2"), -Wb.PAGE_W, Wb.PAGE_W * 2), Wb.clampN(o.opt("y2"), -Wb.PAGE_H, Wb.PAGE_H * 2),
+                    fl = o.opt("fl") == 1 && k in Wb.FILLABLE,
                 )
                 "text" -> {
                     val text = (if (o.isNull("text")) "" else o.opt("text")?.toString() ?: "").take(2000)
@@ -186,7 +218,14 @@ class Doc(val pages: MutableList<Page>, var cur: Int) {
 /** Whiteboard ops (web Op), kept as validated JSON objects plus typed access. */
 object WbOps {
     fun add(p: String, item: Item) = JSONObject().put("k", "add").put("p", p).put("item", item.toJson())
-    fun pts(p: String, id: String, pts: IntArray) = JSONObject().put("k", "pts").put("p", p).put("id", id).put("pts", JSONArray().also { a -> pts.forEach { a.put(it) } })
+    fun pts(p: String, id: String, pts: IntArray, pr: IntArray? = null): JSONObject {
+        val o = JSONObject().put("k", "pts").put("p", p).put("id", id).put("pts", JSONArray().also { a -> pts.forEach { a.put(it) } })
+        if (pr != null) o.put("pr", JSONArray().also { a -> pr.forEach { a.put(it) } })
+        return o
+    }
+    /** Move / resize items: every point becomes (pt - o) * s + o + d (web `xf`). */
+    fun xf(p: String, ids: Collection<String>, s: Double, ox: Int, oy: Int, dx: Int, dy: Int) =
+        JSONObject().put("k", "xf").put("p", p).put("ids", JSONArray(ids.toList())).put("s", s).put("ox", ox).put("oy", oy).put("dx", dx).put("dy", dy)
     fun del(p: String, ids: Collection<String>) = JSONObject().put("k", "del").put("p", p).put("ids", JSONArray(ids.toList()))
     fun clear(p: String) = JSONObject().put("k", "clear").put("p", p)
     fun bg(p: String, bg: String) = JSONObject().put("k", "bg").put("p", p).put("bg", bg)
@@ -218,8 +257,31 @@ object WbOps {
                 val s = page.items.firstOrNull { it.id == op.optString("id") } as? Item.Stroke ?: return false
                 val pts = Wb.cleanPts(op.opt("pts"), max(0, Wb.MAX_POINTS_PER_STROKE * 2 - s.pts.size)) ?: return false
                 if (pts.isEmpty()) return false
+                if (s.pr != null) {
+                    // Keep one pressure per point: missing values repeat the last one.
+                    val add = Wb.cleanPr(op.opt("pr"), pts.size / 2) ?: IntArray(0)
+                    val last = if (s.pr.size > 0) s.pr[s.pr.size - 1] else 50
+                    for (i in 0 until pts.size / 2) s.pr.add(if (i < add.size) add[i] else if (add.isNotEmpty()) add[add.size - 1] else last)
+                }
                 s.pts.addAll(pts)
                 return true
+            }
+            "xf" -> {
+                val page = doc.page(op.optString("p")) ?: return false
+                val set = ids(op).toHashSet()
+                val sRaw = op.optDouble("s", 1.0)
+                val t = WbXf(
+                    if (sRaw.isFinite()) min(20.0, max(0.05, sRaw)) else 1.0,
+                    op.optDouble("ox", 0.0).takeIf { it.isFinite() } ?: 0.0, op.optDouble("oy", 0.0).takeIf { it.isFinite() } ?: 0.0,
+                    op.optDouble("dx", 0.0).takeIf { it.isFinite() } ?: 0.0, op.optDouble("dy", 0.0).takeIf { it.isFinite() } ?: 0.0,
+                )
+                var changed = false
+                for (i in page.items.indices) {
+                    if (page.items[i].id !in set) continue
+                    page.items[i] = WbGeom.transform(page.items[i], t)
+                    changed = true
+                }
+                return changed
             }
             "del" -> {
                 val page = doc.page(op.optString("p")) ?: return false
@@ -295,10 +357,11 @@ object WbOps {
     /** Inverse ops for undo (web inverseOf). [before] = the page before [op]. */
     fun inverse(op: JSONObject, before: Page?, doc: Doc): List<JSONObject> = when (op.optString("k")) {
         "add" -> listOf(del(op.optString("p"), listOf(op.optJSONObject("item")?.optString("id") ?: "")))
-        "del", "clear" -> {
+        "del", "clear", "xf" -> {
+            // Undo puts the items back as they were (an add with an existing id replaces it).
             if (before == null) emptyList()
             else {
-                val set = if (op.optString("k") == "del") ids(op).toHashSet() else null
+                val set = if (op.optString("k") == "clear") null else ids(op).toHashSet()
                 before.items.filter { set == null || it.id in set }.map { add(before.id, it) }
             }
         }
@@ -309,8 +372,48 @@ object WbOps {
     }
 }
 
+/** A move / resize (web `xf` op fields). */
+data class WbXf(val s: Double, val ox: Double, val oy: Double, val dx: Double, val dy: Double)
+
 /** Hit testing for the erasers (web hitItem / itemBounds / itemsInRect). */
 object WbGeom {
+    /** JS Math.round. */
+    private fun jr(v: Double): Int = Math.floor(v + 0.5).toInt()
+
+    /** Move / scale one item (new object): web transformItem. */
+    fun transform(it: Item, t: WbXf): Item {
+        fun X(x: Int) = Wb.clampN(jr((x - t.ox) * t.s + t.ox + t.dx), -Wb.PAGE_W, Wb.PAGE_W * 2)
+        fun Y(y: Int) = Wb.clampN(jr((y - t.oy) * t.s + t.oy + t.dy), -Wb.PAGE_H, Wb.PAGE_H * 2)
+        return when (it) {
+            is Item.Stroke -> {
+                val pts = IntArrayList(max(16, it.pts.size))
+                for (i in 0 until it.pts.size) pts.add(if (i % 2 == 1) Y(it.pts[i]) else X(it.pts[i]))
+                Item.Stroke(it.id, it.by, it.tool, it.c, Wb.clampN(it.w * t.s, 1, 80), pts, it.pr?.copy())
+            }
+            is Item.Text -> Item.Text(it.id, it.by, it.c, Wb.clampN(it.size * t.s, 8, 400), X(it.x), Y(it.y), it.text)
+            is Item.Image -> Item.Image(it.id, it.by, X(it.x), Y(it.y), Wb.clampN(it.w * t.s, 1, Wb.PAGE_W * 3), Wb.clampN(it.h * t.s, 1, Wb.PAGE_H * 3), it.src)
+            is Item.Shape -> Item.Shape(it.k, it.id, it.by, it.c, Wb.clampN(it.w * t.s, 1, 80), X(it.x1), Y(it.y1), X(it.x2), Y(it.y2), it.fl)
+        }
+    }
+
+    /** Triangle corners in its box: apex top centre, base along the bottom (web triPoints). */
+    fun triPoints(x1: Int, y1: Int, x2: Int, y2: Int): List<Pair<Double, Double>> {
+        val l = min(x1, x2).toDouble(); val r = max(x1, x2).toDouble(); val t = min(y1, y2).toDouble(); val b = max(y1, y2).toDouble()
+        return listOf((l + r) / 2 to t, r to b, l to b)
+    }
+
+    /** Union of item bounds, or null. */
+    fun union(items: List<Item>): Box? {
+        if (items.isEmpty()) return null
+        var x0 = Double.POSITIVE_INFINITY; var y0 = Double.POSITIVE_INFINITY
+        var x1 = Double.NEGATIVE_INFINITY; var y1 = Double.NEGATIVE_INFINITY
+        for (it in items) {
+            val b = bounds(it)
+            x0 = min(x0, b.x); y0 = min(y0, b.y); x1 = max(x1, b.x + b.w); y1 = max(y1, b.y + b.h)
+        }
+        return Box(x0, y0, x1 - x0, y1 - y0)
+    }
+
     data class Box(val x: Double, val y: Double, val w: Double, val h: Double)
 
     fun segDist(px: Double, py: Double, x1: Double, y1: Double, x2: Double, y2: Double): Double {
@@ -361,6 +464,12 @@ object WbGeom {
         }
         is Item.Shape -> when (it.k) {
             "line", "arrow" -> segDist(x, y, it.x1.toDouble(), it.y1.toDouble(), it.x2.toDouble(), it.y2.toDouble()) <= r + it.w / 2.0
+            "tri" -> {
+                val tol = r + it.w / 2.0
+                val (a, b, c) = triPoints(it.x1, it.y1, it.x2, it.y2)
+                segDist(x, y, a.first, a.second, b.first, b.second) <= tol || segDist(x, y, b.first, b.second, c.first, c.second) <= tol ||
+                    segDist(x, y, c.first, c.second, a.first, a.second) <= tol
+            }
             "rect" -> {
                 val tol = r + it.w / 2.0
                 val a = it.x1.toDouble(); val b = it.y1.toDouble(); val c = it.x2.toDouble(); val d = it.y2.toDouble()
@@ -389,26 +498,62 @@ object WbGeom {
     }
 }
 
-/** Pen batching (web PointBatcher): one `pts` op per flush. */
-class PointBatcher(val page: String, val id: String) {
+/** Pen batching (web PointBatcher): one `pts` op per flush; pressure when the stroke has it. */
+class PointBatcher(val page: String, val id: String, val withPressure: Boolean = false) {
     private var pending = IntArrayList()
-    fun push(x: Double, y: Double) {
+    private var pressure = IntArrayList()
+    private var lastX = Int.MIN_VALUE
+    private var lastY = Int.MIN_VALUE
+    /** [p] = pressure 0–1 (stylus); ignored unless the stroke has pressure. */
+    fun push(x: Double, y: Double, p: Float = 0.5f) {
         val rx = Math.floor(x + 0.5).toInt(); val ry = Math.floor(y + 0.5).toInt()
-        val n = pending.size
-        if (n >= 2 && pending[n - 2] == rx && pending[n - 1] == ry) return
+        // Identical to the last point (also across flushes): nothing to add.
+        if (rx == lastX && ry == lastY) return
+        lastX = rx; lastY = ry
         pending.add(rx); pending.add(ry)
+        if (withPressure) pressure.add(Wb.pressurePct(p))
     }
+    /** Points not yet flushed (drawn at once, before the next batch leaves). */
+    fun peek(): IntArrayList = pending
+    fun peekPressure(): IntArrayList = pressure
     fun flush(): JSONObject? {
         if (pending.size == 0) return null
         val pts = pending.toArray()
+        val pr = if (withPressure) pressure.toArray() else null
         pending = IntArrayList()
-        return WbOps.pts(page, id, pts)
+        pressure = IntArrayList()
+        return WbOps.pts(page, id, pts, pr)
+    }
+}
+
+/** Fading laser trail (web LaserTrail). */
+class LaserTrail {
+    class Pt(val x: Int, val y: Int, val t: Long)
+    val pts = ArrayList<Pt>()
+    fun add(flat: IntArray, now: Long = System.currentTimeMillis()) {
+        var i = 0
+        while (i + 1 < flat.size) {
+            pts.add(Pt(flat[i].coerceIn(0, Wb.PAGE_W), flat[i + 1].coerceIn(0, Wb.PAGE_H), now))
+            i += 2
+        }
+        if (pts.size > 400) pts.subList(0, pts.size - 400).clear()
+    }
+    /** Drop faded points; true while anything is left to draw. */
+    fun prune(now: Long = System.currentTimeMillis()): Boolean {
+        var n = 0
+        while (n < pts.size && now - pts[n].t > Wb.LASER_MS) n++
+        if (n > 0) pts.subList(0, n).clear()
+        return pts.isNotEmpty()
     }
 }
 
 /** Packet encoding, chunking and snapshot compression (web encodePacket / chunkPackets / codec.ts). */
 object WbCodec {
     fun opsPacket(ops: List<JSONObject>): JSONObject = JSONObject().put("v", 1).put("t", "ops").put("ops", JSONArray(ops))
+
+    /** Laser points (page units), one small lossy packet (web laserPacket). */
+    fun laserPacket(pts: IntArray): ByteArray =
+        JSONObject().put("v", 1).put("t", "laser").put("pts", JSONArray().also { a -> pts.forEach { a.put(it) } }).toString().toByteArray(Charsets.UTF_8)
 
     /** Packet JSON → wire byte arrays (chunked above CHUNK_CHARS like the web). */
     fun encode(packet: JSONObject): List<ByteArray> {
