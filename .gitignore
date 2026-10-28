@@ -26,3 +26,6 @@ secrets/
 apps/web/secrets/
 dump.rdb
 OPENCODE_*.txt
+
+# Runtime files
+*.pid
