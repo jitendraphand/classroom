@@ -58,7 +58,7 @@ test('annotate toolbar: grouped tools, shortcuts in tooltips, docks both ways', 
   const ui = src('renderer/tools.tsx');
   for (const s of ['<FlyoutBar', 'Clear student drawings', 'Clear all marks', 'Stop annotating', 'Dock vertically', 'on={tool === id}']) assert.ok(ui.includes(s), s);
   const main = src('main/main.ts');
-  assert.match(main, /ipcMain\.on\('annotate-tools-orient'/);
+  assert.match(main, /ipc\.on\('annotate-tools-orient'/);
   assert.match(main, /protectExcludedWindow\(win, 'annotate-tools'\)/);
 });
 

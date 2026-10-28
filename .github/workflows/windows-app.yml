@@ -1,0 +1,46 @@
+name: Windows teacher app
+
+on:
+  push:
+    branches: [windows]
+  pull_request:
+    branches: [windows]
+
+concurrency:
+  group: windows-app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Typecheck, tests, web sync, native builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: windows
+    steps:
+      # The web-sync test compares src/shared/web with classroom main, checked out next to this branch.
+      - uses: actions/checkout@v4
+        with:
+          path: windows
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          path: classroom
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: windows/package-lock.json
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:sidecar
+      - name: Capture helper compiles (MinGW)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
+          bash scripts/build-helper.sh
+      - run: npm run build

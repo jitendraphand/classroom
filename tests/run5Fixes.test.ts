@@ -12,7 +12,7 @@ const area = { x: 0, y: 0, width: 1920, height: 1040 };
 
 test('item 1-2: home bar starts whiteboard sharing; Board removed from the share toolbar; no videos button', () => {
   const engine = src('renderer/engine.ts');
-  assert.match(engine, /sym\('btn-board', 'board', 'Share a whiteboard \(students see it live\)'\)/);
+  assert.match(engine, /sym\('btn-board', 'board', 'Share a whiteboard \(students see it live\)', '', 'Whiteboard'\)/);
   assert.match(engine, /btn-board'\)\?\.addEventListener\('click', act\('toggle-whiteboard'\)\)/);
   assert.doesNotMatch(engine, /btn-videos|btn-pen/);
   assert.doesNotMatch(src('renderer/toolbar.tsx'), /toggle-whiteboard/);
@@ -33,7 +33,7 @@ test('item 3: grouped share toolbar; flyout grows the window without moving the 
   assert.equal(left.side, 'before');
   assert.equal(left.rect.x + 200, 1860, 'vertical bar keeps its x');
   assert.deepEqual(flyoutBounds('vertical', v, 0, 0, area).rect, v);
-  assert.match(src('main/main.ts'), /ipcMain\.on\('annotate-tools-flyout'/);
+  assert.match(src('main/main.ts'), /ipc\.on\('annotate-tools-flyout'/);
 });
 
 test('item 4-5: whiteboard window has a right meeting bar with draw allow/deny; roster Allow works in whiteboard mode', () => {

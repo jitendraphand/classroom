@@ -41,24 +41,23 @@ export function routeLivePacket(topic: string | undefined, sender: string | null
   if (topic === CHAT_TOPIC) return { kind: 'chat' };
   if (topic === SIGNAL_TOPIC) {
     const sig = decodeSignalPacket(decodeJson(payload));
-    // The teacher has no participant id to self-check against: students may only name themselves,
-    // which the teacher cannot verify here, so the push only triggers a /state refresh (server truth).
+    // Students hold no data grant: hand / draw-request pushes come from the
+    // server (or a teacher tab) and only trigger a /state refresh (server truth).
     if (!sig) return { kind: 'ignore' };
     if (sig.type === 'draw-allow') {
       if (!signalPacketTrusted(sig, sender, null)) return { kind: 'ignore' };
       return { kind: 'signal', allow: { identity: sig.identity, on: sig.on } };
     }
     const k = senderKind(sender);
-    if (k === 'server' || k === 'teacher' || k === 'student') return { kind: 'signal' };
+    if (k === 'server' || k === 'teacher') return { kind: 'signal' };
     return { kind: 'ignore' };
   }
   if (topic === ctx.drawTopic) {
     const raw = decodeJson(payload) as { t?: unknown; by?: unknown } | null;
     if (!raw || typeof raw.t !== 'string') return { kind: 'ignore' };
     const packet = { t: raw.t, by: typeof raw.by === 'string' ? raw.by : undefined };
+    // Server relay only: it checked the draw permission and stamped `by`.
     if (!drawPacketTrusted({ senderIdentity: sender, packet })) return { kind: 'ignore' };
-    // A student's own points: only while they hold draw permission.
-    if (senderKind(sender) === 'student' && !ctx.drawIdentities.has(sender!)) return { kind: 'ignore' };
     if (senderKind(sender) === 'teacher') return { kind: 'ignore' }; // my own echo / another teacher tab
     return { kind: 'draw' };
   }

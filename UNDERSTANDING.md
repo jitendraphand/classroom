@@ -6,7 +6,7 @@ The live server is `https://13-201-89-150.sslip.io`. The permanent teacher class
 
 ## Auth and the single session
 
-Staff sessions are HS256 JWTs (`apps/web/src/lib/sessionTokens.ts`). Each role has its own cookie and its own `role` claim. A teacher token is only accepted as a teacher. The teacher cookie lasts 7 days.
+Staff sessions are HS256 JWTs (`apps/web/src/lib/sessionTokens.ts`). Each role has its own cookie and its own `role` claim. A teacher token is only accepted as a teacher. Teacher sessions slide: 24 hours without use ends one (`TEACHER_SESSION_HOURS`), and `/api/auth/me` or `/api/auth/status` renews one that is over an hour old. The app calls `/api/auth/me` every 30 minutes and after the PC wakes, so a session stays alive while the app is open.
 
 Over HTTPS the cookie name is `__Host-classroom_teacher` (Secure, Path=/, no Domain). On plain HTTP it is `classroom_teacher`. SameSite is Strict. The `__Host-` prefix matters on sslip.io, because a sibling host could otherwise plant a `Domain=sslip.io` cookie.
 
@@ -111,10 +111,14 @@ Teacher grant: may publish camera, microphone, screen share, screen-share audio,
 
 Track settings the Windows publisher uses (lighter than `lib/videoQuality.ts`, so the host, the SFU, and student devices move less video):
 
-- Teacher camera: 640×360, 15 fps, 350 kbps, plus one 320×180 layer at 10 fps.
+- Teacher camera: 640×360, 15 fps, 300 kbps, one layer.
 - Microphone: speech preset, DTX and RED on.
-- Screen: one 1280×720 stream, 8 fps, 700 kbps. No second simulcast layer.
+- Screen: one 1280×720 stream, 8 fps, 700 kbps. No second simulcast layer. Video mode: 30 fps, 1.5 Mbps.
 - Screen audio: music preset, DTX and RED off.
+
+The token response carries the server's `mediaProfile` (`MEDIA_PROFILE`). With `low` (a small server or a shared school uplink, where the SFU's egress is students × these bitrates) the app uses the web app's low caps: the camera is one 320×180 layer at 12 fps and 120 kbps, and Video mode is 15 fps at 800 kbps (also for the native sidecar). Slides already sit under the low cap.
+
+Students hold no LiveKit data grant. Their strokes, whiteboard ops, hands and draw requests go through API routes, and the server relays them as server packets (no participant identity). The app accepts `draw` and `wb` packets from the server only.
 
 Data topics:
 

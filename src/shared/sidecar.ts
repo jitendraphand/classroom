@@ -40,6 +40,8 @@ export type SidecarRequest = {
   videoFps?: number;
   /** Class code: main fetches a fresh screen token before every sidecar (re)connect. */
   code?: string;
+  /** Server media profile ('low' caps Video mode at 15 fps / 800 kbps). */
+  profile?: 'standard' | 'low';
 };
 
 /** Room code → the screen-token path, or null when the code is not a plain room code. */

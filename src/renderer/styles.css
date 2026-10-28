@@ -44,6 +44,8 @@ input, select, textarea {
 }
 textarea { resize: vertical; min-height: 64px; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+/* Classes, not style="" attributes: the pages' CSP (style-src 'self') drops inline styles. */
+.form-actions { margin-top: 14px; }
 .stack { display: flex; flex-direction: column; gap: 8px; }
 .btn {
   border: 1px solid var(--line);
@@ -366,6 +368,11 @@ textarea { resize: vertical; min-height: 64px; }
 }
 .meet-bar .count[hidden] { display: none; }
 .bar-div { width: 1px; height: 22px; background: var(--line); margin: 0 4px; flex: none; }
+/* Leave and End class sit apart: one ends the class for everyone. */
+.bar-div.wide { margin: 0 14px; }
+.meet-bar .tool { display: inline-flex; flex-direction: column; align-items: center; gap: 3px; min-width: 48px; }
+.meet-bar .tool:has(> button[hidden]) { display: none; }
+.meet-bar .tool-cap { font-size: 11px; line-height: 1; color: #cbd5e1; white-space: nowrap; }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; vertical-align: middle; }
 .seg button {
   width: 40px;
@@ -622,7 +629,7 @@ body.region #actions {
 .waiting-head h3 { margin: 0; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #fde68a; }
 .roster-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex: none; }
 .roster-tools .waiting-toggle { margin-left: auto; }
-.roster-row { display: flex; min-height: 30px; align-items: center; gap: 6px; border: 1px solid transparent; border-radius: 8px; padding: 4px 6px; font-size: 12px; }
+.roster-row { display: flex; flex-wrap: wrap; min-height: 30px; align-items: center; gap: 6px; border: 1px solid transparent; border-radius: 8px; padding: 4px 6px; font-size: 12px; }
 .roster-row:hover { background: rgba(255, 255, 255, 0.04); }
 .roster-row-raised { border-color: rgba(251, 191, 36, 0.3); background: rgba(245, 158, 11, 0.1); }
 .roster-name { flex: 1 1 auto; min-width: 72px; /* B5: never collapses to '(' next to chips */ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; color: #f1f5f9; }
@@ -633,7 +640,8 @@ body.region #actions {
 button.roster-chip:hover:not(:disabled) { filter: brightness(1.2); }
 .roster-chip-warn { background: rgba(245, 158, 11, 0.2); color: #fde68a; }
 .roster-chip-red { background: rgba(239, 68, 68, 0.15); color: #fecaca; }
-.roster-actions { margin-left: auto; display: flex; flex: none; align-items: center; gap: 2px; }
+/* A raised hand adds "Let speak": the actions drop to a second line instead of scrolling the pane sideways. */
+.roster-actions { margin-left: auto; display: flex; flex: none; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 2px; }
 .roster-icon-btn { display: inline-grid; place-items: center; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: #cbd5e1; padding: 0; }
 .roster-icon-btn:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
 .roster-icon-btn:focus-visible { outline: 2px solid #59a6ff; }
@@ -659,6 +667,8 @@ button.roster-chip:hover:not(:disabled) { filter: brightness(1.2); }
 .chat-hand-chip { display: inline-flex; max-width: 100%; align-items: center; overflow: hidden; border-radius: 99px; background: rgba(245, 158, 11, 0.2); font-size: 10px; font-weight: 600; line-height: 20px; color: #fef3c7; }
 .chat-hand-name { max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 0; background: transparent; padding: 0 6px; }
 .chat-hand-name:hover { text-decoration: underline; }
+.chat-hand-speak { border: 0; border-left: 1px solid rgba(252, 211, 77, 0.2); background: transparent; color: #fde68a; font-size: 10px; font-weight: 700; padding: 0 6px; }
+.chat-hand-speak:hover { background: rgba(251, 191, 36, 0.2); }
 .chat-hand-lower { display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center; border: 0; border-left: 1px solid rgba(252, 211, 77, 0.2); background: transparent; color: #fde68a; padding: 0; }
 .chat-hand-lower:hover { background: rgba(251, 191, 36, 0.2); }
 .chat-log { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 4px; }
@@ -753,3 +763,8 @@ html:has(body.tools), body.tools { background: #0d1219; overflow: hidden; }
 .mic-queue-row { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; padding: 2px 0; }
 .mic-queue-row .roster-meta { color: #fde68a; }
 .spotlight-line { margin: 2px 8px; font-size: 11px; color: #fde68a; }
+.class-summary { margin: 10px 0 14px; padding: 10px 14px; list-style: none; border: 1px solid var(--line); border-radius: 10px; background: rgba(255, 255, 255, 0.03); font-size: 13px; line-height: 1.6; color: #e2e8f0; }
+.btn.primary:disabled { background: rgba(255, 255, 255, 0.06); border-color: var(--line); color: #94a3b8; box-shadow: none; opacity: 1; }
+.update-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 16px; padding: 10px 14px; border: 1px solid rgba(89, 166, 255, 0.35); border-radius: 12px; background: rgba(51, 133, 255, 0.1); font-size: 13px; }
+.update-card p { margin: 0; }
+.update-card.required { border-color: rgba(248, 113, 113, 0.5); background: rgba(239, 68, 68, 0.12); }

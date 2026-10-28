@@ -108,7 +108,9 @@ test('media settings match the web upgrade (673b46b)', () => {
   assert.match(cs, /videoCodec: SHARE_CODEC\.codec, scalabilityMode: SHARE_CODEC\.scalabilityMode, backupCodec: \{ codec: SHARE_CODEC\.backupCodec \}/);
   assert.match(cs, /degradationPreference: 'maintain-resolution'/);
   assert.match(cs, /shareOpts\(false, false\)/);
-  assert.match(cs, /simulcast: TEACHER_CAMERA\.simulcast/);
+  // Camera settings follow the server media profile (standard = TEACHER_CAMERA).
+  assert.match(cs, /const cam = teacherCameraFor\(this\.mediaProfile\)/);
+  assert.match(cs, /simulcast: cam\.simulcast/);
   // Teacher mic as web (speech + DTX + RED); share audio music, no DTX.
   assert.match(cs, /audioPreset: AudioPresets\.speech,\s*dtx: true,\s*red: true/);
   assert.match(cs, /audioPreset: AudioPresets\.music,\s*dtx: false/);

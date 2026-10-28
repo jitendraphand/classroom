@@ -35,6 +35,8 @@ export class ClassroomApi {
   setServer(raw: string): string | null {
     const next = normalizeServer(raw);
     if (!next) return null;
+    // The session cookie belongs to the server that issued it: never send it to another one.
+    if (next !== this.server()) this.config.current.cookie = null;
     this.config.current.server = next;
     this.config.save();
     return next;

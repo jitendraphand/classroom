@@ -45,8 +45,10 @@ import {
 import { resolveChatRecipient } from '../shared/chatReply';
 import {
   SCREEN_SHARE,
-  TEACHER_CAMERA,
-  VIDEO_MODE_SHARE,
+  parseProfile,
+  teacherCameraFor,
+  videoModeShare,
+  type MediaProfileName,
   dockGridStyle,
   inkRectFor,
   screenShareSimulcastFor,
@@ -60,7 +62,7 @@ import { AudioRegistry, MIC_CAPTURE } from '../shared/web/audioPolicy';
 import { DUCK_IDLE, HEADPHONES_HINT, MicDuckProcessor, duckStep, trackLevelMeter, type DuckState } from '../shared/web/micDuck';
 import { SHARE_AUDIO_ECHO_WARNING, desktopLoopbackConstraints, toggleShareAudio, wantShareAudio, type ShareAudioChoice } from '../shared/shareAudio';
 import { DRAW_TOPIC, applyPacket, decodePacket, isDrawColor, validStrokeId, type Stroke } from '../shared/web/drawLogic';
-import { SHARE_CODEC, shareProfile } from '../shared/web/videoQuality';
+import { SHARE_CODEC, setMediaProfile, shareProfile } from '../shared/web/videoQuality';
 import type { VideoCell, VideoModel } from '../shared/videoModel';
 import { openWgcTrack, type WgcHandle } from './wgcTrack';
 import { setReportClassCode } from './errorReporter';
@@ -95,6 +97,8 @@ type TrackLike = {
 
 export type ClassView = {
   phase: 'connecting' | 'live' | 'handoff' | 'ended';
+  /** Last class session seen in /state (the ENDED answer may not carry it). */
+  classSessionId: string | null;
   handoff: { kind: 'device' | 'session'; title: string; body: string } | null;
   notice: string;
   code: string;
@@ -260,6 +264,9 @@ export class ClassController {
   /** Last share request, for "click to restart" and resume after rejoin. */
   private lastShare: ShareRequest | null = null;
   private shareStopped = false;
+  private classSessionId: string | null = null;
+  /** Server media profile from the token response ('low' on a small server / shared uplink). */
+  private mediaProfile: MediaProfileName = 'standard';
   private lowPower = (() => {
     try {
       return parseLowPower(localStorage.getItem(LOW_POWER_KEY));
@@ -396,6 +403,7 @@ export class ClassController {
     else if (this.connecting) phase = 'connecting';
     return {
       phase,
+      classSessionId: this.classSessionId,
       whiteboardOn: !!this.whiteboard,
       handoff: this.handoff,
       notice: this.notice,
@@ -478,8 +486,13 @@ export class ClassController {
         await this.enterHandoff('session', reason);
         return;
       }
-      const body = (tokenRes.data ?? {}) as { token?: unknown; url?: unknown; error?: unknown };
+      const body = (tokenRes.data ?? {}) as { token?: unknown; url?: unknown; error?: unknown; mediaProfile?: unknown };
       const tokenOk = tokenRes.status === 200 && typeof body.token === 'string' && typeof body.url === 'string';
+      if (tokenOk) {
+        // Server MEDIA_PROFILE: 'low' caps Video mode and the camera like the web app.
+        this.mediaProfile = parseProfile(body.mediaProfile);
+        setMediaProfile(this.mediaProfile);
+      }
       // 4xx other than 401 (ended / forbidden / not found) will not get better: stop now.
       if (!tokenOk && tokenRes.status >= 400 && tokenRes.status < 500) {
         this.connecting = false;
@@ -769,7 +782,8 @@ export class ClassController {
     const res = await this.roomApi('POST', '/screen-token').catch(() => null);
     const data = res && res.status < 300 ? (res.data as { token?: unknown; url?: unknown }) : null;
     if (!data || typeof data.token !== 'string' || typeof data.url !== 'string') return null;
-    const fps = shareFps({ videoMode: false, lowPower: this.lowPower, slidesFps: SCREEN_SHARE.capture.frameRate, videoFps: VIDEO_MODE_SHARE.capture.frameRate });
+    const video = videoModeShare(this.mediaProfile);
+    const fps = shareFps({ videoMode: false, lowPower: this.lowPower, slidesFps: SCREEN_SHARE.capture.frameRate, videoFps: video.capture.frameRate });
     return {
       url: data.url,
       token: data.token,
@@ -777,7 +791,8 @@ export class ClassController {
       crop: input.kind === 'region' ? cropFractions(input.region, input.display) : null,
       audio: !!input.systemAudio,
       fps,
-      videoFps: shareFps({ videoMode: true, lowPower: this.lowPower, slidesFps: fps, videoFps: VIDEO_MODE_SHARE.capture.frameRate }),
+      videoFps: shareFps({ videoMode: true, lowPower: this.lowPower, slidesFps: fps, videoFps: video.capture.frameRate }),
+      profile: this.mediaProfile,
     };
   }
 
@@ -1894,10 +1909,11 @@ export class ClassController {
 
   private async syncCam(): Promise<void> {
     if (!this.room || !this.camOn || this.camTrack) return;
+    const cam = teacherCameraFor(this.mediaProfile);
     const video: MediaTrackConstraints = {
-      width: { ideal: TEACHER_CAMERA.capture.width },
-      height: { ideal: TEACHER_CAMERA.capture.height },
-      frameRate: { ideal: TEACHER_CAMERA.capture.frameRate, max: TEACHER_CAMERA.capture.frameRate },
+      width: { ideal: cam.capture.width },
+      height: { ideal: cam.capture.height },
+      frameRate: { ideal: cam.capture.frameRate, max: cam.capture.frameRate },
     };
     if (this.opts.camId) video.deviceId = { exact: this.opts.camId };
     let stream: MediaStream;
@@ -1915,12 +1931,12 @@ export class ClassController {
       return;
     }
     const track = new LocalVideoTrack(media, undefined, true);
-    const layers = TEACHER_CAMERA.layers.map((l) => new VideoPreset(l.width, l.height, l.maxBitrate, l.maxFramerate));
+    const layers = cam.layers.map((l) => new VideoPreset(l.width, l.height, l.maxBitrate, l.maxFramerate));
     try {
       await this.room.localParticipant.publishTrack(track, {
         source: Track.Source.Camera,
-        simulcast: TEACHER_CAMERA.simulcast,
-        videoEncoding: { maxBitrate: TEACHER_CAMERA.encoding.maxBitrate, maxFramerate: TEACHER_CAMERA.encoding.maxFramerate },
+        simulcast: cam.simulcast,
+        videoEncoding: { maxBitrate: cam.encoding.maxBitrate, maxFramerate: cam.encoding.maxFramerate },
         videoSimulcastLayers: layers.length ? layers : undefined,
       });
     } catch (err) {
@@ -2138,7 +2154,7 @@ export class ClassController {
   private async applyVideoMode(on: boolean): Promise<void> {
     this.videoMode = { on, auto: false };
     const profile = shareProfile(on);
-    const fps = shareFps({ videoMode: on, lowPower: this.lowPower, slidesFps: SCREEN_SHARE.capture.frameRate, videoFps: VIDEO_MODE_SHARE.capture.frameRate });
+    const fps = shareFps({ videoMode: on, lowPower: this.lowPower, slidesFps: SCREEN_SHARE.capture.frameRate, videoFps: videoModeShare(this.mediaProfile).capture.frameRate });
     const raw = this.shareRaw;
     try {
       if (raw) raw.contentHint = profile.contentHint;
@@ -2149,7 +2165,7 @@ export class ClassController {
     if (sender) {
       try {
         const params = sender.getParameters();
-        params.encodings = capEncodingFps(windowsShareEncodings(params.encodings ?? [], on), fps);
+        params.encodings = capEncodingFps(windowsShareEncodings(params.encodings ?? [], on, this.mediaProfile), fps);
         (params as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference = profile.degradationPreference;
         await sender.setParameters(params);
       } catch (err) {
@@ -2287,6 +2303,7 @@ export class ClassController {
       return;
     }
     this.snap = snap;
+    if (snap.classSessionId) this.classSessionId = snap.classSessionId;
     this.drawAllowPushes.clear();
     this.noteDrawRequests(snap);
     if (!this.clearedStaleStage && snap.stageMode === 'screen' && !this.sharing) {

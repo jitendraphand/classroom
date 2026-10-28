@@ -8,7 +8,8 @@ const ctx = (ids: string[] = []) => ({ drawTopic: 'draw', drawIdentities: new Se
 
 test('cls-signal hand / draw-request pushes refresh the roster', () => {
   const hand = enc({ v: 1, type: 'hand', raised: true, participantId: 'p1' });
-  assert.deepEqual(routeLivePacket('cls-signal', 'student_p1', hand, ctx()), { kind: 'signal' });
+  // Students cannot publish data (web main): their hands arrive as the server's push.
+  assert.deepEqual(routeLivePacket('cls-signal', 'student_p1', hand, ctx()), { kind: 'ignore' });
   assert.deepEqual(routeLivePacket('cls-signal', undefined, hand, ctx()), { kind: 'signal' });
   const req = enc({ v: 1, type: 'draw-req', on: true, participantId: 'p1' });
   assert.deepEqual(routeLivePacket('cls-signal', undefined, req, ctx()), { kind: 'signal' });
@@ -29,27 +30,22 @@ test('state and chat topics still nudge', () => {
   assert.equal(routeLivePacket('chat', 'student_x', enc({}), ctx()).kind, 'chat');
 });
 
-test('student stroke points: only their own, only while allowed to draw', () => {
+test('stroke points only from the server relay (students hold no data grant)', () => {
   const pts = enc({ v: 1, t: 'pts', id: 's1', by: 'student_p1', pts: [] });
-  assert.equal(routeLivePacket('draw', 'student_p1', pts, ctx(['student_p1'])).kind, 'draw');
-  assert.equal(routeLivePacket('draw', 'student_p1', pts, ctx([])).kind, 'ignore'); // no permission
-  assert.equal(routeLivePacket('draw', 'student_p2', pts, ctx(['student_p2'])).kind, 'ignore'); // forged by
+  assert.equal(routeLivePacket('draw', 'student_p1', pts, ctx(['student_p1'])).kind, 'ignore');
+  assert.equal(routeLivePacket('draw', undefined, pts, ctx()).kind, 'draw');
   const clear = enc({ v: 1, t: 'clear', by: 'student_p1' });
-  assert.equal(routeLivePacket('draw', 'student_p1', clear, ctx(['student_p1'])).kind, 'ignore');
-  assert.equal(routeLivePacket('draw', undefined, clear, ctx()).kind, 'draw'); // server
+  assert.equal(routeLivePacket('draw', undefined, clear, ctx()).kind, 'draw');
   assert.equal(routeLivePacket('draw', 'teacher_t', clear, ctx()).kind, 'ignore'); // my echo
 });
 
-test('whiteboard host accepts student ops stamped with their identity', () => {
-  const ops: any = { v: 1, t: 'ops', ops: [], by: 'student_other' };
-  assert.equal(acceptWbPacket(ops, 'student_p1'), true);
-  assert.equal(ops.by, 'student_p1');
-  assert.equal(acceptWbPacket({ v: 1, t: 'snap' } as any, 'student_p1'), false);
-  assert.equal(acceptWbPacket({ v: 1, t: 'ops', ops: [] } as any, 'teacher_x'), false);
-  assert.equal(acceptWbPacket({ v: 1, t: 'ops', ops: [] } as any, 'guest_x'), false);
+test('whiteboard host takes packets from the server relay only', () => {
   const relayed: any = { v: 1, t: 'ops', ops: [], by: 'student_p1' };
   assert.equal(acceptWbPacket(relayed, undefined), true);
   assert.equal(relayed.by, 'student_p1');
+  assert.equal(acceptWbPacket({ v: 1, t: 'ops', ops: [], by: 'student_p1' } as any, 'student_p1'), false);
+  assert.equal(acceptWbPacket({ v: 1, t: 'snap' } as any, 'student_p1'), false);
+  assert.equal(acceptWbPacket({ v: 1, t: 'ops', ops: [] } as any, 'teacher_x'), false);
 });
 
 import { connectRetryDelayMs, CONNECT_RETRY_BASE_MS } from '../src/shared/connectRetry';

@@ -16,7 +16,8 @@
  */
 
 import { SIDECAR_PUBLISH_TIMEOUT_MS, controlLine, inkMessage, parseScreenToken, refreshInitLine, screenTokenPath, sidecarInit, type Publisher, type SidecarRequest } from '../shared/sidecar';
-import { SIDECAR_HELPER_FPS, VIDEO_MODE_SHARE as SIDECAR_VIDEO } from '../shared/capture';
+import { parseProfile, videoModeShare } from '../shared/capture';
+import { updateNotice, type UpdateNotice } from '../shared/update';
 import { fitToolbar, flyoutBounds, movedBounds, parseOrient, stableNatural, toolbarSize } from '../shared/toolbarLayout';
 import { HW_ENCODE_FEATURES } from '../shared/hwEncode';
 import { busyFraction, cpuTimes, initialState as adaptiveInitial, levelLabel, levelProfile, nextState as adaptiveNext, smoothCpu, type AdaptiveState } from '../shared/adaptiveCapture';
@@ -38,15 +39,17 @@ import {
   Notification,
   powerMonitor,
   protocol,
+  safeStorage,
   screen,
   session,
+  shell,
   Tray,
   type BrowserWindow as Win,
 } from 'electron';
 import { ClassroomApi, errorMessage, type StoredConfig } from './api';
 import { trayIcons, windowIcon } from './icon';
 import { isTeacherAction, type PanelSnapshot, type TeacherAction } from '../shared/actions';
-import { DEFAULT_HOTKEYS, DEFAULT_SERVER } from '../shared/apiModel';
+import { DEFAULT_HOTKEYS, DEFAULT_SERVER, isAppPageUrl, migrateHotkeys, openCookie, sealCookie, type CookieCodec } from '../shared/apiModel';
 import {
   LABEL_UNAVAILABLE,
   LABEL_WGC,
@@ -86,6 +89,50 @@ protocol.registerSchemesAsPrivileged([
     privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true },
   },
 ]);
+
+/**
+ * IPC from the app's own pages only. Every window loads app://classroom/…;
+ * a page anywhere else (a dropped link, a redirect) must not reach the API
+ * bridge, which carries the teacher's session.
+ */
+type IpcInvokeEvent = Electron.IpcMainInvokeEvent;
+type IpcSendEvent = Electron.IpcMainEvent;
+function fromAppPage(event: IpcInvokeEvent | IpcSendEvent): boolean {
+  return isAppPageUrl(event.senderFrame?.url);
+}
+const ipc = {
+  handle(channel: string, fn: (event: IpcInvokeEvent, ...args: unknown[]) => unknown): void {
+    ipcMain.handle(channel, (event, ...args) => {
+      if (!fromAppPage(event)) {
+        console.log(`[ipc] refused ${channel}`);
+        return Promise.reject(new Error('Not allowed'));
+      }
+      return fn(event, ...args);
+    });
+  },
+  on(channel: string, fn: (event: IpcSendEvent, ...args: unknown[]) => void): void {
+    ipcMain.on(channel, (event, ...args) => {
+      if (fromAppPage(event)) fn(event, ...args);
+      else console.log(`[ipc] refused ${channel}`);
+    });
+  },
+};
+
+// No window may leave the app's pages or open anything the handlers below do not allow.
+app.on('web-contents-created', (_event, contents) => {
+  const keepInApp = (event: { preventDefault: () => void; url?: string }, url?: string) => {
+    const target = event.url ?? url ?? '';
+    if (!isAppPageUrl(target)) {
+      event.preventDefault();
+      console.log('[nav] blocked', target.slice(0, 80));
+    }
+  };
+  contents.on('will-navigate', keepInApp);
+  contents.on('will-redirect', keepInApp);
+  contents.on('will-attach-webview', (event) => event.preventDefault());
+  // attachChildWindows() replaces this for the class window's own pop-ups.
+  contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+});
 
 app.commandLine.appendSwitch('high-dpi-support', '1');
 // Only enable-features call. The published track is the helper's WGC session;
@@ -186,13 +233,24 @@ function captureLogPath(): string {
   }
 }
 
+/** capture.log is rotated at this size (one previous file is kept as capture.1.log). */
+const CAPTURE_LOG_MAX_BYTES = 5 * 1024 * 1024;
+let captureLogChain: Promise<void> = Promise.resolve();
+
+/** Off the main thread's critical path: queued async appends, rotated, never thrown. */
 function logCapture(line: string): void {
   console.log(line);
-  try {
-    fs.appendFileSync(captureLogPath(), `${new Date().toISOString()} ${line}\n`);
-  } catch {
-    /* userData is not ready yet */
-  }
+  const text = `${new Date().toISOString()} ${line}\n`;
+  captureLogChain = captureLogChain.then(async () => {
+    try {
+      const file = captureLogPath();
+      const size = (await fs.promises.stat(file).catch(() => null))?.size ?? 0;
+      if (size > CAPTURE_LOG_MAX_BYTES) await fs.promises.rename(file, file.replace(/\.log$/, '.1.log')).catch(() => undefined);
+      await fs.promises.appendFile(file, text);
+    } catch {
+      /* userData is not ready yet */
+    }
+  });
 }
 
 /**
@@ -484,29 +542,41 @@ function configPath(): string {
   return path.join(app.getPath('userData'), 'config.json');
 }
 
+/** Windows DPAPI (Electron safeStorage); unavailable on some Linux desktops, then the file keeps it plain. */
+const cookieCodec: CookieCodec = {
+  get available() {
+    try {
+      return safeStorage.isEncryptionAvailable();
+    } catch {
+      return false;
+    }
+  },
+  encrypt: (value) => safeStorage.encryptString(value).toString('base64'),
+  decrypt: (b64) => safeStorage.decryptString(Buffer.from(b64, 'base64')),
+};
+
 function loadConfig(): void {
   try {
-    const raw = JSON.parse(fs.readFileSync(configPath(), 'utf8')) as Partial<StoredConfig>;
+    const raw = JSON.parse(fs.readFileSync(configPath(), 'utf8')) as Partial<StoredConfig> & { cookieEnc?: unknown };
     const server = typeof raw.server === 'string' && raw.server ? raw.server : DEFAULT_SERVER;
     const layout = typeof raw.layout === 'number' && isSlotCount(raw.layout) ? raw.layout : 4;
-    const hotkeys = raw.hotkeys && typeof raw.hotkeys === 'object' ? raw.hotkeys : DEFAULT_HOTKEYS;
+    const hotkeys = migrateHotkeys(raw.hotkeys);
+    const stored = openCookie(raw, cookieCodec);
     config = {
       server,
       email: typeof raw.email === 'string' ? raw.email : '',
-      cookie: typeof raw.cookie === 'string' && raw.cookie ? raw.cookie : null,
+      cookie: stored.cookie,
       toolbar:
         raw.toolbar && typeof raw.toolbar.x === 'number' && typeof raw.toolbar.y === 'number'
           ? { x: raw.toolbar.x, y: raw.toolbar.y }
           : null,
       layout,
-      hotkeys: {
-        mic: typeof hotkeys.mic === 'string' ? hotkeys.mic : DEFAULT_HOTKEYS.mic,
-        camera: typeof hotkeys.camera === 'string' ? hotkeys.camera : DEFAULT_HOTKEYS.camera,
-        stopShare: typeof hotkeys.stopShare === 'string' ? hotkeys.stopShare : DEFAULT_HOTKEYS.stopShare,
-      },
+      hotkeys,
       micId: typeof raw.micId === 'string' ? raw.micId : '',
       camId: typeof raw.camId === 'string' ? raw.camId : '',
     };
+    // Older versions stored the session in plain text: re-save it encrypted.
+    if (stored.migrate || JSON.stringify(raw.hotkeys) !== JSON.stringify(hotkeys)) saveConfig();
   } catch {
     config = defaultConfig();
   }
@@ -515,7 +585,8 @@ function loadConfig(): void {
 function saveConfig(): void {
   try {
     fs.mkdirSync(path.dirname(configPath()), { recursive: true });
-    fs.writeFileSync(configPath(), JSON.stringify(config), { mode: 0o600 });
+    const { cookie, ...rest } = config;
+    fs.writeFileSync(configPath(), JSON.stringify({ ...rest, ...sealCookie(cookie, cookieCodec) }), { mode: 0o600 });
   } catch (err) {
     console.log('[config] save failed');
   }
@@ -925,7 +996,7 @@ function fitAnnotateTools(win: BrowserWindow): void {
   }
 }
 
-ipcMain.on('annotate-tools-orient', (event, orient: unknown) => {
+ipc.on('annotate-tools-orient', (event, orient: unknown) => {
   const win = chrome.get('annotate-tools');
   if (!win || win.isDestroyed() || event.sender !== win.webContents) return;
   const o = parseOrient(orient);
@@ -961,7 +1032,7 @@ function applyToolsFlyout(win: BrowserWindow, size: number, along: number): void
   win.webContents.send('annotate-tools-flyout-side', side);
 }
 
-ipcMain.on('annotate-tools-flyout', (event, m: unknown) => {
+ipc.on('annotate-tools-flyout', (event, m: unknown) => {
   const win = chrome.get('annotate-tools');
   if (!win || win.isDestroyed() || event.sender !== win.webContents || !m || typeof m !== 'object') return;
   const r = m as { size?: unknown; along?: unknown };
@@ -971,7 +1042,7 @@ ipcMain.on('annotate-tools-flyout', (event, m: unknown) => {
   applyToolsFlyout(win, size, along);
 });
 
-ipcMain.on('annotate-tools-measure', (event, m: unknown) => {
+ipc.on('annotate-tools-measure', (event, m: unknown) => {
   const win = chrome.get('annotate-tools');
   if (!win || win.isDestroyed() || event.sender !== win.webContents || !m || typeof m !== 'object') return;
   const r = m as { width?: unknown; height?: unknown; overflow?: unknown };
@@ -1469,7 +1540,19 @@ function bootPayload() {
     camId: config.camId,
     capture: plan,
     platform: process.platform,
+    version: app.getVersion(),
+    update: lastUpdate,
   };
+}
+
+/** Server-advertised app version (see shared/update.ts); checked at boot and every 6 h. */
+let lastUpdate: UpdateNotice | null = null;
+const UPDATE_CHECK_MS = 6 * 60 * 60_000;
+async function checkForUpdate(): Promise<void> {
+  const res = await api.call('GET', '/api/desktop/windows').catch(() => null);
+  if (!res || res.status !== 200) return;
+  lastUpdate = updateNotice(res.data, app.getVersion());
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('app-update', lastUpdate);
 }
 
 type AffinityRow = { name: string; hwnd: string; protected: boolean; ok: boolean; captured: boolean };
@@ -1934,8 +2017,20 @@ async function runNotepadCaptureScenario(): Promise<CaptureScenarioReport> {
   return report;
 }
 
+/**
+ * Teacher sessions slide on the server: 24 h without use ends them, and
+ * /api/auth/me renews one that is over an hour old. The app can stay open for
+ * days (and a class can run past the 24 h mark), so renew in the background
+ * and after the PC wakes up.
+ */
+const SESSION_RENEW_MS = 30 * 60_000;
+function renewSession(): void {
+  if (!config.cookie) return;
+  void api.call('GET', '/api/auth/me').catch(() => undefined);
+}
+
 function installIpc(): void {
-  ipcMain.handle('boot', async () => {
+  ipc.handle('boot', async () => {
     let me: { role: string; name: string; email: string; mustChangePassword: boolean } | null = null;
     let reason: string | null = null;
     if (config.cookie) {
@@ -1955,7 +2050,7 @@ function installIpc(): void {
     return { ...bootPayload(), me, reason };
   });
 
-  ipcMain.handle('login', async (_e, email: unknown, password: unknown) => {
+  ipc.handle('login', async (_e, email: unknown, password: unknown) => {
     if (typeof email !== 'string' || typeof password !== 'string' || !email.trim() || !password) {
       return { ok: false, error: 'Enter your email and password.' };
     }
@@ -1979,13 +2074,13 @@ function installIpc(): void {
     };
   });
 
-  ipcMain.handle('logout', async () => {
+  ipc.handle('logout', async () => {
     await api.call('POST', '/api/auth/logout');
     api.setCookie(null);
     return { ok: true };
   });
 
-  ipcMain.handle('change-password', async (_e, currentPassword: unknown, newPassword: unknown) => {
+  ipc.handle('change-password', async (_e, currentPassword: unknown, newPassword: unknown) => {
     if (typeof currentPassword !== 'string' || typeof newPassword !== 'string') {
       return { ok: false, error: 'Enter your current and new password.' };
     }
@@ -1994,19 +2089,28 @@ function installIpc(): void {
     return { ok: true };
   });
 
-  ipcMain.handle('api', async (_e, method: unknown, apiPath: unknown, body: unknown) => {
+  ipc.handle('api', async (_e, method: unknown, apiPath: unknown, body: unknown) => {
     if (typeof method !== 'string' || typeof apiPath !== 'string') return { status: 400, data: { error: 'Bad request' } };
     return api.call(method, apiPath, body === undefined ? undefined : body);
   });
 
-  ipcMain.handle('set-server', async (_e, url: unknown) => {
+  // Opens only the download link the server advertised (https, checked in shared/update.ts).
+  ipc.handle('open-download', async () => {
+    if (!lastUpdate?.url) return { ok: false };
+    await shell.openExternal(lastUpdate.url);
+    return { ok: true };
+  });
+
+  ipc.handle('set-server', async (_e, url: unknown) => {
     if (typeof url !== 'string') return { ok: false, error: 'Enter a server address.' };
     const next = api.setServer(url);
     if (!next) return { ok: false, error: 'Use an http or https address without a username or password in it.' };
+    lastUpdate = null;
+    void checkForUpdate();
     return { ok: true, server: next };
   });
 
-  ipcMain.handle('list-sources', async () => {
+  ipc.handle('list-sources', async () => {
     const sources = await desktopCapturer.getSources({
       types: ['screen', 'window'],
       thumbnailSize: { width: 160, height: 100 },
@@ -2021,7 +2125,7 @@ function installIpc(): void {
     }));
   });
 
-  ipcMain.handle('prepare-capture', (_e, source: unknown) => {
+  ipc.handle('prepare-capture', (_e, source: unknown) => {
     if (!source || typeof source !== 'object') return false;
     const s = source as { id?: unknown; displayId?: unknown; name?: unknown; kind?: unknown };
     if (typeof s.id !== 'string' || !s.id) return false;
@@ -2034,9 +2138,9 @@ function installIpc(): void {
     return true;
   });
 
-  ipcMain.handle('capture-plan', () => plan);
+  ipc.handle('capture-plan', () => plan);
 
-  ipcMain.handle('start-wgc', async (event, req: unknown): Promise<WgcStartResult> => {
+  ipc.handle('start-wgc', async (event, req: unknown): Promise<WgcStartResult> => {
     if (!mainWindow || event.sender.id !== mainWindow.webContents.id) return { ok: false, error: 'denied' };
     if (process.platform !== 'win32') return { ok: false, error: 'not-windows' };
     if (plan.mode !== 'wgc-exclude' || plan.mask) {
@@ -2091,13 +2195,15 @@ function installIpc(): void {
     // before "published" falls back to the Electron publish path.
     let publisher: Publisher = 'electron';
     const sideReq = (body as { sidecar?: SidecarRequest }).sidecar;
+    // Video mode caps follow the server's media profile (low: 15 fps / 800 kbps).
+    const sidecarVideo = videoModeShare(parseProfile(sideReq?.profile));
     const init =
       sideReq && typeof sideReq === 'object' && fs.existsSync(sidecarExe())
         ? sidecarInit(sideReq, {
             slidesFps: SCREEN_SHARE.capture.frameRate,
-            videoFps: SIDECAR_VIDEO.encoding.maxFramerate,
+            videoFps: sidecarVideo.encoding.maxFramerate,
             maxBitrate: SCREEN_SHARE.encoding.maxBitrate,
-            videoBitrate: SIDECAR_VIDEO.encoding.maxBitrate,
+            videoBitrate: sidecarVideo.encoding.maxBitrate,
             excludePid: process.pid, // share audio leaves out this app's own sound (no echo)
           })
         : null;
@@ -2105,7 +2211,7 @@ function installIpc(): void {
     // Sidecar: the helper's capture rate cannot change later, so start it at
     // the Video mode rate; the sidecar paces slides down to their own rate.
     const electronArgs = args;
-    if (init) args = withCaptureFps(args, SIDECAR_HELPER_FPS);
+    if (init) args = withCaptureFps(args, sidecarVideo.capture.frameRate);
     if (init) {
       sidecarInitLine = JSON.stringify(init);
       sidecarTokenPath = screenTokenPath(sideReq?.code);
@@ -2172,7 +2278,7 @@ function installIpc(): void {
     };
   });
 
-  ipcMain.handle('stop-wgc', async () => {
+  ipc.handle('stop-wgc', async () => {
     supervisor.disarm();
     captureTarget = null;
     inkLayer = null;
@@ -2189,29 +2295,29 @@ function installIpc(): void {
     return { ok: true };
   });
 
-  ipcMain.handle('adopt-mask', (_e, reason: unknown) => {
+  ipc.handle('adopt-mask', (_e, reason: unknown) => {
     const why = typeof reason === 'string' && reason ? reason : 'Windows.Graphics.Capture did not start';
     logCapture(`[capture] refused blackout mask: ${why}`);
     return plan;
   });
 
-  ipcMain.handle('capture-test-open', () => {
+  ipc.handle('capture-test-open', () => {
     openCaptureTestWindow();
     return { ok: true };
   });
 
-  ipcMain.handle('capture-test-start', () => startCaptureTest());
+  ipc.handle('capture-test-start', () => startCaptureTest());
 
-  ipcMain.handle('capture-test-stop', () => {
+  ipc.handle('capture-test-stop', () => {
     stopCaptureTest();
     return { ok: true };
   });
 
-  ipcMain.handle('capture-diagnostics', () => diagnostics());
+  ipc.handle('capture-diagnostics', () => diagnostics());
 
-  ipcMain.handle('capture-diff', () => runCaptureDiff());
+  ipc.handle('capture-diff', () => runCaptureDiff());
 
-  ipcMain.handle('capture-scenario', async () => {
+  ipc.handle('capture-scenario', async () => {
     if (testRunning) {
       testRunning = false;
       if (!lastSnap?.hud.sharing) wgc.stop();
@@ -2222,17 +2328,17 @@ function installIpc(): void {
     return report;
   });
 
-  ipcMain.handle('annotation-open', (_event, displayId: unknown) => {
+  ipc.handle('annotation-open', (_event, displayId: unknown) => {
     openAnnotationOverlay(displayId);
     return { ok: true };
   });
 
-  ipcMain.handle('annotation-close', () => {
+  ipc.handle('annotation-close', () => {
     closeAnnotationOverlay();
     return { ok: true };
   });
 
-  ipcMain.on('annotation-active', (_event, on: unknown) => {
+  ipc.on('annotation-active', (_event, on: unknown) => {
     annotateOn = on === true;
     if (annotateOn) openAnnotateTools();
     else closeAnnotateTools();
@@ -2240,7 +2346,7 @@ function installIpc(): void {
   });
 
   // Tool panel: Draw ↔ Click-through without closing the panel.
-  ipcMain.on('annotation-draw-mode', (event, on: unknown) => {
+  ipc.on('annotation-draw-mode', (event, on: unknown) => {
     const tools = chrome.get('annotate-tools');
     if (!tools || tools.isDestroyed() || event.sender !== tools.webContents) return;
     if (!annotateOn) return;
@@ -2248,7 +2354,7 @@ function installIpc(): void {
   });
 
   // Student desktop ink (from the class window) → the captured overlay.
-  ipcMain.on('student-ink', (event, ink: unknown) => {
+  ipc.on('student-ink', (event, ink: unknown) => {
     if (!mainWindow || event.sender !== mainWindow.webContents) return;
     if (!ink || typeof ink !== 'object') return;
     lastStudentInk = ink;
@@ -2257,7 +2363,7 @@ function installIpc(): void {
   });
 
   // Video mode: restart the helper with the same source at a new capture rate.
-  ipcMain.handle('wgc-fps', async (event, fps: unknown) => {
+  ipc.handle('wgc-fps', async (event, fps: unknown) => {
     if (!mainWindow || event.sender.id !== mainWindow.webContents.id) return { ok: false };
     if (!lastWgcArgs || !lastSnap?.hud.sharing) return { ok: false };
     const rate = Math.max(1, Math.min(30, Math.round(Number(fps) || SCREEN_SHARE.capture.frameRate)));
@@ -2279,7 +2385,7 @@ function installIpc(): void {
   });
 
   // Class window → sidecar: Video mode (frame rate) and share sound on/off.
-  ipcMain.on('sidecar-control', (event, msg: unknown) => {
+  ipc.on('sidecar-control', (event, msg: unknown) => {
     if (!mainWindow || event.sender !== mainWindow.webContents || !sidecarActive()) return;
     const m = msg as { op?: unknown; videoMode?: unknown; on?: unknown } | null;
     if (m?.op === 'mode') {
@@ -2291,19 +2397,19 @@ function installIpc(): void {
     }
   });
 
-  ipcMain.on('annotation-command', (_event, cmd: unknown) => {
+  ipc.on('annotation-command', (_event, cmd: unknown) => {
     if (!cmd || typeof cmd !== 'object') return;
     sendOverlay('annotate-command', cmd);
   });
 
-  ipcMain.on('annotation-ink', (_event, shapes: unknown) => {
+  ipc.on('annotation-ink', (_event, shapes: unknown) => {
     replaceInk(shapes);
   });
 
   // The overlay's rendered ink (teacher annotations + student desktop ink),
   // already at the published frame size. Composited into each frame so it
   // reaches students whether or not WGC captures the layered overlay window.
-  ipcMain.on('annotation-layer', (event, raw: unknown) => {
+  ipc.on('annotation-layer', (event, raw: unknown) => {
     const win = chrome.get('annotate-overlay');
     if (!win || win.isDestroyed() || event.sender !== win.webContents) return;
     inkLayer = parseInkLayer(raw);
@@ -2314,7 +2420,7 @@ function installIpc(): void {
     kickInk();
   });
 
-  ipcMain.on('video-tile', (event, key: unknown, jpeg: unknown) => {
+  ipc.on('video-tile', (event, key: unknown, jpeg: unknown) => {
     if (!mainWindow || event.sender !== mainWindow.webContents) return;
     if (typeof key !== 'string' || !key || key.length > 240) return;
     const size = jpeg instanceof ArrayBuffer ? jpeg.byteLength : jpeg instanceof Uint8Array ? jpeg.byteLength : 0;
@@ -2325,32 +2431,32 @@ function installIpc(): void {
   });
 
   // Teacher eraser / clear over student ink → the class window posts to /draw.
-  ipcMain.on('student-ink-erase', (event, ids: unknown) => {
+  ipc.on('student-ink-erase', (event, ids: unknown) => {
     const overlay = chrome.get('annotate-overlay');
     if (!overlay || overlay.isDestroyed() || event.sender !== overlay.webContents) return;
     if (!Array.isArray(ids)) return;
     const clean = ids.filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 40).slice(0, 100);
     if (clean.length && mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('student-ink-edit', { erase: clean });
   });
-  ipcMain.on('student-ink-clear', (event) => {
+  ipc.on('student-ink-clear', (event) => {
     const tools = chrome.get('annotate-tools');
     if (!tools || tools.isDestroyed() || event.sender !== tools.webContents) return;
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('student-ink-edit', { clear: true });
   });
 
-  ipcMain.on('annotation-status', (_event, status: unknown) => {
+  ipc.on('annotation-status', (_event, status: unknown) => {
     for (const win of [toolbar, chrome.get('annotate-tools')]) {
       if (win && !win.isDestroyed()) win.webContents.send('annotate-status', status);
     }
   });
 
-  ipcMain.on('mouse-passthrough', (event, on: unknown) => {
+  ipc.on('mouse-passthrough', (event, on: unknown) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win || win.isDestroyed()) return;
     win.setIgnoreMouseEvents(on === true, { forward: true });
   });
 
-  ipcMain.handle('displays', () =>
+  ipc.handle('displays', () =>
     screen.getAllDisplays().map((d) => ({
       id: d.id,
       scaleFactor: d.scaleFactor,
@@ -2361,7 +2467,7 @@ function installIpc(): void {
     }))
   );
 
-  ipcMain.handle('confirm-end', async () => {
+  ipc.handle('confirm-end', async () => {
     // B2 (live test 2026-10-17): this used to bail out on lastSnap.hud.sharing, a HUD
     // snapshot that lags a few seconds behind Stop sharing, so End class was ignored.
     // The class window already refuses End while it is really sharing.
@@ -2386,7 +2492,7 @@ function installIpc(): void {
     return choice.response === 0;
   });
 
-  ipcMain.handle('save-hotkeys', (_e, hotkeys: unknown) => {
+  ipc.handle('save-hotkeys', (_e, hotkeys: unknown) => {
     if (!hotkeys || typeof hotkeys !== 'object') return { ok: false, error: 'Invalid shortcuts.' };
     const h = hotkeys as Partial<Hotkeys>;
     const next: Hotkeys = {
@@ -2400,7 +2506,7 @@ function installIpc(): void {
     return { ok: true };
   });
 
-  ipcMain.handle('save-layout', (_e, slots: unknown) => {
+  ipc.handle('save-layout', (_e, slots: unknown) => {
     if (typeof slots === 'number' && isSlotCount(slots)) {
       config.layout = slots;
       saveConfig();
@@ -2408,13 +2514,13 @@ function installIpc(): void {
     }
   });
 
-  ipcMain.handle('save-devices', (_e, micId: unknown, camId: unknown) => {
+  ipc.handle('save-devices', (_e, micId: unknown, camId: unknown) => {
     if (typeof micId === 'string') config.micId = micId;
     if (typeof camId === 'string') config.camId = camId;
     saveConfig();
   });
 
-  ipcMain.on('push-hud', (event, snap: unknown) => {
+  ipc.on('push-hud', (event, snap: unknown) => {
     if (!mainWindow || event.sender.id !== mainWindow.webContents.id) return;
     if (!snap || typeof snap !== 'object') return;
     const next = snap as PanelSnapshot;
@@ -2430,11 +2536,11 @@ function installIpc(): void {
     }
   });
 
-  ipcMain.on('action', (_event, action: unknown) => {
+  ipc.on('action', (_event, action: unknown) => {
     if (isTeacherAction(action)) forward(action);
   });
 
-  ipcMain.on('toolbar-size', (_event, w: unknown, h: unknown) => {
+  ipc.on('toolbar-size', (_event, w: unknown, h: unknown) => {
     if (!toolbar || toolbar.isDestroyed()) return;
     const width = Math.max(48, Math.min(1600, Math.round(Number(w))));
     const height = Math.max(44, Math.min(420, Math.round(Number(h))));
@@ -2445,19 +2551,19 @@ function installIpc(): void {
     publishBounds();
   });
 
-  ipcMain.on('toggle-panel', (_event, kind: unknown) => {
+  ipc.on('toggle-panel', (_event, kind: unknown) => {
     if (typeof kind === 'string') togglePanel(kind);
   });
 
-  ipcMain.on('minimize-main', () => {
+  ipc.on('minimize-main', () => {
     showToolbar();
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.minimize();
     publishBounds();
   });
 
-  ipcMain.on('restore-main', () => restoreMain());
+  ipc.on('restore-main', () => restoreMain());
 
-  ipcMain.on('notify', (_event, title: unknown, body: unknown) => {
+  ipc.on('notify', (_event, title: unknown, body: unknown) => {
     if (typeof title !== 'string' || typeof body !== 'string') return;
     if (Notification.isSupported()) {
       const n = new Notification({
@@ -2472,7 +2578,7 @@ function installIpc(): void {
     refreshTray();
   });
 
-  ipcMain.on('class-active', (_event, on: unknown) => {
+  ipc.on('class-active', (_event, on: unknown) => {
     classActive = on === true;
     registerHotkeys();
     rebuildTrayMenu();
@@ -2482,12 +2588,13 @@ function installIpc(): void {
 
 function installCapturePermission(): void {
   const ses = session.defaultSession;
-  ses.setPermissionRequestHandler((_wc, permission, callback) => {
-    callback(permission === 'media' || permission === 'display-capture' || permission === 'notifications');
+  ses.setPermissionRequestHandler((wc, permission, callback, details) => {
+    const from = details?.requestingUrl || wc?.getURL();
+    callback(isAppPageUrl(from) && (permission === 'media' || permission === 'display-capture' || permission === 'notifications'));
   });
-  ses.setPermissionCheckHandler((_wc, permission) => {
+  ses.setPermissionCheckHandler((_wc, permission, requestingOrigin) => {
     const name = String(permission);
-    return name === 'media' || name === 'display-capture';
+    return isAppPageUrl(requestingOrigin) && (name === 'media' || name === 'display-capture');
   });
   ses.setDisplayMediaRequestHandler(async (request, callback) => {
     try {
@@ -2564,9 +2671,15 @@ async function start(): Promise<void> {
   // Display / session changes can leave the WGC session frozen: restart it.
   screen.on('display-added', () => supervisor.trigger('display-added'));
   screen.on('display-removed', () => supervisor.trigger('display-removed'));
+  setInterval(renewSession, SESSION_RENEW_MS).unref?.();
+  void checkForUpdate();
+  setInterval(() => void checkForUpdate(), UPDATE_CHECK_MS).unref?.();
   for (const ev of ['unlock-screen', 'resume', 'user-did-become-active'] as const) {
     try {
-      powerMonitor.on(ev as 'resume', () => supervisor.trigger(ev));
+      powerMonitor.on(ev as 'resume', () => {
+        supervisor.trigger(ev);
+        if (ev === 'resume') renewSession();
+      });
     } catch {
       /* event not supported on this platform */
     }

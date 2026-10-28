@@ -4,6 +4,10 @@ Desktop app for the teacher of the existing classroom. Students keep using the w
 
 Windows 10 version 2004 (build 19041) and Windows 11. The panels float on the teacher’s desktop. Students must see the pixels underneath those panels, not the panels and not black rectangles.
 
+## Releases
+
+- 1.1.0 (2026-10-28): see [docs/RELEASE-1.1.0.md](docs/RELEASE-1.1.0.md) for changes, checksums and what was tested.
+
 ## Layout
 
 ```
@@ -70,7 +74,7 @@ Share does not wait on an in-app capture test. Sign-in and the timetable no long
 
 ## Shared with the website
 
-`scripts/sync-web.mjs` copies `pollPolicy.ts`, `peopleSearch.ts`, `videoQuality.ts` and `drawLogic.ts` from `../classroom/apps/web/src/lib` into `src/shared/web/`, and turns the website's `Icons.tsx` into `src/shared/web/icons.ts`. `tests/webSync.test.ts` fails when a copy drifts. Poll intervals (state, chat, waiting), roster / chat search, the share encodings for Video mode and the student-drawing packets therefore come from the same source as the website. Run `node scripts/sync-web.mjs` after changing those web files.
+`scripts/sync-web.mjs` copies the website's pure modules listed in its `WEB_MODULES` (poll policy, search, video quality and media profile, drawing, whiteboard, realtime packet rules, class finish, time format and more) from `../classroom/apps/web/src/lib` into `src/shared/web/`, and turns the website's `Icons.tsx` into `src/shared/web/icons.ts`. `tests/webSync.test.ts` checks every one of them and fails when a copy drifts; the `Windows teacher app` GitHub workflow runs it against classroom `main` on every push to this branch. Poll intervals (state, chat, waiting), roster / chat search, the share encodings for Video mode and the student-drawing packets therefore come from the same source as the website. Run `node scripts/sync-web.mjs` after changing those web files.
 
 ## UI
 
@@ -97,6 +101,15 @@ Where it is configured (read-only, not copied into this app):
 - The web app reads `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET`. Tokens are minted in `apps/web/src/lib/livekit.ts`. Room events hit `POST /api/livekit/webhook` (CSRF-exempt, signed by LiveKit). That webhook is what force-mutes students while no teacher is connected.
 
 The public classroom the app defaults to is `https://13-201-89-150.sslip.io`. The teacher can type another origin on the sign-in screen. The LiveKit WebSocket URL is whatever that server returns with the token.
+
+## Security, sessions and updates
+
+- Every window loads `app://classroom/…`. Navigation anywhere else is refused, pop-ups are limited to the app's own windows, the preload exposes the bridge only on those pages, and every IPC handler checks that its sender is one of them. Camera, microphone and notification permissions are granted to them only.
+- The session cookie is stored encrypted with Windows DPAPI (Electron `safeStorage`). Changing the server address forgets it: a cookie is only ever sent to the server that issued it.
+- Teacher sessions slide on the server (24 h without use). The app renews its session every 30 minutes and after the PC wakes.
+- Global shortcuts are only registered while a class is open: Ctrl+Alt+Shift+M (microphone), Ctrl+Alt+Shift+V (camera), Ctrl+Alt+Shift+S (stop sharing). The old Ctrl+Shift+M / V / S defaults took paste-as-plain-text and Save as from the apps a teacher shares; untouched old defaults are moved to the new ones on start.
+- Updates: the app is not code-signed and has no auto-updater. The school server advertises the current build with `WINDOWS_APP_LATEST`, `WINDOWS_APP_MINIMUM` and `WINDOWS_APP_URL` (`GET /api/desktop/windows`); the dashboard shows "available" or "required" with a Download button. Set a code-signing certificate with electron-builder's `CSC_LINK` / `CSC_KEY_PASSWORD` to sign builds.
+- A school build can bake in its server address: `CLASSROOM_DEFAULT_SERVER=https://classes.example.org npm run build`.
 
 ## Tests
 

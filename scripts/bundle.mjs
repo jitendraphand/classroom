@@ -8,7 +8,13 @@ import path from 'node:path';
 
 fs.mkdirSync('dist/renderer', { recursive: true });
 
-const shared = { bundle: true, sourcemap: true, logLevel: 'info' };
+// A school's build can bake in its server: CLASSROOM_DEFAULT_SERVER=https://… npm run build
+const shared = {
+  bundle: true,
+  sourcemap: true,
+  logLevel: 'info',
+  define: { 'process.env.CLASSROOM_DEFAULT_SERVER': JSON.stringify(process.env.CLASSROOM_DEFAULT_SERVER || '') },
+};
 
 await esbuild.build({
   ...shared,
@@ -50,7 +56,7 @@ await esbuild.build({
   target: 'chrome128',
   conditions: ['browser', 'import', 'default'],
   mainFields: ['browser', 'module', 'main'],
-  define: { 'process.env.NODE_ENV': '"production"' },
+  define: { ...shared.define, 'process.env.NODE_ENV': '"production"' },
 });
 
 const srcDir = 'src/renderer';

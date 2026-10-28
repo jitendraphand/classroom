@@ -2,14 +2,13 @@
  * Windows teacher whiteboard (item 5). Same model / wire format as the web app
  * (src/shared/web/whiteboard, synced from classroom apps/web/src/lib/whiteboard):
  * ops over LiveKit reliable data (topic `wb`), compressed snapshots for late
- * joiners and on request, student annotation (server-relayed `by`, or published
- * by the student and stamped with their identity) filtered by studentOpAllowed. The board UI runs in a window.open child
+ * joiners and on request, student annotation (relayed by the server with `by`)
+ * filtered by studentOpAllowed. The board UI runs in a window.open child
  * (whiteboard.html) in this same renderer process, so it shares the session object.
  */
 import { RoomEvent, type RemoteParticipant, type Room } from 'livekit-client';
 import { SNAP_STORE_MS, WhiteboardSession, opsPackets, packetsToB64 } from '../shared/web/whiteboard/session';
 import type { PanelSnapshot, TeacherAction } from '../shared/actions';
-import { senderKind, wbStudentPacketAllowed } from '../shared/web/realtimePackets';
 import { WB_TOPIC, cleanDoc, studentOpAllowed, type Op, type Packet } from '../shared/web/whiteboard/model';
 
 export const WB_STORE_KEY = 'classroom.whiteboardDoc';
@@ -32,17 +31,14 @@ export function filterRelayedOps(session: WhiteboardSession, p: Packet & { by?: 
 }
 
 /**
- * Who may send the host a `wb` packet (web Whiteboard.tsx host rule): the
- * server (no identity) anything; a student only `ops`, stamped with their
- * LiveKit identity so studentOpAllowed limits them to their own annotation;
- * teachers (me / another teacher tab) are ignored. Returns false to drop.
+ * Who may send the host a `wb` packet (web Whiteboard.tsx host rule): only the
+ * server (no identity). Students hold no LiveKit data grant; their ops reach
+ * the host as the server's relay, with `by` set by the server after it checked
+ * the permission. Teacher identities (me / another teacher tab) are ignored.
+ * Returns false to drop.
  */
-export function acceptWbPacket(p: Packet & { by?: string }, sender: string | null | undefined): boolean {
-  if (!sender) return true;
-  if (senderKind(sender) !== 'student' || !sender.startsWith('student_')) return false;
-  if (!wbStudentPacketAllowed(p.t)) return false;
-  p.by = sender;
-  return true;
+export function acceptWbPacket(_p: Packet & { by?: string }, sender: string | null | undefined): boolean {
+  return !sender;
 }
 
 export function loadSavedBoard(storage: Pick<Storage, 'getItem'> | null): WhiteboardSession {
@@ -88,7 +84,7 @@ export class WindowsWhiteboard {
         return;
       }
       if (!p || typeof p !== 'object') return;
-      // Server-relayed packets, or student annotation ops published straight to `wb` (web 97b3bab).
+      // Server-relayed packets only (students cannot publish data).
       if (!acceptWbPacket(p, participant?.identity)) return;
       if (p.t === 'req') return void this.sendSnapshot([(p as { to: string }).to]);
       if (p.t === 'ops' && !filterRelayedOps(this.session, p)) return;

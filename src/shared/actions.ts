@@ -186,4 +186,8 @@ export type BootInfo = {
   camId: string;
   capture: { mode: CaptureMode; affinity: number; mask: boolean; label: string; detail: string };
   platform: string;
+  /** This app's version (package.json). */
+  version?: string;
+  /** Server-advertised update, when the server sets one. */
+  update?: import('./update').UpdateNotice | null;
 };

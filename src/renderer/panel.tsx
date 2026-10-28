@@ -5,6 +5,12 @@ import { createRoot } from 'react-dom/client';
 import type { PanelSnapshot, TeacherAction } from '../shared/actions';
 import { desktop } from './bridge';
 import { ChatView, RosterView } from './teacherViews';
+import { DEFAULT_HOTKEYS } from '../shared/apiModel';
+
+/** 'CommandOrControl+Alt+Shift+M' → 'Ctrl+Alt+Shift+M' (this app runs on Windows). */
+function keyLabel(accel: string): string {
+  return accel.replace('CommandOrControl', 'Ctrl');
+}
 
 const kind = new URLSearchParams(location.search).get('kind') || 'chat';
 
@@ -33,7 +39,10 @@ function Devices({ snap }: { snap: PanelSnapshot }) {
         <option value="">System default</option>
         {cams.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
       </select>
-      <p className="hint">Shortcuts use Electron accelerators, for example CommandOrControl+Shift+M.</p>
+      <p className="hint">
+        Shortcuts while a class is open, from any app: {keyLabel(DEFAULT_HOTKEYS.mic)} microphone,{' '}
+        {keyLabel(DEFAULT_HOTKEYS.camera)} camera, {keyLabel(DEFAULT_HOTKEYS.stopShare)} stop sharing.
+      </p>
     </>
   );
 }

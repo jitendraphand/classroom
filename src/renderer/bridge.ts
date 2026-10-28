@@ -45,6 +45,9 @@ export type CaptureTestStart = CaptureDiag & { ok: boolean; error?: string };
 
 export type ClassroomBridge = {
   getBoot: () => Promise<BootInfo>;
+  /** Opens the server-advertised download page in the browser. */
+  openDownload?: () => Promise<{ ok: boolean }>;
+  onUpdate?: (cb: (notice: unknown) => void) => () => void;
   login: (email: string, password: string) => Promise<LoginResult>;
   logout: () => Promise<{ ok: boolean }>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<{ ok: boolean; error?: string }>;

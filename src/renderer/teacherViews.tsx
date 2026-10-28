@@ -222,6 +222,12 @@ export function RosterView({ snap, send, showLayout = false }: { snap: PanelSnap
   );
 }
 
+/** Unmute a student who raised a hand, then lower the hand (one click to give the floor). */
+function letSpeak(send: Send, id: string): void {
+  send({ type: 'mute-one', id, muted: false });
+  send({ type: 'lower-hand', id });
+}
+
 function RosterRow({ p, send, sharing, spotlit = false }: { p: AdmittedPerson; send: Send; sharing: boolean; spotlit?: boolean }) {
   const raised = p.handRaised;
   const focus = focusLabel(p.focus);
@@ -281,6 +287,18 @@ function RosterRow({ p, send, sharing, spotlit = false }: { p: AdmittedPerson; s
         >
           <Icon name="pin" size={13} />
         </IconBtn>
+        {raised && p.mutedByTeacher && (
+          // Giving the floor in one click: unmute, then lower the hand (web "Let … speak").
+          <button
+            type="button"
+            className="roster-chip roster-chip-warn"
+            data-testid="let-speak"
+            title={`Unmute ${p.displayName} and lower their hand`}
+            onClick={() => letSpeak(send, p.id)}
+          >
+            Let speak
+          </button>
+        )}
         {raised && (
           <IconBtn label={`Lower ${p.displayName}'s hand`} tone="warn" onClick={() => send({ type: 'lower-hand', id: p.id })}>
             <Icon name="handDown" />
@@ -393,6 +411,17 @@ export function ChatView({ snap, send }: { snap: PanelSnapshot; send: Send }) {
                 >
                   {h.displayName}
                 </button>
+                {h.mutedByTeacher && (
+                  <button
+                    type="button"
+                    className="chat-hand-speak"
+                    onClick={() => letSpeak(send, h.id)}
+                    aria-label={`Let ${h.displayName} speak`}
+                    title="Unmute and lower the hand"
+                  >
+                    Let speak
+                  </button>
+                )}
                 <button
                   type="button"
                   className="chat-hand-lower"

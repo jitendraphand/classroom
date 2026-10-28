@@ -14,6 +14,9 @@ import {
 } from '../shared/apiModel';
 import { dockGridStyle, isOfferedShareWindow } from '../shared/capture';
 import { endedSessionCopy, isEndedReason } from '../shared/session';
+import { classSummaryFacts, type ClassSummaryRow } from '../shared/web/classFinish';
+import { formatDate, formatTime } from '../shared/web/timeFormat';
+import { updateText, type UpdateNotice } from '../shared/update';
 import { isFocusAlert } from '../shared/session';
 import type { SlotCount } from '../shared/classLogic';
 import { createElement } from 'react';
@@ -36,13 +39,21 @@ function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c);
 }
 
-function sym(id: string, name: IconName, label: string, extra = ''): string {
+/** Round icon button with a visible word under it (the website's labelled toolbar). */
+function sym(id: string, name: IconName, label: string, extra = '', caption = ''): string {
   const cls = extra ? `sym ${extra}` : 'sym';
-  return `<button class="${cls}" id="${id}" type="button" title="${esc(label)}" aria-label="${esc(label)}">${ICONS[name]}</button>`;
+  const button = `<button class="${cls}" id="${id}" type="button" title="${esc(label)}" aria-label="${esc(label)}">${ICONS[name]}</button>`;
+  return caption ? `<span class="tool">${button}<span class="tool-cap" id="${id}-cap" aria-hidden="true">${esc(caption)}</span></span>` : button;
 }
 
-function symCount(id: string, name: IconName, label: string, badgeId: string): string {
-  return `<button class="sym" id="${id}" type="button" title="${esc(label)}" aria-label="${esc(label)}">${ICONS[name]}<span class="count" id="${badgeId}" hidden></span></button>`;
+function symCount(id: string, name: IconName, label: string, badgeId: string, caption = ''): string {
+  const button = `<button class="sym" id="${id}" type="button" title="${esc(label)}" aria-label="${esc(label)}">${ICONS[name]}<span class="count" id="${badgeId}" hidden></span></button>`;
+  return caption ? `<span class="tool">${button}<span class="tool-cap" aria-hidden="true">${esc(caption)}</span></span>` : button;
+}
+
+function setCaption(id: string, text: string): void {
+  const el = document.getElementById(`${id}-cap`);
+  if (el && el.textContent !== text) el.textContent = text;
 }
 
 function setBadge(id: string, n: number): void {
@@ -107,6 +118,11 @@ function clearController(): void {
 async function bootApp(): Promise<void> {
   app.innerHTML = '<div class="center"><p>Opening…</p></div>';
   boot = await api.getBoot();
+  // The update check answers after boot (and every few hours).
+  api.onUpdate?.((notice) => {
+    if (boot) boot.update = notice as UpdateNotice;
+    paintUpdate(notice as UpdateNotice);
+  });
   if (boot.me?.role === 'teacher' && boot.me.mustChangePassword) {
     showPassword('');
     return;
@@ -136,7 +152,7 @@ function showLogin(message: string): void {
         <input id="email" type="email" value="${esc(email)}" autocomplete="username" />
         <label for="password">Password</label>
         <input id="password" type="password" autocomplete="current-password" />
-        <div class="row" style="margin-top:14px">
+        <div class="row form-actions">
           <button class="btn primary" type="submit">Sign in</button>
         </div>
       </form>
@@ -160,7 +176,11 @@ function showLogin(message: string): void {
       err.textContent = res.error || 'Could not sign in.';
       return;
     }
-    if (boot) boot.email = res.email || email;
+    if (boot) {
+      boot.email = res.email || email;
+      // The login answer has the teacher's name: show it now, not only after a restart.
+      boot.me = { role: 'teacher', name: res.name || '', email: res.email || email, mustChangePassword: !!res.mustChangePassword };
+    }
     if (res.mustChangePassword) showPassword('');
     else await showHome();
   });
@@ -178,7 +198,7 @@ function showPassword(message: string): void {
         <input id="current" type="password" autocomplete="current-password" />
         <label for="next">New password</label>
         <input id="next" type="password" autocomplete="new-password" />
-        <div class="row" style="margin-top:14px">
+        <div class="row form-actions">
           <button class="btn primary" type="submit">Save password</button>
         </div>
       </form>
@@ -209,16 +229,15 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = ''):
   return node;
 }
 
+/** School time zone from the timetable answer: every time on the dashboard is school time, 24-hour (web lib/timeFormat). */
+let schoolTz: string | undefined;
+
 function fmtDate(date: string): string {
-  const d = new Date(`${date}T00:00:00Z`);
-  if (Number.isNaN(d.getTime())) return date;
-  return d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short', timeZone: 'UTC' });
+  return formatDate(date, { long: true }) || date;
 }
 
 function fmtTime(iso: string | null): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return formatTime(iso, schoolTz);
 }
 
 /** A web-style card: title, subtitle, body. */
@@ -251,6 +270,7 @@ async function showHome(): Promise<void> {
         <p class="hint" id="home-email"></p>
       </div>
       <p class="err" id="home-err" role="alert"></p>
+      <div id="home-update"></div>
       <div id="home-live"></div>
       <div id="home-today"></div>
       <div id="home-later"></div>
@@ -273,6 +293,7 @@ async function showHome(): Promise<void> {
     showLogin('');
   });
   actions.append(pw, out);
+  paintUpdate(boot?.update ?? null);
   const homeErr = document.getElementById('home-err')!;
   const res = await api.api('GET', '/api/teacher/schedule');
   if (res.status === 401) {
@@ -284,8 +305,12 @@ async function showHome(): Promise<void> {
     return;
   }
   const schedule = parseSchedule(res.data);
+  schoolTz = schedule.timezone || undefined;
   const tz = document.getElementById('home-tz');
-  if (tz && schedule.timezone) tz.textContent = `Times shown in your device’s time zone; the school timetable uses ${schedule.timezone}.`;
+  if (tz) {
+    const zone = schedule.timezone ? `Times are school time (${schedule.timezone}). ` : '';
+    tz.textContent = `${zone}Classroom Teacher ${boot?.version ?? ''}`.trim();
+  }
   if (schedule.activeCode) {
     const live = el('div', 'live-card');
     const copy = el('div');
@@ -334,6 +359,24 @@ async function showHome(): Promise<void> {
   document.getElementById('home-adhoc')?.append(adHocForm(schedule.grades, schedule.gradesConfigured, homeErr));
 }
 
+/** "A newer version is available / required" from the school server (shared/update.ts). */
+function paintUpdate(notice: UpdateNotice | null): void {
+  const host = document.getElementById('home-update');
+  if (!host) return;
+  host.replaceChildren();
+  if (!notice || notice.level === 'none') return;
+  const box = el('div', notice.level === 'required' ? 'update-card required' : 'update-card');
+  box.setAttribute('role', notice.level === 'required' ? 'alert' : 'status');
+  box.append(el('p', '', updateText(notice)));
+  if (notice.url) {
+    const dl = el('button', notice.level === 'required' ? 'btn primary sm' : 'btn sm', 'Download');
+    dl.type = 'button';
+    dl.addEventListener('click', () => void api.openDownload?.());
+    box.append(dl);
+  }
+  host.append(box);
+}
+
 function classRow(c: ClassChoice, err: HTMLElement): HTMLElement {
   const li = el('li', c.live ? 'class-row live' : 'class-row');
   const main = el('div', 'class-main');
@@ -349,10 +392,12 @@ function classRow(c: ClassChoice, err: HTMLElement): HTMLElement {
   if (c.note) meta.append(el('span', '', c.note));
   main.append(meta);
   li.append(main);
-  if (c.mine) {
+  // A past class that cannot be reopened has no action: the status badge says Held / Not held.
+  if (c.mine && (c.canStart || c.phase !== 'past')) {
     const btn = el('button', 'btn primary', classStartLabel(c));
     btn.type = 'button';
     btn.disabled = !c.canStart;
+    if (!c.canStart) btn.title = c.phase === 'upcoming' && c.opensAt ? `Opens at ${fmtTime(c.opensAt)}` : 'Not open now';
     btn.addEventListener('click', () => {
       btn.disabled = true;
       btn.textContent = 'Opening…';
@@ -403,9 +448,9 @@ function adHocForm(grades: GradeChoice[], gradesConfigured: boolean, err: HTMLEl
   max.min = '1';
   max.max = '6';
   max.value = String(Math.min(6, Math.max(1, boot ? boot.layout - 1 : 3)));
-  const maxField = field('Max visible student videos', 'adhoc-max', max);
+  const maxField = field('Student cameras on your screen', 'adhoc-max', max);
   maxField.classList.add('narrow');
-  maxField.append(el('p', 'hint', 'Only this many student camera streams reach you. Others stay local-only on their devices.'));
+  maxField.append(el('p', 'hint', 'How many students you see at once (1–6). The others take turns in these places.'));
   const go = el('button', 'btn primary', 'Start ad-hoc class');
   go.type = 'submit';
   const campuses = campusesOf(grades);
@@ -622,8 +667,10 @@ function showEnded(view: ClassView): void {
     <div class="center">
       <div class="card">
         <p class="brand">Classroom</p>
-        <h1>Class ended</h1>
+        <h1>Class finished</h1>
         <p class="sub">${esc(view.label)}</p>
+        <p class="hint">The class has ended for everyone and attendance is saved.</p>
+        <ul class="class-summary" id="class-summary" hidden></ul>
         <button class="btn primary" id="home" type="button">Back to timetable</button>
       </div>
     </div>`;
@@ -631,6 +678,17 @@ function showEnded(view: ClassView): void {
     clearController();
     void showHome();
   });
+  if (view.classSessionId) void paintClassSummary(view.classSessionId);
+}
+
+/** Duration and attendance, from the same report as the website's finished screen. Nothing shows if it fails. */
+async function paintClassSummary(classSessionId: string): Promise<void> {
+  const res = await api.api('GET', `/api/teacher/attendance/sessions?sessionId=${encodeURIComponent(classSessionId)}`).catch(() => null);
+  const row = res && res.status === 200 ? (res.data as { rows?: ClassSummaryRow[] } | null)?.rows?.[0] : undefined;
+  const list = document.getElementById('class-summary');
+  if (!row || !list) return;
+  list.replaceChildren(...classSummaryFacts(row).map((fact) => el('li', '', fact)));
+  list.hidden = false;
 }
 
 function renderClass(view: ClassView): void {
@@ -658,6 +716,7 @@ function renderClass(view: ClassView): void {
   setGlyph('btn-mic', view.micOn ? 'mic' : 'micOff');
   setGlyph('btn-cam', view.camOn ? 'cam' : 'camOff');
   setLabel('btn-mic', view.micOn ? 'Mute microphone' : 'Unmute microphone');
+  setCaption('btn-mic', view.micOn ? 'Mic' : 'Muted');
   setLabel('btn-cam', view.camOn ? 'Turn camera off' : 'Turn camera on');
   setLabel('btn-open-chat', activePane === 'pane-chat' ? 'Chat (open)' : 'Open chat');
   setLabel('btn-open-roster', hands > 0 ? `Open roster (${hands} raised ${hands === 1 ? 'hand' : 'hands'})` : 'Open roster');
@@ -712,22 +771,27 @@ function buildClass(): void {
       </div>
       <div class="meet-wrap">
         <div class="meet-bar" id="controls">
-          ${sym('btn-mic', 'mic', 'Mute microphone')}
-          ${sym('btn-cam', 'cam', 'Turn camera off')}
-          ${sym('btn-share', 'share', 'Share screen')}
-          ${sym('btn-stop', 'stop', 'Stop sharing screen', 'danger')}
-          ${sym('btn-board', 'board', 'Share a whiteboard (students see it live)')}
-          ${symCount('btn-open-chat', 'chat', 'Open chat', 'badge-chat')}
-          ${symCount('btn-open-roster', 'people', 'Open roster', 'badge-roster')}
+          ${sym('btn-mic', 'mic', 'Mute microphone', '', 'Mic')}
+          ${sym('btn-cam', 'cam', 'Turn camera off', '', 'Camera')}
+          ${sym('btn-share', 'share', 'Share screen', '', 'Share')}
+          ${sym('btn-stop', 'stop', 'Stop sharing screen', 'danger', 'Stop share')}
+          ${sym('btn-board', 'board', 'Share a whiteboard (students see it live)', '', 'Whiteboard')}
+          ${symCount('btn-open-chat', 'chat', 'Open chat', 'badge-chat', 'Chat')}
+          ${symCount('btn-open-roster', 'people', 'Open roster', 'badge-roster', 'People')}
           <span class="bar-div"></span>
-          <div class="seg" role="group" aria-label="Videos on screen">
-            <button class="sym texty" id="layout-2" type="button" title="Show 2 videos, including you" aria-label="Show 2 videos, including you">2</button>
-            <button class="sym texty" id="layout-4" type="button" title="Show 4 videos, including you" aria-label="Show 4 videos, including you">4</button>
-            <button class="sym texty" id="layout-6" type="button" title="Show 6 videos, including you" aria-label="Show 6 videos, including you">6</button>
-          </div>
+          <span class="tool">
+            <div class="seg" role="group" aria-label="Videos on screen">
+              <button class="sym texty" id="layout-2" type="button" title="Show 2 videos, including you" aria-label="Show 2 videos, including you">2</button>
+              <button class="sym texty" id="layout-4" type="button" title="Show 4 videos, including you" aria-label="Show 4 videos, including you">4</button>
+              <button class="sym texty" id="layout-6" type="button" title="Show 6 videos, including you" aria-label="Show 6 videos, including you">6</button>
+            </div>
+            <span class="tool-cap" aria-hidden="true">Videos</span>
+          </span>
           <button class="btn sm warn" id="btn-mute" type="button">Mute all</button>
           <button class="btn sm" id="btn-allow" type="button">Unmute all</button>
-          ${sym('btn-leave', 'leave', 'Leave class', 'danger')}
+          <span class="bar-div"></span>
+          ${sym('btn-leave', 'leave', 'Leave class (it keeps running for the students)', '', 'Leave')}
+          <span class="bar-div wide"></span>
           <button class="btn sm danger" id="btn-end" type="button">End class</button>
         </div>
         <p class="err" id="notice"></p>

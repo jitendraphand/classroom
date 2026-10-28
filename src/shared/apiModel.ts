@@ -3,15 +3,70 @@
  * and the tests. No I/O.
  */
 
-export const DEFAULT_SERVER = 'https://13-201-89-150.sslip.io';
+/** Used when no server was ever entered. A school build sets CLASSROOM_DEFAULT_SERVER at bundle time. */
+export const FALLBACK_SERVER = 'https://13-201-89-150.sslip.io';
+export const DEFAULT_SERVER = normalizeServer(process.env.CLASSROOM_DEFAULT_SERVER ?? '') ?? FALLBACK_SERVER;
 
+/**
+ * Global shortcuts (registered only while a class is open). Three modifiers:
+ * Ctrl+Shift+V / S / M are paste-as-text, Save as and mute in the apps a
+ * teacher shares, and a global shortcut takes the key away from them.
+ */
 export const DEFAULT_HOTKEYS = {
+  mic: 'CommandOrControl+Alt+Shift+M',
+  camera: 'CommandOrControl+Alt+Shift+V',
+  stopShare: 'CommandOrControl+Alt+Shift+S',
+} as const;
+
+/** Defaults before 1.1.0; a stored value equal to one of these was never customised. */
+export const LEGACY_DEFAULT_HOTKEYS = {
   mic: 'CommandOrControl+Shift+M',
   camera: 'CommandOrControl+Shift+V',
   stopShare: 'CommandOrControl+Shift+S',
 } as const;
 
 export type HotkeyName = keyof typeof DEFAULT_HOTKEYS;
+
+/** Stored shortcuts with untouched old defaults moved to the new ones; custom ones are kept. */
+export function migrateHotkeys(stored: unknown): Record<HotkeyName, string> {
+  const raw = stored && typeof stored === 'object' ? (stored as Record<string, unknown>) : {};
+  const out = {} as Record<HotkeyName, string>;
+  for (const name of Object.keys(DEFAULT_HOTKEYS) as HotkeyName[]) {
+    const v = raw[name];
+    out[name] = typeof v !== 'string' || v === LEGACY_DEFAULT_HOTKEYS[name] ? DEFAULT_HOTKEYS[name] : v;
+  }
+  return out;
+}
+
+/**
+ * The session cookie on disk: encrypted with the OS key store when available
+ * (Windows DPAPI via Electron safeStorage), plain only where it is not.
+ */
+export type CookieCodec = { available: boolean; encrypt: (s: string) => string; decrypt: (b64: string) => string };
+
+export function sealCookie(cookie: string | null, codec: CookieCodec): { cookie?: string; cookieEnc?: string } {
+  if (!cookie) return {};
+  if (!codec.available) return { cookie };
+  try {
+    return { cookieEnc: codec.encrypt(cookie) };
+  } catch {
+    return { cookie };
+  }
+}
+
+/** Reads either form; `migrate` is true when a plain cookie should be re-saved encrypted. */
+export function openCookie(raw: { cookie?: unknown; cookieEnc?: unknown }, codec: CookieCodec): { cookie: string | null; migrate: boolean } {
+  if (typeof raw.cookieEnc === 'string' && raw.cookieEnc && codec.available) {
+    try {
+      const value = codec.decrypt(raw.cookieEnc);
+      return { cookie: value || null, migrate: false };
+    } catch {
+      return { cookie: null, migrate: false };
+    }
+  }
+  const plain = typeof raw.cookie === 'string' && raw.cookie ? raw.cookie : null;
+  return { cookie: plain, migrate: !!plain && codec.available };
+}
 
 /** Teacher session cookie pair from a Set-Cookie header list. */
 export function teacherCookieFromSetCookie(lines: readonly string[]): { present: boolean; value: string | null } {
@@ -24,6 +79,17 @@ export function teacherCookieFromSetCookie(lines: readonly string[]): { present:
     return { present: true, value: value ? first : null };
   }
   return { present: false, value: null };
+}
+
+/** The app's own pages (app://classroom/…). Navigation, IPC and permissions are limited to them. */
+export function isAppPageUrl(url: string | null | undefined): boolean {
+  if (!url) return false;
+  try {
+    const u = new URL(url);
+    return u.protocol === 'app:' && u.host === 'classroom';
+  } catch {
+    return false;
+  }
 }
 
 export function isSafeApiPath(path: string): boolean {
@@ -334,6 +400,8 @@ export type RoomSnapshot = {
   /** Students waiting for an open mic slot (only when a mic limit is set). */
   micQueue: MicQueueEntry[];
   micLimit: number;
+  /** The class session running in this room (teacher state `classInfo`); the after-class summary reads its attendance. */
+  classSessionId: string | null;
 };
 
 export function parseRoomState(data: unknown): RoomSnapshot | null {
@@ -406,7 +474,14 @@ export function parseRoomState(data: unknown): RoomSnapshot | null {
     spotlight: parseSpotlight(d.spotlight),
     micQueue: Array.isArray(d.micQueue) ? d.micQueue.map(parseMicQueueEntry).filter((q): q is MicQueueEntry => !!q) : [],
     micLimit: typeof d.micLimit === 'number' && Number.isFinite(d.micLimit) ? d.micLimit : 0,
+    classSessionId: classSessionIdOf(d.classInfo),
   };
+}
+
+function classSessionIdOf(raw: unknown): string | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const id = (raw as { classSessionId?: unknown }).classSessionId;
+  return typeof id === 'string' && id ? id : null;
 }
 
 function parseSpotlight(raw: unknown): SpotlightInfo | null {

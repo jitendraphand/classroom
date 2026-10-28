@@ -8,7 +8,7 @@ const src = (p: string) => readFileSync(new URL(`../${p}`, import.meta.url), 'ut
 
 test('B2: End class is not ignored right after Stop sharing (no stale HUD check in main)', () => {
   const main = src('src/main/main.ts');
-  const body = main.slice(main.indexOf("ipcMain.handle('confirm-end'"), main.indexOf("ipcMain.handle('confirm-end'") + 400);
+  const body = main.slice(main.indexOf("ipc.handle('confirm-end'"), main.indexOf("ipc.handle('confirm-end'") + 400);
   assert.doesNotMatch(body, /lastSnap\?\.hud\.sharing\) return false/);
 });
 

@@ -6,7 +6,16 @@ directories:
   buildResources: build
 files:
   - dist/**
+  # Source maps help nobody on a teacher's PC; the installer has to stay under 100 MB.
+  - '!dist/**/*.map'
   - package.json
+# The UI is English only: Chromium's other 54 locale packs were ~45 MB of the install.
+electronLanguages:
+  - en-US
+compression: maximum
+# No update feed (the app is not auto-updated; the school server advertises new
+# builds, see README "Security, sessions and updates"), so no latest.yml either.
+publish: null
 extraResources:
   - from: native/affinity-helper.exe
     to: affinity-helper.exe
@@ -35,6 +44,8 @@ win:
   signAndEditExecutable: true
   forceCodeSigning: false
 nsis:
+  # Differential (blockmap) packages compress file by file; there is no updater, so one solid archive.
+  differentialPackage: false
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true

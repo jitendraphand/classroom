@@ -6,7 +6,11 @@ function listen(channel: string, cb: (payload: unknown) => void): () => void {
   return () => ipcRenderer.removeListener(channel, fn);
 }
 
-contextBridge.exposeInMainWorld('classroom', {
+// Only the app's own pages get the bridge (the main process also refuses
+// navigation elsewhere and checks every IPC sender).
+const ownPage = location.protocol === 'app:' && location.host === 'classroom';
+
+if (ownPage) contextBridge.exposeInMainWorld('classroom', {
   getBoot: () => ipcRenderer.invoke('boot'),
   login: (email: string, password: string) => ipcRenderer.invoke('login', email, password),
   logout: () => ipcRenderer.invoke('logout'),
@@ -39,6 +43,8 @@ contextBridge.exposeInMainWorld('classroom', {
   saveLayout: (slots: unknown) => ipcRenderer.invoke('save-layout', slots),
   saveDevices: (micId: string, camId: string) => ipcRenderer.invoke('save-devices', micId, camId),
   setServer: (url: string) => ipcRenderer.invoke('set-server', url),
+  openDownload: () => ipcRenderer.invoke('open-download'),
+  onUpdate: (cb: (notice: unknown) => void) => listen('app-update', cb),
   setClassActive: (on: boolean) => ipcRenderer.send('class-active', on),
   captureTestOpen: () => ipcRenderer.invoke('capture-test-open'),
   captureTestStart: () => ipcRenderer.invoke('capture-test-start'),

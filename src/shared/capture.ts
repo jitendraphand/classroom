@@ -21,6 +21,7 @@
  * planMask remains for geometry tests. Nothing in the publisher calls it.
  */
 
+import { parseMediaProfile, type MediaProfile } from './web/videoQuality';
 import { videoGrid, type SlotCount } from './classLogic';
 
 export const WIN10_2004_BUILD = 19041;
@@ -414,9 +415,44 @@ export const VIDEO_MODE_SHARE = {
  */
 export const SIDECAR_HELPER_FPS = VIDEO_MODE_SHARE.capture.frameRate;
 
+/**
+ * The server's media profile (MEDIA_PROFILE, sent with the LiveKit token).
+ * 'low' is for a small server or a shared school uplink: the SFU forwards the
+ * teacher's streams to every student, so these caps are what its egress pays
+ * per student. They match the web app's low profile (web videoQuality LOW_*):
+ * Video mode 720p15 ≤800 kbps, teacher camera one 180p layer ≤120 kbps.
+ * Slides (8 fps, 700 kbps) are already under the web's low cap.
+ */
+export type MediaProfileName = MediaProfile;
+export const parseProfile = parseMediaProfile;
+
+export const LOW_VIDEO_MODE_SHARE = {
+  capture: { width: 1280, height: 720, frameRate: 15 },
+  encoding: { maxBitrate: 800_000, maxFramerate: 15 },
+} as const;
+
+export const LOW_TEACHER_CAMERA = {
+  capture: { width: 320, height: 180, frameRate: 12 },
+  encoding: { maxBitrate: 120_000, maxFramerate: 12 },
+  layers: [] as { width: number; height: number; maxBitrate: number; maxFramerate: number }[],
+  simulcast: false,
+} as const;
+
+export function videoModeShare(profile: MediaProfileName = 'standard') {
+  return profile === 'low' ? LOW_VIDEO_MODE_SHARE : VIDEO_MODE_SHARE;
+}
+
+export function teacherCameraFor(profile: MediaProfileName = 'standard') {
+  return profile === 'low' ? LOW_TEACHER_CAMERA : TEACHER_CAMERA;
+}
+
 /** Sender encodings for slides (this app's SCREEN_SHARE) or video mode. Other fields are kept. */
-export function windowsShareEncodings<E extends { maxBitrate?: number; maxFramerate?: number }>(encodings: E[], videoMode: boolean): E[] {
-  const top = videoMode ? VIDEO_MODE_SHARE.encoding : SCREEN_SHARE.encoding;
+export function windowsShareEncodings<E extends { maxBitrate?: number; maxFramerate?: number }>(
+  encodings: E[],
+  videoMode: boolean,
+  profile: MediaProfileName = 'standard'
+): E[] {
+  const top = videoMode ? videoModeShare(profile).encoding : SCREEN_SHARE.encoding;
   const list = encodings.length ? encodings : [{} as E];
   return list.map((e, i) => {
     const low = i < list.length - 1 ? SCREEN_SHARE.layers[i] : undefined;
