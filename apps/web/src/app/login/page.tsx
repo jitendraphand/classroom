@@ -6,6 +6,7 @@ import { BackLink } from '@/components/layout/AppHeader';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Card } from '@/components/ui/Card';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { endedSessionCopy, isEndedReason, safeNextPath } from '@/lib/sessionClient';
 
 export default function LoginPage() {
@@ -17,6 +18,8 @@ export default function LoginPage() {
   const [notice, setNotice] = useState<{ title: string; body: string } | null>(null);
   const [next, setNext] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  useDocumentTitle('Staff login');
 
   // Read on the client (no useSearchParams, so the page stays static).
   useEffect(() => {
@@ -81,15 +84,27 @@ export default function LoginPage() {
             onChange={(e) => setEmail(e.target.value)}
             required
           />
-          <Input
-            label="Password"
-            type="password"
-            name="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
+          <div className="relative">
+            <Input
+              label="Password"
+              type={showPassword ? 'text' : 'password'}
+              name="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="pr-16"
+              required
+            />
+            <button
+              type="button"
+              className="absolute bottom-0 right-0 flex h-[2.625rem] items-center px-3 text-xs font-semibold text-slate-300 hover:text-white"
+              aria-pressed={showPassword}
+              aria-controls="password"
+              onClick={() => setShowPassword((v) => !v)}
+            >
+              {showPassword ? 'Hide' : 'Show'}
+            </button>
+          </div>
           {error && (
             <p className="text-sm text-danger-fg" role="alert">
               {error}
@@ -101,6 +116,8 @@ export default function LoginPage() {
         </form>
         <p className="mt-6 text-center text-sm text-slate-400">
           Teacher accounts are created by the school administrator.
+          <br />
+          Forgot your password? Ask your school administrator to reset it.
         </p>
       </Card>
     </main>

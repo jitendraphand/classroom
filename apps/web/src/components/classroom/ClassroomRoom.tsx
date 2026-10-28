@@ -1,6 +1,13 @@
 'use client';
 
-import { classEndedCopy, finishCopy, finishFromState, type FinishReason } from '@/lib/classFinish';
+import {
+  classEndedCopy,
+  classSummaryFacts,
+  finishCopy,
+  finishFromState,
+  type ClassSummaryRow,
+  type FinishReason,
+} from '@/lib/classFinish';
 import {
   classEndedNoted,
   noteClassEnded,
@@ -85,6 +92,7 @@ import { Avatar } from '@/components/ui/Avatar';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { pageTitle, useTabTitle } from '@/hooks/useDocumentTitle';
 import { PageLoading } from '@/components/ui/Skeleton';
 import {
   IconDoor,
@@ -94,6 +102,7 @@ import {
   IconMicOff,
   IconPen,
   IconPin,
+  IconStar,
   IconScreen,
   IconSearch,
   IconUserPlus,
@@ -169,7 +178,7 @@ import {
 /** Wait the server-assigned connect slot (lib/joinPacingLogic). */
 import { CameraErrorBanner, SelectivePublisher } from './SelectivePublisher';
 import { StudentMediaPrivacy } from './StudentMediaPrivacy';
-import { TeacherCameraFloat } from './TeacherCameraFloat';
+import { TeacherCameraFloat, TeacherStageCamera } from './TeacherCameraFloat';
 import { TeacherPeersFloat } from './TeacherPeersFloat';
 import { enqueueLocalPublish, safeStop } from './localPublish';
 import { isTeacherParticipant, useHasTeacherScreen, useTeacherLive } from './participantRoles';
@@ -199,7 +208,14 @@ function ParticipantGrid({
   onStopShare,
   entireShareInfo,
   hiddenIdentities = [],
+  onShareScreen,
+  onPrepareShare,
+  onOpenWhiteboard,
 }: {
+  /** Teacher, nothing shared: quick starts shown on the empty stage. */
+  onShareScreen?: () => void;
+  onPrepareShare?: () => void;
+  onOpenWhiteboard?: () => void;
   entireShareInfo?: EntireShareInfo;
   /** What this teacher tab is capturing; decides whether the local share may be previewed. */
   localShareSurface?: string;
@@ -244,9 +260,29 @@ function ParticipantGrid({
   const hasScreen = screenShares.length > 0;
 
   if (!hasScreen && cameras.length === 0) {
-    // Teacher: the stage stays empty until a share; the teacher's own camera
-    // preview lives only in the docked Class panel (no duplicate tile here).
-    if (isTeacher) return <div className="stage-empty min-h-0 flex-1" aria-hidden />;
+    // Teacher: until a share, the stage offers the two ways to fill it; the
+    // teacher's own camera preview lives only in the docked Class panel.
+    if (isTeacher)
+      return (
+        <div className="stage-empty flex min-h-0 flex-1 items-center justify-center p-6">
+          <div className="max-w-sm text-center">
+            <p className="font-semibold text-white">Nothing is shared yet</p>
+            <p className="mt-1 text-sm text-slate-400">Share your screen or open the whiteboard to fill this space for everyone.</p>
+            <div className="mt-4 flex flex-wrap justify-center gap-2">
+              {onShareScreen && (
+                <Button onPointerDown={onPrepareShare} onClick={onShareScreen}>
+                  Share screen
+                </Button>
+              )}
+              {onOpenWhiteboard && (
+                <Button variant="secondary" onClick={onOpenWhiteboard}>
+                  Open whiteboard
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      );
     return (
       <div className="flex min-h-0 flex-col gap-3">
         <EmptyState
@@ -667,7 +703,8 @@ function RoomInner({
   visibleIdentities: string[];
   displayName: string;
   onVisibilityChange: (v: boolean) => void;
-  onClassEnded: () => void;
+  /** The class ended; teachers get that session's summary on the finished screen. */
+  onClassEnded: (classSessionId: string | null) => void;
   /** Student: the class view stops for good (left / ended / removed / another device). */
   onFinished: (r: FinishReason) => void;
 }) {
@@ -1075,6 +1112,11 @@ function RoomInner({
     return () => window.clearTimeout(t);
   }, [takeoverToast]);
 
+  // The ENDED reply may carry no class details, so keep the last one seen.
+  const classSessionIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (state?.classInfo?.classSessionId) classSessionIdRef.current = state.classInfo.classSessionId;
+  }, [state?.classInfo?.classSessionId]);
   useEffect(() => {
     if (state?.status === 'ENDED' || state?.ended) {
       noteClassEnded(code);
@@ -1083,9 +1125,9 @@ function RoomInner({
       } catch {
         /* ignore */
       }
-      onClassEnded();
+      onClassEnded(state?.classInfo?.classSessionId ?? classSessionIdRef.current);
     }
-  }, [state?.status, state?.ended, room, onClassEnded, code]);
+  }, [state?.status, state?.ended, state?.classInfo?.classSessionId, room, onClassEnded, code]);
 
   useEffect(() => {
     if (!isTeacher || !room) return;
@@ -1948,7 +1990,7 @@ function RoomInner({
       room?.disconnect();
       // Teacher: stay on the "Class finished" screen (it has a Dashboard button)
       // instead of jumping straight back to the dashboard.
-      onClassEnded();
+      onClassEnded(classSessionIdRef.current);
     } catch {
       setHudNotice('Could not end the class. Everyone is still in the room.');
       setEndingClass(false);
@@ -2181,11 +2223,6 @@ function RoomInner({
   const studentCount = rosterStudents.length;
   const shownRoster = filterPeople(rosterStudents, rosterQuery);
   const shownWaiting = filterPeople(state?.waiting ?? [], rosterQuery);
-  // Item 13: the hands list was pinned over the title on phones; it starts
-  // collapsed to a small pill there and the teacher can open/close it.
-  const [handsCollapsed, setHandsCollapsed] = useState(
-    () => typeof window !== 'undefined' && window.innerWidth <= 700,
-  );
   /** Raised hands, earliest first: shown in the chat panel so they stay in
    * sight while the roster is closed. */
   const raisedHands = rosterStudents
@@ -2195,11 +2232,7 @@ function RoomInner({
   // the tab strip / taskbar while the teacher looks at the shared display.
   const handsN = isTeacher ? raisedHands.length : 0;
   const unreadN = isTeacher ? chatUnread : 0;
-  useEffect(() => {
-    if (!isTeacher || typeof document === 'undefined') return;
-    const base = document.title.replace(/^\([^)]*\)\s*/, '');
-    document.title = teacherTabTitle(base, handsN, unreadN);
-  }, [isTeacher, handsN, unreadN]);
+  useTabTitle(teacherTabTitle(pageTitle(state?.name || 'Class'), handsN, unreadN));
   useEffect(
     () => () => {
       if (typeof document !== 'undefined') document.title = document.title.replace(/^\([^)]*\)\s*/, '');
@@ -2340,6 +2373,15 @@ function RoomInner({
       setHudNotice('Could not lower hand');
     }
   }
+  /** Raised hand → give the student the floor: unmute them, then lower the hand. */
+  async function letSpeak(participantId: string) {
+    await muteStudent(participantId, false);
+    await lowerHand(participantId);
+  }
+  const mutedStudentIds = useMemo(
+    () => new Set((state?.admitted ?? []).filter((p) => p.role === 'STUDENT' && p.mutedByTeacher).map((p) => p.id)),
+    [state?.admitted]
+  );
   // —— Student drawing on the shared screen (ShareDrawing.tsx, lib/drawLogic.ts) ——
   const drawActions = useDrawingActions(code);
   const drawHolders = state?.drawHolders ?? (state?.drawHolder ? [state.drawHolder] : []);
@@ -2442,6 +2484,9 @@ function RoomInner({
   const micLimitOn = (state?.micLimit ?? 0) > 0;
   const micWaiting = !!state?.me?.micWaiting;
   const showAskToSpeak = !isTeacher && micLimitOn && effectiveMuted && !state?.me?.micGranted;
+  // No mic cap: asking to speak raises the hand, and the teacher's raised-hands
+  // bar has "Let … speak" (unmutes and lowers it).
+  const askByHand = !isTeacher && !micLimitOn && effectiveMuted;
   const controlsProps = {
     micOn: micOn && !effectiveMuted,
     camOn,
@@ -2517,11 +2562,15 @@ function RoomInner({
             body: JSON.stringify({ want: !micWaiting }),
           }).then(() => refresh());
         }
-      : undefined,
+      : askByHand && !handRaised
+        ? () => void toggleHand()
+        : undefined,
     micWaitNote:
       !isTeacher && micWaiting
         ? `Waiting to speak${state?.me?.micPosition ? ` (#${state.me.micPosition})` : ''}`
-        : null,
+        : askByHand && handRaised
+          ? 'Hand raised. Your teacher can let you speak.'
+          : null,
     onLeave: leave,
     isTeacher,
     canPublishVideo: effectiveCanPublish,
@@ -2561,6 +2610,9 @@ function RoomInner({
     const teacherGone = teacherLive === false;
     const teacherHere = teacherIdentities.length > 0 && !teacherGone;
     const showTeacherScreen = effectiveStage === 'screen' && !teacherGone;
+    // Nothing shared: the teacher's camera fills the stage (unless the student
+    // minimised videos to save data or space).
+    const teacherOnStage = teacherHere && !showTeacherScreen && !state?.whiteboard && studentVideoMode !== 'min';
     const fsGate = fullscreenGate({
       status: focus.status,
       everFullscreen: focus.everFullscreen,
@@ -2595,7 +2647,21 @@ function RoomInner({
         />
         <RoomAudioRenderer />
 
-        <div className="stage-fullscreen-badge">{badge}</div>
+        {/* Status and class details share one row, so the phone's "Muted by
+            teacher" pill (below it) never covers the info button. Class
+            details hide under the fullscreen cover, same as the video float. */}
+        <div className="stage-top-left">
+          <div className="stage-fullscreen-badge">{badge}</div>
+          {!covered && (
+            <ClassInfoButton
+              teacherName={state?.classInfo?.teacherName || state?.teacherName || null}
+              subject={state?.classInfo ? state.classInfo.subject : state?.name || null}
+              audience={state?.classInfo?.audience || null}
+              scheduledStart={state?.classInfo?.scheduledStart ?? null}
+              scheduledEnd={state?.classInfo?.scheduledEnd ?? null}
+            />
+          )}
+        </div>
 
         {camError && camOn && (
           <CameraErrorBanner message={camError} onDismiss={() => setCamError(null)} />
@@ -2663,6 +2729,11 @@ function RoomInner({
             />
           ) : covered ? null : showTeacherScreen ? (
             <TeacherScreenStage teacherIdentities={teacherIdentities} zoomable drawing={myDrawState === 'drawing'} />
+          ) : teacherOnStage ? (
+            <TeacherStageCamera
+              teacherIdentities={teacherIdentities}
+              fallback="Their screen will fill this view when they share it."
+            />
           ) : (
             <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-ink-950 px-6 text-center text-slate-400">
               <IconVideo size={32} />
@@ -2677,18 +2748,6 @@ function RoomInner({
 
         {/* Teacher video hidden: receive no teacher camera at all. */}
         {covered && <TeacherMediaDemand teacherIdentities={teacherIdentities} mode={dataSaver} camPaneMinimized />}
-        {/* Class details. Hidden under the fullscreen cover, same as the video float. */}
-        {!covered && (
-          <div className="absolute left-3 top-12 z-40">
-            <ClassInfoButton
-              teacherName={state?.classInfo?.teacherName || state?.teacherName || null}
-              subject={state?.classInfo ? state.classInfo.subject : state?.name || null}
-              audience={state?.classInfo?.audience || null}
-              scheduledStart={state?.classInfo?.scheduledStart ?? null}
-              scheduledEnd={state?.classInfo?.scheduledEnd ?? null}
-            />
-          </div>
-        )}
         {/* The one student video float (teacher, screen share and whiteboard). */}
         {!covered && (
           <TeacherCameraFloat
@@ -2698,6 +2757,7 @@ function RoomInner({
             selfStream={localCamStream}
             camOn={camOn}
             mode={studentVideoMode}
+            teacherOnStage={teacherOnStage}
           />
         )}
         {!covered && state?.spotlight && state.spotlight.identity !== state.me?.livekitIdentity && (
@@ -2869,6 +2929,15 @@ function RoomInner({
             onOpenRoster={screenOn ? undefined : openRoster}
           />
         )}
+        {isTeacher && raisedHands.length > 0 && (
+          <RaisedHandsBar
+            hands={raisedHands}
+            mutedIds={mutedStudentIds}
+            onLetSpeak={(id) => void letSpeak(id)}
+            onLower={(id) => void lowerHand(id)}
+            onOpenRoster={screenOn ? undefined : openRoster}
+          />
+        )}
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone={isTeacher ? 'brand' : 'neutral'}>
@@ -2924,31 +2993,6 @@ function RoomInner({
         </span>
       )}
 
-      {isTeacher && raisedHands.length > 0 && (
-        <div className="raised-hands-toast" role="status" data-testid="raised-hands-toast" aria-label="Raised hands" data-collapsed={handsCollapsed ? '1' : '0'}>
-          <button
-            type="button"
-            className="raised-hands-toggle"
-            onClick={() => setHandsCollapsed((v) => !v)}
-            aria-expanded={!handsCollapsed}
-          >
-            ✋ Raised hands ({raisedHands.length}) {handsCollapsed ? '▸' : '▾'}
-          </button>
-          {!handsCollapsed && <ul>
-            {raisedHands.slice(0, 8).map((h) => (
-              <li key={h.id}>
-                <span className="min-w-0 truncate">{h.displayName}</span>
-                <button type="button" onClick={() => void lowerHand(h.id)} aria-label={`Lower hand for ${h.displayName}`}>
-                  Lower
-                </button>
-              </li>
-            ))}
-          </ul>}
-          {raisedHands.length > 8 && (
-            <p className="mt-1 text-xs text-slate-400">+{raisedHands.length - 8} more in the roster</p>
-          )}
-        </div>
-      )}
       {isTeacher && takeoverToast && (
         <div className="teacher-toast" role="status" data-testid="takeover-toast">
           <span className="flex-1">{takeoverToast}</span>
@@ -3055,6 +3099,11 @@ function RoomInner({
                 teacherIdentities={teacherIdentities}
                 localShareSurface={shareSurface}
                 onStopShare={() => void toggleScreen()}
+                onShareScreen={isTeacher && canShareScreen() ? controlsProps.onToggleScreen : undefined}
+                onPrepareShare={() => {
+                  if (!screenOn && canShareScreen()) preopenShareControls();
+                }}
+                onOpenWhiteboard={isTeacher ? controlsProps.onToggleWhiteboard : undefined}
                 entireShareInfo={{
                   controlsInTab: !shareMount,
                   hands: raisedHands.length,
@@ -3279,18 +3328,14 @@ function RoomInner({
                           Allow
                         </button>
                       ) : null}
-                      <button
-                        type="button"
-                        className={cn(
-                          'shrink-0 rounded px-1 text-[10px] font-semibold leading-4',
-                          state?.spotlight?.participantId === p.id
-                            ? 'bg-amber-500/25 text-amber-100'
-                            : 'bg-white/10 text-slate-200 hover:bg-white/20'
-                        )}
+                      <RosterIconButton
+                        label={state?.spotlight?.participantId === p.id ? `Stop spotlight on ${p.displayName}` : `Spotlight ${p.displayName} (shown large to the class)`}
+                        tone={state?.spotlight?.participantId === p.id ? 'on' : 'plain'}
+                        pressed={state?.spotlight?.participantId === p.id}
                         onClick={() => void setSpotlight(state?.spotlight?.participantId === p.id ? null : p.id)}
                       >
-                        {state?.spotlight?.participantId === p.id ? 'Stop spotlight' : 'Spotlight'}
-                      </button>
+                        <IconStar size={13} />
+                      </RosterIconButton>
                     </span>
                   </li>
                 );
@@ -3569,6 +3614,46 @@ function WaitingAdmitBar({
   );
 }
 
+/** Raised hands in the header: give the first student the floor, or lower the hand. */
+function RaisedHandsBar({
+  hands,
+  mutedIds,
+  onLetSpeak,
+  onLower,
+  onOpenRoster,
+}: {
+  hands: Array<{ id: string; displayName: string }>;
+  mutedIds: Set<string>;
+  onLetSpeak: (id: string) => void;
+  onLower: (id: string) => void;
+  onOpenRoster?: () => void;
+}) {
+  const first = hands[0];
+  if (!first) return null;
+  const n = hands.length;
+  return (
+    <div className="raised-hands-toast order-first" role="status" aria-live="polite" data-testid="raised-hands-toast" aria-label="Raised hands">
+      <IconHand size={14} className="shrink-0 text-violet-200" />
+      <span className="min-w-0 flex-1 truncate font-semibold">
+        {n === 1 ? `${first.displayName} raised a hand` : `${n} hands raised · ${shortName(first.displayName)} first`}
+      </span>
+      {mutedIds.has(first.id) && (
+        <Button variant="secondary" size="sm" onClick={() => onLetSpeak(first.id)} title={`Unmute ${first.displayName} and lower the hand`}>
+          Let {shortName(first.displayName)} speak
+        </Button>
+      )}
+      <Button variant="ghost" size="sm" onClick={() => onLower(first.id)} aria-label={`Lower hand for ${first.displayName}`}>
+        Lower
+      </Button>
+      {n > 1 && onOpenRoster && (
+        <Button variant="ghost" size="sm" onClick={onOpenRoster}>
+          All hands
+        </Button>
+      )}
+    </div>
+  );
+}
+
 /** Floating window → the HUD portals itself; otherwise wrap it in the in-page dock. */
 function ShareHudSlot({
   floating,
@@ -3830,8 +3915,10 @@ export function ClassroomRoom({ code }: { code: string }) {
     router.push(studentHomePath(school));
   }, [isTeacher, schoolStudent, router]);
 
-  const markEnded = useCallback(() => {
+  const [endedSessionId, setEndedSessionId] = useState<string | null>(null);
+  const markEnded = useCallback((classSessionId: string | null) => {
     setClassEnded(true);
+    if (classSessionId) setEndedSessionId(classSessionId);
     setTokenData(null);
   }, []);
   const finish = useCallback((r: FinishReason) => {
@@ -4000,9 +4087,17 @@ export function ClassroomRoom({ code }: { code: string }) {
         <div className="max-w-md rounded-2xl border border-white/10 bg-surface-1 p-8 text-center shadow-lift">
           <p className="font-display text-2xl font-semibold tracking-tight">{endCopy.title}</p>
           <p className="mt-2 text-sm text-slate-400">{endCopy.body}</p>
-          <Button className="mt-6" variant="secondary" onClick={() => void goHomeAfterEnd()}>
-            {isTeacher ? 'Dashboard' : 'Home'}
-          </Button>
+          {isTeacher && endedSessionId && <TeacherClassSummary classSessionId={endedSessionId} />}
+          <div className="mt-6 flex flex-wrap justify-center gap-3">
+            <Button variant={isTeacher ? 'primary' : 'secondary'} onClick={() => void goHomeAfterEnd()}>
+              {isTeacher ? 'Dashboard' : 'Home'}
+            </Button>
+            {isTeacher && (
+              <Button variant="secondary" onClick={() => router.push('/teacher/attendance')}>
+                Attendance
+              </Button>
+            )}
+          </div>
         </div>
       </main>
     );
@@ -4169,6 +4264,35 @@ function ReconnectWatchdog({ onStuck }: { onStuck: () => void }) {
     };
   }, [room]);
   return null;
+}
+
+/**
+ * Teacher's finished screen: when the class ran, and who came, from the same
+ * report the attendance page uses. One request; nothing shows if it fails.
+ */
+function TeacherClassSummary({ classSessionId }: { classSessionId: string }) {
+  const [facts, setFacts] = useState<string[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void fetch(`/api/teacher/attendance/sessions?sessionId=${encodeURIComponent(classSessionId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { rows?: ClassSummaryRow[] } | null) => {
+        const row = d?.rows?.[0];
+        if (alive && row) setFacts(classSummaryFacts(row));
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [classSessionId]);
+  if (!facts) return null;
+  return (
+    <ul className="mt-4 space-y-1 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm text-slate-200" data-testid="class-summary">
+      {facts.map((f) => (
+        <li key={f}>{f}</li>
+      ))}
+    </ul>
+  );
 }
 
 /**

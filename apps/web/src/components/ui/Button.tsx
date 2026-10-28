@@ -3,7 +3,7 @@
 import { forwardRef, type ButtonHTMLAttributes } from 'react';
 import { cn } from '@/lib/cn';
 
-export type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'ghost' | 'warning';
+export type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'dangerSoft' | 'ghost' | 'warning';
 export type ButtonSize = 'sm' | 'md' | 'lg';
 
 type Props = ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -16,6 +16,7 @@ const variantClass: Record<ButtonVariant, string> = {
   primary: 'btn-primary',
   secondary: 'btn-secondary',
   danger: 'btn-danger',
+  dangerSoft: 'btn-danger-soft',
   ghost: 'btn-ghost',
   warning: 'btn-warning',
 };

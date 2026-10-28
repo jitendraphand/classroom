@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { AdminShell, SecretOnce } from '@/components/admin/AdminShell';
 import { Button } from '@/components/ui/Button';
+import { useConfirm } from '@/components/ui/ConfirmDialog';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { api } from '@/lib/clientFetch';
 import { PRIVILEGE_LABELS, type Privilege, type PrivilegeSet } from '@/lib/privileges';
@@ -30,6 +31,8 @@ function Editor() {
   // Item 11: a failed load (e.g. 403 for a sub-admin) shows only the message, not the form too.
   const [loadError, setLoadError] = useState('');
   const [form, setForm] = useState({ name: '', email: '', privileges: blank() });
+  const [notice, setNotice] = useState('');
+  const [confirm, confirmDialog] = useConfirm();
   // Item 6: a sub-admin can be a new account or an existing teacher (one login, switchable views).
   const [source, setSource] = useState<'teacher' | 'new'>('teacher');
   const [teacherId, setTeacherId] = useState('');
@@ -87,12 +90,23 @@ function Editor() {
   }
 
   async function savePriv(row: AdminRow, privileges: PrivilegeSet) {
+    setNotice('');
     const { ok, data } = await api(`/api/admin/sub-admins/${row.id}`, { method: 'PATCH', body: { privileges } });
     if (!ok) setError(data.error || 'Could not save');
-    else void load();
+    else {
+      setNotice(`Saved permissions for ${row.name || row.email}. They apply at their next page load.`);
+      void load();
+    }
   }
 
   async function reset(row: AdminRow) {
+    const go = await confirm({
+      title: `Reset the password for ${row.name || row.email}?`,
+      body: 'They are signed out and get a new temporary password, shown to you once.',
+      confirmLabel: 'Reset password',
+      tone: 'primary',
+    });
+    if (!go) return;
     const { ok, data } = await api<{ temporaryPassword?: string }>(`/api/admin/sub-admins/${row.id}`, { method: 'PATCH', body: { resetPassword: true } });
     if (!ok || !data.temporaryPassword) setError(data.error || 'Could not reset');
     else setSecret({ title: 'Password reset', lines: [['Email', row.email], ['Temporary password', data.temporaryPassword]] });
@@ -102,7 +116,7 @@ function Editor() {
     const msg = row.teacherId
       ? `Remove the admin role from ${row.name}? Their teacher account stays.`
       : `Delete ${row.email}?`;
-    if (!confirm(msg)) return;
+    if (!(await confirm({ title: msg, confirmLabel: row.teacherId ? 'Remove admin role' : 'Delete' }))) return;
     const { ok, data } = await api(`/api/admin/sub-admins/${row.id}`, { method: 'DELETE' });
     if (!ok) setError(data.error || 'Could not delete');
     else void load();
@@ -119,7 +133,13 @@ function Editor() {
 
   return (
     <div className="space-y-4">
+      {confirmDialog}
       {secret && <SecretOnce title={secret.title} lines={secret.lines} onClose={() => setSecret(null)} />}
+      {notice && (
+        <p className="rounded-xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-100" role="status">
+          {notice}
+        </p>
+      )}
       {error && <p className="text-sm text-red-300">{error}</p>}
       <Card>
         <CardHeader title="New sub-administrator" subtitle="Pick the privileges. The system administrator keeps every privilege." />
@@ -184,7 +204,7 @@ function Editor() {
                         Reset password
                       </Button>
                     )}
-                    <Button size="sm" variant="danger" onClick={() => void remove(row)}>
+                    <Button size="sm" variant="dangerSoft" onClick={() => void remove(row)}>
                       {row.teacherId ? 'Remove admin role' : 'Delete'}
                     </Button>
                   </div>

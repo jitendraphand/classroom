@@ -5,6 +5,7 @@ import { manualStudentJoinAllowed } from '@/lib/schoolConfig';
 // Reads ALLOW_MANUAL_STUDENT_JOIN at request time. (GET /join?t=… never
 // reaches this page: middleware rewrites it to /api/student/join.)
 export const dynamic = 'force-dynamic';
+export const metadata = { title: 'Join class' };
 
 export default function JoinLandingPage() {
   return manualStudentJoinAllowed() ? <JoinCodeForm /> : <SchoolAppOnly />;

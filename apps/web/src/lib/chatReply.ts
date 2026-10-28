@@ -30,3 +30,18 @@ export function resolveChatRecipient(to: 'all' | string, studentIds: Set<string>
   return studentIds.has(to) ? to : 'all';
 }
 
+
+/**
+ * Pure: the student whose private question is the newest message, if the
+ * teacher has not written since. The composer then suggests a private reply,
+ * so an answer to a private question does not go to the whole class by habit.
+ */
+export function pendingPrivateQuestion(
+  messages: Array<ReplyMsg & { senderName: string }>,
+  myParticipantId: string | null
+): { participantId: string; name: string } | null {
+  const last = messages[messages.length - 1];
+  if (!last || last.senderParticipantId === myParticipantId) return null;
+  if (last.scope !== 'TEACHER' || last.senderRole !== 'STUDENT') return null;
+  return { participantId: last.senderParticipantId, name: last.senderName };
+}

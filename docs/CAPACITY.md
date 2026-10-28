@@ -1,6 +1,6 @@
 # Class capacity (2,500 concurrent students)
 
-The web app does not cap how many students can be in a class, and it does not cap how many classes can run at once. A student sees "This class is full." only when an administrator has set a positive **Students per class** value under System Control → Class size and microphones. The default is empty (no limit). The same page can limit how many student microphones are open at once; `0` means no microphone cap.
+The web app does not cap how many students can be in a class, and it does not cap how many classes can run at once. A student sees "This class is full." only when an administrator has set a positive **Students per class** value under Settings → Class size and microphones. The default is empty (no limit). The same page can limit how many student microphones are open at once; `0` means no microphone cap.
 
 The rotating camera sample (at most six student cameras in the teacher's mosaic) is a bandwidth choice. It is not a class-size limit. Students who are not in the mosaic still attend, hear the class, and can be heard when the teacher unmutes them.
 

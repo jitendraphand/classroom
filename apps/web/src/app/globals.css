@@ -53,6 +53,34 @@ body {
   outline-offset: 2px;
 }
 
+/* Native boxes are 13px; their wrapping labels are clickable too, but the box
+   itself should still be easy to hit on a phone. */
+input[type='checkbox'],
+input[type='radio'] {
+  width: 1.125rem;
+  height: 1.125rem;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* The native "Choose file" button is light grey on our dark theme. */
+input[type='file'] {
+  @apply text-sm text-slate-300;
+}
+input[type='file']::file-selector-button {
+  @apply mr-3 cursor-pointer rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2 text-sm font-semibold text-slate-100;
+}
+input[type='file']::file-selector-button:hover {
+  @apply bg-white/[0.12];
+}
+
+/* Date and time fields clip "dd/mm/yyyy" plus the picker icon when narrow. */
+input[type='date'].input,
+input[type='time'].input {
+  min-width: 10rem;
+  padding-right: 0.75rem;
+}
+
 /* Scrollbars */
 * {
   scrollbar-width: thin;
@@ -103,8 +131,20 @@ body {
     border-color: rgba(255, 255, 255, 0.15);
   }
 
+  /* red-600: white text needs ≥ 4.5:1 (red-500 is 3.76:1). */
   .btn-danger {
-    @apply btn bg-danger text-white hover:bg-red-500 shadow-[0_8px_24px_rgba(239,68,68,0.2)];
+    @apply btn bg-red-600 text-white hover:bg-red-700 shadow-[0_8px_24px_rgba(239,68,68,0.2)];
+  }
+
+  /* Small icon actions inside chips and rows: 28px, above the 24px minimum target. */
+  .chip-icon-btn {
+    @apply inline-grid h-7 w-7 shrink-0 place-items-center rounded-md text-sm text-slate-400 transition hover:bg-white/10 hover:text-white
+      focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-400;
+  }
+
+  /* Row-level destructive actions: visible but not the loudest thing in the row. */
+  .btn-danger-soft {
+    @apply btn border border-red-400/35 bg-red-500/10 text-red-200 hover:border-red-400/60 hover:bg-red-500/20;
   }
 
   .btn-ghost {
@@ -228,8 +268,14 @@ body {
     @apply relative flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden bg-black;
   }
 
+  .stage-top-left {
+    @apply pointer-events-none absolute left-3 top-3 z-40 flex max-w-[calc(100vw-1.5rem)] items-center gap-2;
+  }
+  .stage-top-left > * {
+    pointer-events: auto;
+  }
   .stage-fullscreen-badge {
-    @apply pointer-events-none absolute left-3 top-3 z-30 rounded-full border border-white/15 bg-black/55 px-3 py-1.5 text-2xs font-semibold tracking-wide text-white backdrop-blur-md;
+    @apply pointer-events-none min-w-0 rounded-full border border-white/15 bg-black/55 px-3 py-1.5 text-2xs font-semibold tracking-wide text-white backdrop-blur-md;
   }
 
   .stage-float-chrome {
@@ -522,7 +568,7 @@ body {
     @apply ml-auto flex shrink-0 items-center gap-0.5;
   }
   .roster-icon-btn {
-    @apply inline-grid h-6 w-6 place-items-center rounded-md text-slate-300 transition hover:bg-white/10 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-400;
+    @apply inline-grid h-7 w-7 place-items-center rounded-md text-slate-300 transition hover:bg-white/10 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-400;
   }
   .roster-icon-btn-warn {
     @apply bg-amber-500/15 text-amber-200 hover:bg-amber-500/25;
@@ -623,57 +669,6 @@ body {
   flex: 0 0 auto;
 }
 
-
-/* Light professional landing (home page only) */
-.light-landing {
-  --surface-0: #f8fafc;
-  --surface-1: #ffffff;
-  --surface-2: #f1f5f9;
-  --border: rgba(15, 23, 42, 0.08);
-  --text: #0f172a;
-  --text-muted: #64748b;
-  color: #0f172a;
-  background:
-    radial-gradient(900px 480px at 10% -10%, rgba(51, 133, 255, 0.08), transparent 55%),
-    radial-gradient(700px 400px at 90% 0%, rgba(14, 165, 233, 0.06), transparent 50%),
-    #f8fafc;
-}
-.light-landing .landing-btn-primary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  border-radius: 0.875rem;
-  background: #1a66f5;
-  padding: 0.625rem 1rem;
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: #fff;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
-  transition: background 0.15s ease;
-}
-.light-landing .landing-btn-primary:hover {
-  background: #3385ff;
-}
-.light-landing .landing-btn-secondary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  border-radius: 0.875rem;
-  border: 1px solid #e2e8f0;
-  background: #fff;
-  padding: 0.625rem 1rem;
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: #334155;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
-  transition: background 0.15s ease, border-color 0.15s ease;
-}
-.light-landing .landing-btn-secondary:hover {
-  border-color: #cbd5e1;
-  background: #f8fafc;
-}
 
 /* In-page share controls (entire-screen capture, or no pop-out window). */
 .share-inline-dock {
@@ -888,62 +883,10 @@ body {
   left: 16px;
   z-index: 60;
 }
-/* Raised hands: left side, clear of the right meeting bar and the bottom dock. */
+/* Raised hands: an in-flow bar in the classroom header, under the waiting-room
+   bar. It pushes content down instead of covering the class title or videos. */
 .raised-hands-toast {
-  position: fixed;
-  left: 16px;
-  top: 72px;
-  z-index: 80;
-  width: min(92vw, 280px);
-  border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(15, 18, 30, 0.95);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
-  padding: 10px 12px;
-  color: #f1f5f9;
-  font-size: 13px;
-}
-.raised-hands-toggle {
-  display: block;
-  width: 100%;
-  text-align: left;
-  font-weight: 650;
-  background: transparent !important;
-  padding: 0 !important;
-}
-.raised-hands-toast[data-collapsed='1'] {
-  width: auto;
-}
-@media (max-width: 700px) {
-  .raised-hands-toast {
-    top: auto;
-    left: 8px;
-    bottom: calc(96px + env(safe-area-inset-bottom, 0px));
-    max-height: 40vh;
-    overflow-y: auto;
-  }
-}
-.raised-hands-toast ul {
-  list-style: none;
-  margin: 6px 0 0;
-  padding: 0;
-}
-.raised-hands-toast li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 44px;
-}
-.raised-hands-toast button {
-  min-height: 44px;
-  min-width: 44px;
-  border-radius: 8px;
-  padding: 0 10px;
-  font-size: 12px;
-  font-weight: 650;
-  color: #f8fafc;
-  background: rgba(255, 255, 255, 0.08);
+  @apply flex w-full min-w-0 items-center gap-1.5 rounded-xl border border-violet-400/40 bg-violet-500/15 px-2 py-1 text-xs text-violet-50;
 }
 
 /* Student control panel buttons scale with the viewport (same look on a phone

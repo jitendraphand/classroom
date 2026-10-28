@@ -68,8 +68,12 @@ export function blankTileKind(opts: {
   pendingSample: number;
   blankIndex: number;
   settling: boolean;
+  /** Students already shown in other tiles: blanks beyond the unshown ones stay empty. */
+  shownStudents?: number;
 }): 'empty' | 'connecting' | 'off-camera' {
   if (opts.studentsInRoom <= 0) return 'empty';
+  // A 3-student class in a 6-tile grid: no "Off camera" tile for students who do not exist.
+  if (opts.shownStudents != null && opts.blankIndex >= opts.studentsInRoom - opts.shownStudents) return 'empty';
   if (opts.settling && opts.pendingSample > 0 && opts.blankIndex >= 0 && opts.blankIndex < opts.pendingSample) {
     return 'connecting';
   }

@@ -7,22 +7,14 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { IconChat, IconHand, IconHandDown, IconReply, IconSearch, IconSend } from '@/components/ui/Icons';
 import { filterMessages, filterPeople, normalizeQuery } from '@/lib/peopleSearch';
 import { cn } from '@/lib/cn';
-import { replyTargetFor, resolveChatRecipient } from '@/lib/chatReply';
+import { pendingPrivateQuestion, replyTargetFor, resolveChatRecipient } from '@/lib/chatReply';
 import { chatPlaceholder } from '@/hooks/useStudentLayout';
+import { formatTime } from '@/lib/timeFormat';
 import { Button } from '@/components/ui/Button';
 import { useChatThread, type ChatMessage, type ChatThread, type StudentOpt, type ThreadProps } from './chatThread';
 
 export { replyTargetFor, resolveChatRecipient, useChatThread };
 export type { ChatMessage, ChatThread };
-
-function formatTime(iso: string) {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  } catch {
-    return '';
-  }
-}
 
 function scopeBadge(scope: string) {
   if (scope === 'BROADCAST') {
@@ -132,6 +124,7 @@ export function ChatView({
   }
 
   const toName = to === 'all' ? null : studentOptions.find((s) => s.id === to)?.displayName ?? null;
+  const askedPrivately = isTeacher && to === 'all' ? pendingPrivateQuestion(messages, myParticipantId) : null;
   const hands = isTeacher ? raisedHands ?? [] : [];
 
   // Teacher search: narrows the "To" list (name / SID) and the messages.
@@ -331,6 +324,16 @@ export function ChatView({
           <p className="text-2xs text-slate-400">
             To <span className="font-medium text-slate-200">teacher</span>
           </p>
+        )}
+        {!ended && askedPrivately && studentIds.has(askedPrivately.participantId) && (
+          <button
+            type="button"
+            className="chat-replying w-full rounded-lg border border-sky-400/30 bg-sky-500/10 px-2 py-1.5 text-left text-2xs font-semibold text-sky-200 hover:bg-sky-500/20"
+            onClick={() => replyTo(askedPrivately.participantId)}
+            data-no-drag
+          >
+            {askedPrivately.name} asked you privately · Reply privately
+          </button>
         )}
         {!ended && isTeacher && toName && (
           <p className="chat-replying text-2xs font-semibold text-sky-300" aria-live="polite" data-replying-to={to}>

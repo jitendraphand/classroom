@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { api } from '@/lib/clientFetch';
+import { formatDate, formatMonth } from '@/lib/timeFormat';
 
 type Tone = 'taken' | 'today' | 'upcoming' | 'skipped';
 type Home = {
@@ -67,7 +68,7 @@ export function TeacherInsights({ year, onYear }: { year: string; onYear: (year:
   const rankLabel =
     !rank || rank.percentile == null
       ? 'Not enough ratings yet'
-      : `${rank.percentile}th percentile · week of ${rank.weekStart}`;
+      : `${rank.percentile}th percentile · week of ${formatDate(rank.weekStart, { weekday: false })}`;
 
   return (
     <div className="mb-8 space-y-4">
@@ -85,7 +86,7 @@ export function TeacherInsights({ year, onYear }: { year: string; onYear: (year:
         </label>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Kpi label="Sessions conducted" value={String(home.kpis.sessionsConducted)} />
         <Kpi label="Average attendance" value={home.kpis.averageAttendance == null ? '—' : `${Math.round(home.kpis.averageAttendance * 1000) / 10}%`} />
         <Kpi label="Average rating" value={home.kpis.averageRating == null ? '—' : `${home.kpis.averageRating}★`} />
@@ -95,13 +96,13 @@ export function TeacherInsights({ year, onYear }: { year: string; onYear: (year:
       <Card>
         <CardHeader
           title="Calendar"
-          subtitle={home.month}
+          subtitle={formatMonth(home.month)}
           action={
             <span className="flex gap-2">
-              <button type="button" className="btn-ghost px-2 py-1 text-xs" onClick={() => setMonth(home.prevMonth)}>
+              <button type="button" className="btn-ghost px-3 py-1.5 text-xs" onClick={() => setMonth(home.prevMonth)} aria-label="Previous month">
                 Previous
               </button>
-              <button type="button" className="btn-ghost px-2 py-1 text-xs" onClick={() => setMonth(home.nextMonth)}>
+              <button type="button" className="btn-ghost px-3 py-1.5 text-xs" onClick={() => setMonth(home.nextMonth)} aria-label="Next month">
                 Next
               </button>
             </span>
@@ -115,7 +116,7 @@ export function TeacherInsights({ year, onYear }: { year: string; onYear: (year:
             </span>
           ))}
         </div>
-        <div className="grid grid-cols-7 gap-1 text-center text-2xs text-slate-500">
+        <div className="grid grid-cols-7 gap-1 text-center text-2xs text-slate-400">
           {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => (
             <div key={d}>{d}</div>
           ))}
@@ -144,9 +145,9 @@ export function TeacherInsights({ year, onYear }: { year: string; onYear: (year:
         <div className="mb-3 grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
           <input className="input" type="date" value={filters.from} onChange={(e) => setFilters({ ...filters, from: e.target.value })} aria-label="From" />
           <input className="input" type="date" value={filters.to} onChange={(e) => setFilters({ ...filters, to: e.target.value })} aria-label="To" />
-          <input className="input" placeholder="Grade" value={filters.grade} onChange={(e) => setFilters({ ...filters, grade: e.target.value })} />
-          <input className="input" placeholder="Division" value={filters.division} onChange={(e) => setFilters({ ...filters, division: e.target.value })} />
-          <input className="input" placeholder="Subject" value={filters.subject} onChange={(e) => setFilters({ ...filters, subject: e.target.value })} />
+          <input className="input" placeholder="Grade" aria-label="Grade" value={filters.grade} onChange={(e) => setFilters({ ...filters, grade: e.target.value })} />
+          <input className="input" placeholder="Division" aria-label="Division" value={filters.division} onChange={(e) => setFilters({ ...filters, division: e.target.value })} />
+          <input className="input" placeholder="Subject" aria-label="Subject" value={filters.subject} onChange={(e) => setFilters({ ...filters, subject: e.target.value })} />
           <select className="input" value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })} aria-label="Status">
             <option value="">Any status</option>
             <option value="taken">Taken / completed</option>
@@ -168,7 +169,7 @@ export function TeacherInsights({ year, onYear }: { year: string; onYear: (year:
             <tbody>
               {home.sessions.map((s) => (
                 <tr key={`${s.date}-${s.subject}-${s.audience}`} className="border-t border-white/5">
-                  <td className="py-2 pr-3 whitespace-nowrap">{s.date}</td>
+                  <td className="py-2 pr-3 whitespace-nowrap">{formatDate(s.date)}</td>
                   <td className="py-2 pr-3">
                     {s.subject}
                     <span className="text-slate-400"> · {s.audience}</span>
@@ -195,7 +196,7 @@ export function TeacherInsights({ year, onYear }: { year: string; onYear: (year:
 function Kpi({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-      <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="text-xs uppercase tracking-wide text-slate-400">{label}</p>
       <p className="mt-1 font-display text-lg font-semibold text-white">{value}</p>
     </div>
   );

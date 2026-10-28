@@ -33,7 +33,7 @@ export function chatBottomReserve(vw: number, vh: number): number {
 
 /** Short on a phone so the placeholder is not clipped to "Message your". */
 export function chatPlaceholder(isTeacher: boolean, compact: boolean, toName?: string | null): string {
-  if (isTeacher) return toName ? `Private message to ${toName}…` : 'Write a message…';
+  if (isTeacher) return toName ? `Private message to ${toName}…` : 'Message everyone…';
   if (compact) return 'To teacher…';
   return 'Write a message…';
 }
@@ -41,9 +41,17 @@ export function chatPlaceholder(isTeacher: boolean, compact: boolean, toName?: s
 /**
  * Pure: the student chat window box. Bottom-left corner (the controls are on
  * the right), sized to the viewport so the shared screen stays visible:
- * ≈ 17–20% of a phone screen, ≈ 13% of a laptop screen.
+ * ≈ 17–20% of a landscape phone, ≈ 13% of a laptop screen. A portrait phone
+ * gets a full-width sheet above the bottom controls instead: the 16:9 stage
+ * only fills the top of the screen there, and a 200 px window was too narrow
+ * to read or type in.
  */
 export function studentChatBox(vw: number, vh: number, rightReserve = 72) {
+  if (vw <= 700 && vh > vw) {
+    const bottom = chatBottomReserve(vw, vh);
+    const height = Math.round(clamp(vh * 0.42, 200, 420));
+    return { width: vw - 16, height, x: 8, y: Math.max(8, vh - height - bottom) };
+  }
   const width = Math.round(clamp(vw * 0.3, 200, 340));
   const height = Math.round(clamp(Math.min(vh * 0.5, vw * 0.6), 160, 420));
   const bottom = chatBottomReserve(vw, vh);

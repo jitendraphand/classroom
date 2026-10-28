@@ -5,11 +5,14 @@ import { AdminShell } from '@/components/admin/AdminShell';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader } from '@/components/ui/Card';
+import { useConfirm } from '@/components/ui/ConfirmDialog';
 import { CampusSelect, DivisionSelect, DivisionsPicker, GradeSelect, defaultCampus, useGradeOptions } from '@/components/admin/GradePickers';
 import { api } from '@/lib/clientFetch';
 import { cn } from '@/lib/cn';
 import { modifyLabel, substituteProblem } from '@/lib/overrideRules';
 import { academicYearChoices } from '@/lib/academicYear';
+import { formatDate } from '@/lib/timeFormat';
+import { slotClashes } from '@/lib/timetableClashes';
 
 type Teacher = { id: string; name: string; disabled: boolean };
 type Slot = {
@@ -78,7 +81,8 @@ function weekdayOfDate(date: string) {
 }
 
 function TimetableEditor() {
-  const [mode, setMode] = useState<'teacher' | 'grade'>('teacher');
+  const [mode, setMode] = useState<'school' | 'teacher' | 'grade'>('school');
+  const [confirm, confirmDialog] = useConfirm();
   const [teacherId, setTeacherId] = useState('');
   const [campus, setCampus] = useState('');
   const [grade, setGrade] = useState('');
@@ -146,7 +150,8 @@ function TimetableEditor() {
     if (all && !ov.date) setOv((o) => ({ ...o, date: all.today }));
   }, [all, ov.date]);
 
-  const showGrid = mode === 'teacher' ? !!teacherId : !!grade;
+  const showGrid = mode === 'school' ? true : mode === 'teacher' ? !!teacherId : !!grade;
+  const clashes = useMemo(() => slotClashes(view?.slots ?? []), [view]);
   const byDay = useMemo(() => {
     const m = new Map<number, Slot[]>();
     for (const s of view?.slots ?? []) m.set(s.weekday, [...(m.get(s.weekday) ?? []), s]);
@@ -177,7 +182,8 @@ function TimetableEditor() {
       { method: editingId ? 'PUT' : 'POST', body }
     );
     if (!ok) {
-      if (data.canForce && confirm(`${data.error}\n\nSave anyway?`)) return saveSlot(e, true);
+      if (data.canForce && (await confirm({ title: 'Save anyway?', body: data.error, confirmLabel: 'Save anyway', tone: 'primary' })))
+        return saveSlot(e, true);
       setError(data.error || 'Could not save');
       return;
     }
@@ -214,7 +220,12 @@ function TimetableEditor() {
   }
 
   async function removeSlot(s: Slot) {
-    if (!confirm(`Delete ${s.subject} (${s.audience}) on ${DAYS[s.weekday]} ${s.start}? Past attendance is kept.`)) return;
+    const go = await confirm({
+      title: `Delete ${s.subject} (${s.audience}) on ${DAYS[s.weekday]} at ${s.start}?`,
+      body: 'The weekly slot stops from now on. Past classes and attendance are kept.',
+      confirmLabel: 'Delete slot',
+    });
+    if (!go) return;
     const { ok, data } = await api(`/api/admin/timetable/slots/${s.id}`, { method: 'DELETE' });
     if (!ok) setError(data.error || 'Delete failed');
     void load();
@@ -247,7 +258,8 @@ function TimetableEditor() {
     };
     const { ok, data } = await api<{ canForce?: boolean }>('/api/admin/timetable/overrides', { body });
     if (!ok) {
-      if (data.canForce && confirm(`${data.error}\n\nSave anyway?`)) return saveOverride(e, true);
+      if (data.canForce && (await confirm({ title: 'Save anyway?', body: data.error, confirmLabel: 'Save anyway', tone: 'primary' })))
+        return saveOverride(e, true);
       setError(data.error || 'Could not save');
       return;
     }
@@ -257,7 +269,8 @@ function TimetableEditor() {
   }
 
   async function removeOverride(o: Override) {
-    if (!confirm('Remove this change? The regular timetable applies again.')) return;
+    const go = await confirm({ title: 'Remove this change?', body: 'The regular timetable applies again on that date.', confirmLabel: 'Remove change' });
+    if (!go) return;
     await api(`/api/admin/timetable/overrides/${o.id}`, { method: 'DELETE' });
     void load();
   }
@@ -273,6 +286,7 @@ function TimetableEditor() {
 
   return (
     <div className="space-y-6">
+      {confirmDialog}
       {error && (
         <p className="rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-2 text-sm text-danger-fg" role="alert">
           {error}
@@ -283,14 +297,15 @@ function TimetableEditor() {
       <Card>
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex rounded-xl border border-white/10 p-1">
-            {(['teacher', 'grade'] as const).map((m) => (
+            {(['school', 'teacher', 'grade'] as const).map((m) => (
               <button
                 key={m}
                 type="button"
+                aria-pressed={mode === m}
                 onClick={() => setMode(m)}
                 className={cn('rounded-lg px-3 py-1.5 text-sm font-medium', mode === m ? 'bg-brand-600 text-white' : 'text-slate-400 hover:text-white')}
               >
-                {m === 'teacher' ? 'By teacher' : 'By grade-division'}
+                {m === 'school' ? 'Whole school' : m === 'teacher' ? 'By teacher' : 'By grade-division'}
               </button>
             ))}
           </div>
@@ -305,7 +320,7 @@ function TimetableEditor() {
               ))}
             </select>
           </label>
-          {mode === 'teacher' ? (
+          {mode === 'school' ? null : mode === 'teacher' ? (
             <select className="input max-w-xs" value={teacherId} onChange={(e) => setTeacherId(e.target.value)} aria-label="Teacher">
               <option value="">Choose a teacher…</option>
               {teachers.map((t) => (
@@ -331,9 +346,14 @@ function TimetableEditor() {
               <DivisionSelect className="w-40" grade={grade} value={division} onChange={setDivision} options={gradeOptions} ariaLabel="Division (optional)" />
             </>
           )}
-          <p className="text-xs text-slate-500">Times are in {view?.timezone ?? '…'}.</p>
+          <p className="text-xs text-slate-400">Times are school time ({view?.timezone ?? '…'}).</p>
         </div>
 
+        {showGrid && clashes.size > 0 && (
+          <p className="mt-4 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100" role="status">
+            {clashes.size} slot{clashes.size === 1 ? '' : 's'} clash (same teacher, or the same class twice, at overlapping times). They are marked below.
+          </p>
+        )}
         {showGrid ? (
           <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-7">
             {DAY_ORDER.map((d) => (
@@ -341,7 +361,11 @@ function TimetableEditor() {
                 <p className="mb-2 px-1 text-2xs font-semibold uppercase tracking-wider text-slate-400">{DAYS[d]}</p>
                 <div className="space-y-2">
                   {(byDay.get(d) ?? []).map((s) => (
-                    <div key={s.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-2 text-xs">
+                    <div
+                      key={s.id}
+                      className={cn('rounded-lg border bg-white/[0.03] p-2 text-xs', clashes.has(s.id) ? 'border-amber-400/60' : 'border-white/10')}
+                    >
+                      {clashes.has(s.id) && <p className="mb-1 font-semibold text-amber-200">Clash</p>}
                       <p className="font-mono text-brand-300">
                         {s.start}–{s.end}
                       </p>
@@ -349,20 +373,20 @@ function TimetableEditor() {
                       <p className="text-slate-400">{mode === 'teacher' ? s.audience : `${s.audience} · ${s.teacherName}`}</p>
                       {(s.effectiveFrom || s.effectiveTo) && (
                         <p className="text-slate-500">
-                          {s.effectiveFrom ?? '…'} → {s.effectiveTo ?? '…'}
+                          {s.effectiveFrom ? formatDate(s.effectiveFrom, { weekday: false }) : '…'} → {s.effectiveTo ? formatDate(s.effectiveTo, { weekday: false }) : '…'}
                         </p>
                       )}
-                      <div className="mt-1 flex gap-3">
-                        <button type="button" className="text-brand-300 hover:underline" onClick={() => editSlot(s)}>
+                      <div className="mt-1 flex gap-1">
+                        <button type="button" className="min-h-[28px] rounded px-1.5 text-brand-300 hover:bg-white/5 hover:underline" onClick={() => editSlot(s)}>
                           Edit
                         </button>
-                        <button type="button" className="text-red-300 hover:underline" onClick={() => void removeSlot(s)}>
+                        <button type="button" className="min-h-[28px] rounded px-1.5 text-red-300 hover:bg-white/5 hover:underline" onClick={() => void removeSlot(s)}>
                           Delete
                         </button>
                       </div>
                     </div>
                   ))}
-                  {!(byDay.get(d) ?? []).length && <p className="px-1 text-xs text-slate-600">—</p>}
+                  {!(byDay.get(d) ?? []).length && <p className="px-1 text-xs text-slate-500">No classes</p>}
                 </div>
               </div>
             ))}
@@ -419,7 +443,7 @@ function TimetableEditor() {
           </div>
           <label className="block">
             <span className="label">Subject</span>
-            <input className="input" required value={slotForm.subject} onChange={(e) => setSlotForm({ ...slotForm, subject: e.target.value })} placeholder="Mathematics" />
+            <input className="input" required value={slotForm.subject} onChange={(e) => setSlotForm({ ...slotForm, subject: e.target.value })} placeholder="e.g. Mathematics" />
           </label>
           <div className="block sm:col-span-2">
             <span className="label">{editingId ? 'Day' : 'Days'}</span>
@@ -451,7 +475,7 @@ function TimetableEditor() {
               {!editingId && (
                 <button
                   type="button"
-                  className="ml-auto px-1 text-2xs text-slate-400 hover:text-white"
+                  className="ml-auto min-h-6 px-1 text-2xs text-slate-400 hover:text-white"
                   onClick={() => setSlotForm({ ...slotForm, weekdays: slotForm.weekdays.length >= 5 ? [] : [1, 2, 3, 4, 5] })}
                 >
                   {slotForm.weekdays.length >= 5 ? 'Clear' : 'Mon–Fri'}
@@ -467,16 +491,14 @@ function TimetableEditor() {
             <span className="label">End</span>
             <input className="input" type="time" required value={slotForm.end} onChange={(e) => setSlotForm({ ...slotForm, end: e.target.value })} />
           </label>
-          <div className="grid grid-cols-2 gap-2">
-            <label className="block">
-              <span className="label">From (optional)</span>
-              <input className="input px-2" type="date" value={slotForm.effectiveFrom} onChange={(e) => setSlotForm({ ...slotForm, effectiveFrom: e.target.value })} />
-            </label>
-            <label className="block">
-              <span className="label">To (optional)</span>
-              <input className="input px-2" type="date" value={slotForm.effectiveTo} onChange={(e) => setSlotForm({ ...slotForm, effectiveTo: e.target.value })} />
-            </label>
-          </div>
+          <label className="block">
+            <span className="label">Starts on (optional)</span>
+            <input className="input" type="date" value={slotForm.effectiveFrom} onChange={(e) => setSlotForm({ ...slotForm, effectiveFrom: e.target.value })} />
+          </label>
+          <label className="block">
+            <span className="label">Ends on (optional)</span>
+            <input className="input" type="date" value={slotForm.effectiveTo} onChange={(e) => setSlotForm({ ...slotForm, effectiveTo: e.target.value })} />
+          </label>
           <label className="block">
             <span className="label">Academic year</span>
             <select className="input" value={slotYear} onChange={(e) => setSlotYear(e.target.value)} aria-label="Academic year for this slot">
@@ -615,7 +637,7 @@ function TimetableEditor() {
             {(all?.overrides ?? []).map((o) => (
               <li key={o.id} className="flex flex-col gap-1 py-2 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <span className="mr-2 font-mono text-slate-300">{o.date}</span>
+                  <span className="mr-2 text-slate-300">{formatDate(o.date)}</span>
                   <Badge tone={o.kind === 'CANCEL' ? 'danger' : o.kind === 'EXTRA' ? 'success' : 'warning'}>
                     {o.kind === 'CANCEL' ? 'Cancelled' : o.kind === 'EXTRA' ? 'Extra' : o.label ?? modifyLabel(o)}
                   </Badge>
@@ -630,7 +652,7 @@ function TimetableEditor() {
                   </span>
                   {o.note && <span className="ml-2 text-slate-500">({o.note})</span>}
                 </div>
-                <button type="button" className="self-start text-xs text-red-300 hover:underline" onClick={() => void removeOverride(o)}>
+                <button type="button" className="min-h-[28px] self-start rounded px-2 text-xs text-red-300 hover:bg-white/5 hover:underline" onClick={() => void removeOverride(o)}>
                   Remove
                 </button>
               </li>

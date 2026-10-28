@@ -48,12 +48,13 @@ export function classTone(input: {
   return 'today';
 }
 
-/** Today's admin board tag. */
-export type TodayTag = 'ongoing' | 'not_taken' | 'starts' | 'completed';
+/** Today's admin board tag. "late" = inside the slot and nobody has started it yet. */
+export type TodayTag = 'ongoing' | 'late' | 'not_taken' | 'starts' | 'completed';
 
 export function todayTag(input: {
   nowMinute: number;
   startMinute: number;
+  endMinute: number;
   started: boolean;
   ended: boolean;
   live: boolean;
@@ -64,6 +65,7 @@ export function todayTag(input: {
   if (input.started && !input.ended) return 'ongoing';
   if (input.cancelled) return 'not_taken';
   if (input.nowMinute < input.startMinute) return 'starts';
+  if (input.nowMinute < input.endMinute) return 'late';
   return 'not_taken';
 }
 

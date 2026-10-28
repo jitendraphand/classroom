@@ -139,6 +139,10 @@ test('blank tiles connect briefly and never say off camera with nobody there', (
   assert.equal(blankTileKind({ studentsInRoom: 80, pendingSample: 2, blankIndex: 0, settling: true }), 'connecting');
   assert.equal(blankTileKind({ studentsInRoom: 80, pendingSample: 2, blankIndex: 2, settling: true }), 'off-camera');
   assert.equal(blankTileKind({ studentsInRoom: 80, pendingSample: 2, blankIndex: 0, settling: false }), 'off-camera');
+  // Every student already has a tile: the spare tiles are empty, not "Off camera".
+  assert.equal(blankTileKind({ studentsInRoom: 3, pendingSample: 0, blankIndex: 0, settling: false, shownStudents: 3 }), 'empty');
+  assert.equal(blankTileKind({ studentsInRoom: 5, pendingSample: 0, blankIndex: 1, settling: false, shownStudents: 3 }), 'off-camera');
+  assert.equal(blankTileKind({ studentsInRoom: 5, pendingSample: 0, blankIndex: 2, settling: false, shownStudents: 3 }), 'empty');
   assert.equal(blankTileKind({ studentsInRoom: 4, pendingSample: 0, blankIndex: 0, settling: true }), 'off-camera');
 });
 

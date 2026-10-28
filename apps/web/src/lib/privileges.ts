@@ -62,23 +62,6 @@ export function hasAnyPrivilege(privs: PrivilegeSet, kind: string, list: Privile
   return list.some((p) => hasPrivilege(privs, kind, p));
 }
 
-/** Privileges that have a card on System Control. */
-export const SYSTEM_TAB_PRIVILEGES: Privilege[] = ['manageTeachers', 'schedule', 'manageSchool', 'viewReports'];
-
-export function canSeeSystemTab(privs: PrivilegeSet, kind: string): boolean {
-  return kind === 'SYSTEM' || hasAnyPrivilege(privs, kind, SYSTEM_TAB_PRIVILEGES);
-}
-
-/** Tabs a sub-admin may open. System administrators see every tab. */
-export function visibleAdminTabs(privs: PrivilegeSet, kind: string): Array<'today' | 'live' | 'performance' | 'system'> {
-  const tabs: Array<'today' | 'live' | 'performance' | 'system'> = [];
-  if (hasAnyPrivilege(privs, kind, ['viewReports', 'monitorLive', 'schedule'])) tabs.push('today');
-  if (hasPrivilege(privs, kind, 'monitorLive')) tabs.push('live');
-  if (hasPrivilege(privs, kind, 'viewReports')) tabs.push('performance');
-  if (canSeeSystemTab(privs, kind)) tabs.push('system');
-  return tabs;
-}
-
 export function parsePrivilegeBody(body: unknown): PrivilegeSet | null {
   if (!body || typeof body !== 'object') return null;
   const o = body as Record<string, unknown>;

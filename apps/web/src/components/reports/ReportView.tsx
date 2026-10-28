@@ -8,6 +8,7 @@ import { Card } from '@/components/ui/Card';
 import { CampusSelect, DivisionSelect, GradeSelect, useGradeOptions } from '@/components/admin/GradePickers';
 import { api } from '@/lib/clientFetch';
 import { cn } from '@/lib/cn';
+import { formatDate } from '@/lib/timeFormat';
 
 type Kind = 'sessions' | 'students' | 'detail';
 
@@ -82,10 +83,13 @@ export function ReportView({
   base,
   teachers,
   showTeacherFilter,
+  initialTeacherId,
 }: {
   base: string;
   teachers?: { id: string; name: string }[];
   showTeacherFilter?: boolean;
+  /** Pre-select a teacher (links from Teacher performance). */
+  initialTeacherId?: string;
 }) {
   const [kind, setKind] = useState<Kind>('sessions');
   const [filter, setFilter] = useState({ from: isoDay(-30), to: isoDay(0), teacherId: '', campus: '', grade: '', division: '', subject: '', sessionId: '', year: academicYearForDate(isoDay(0)) });
@@ -94,6 +98,10 @@ export function ReportView({
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const gradeOptions = useGradeOptions();
+
+  useEffect(() => {
+    if (initialTeacherId) setFilter((f) => ({ ...f, teacherId: initialTeacherId }));
+  }, [initialTeacherId]);
 
   const qs = useMemo(() => {
     const p = new URLSearchParams();
@@ -119,6 +127,26 @@ export function ReportView({
     void load();
   }, [load]);
 
+  // Headline numbers for the class list: what a principal asks first.
+  const summary = useMemo(() => {
+    if (kind !== 'sessions' || !rows?.length) return null;
+    const list = rows as SessionRow[];
+    const held = list.filter((r) => r.status === 'Held');
+    const sum = (k: 'present' | 'late' | 'notAdmitted' | 'absent') => held.reduce((a, r) => a + (r[k] || 0), 0);
+    const attended = sum('present') + sum('late');
+    const expected = attended + sum('notAdmitted') + sum('absent');
+    return {
+      classes: list.length,
+      held: held.length,
+      notHeld: list.filter((r) => r.status === 'Not held').length,
+      rate: expected ? Math.round((attended / expected) * 1000) / 10 : null,
+      attended,
+      expected,
+      late: sum('late'),
+      lateStarts: held.filter((r) => (r.startDelayMin ?? 0) > 0).length,
+    };
+  }, [kind, rows]);
+
   const set = (k: keyof typeof filter) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setFilter({ ...filter, [k]: e.target.value });
 
@@ -128,11 +156,11 @@ export function ReportView({
         <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-7">
           <label className="block">
             <span className="label">From</span>
-            <input className="input px-2" type="date" value={filter.from} onChange={set('from')} />
+            <input className="input" type="date" value={filter.from} onChange={set('from')} />
           </label>
           <label className="block">
             <span className="label">To</span>
-            <input className="input px-2" type="date" value={filter.to} onChange={set('to')} />
+            <input className="input" type="date" value={filter.to} onChange={set('to')} />
           </label>
           <label className="block">
             <span className="label">Academic year</span>
@@ -200,6 +228,7 @@ export function ReportView({
             <button
               key={k}
               type="button"
+              aria-pressed={kind === k}
               onClick={() => setKind(k)}
               className={cn('rounded-lg px-3 py-1.5 text-sm font-medium', kind === k ? 'bg-brand-600 text-white' : 'text-slate-400 hover:text-white')}
             >
@@ -214,6 +243,35 @@ export function ReportView({
 
       {error && <p className="text-sm text-danger-fg">{error}</p>}
 
+      {summary && (
+        <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4" aria-label="Summary">
+          <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+            <dt className="text-xs text-slate-400">Attendance</dt>
+            <dd className="mt-1 font-display text-2xl font-semibold text-white">{summary.rate == null ? '—' : `${summary.rate}%`}</dd>
+            <dd className="text-xs text-slate-400">
+              {summary.attended} of {summary.expected} student-classes
+            </dd>
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+            <dt className="text-xs text-slate-400">Classes held</dt>
+            <dd className="mt-1 font-display text-2xl font-semibold text-white">
+              {summary.held} <span className="text-base font-normal text-slate-400">of {summary.classes}</span>
+            </dd>
+            {summary.notHeld > 0 && <dd className="text-xs text-red-200">{summary.notHeld} not held</dd>}
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+            <dt className="text-xs text-slate-400">Started late</dt>
+            <dd className="mt-1 font-display text-2xl font-semibold text-white">{summary.lateStarts}</dd>
+            <dd className="text-xs text-slate-400">classes began after their time</dd>
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+            <dt className="text-xs text-slate-400">Late arrivals</dt>
+            <dd className="mt-1 font-display text-2xl font-semibold text-white">{summary.late}</dd>
+            <dd className="text-xs text-slate-400">students who came in late</dd>
+          </div>
+        </dl>
+      )}
+
       <Card padding={false} className="overflow-x-auto">
         {loading && !rows ? (
           <p className="p-6 text-sm text-slate-400">Loading…</p>
@@ -223,24 +281,27 @@ export function ReportView({
           <table className="w-full min-w-[860px] text-left text-sm">
             <thead className="text-2xs uppercase tracking-wider text-slate-500">
               <tr className="border-b border-white/5">
-                {['Date', 'Class', 'Teacher', 'Scheduled', 'Actual', 'Status', 'Present', 'Late', 'Waited', 'Absent', ''].map((h) => (
+                {['Date', 'Class', ...(showTeacherFilter ? ['Teacher'] : []), 'Scheduled', 'Actual', 'Status', 'Present', 'Late', 'Waited', 'Absent'].map((h) => (
                   <th key={h} className="px-4 py-3 font-semibold">
                     {h}
                   </th>
                 ))}
+                <th className="px-4 py-3">
+                  <span className="sr-only">Details</span>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
               {(rows as SessionRow[]).map((r, i) => (
                 <tr key={r.sessionId ?? `n${i}`} className="align-top">
-                  <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs text-slate-300">{r.date}</td>
+                  <td className="whitespace-nowrap px-4 py-2.5 text-xs text-slate-300">{formatDate(r.date)}</td>
                   <td className="px-4 py-2.5">
                     <p className="font-medium text-white">{r.subject}</p>
                     <p className="text-xs text-slate-400">
                       {r.audience} · {r.type}
                     </p>
                   </td>
-                  <td className="px-4 py-2.5 text-slate-300">{r.teacher}</td>
+                  {showTeacherFilter && <td className="px-4 py-2.5 text-slate-300">{r.teacher}</td>}
                   <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs">{r.scheduledStart ? `${r.scheduledStart}–${r.scheduledEnd}` : '—'}</td>
                   <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs">
                     {r.startedAt ? `${r.startedAt}–${r.endedAt || '…'}` : '—'}
@@ -259,7 +320,7 @@ export function ReportView({
                     {r.sessionId && (
                       <button
                         type="button"
-                        className="text-xs text-brand-300 hover:underline"
+                        className="inline-flex min-h-6 items-center text-xs text-brand-300 hover:underline"
                         onClick={() => {
                           setFilter({ ...filter, sessionId: r.sessionId! });
                           setKind('detail');
@@ -321,7 +382,7 @@ export function ReportView({
               <tbody className="divide-y divide-white/5">
                 {(rows as DetailRow[]).map((r) => (
                   <tr key={`${r.sessionId}-${r.externalId}`}>
-                    <td className="whitespace-nowrap px-4 py-2 font-mono text-xs">{r.date}</td>
+                    <td className="whitespace-nowrap px-4 py-2 text-xs">{formatDate(r.date)}</td>
                     <td className="px-4 py-2">
                       <p className="text-white">{r.subject}</p>
                       <p className="text-xs text-slate-400">{r.audience}</p>

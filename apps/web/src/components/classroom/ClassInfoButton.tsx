@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { formatDate, formatTimeRange } from '@/lib/timeFormat';
 
 type Props = {
   teacherName?: string | null;
@@ -10,22 +11,11 @@ type Props = {
   scheduledEnd?: string | null;
 };
 
-function formatWhen(value: string): string {
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return value;
-  return d.toLocaleString(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
-
+/** "Wed 28 Oct, 09:40–10:25" (one format app-wide, lib/timeFormat). */
 function scheduledLabel(start?: string | null, end?: string | null): string | null {
   if (!start && !end) return null;
-  if (start && end) return `${formatWhen(start)} – ${formatWhen(end)}`;
-  return formatWhen((start || end) as string);
+  const day = formatDate(start || end);
+  return day ? `${day}, ${formatTimeRange(start, end)}` : null;
 }
 
 /** Small "i" that opens the class details (teacher, subject, audience, time). */

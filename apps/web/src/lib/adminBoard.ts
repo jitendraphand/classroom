@@ -8,7 +8,7 @@ import { prismaOccurrenceKeys, pickSessionForOccurrence } from './occurrenceRuns
 import { formatHHMM, localDateOf, localMinuteOf } from './schedule';
 import { occurrencesForDate } from './scheduleService';
 import { averageAttendance, sessionAttendance } from './sessionStats';
-import { appTimeZone } from './schoolConfig';
+import { appTimeZone, lateGraceMinutes } from './schoolConfig';
 import { latestRank } from './rankingService';
 
 function dateKey(d: Date) {
@@ -54,6 +54,7 @@ export async function adminToday(url: URL) {
     const tag: TodayTag = todayTag({
       nowMinute,
       startMinute: o.startMinute,
+      endMinute: o.endMinute,
       started,
       ended,
       live,
@@ -67,6 +68,7 @@ export async function adminToday(url: URL) {
       start: formatHHMM(o.startMinute),
       end: formatHHMM(o.endMinute),
       tag,
+      lateMinutes: tag === 'late' ? nowMinute - o.startMinute : 0,
       roomCode: room?.code ?? null,
       sessionId: cs?.id ?? null,
     };
@@ -112,9 +114,14 @@ export async function adminPerformance(url: URL) {
     starsBySession.set(f.classSessionId, list);
   }
 
+  const graceMs = lateGraceMinutes() * 60_000;
   const rows = [];
   for (const t of teachers) {
     const mine = sessions.filter((s) => s.teacherId === t.id);
+    // Timetabled classes the teacher opened after start + the student late grace.
+    const lateStarts = mine.filter(
+      (cs) => cs.startedAt && cs.scheduledStart && cs.startedAt.getTime() - cs.scheduledStart.getTime() > graceMs
+    ).length;
     const ratios = mine.map((cs) => {
       return sessionAttendance(cs, pupils).ratio;
     });
@@ -129,6 +136,7 @@ export async function adminPerformance(url: URL) {
       name: t.name,
       email: t.email,
       classes: mine.length,
+      lateStarts,
       averageAttendance: averageAttendance(ratios),
       averageStars: averageStars(ratings),
       rank: rank

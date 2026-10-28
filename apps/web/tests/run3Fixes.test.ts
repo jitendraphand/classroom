@@ -5,7 +5,7 @@ import { STUDENT_GONE_GRACE_MS, isGone, nextLive, parseLive } from '../src/lib/s
 import { adhocProblem } from '../src/lib/adhocForm';
 import { lobbyEndedFor } from '../src/lib/lobbyState';
 import { selfTileLabel } from '../src/lib/rosterLabels';
-import { classEndedCopy } from '../src/lib/classFinish';
+import { classEndedCopy, classSummaryFacts } from '../src/lib/classFinish';
 
 const h = (id: string, until: number): DrawHolder => ({ participantId: id, identity: `student_${id}`, name: id.toUpperCase(), until });
 
@@ -70,4 +70,19 @@ test('teacher self tile never reads "You (you)"', () => {
 test('teacher gets a finished screen after ending the class', () => {
   assert.equal(classEndedCopy(true).title, 'Class finished');
   assert.equal(classEndedCopy(false).title, 'Class ended');
+});
+
+test('teacher finished screen summarises the class', () => {
+  const row = { startedAt: '09:02', endedAt: '09:44', present: 25, late: 3, notAdmitted: 1, absent: 2, knownStudents: 30 };
+  assert.deepEqual(classSummaryFacts(row), [
+    '09:02–09:44 (42 min)',
+    '28 of 30 students attended (3 late)',
+    '2 absent',
+    '1 waited but were not admitted',
+  ]);
+  // Ad-hoc class with no roster, past midnight.
+  assert.deepEqual(classSummaryFacts({ ...row, startedAt: '23:50', endedAt: '00:10', present: 1, late: 0, notAdmitted: 0, absent: 0, knownStudents: 0 }), [
+    '23:50–00:10 (20 min)',
+    '1 student attended',
+  ]);
 });

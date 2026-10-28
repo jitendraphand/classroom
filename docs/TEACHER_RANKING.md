@@ -26,6 +26,6 @@ One eligible teacher is the 100th percentile. Ties share a percentile (only stri
 
 The Next.js server (`src/instrumentation.ts`) checks once an hour. If the current week's snapshot is missing, it writes one. The week starts on Monday 00:00 in `APP_TIMEZONE` (default Asia/Kolkata). The previous week is filled in once if it was missed at the boundary.
 
-An administrator with **View data and reports** can press **Recompute ranks now** on Teacher performance. That rewrites the current week for the selected academic year.
+An administrator with **View data and reports** can press **Update now** on Teacher performance. That rewrites the current week for the selected academic year.
 
 Teachers see their own percentile and the week. They never receive the written feedback text. That text is available only on the admin Teacher performance tab, for one class at a time.

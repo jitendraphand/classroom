@@ -197,6 +197,37 @@ the image build.
   index drop) with the code; the entrypoint does this
   (`prisma migrate deploy`).
 
+## UI/UX review fixes
+
+Every page was walked as admin, sub-admin, teacher and student (laptop and
+phone) with axe-core. After the fixes, axe issues fell from 506 to 0 on the
+staff, student and public pages. Colour contrast went from 483 failing elements
+to 0, and the 4 unlabelled form fields are fixed. Changes people will notice:
+
+- **Admin navigation:** Today, Live, Timetable, Teachers, Students,
+  Attendance, Performance and Settings are top-level tabs (no "System Control"
+  hub), and each person sees only the tabs their permissions allow. A page
+  they cannot use names the missing permission.
+- **Admin:** classes running late show "Late · teacher not in yet (N min)" on
+  Today and in a "Should be live now" panel on Live. The Students page is
+  paged (50 per page), the timetable opens on the whole school with clashes
+  marked, all confirmations use the app's dialog, and Delete is a quiet button
+  shown only when deleting is possible. Before the idle sign-out, staff now
+  get a one-minute "Still there?" warning. The Live pages never sign out
+  for idleness.
+- **Teacher:** a "Now / Next class" card with Start sits at the top of the
+  dashboard. The raised-hands bar has "Let … speak". Toolbar buttons have
+  visible labels, Leave is neutral and set apart from End class, and an empty
+  stage offers Share screen / Open whiteboard. Chat suggests a private reply to
+  a private question, and the finished screen shows duration and attendance.
+- **Student:** the teacher's camera fills the stage until something is
+  shared, and chat is a full-width sheet on portrait phones. Muted students
+  always have "Ask to speak" (without a mic cap it raises the hand). The
+  classroom code downloads while the student waits in the lobby.
+- **Everywhere:** one time format (24-hour, "Wed 28 Oct", school time zone),
+  a tab title per page, a dark home page that points students to the school
+  app, and show/hide on the login password.
+
 ## Still open
 
 - Unsigned mode can still be impersonated by anyone who knows a SID. Only

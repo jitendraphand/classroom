@@ -26,8 +26,9 @@ export function dataSaverLabel(m: DataSaverMode): string {
   return 'Data saver off (tap for Low quality)';
 }
 
+/** Word on the quality button (its caption reads "Quality"). */
 export function dataSaverBadge(m: DataSaverMode): string {
-  return m === 'low' ? 'LQ' : m === 'share-only' ? 'A+S' : 'HD';
+  return m === 'low' ? 'Low' : m === 'share-only' ? 'Audio' : 'Full';
 }
 
 /** What a student subscribes to for the teacher's video tracks. */

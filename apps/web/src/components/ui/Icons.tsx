@@ -156,6 +156,20 @@ export function IconPin(p: P) {
   );
 }
 
+/** Spotlight: a star (show this student large to the class). */
+export function IconStar(p: P) {
+  return (
+    <svg {...base(p)}>
+      <path
+        d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9L12 3.5Z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 /** Lower a raised hand: the hand with a downward arrow. */
 export function IconHandDown(p: P) {
   return (

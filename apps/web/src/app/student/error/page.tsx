@@ -4,6 +4,7 @@ import { ERROR_FIELDS } from '@/lib/schoolJoin';
 import { JOIN_ERROR_TEXT, type JoinErrorCode } from '@/lib/schoolJwt';
 
 export const dynamic = 'force-dynamic';
+export const metadata = { title: 'Cannot open class' };
 
 export default async function JoinErrorPage({ searchParams }: { searchParams: Promise<{ reason?: string; field?: string }> }) {
   const sp = await searchParams;

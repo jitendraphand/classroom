@@ -9,6 +9,8 @@ import { SchoolAppOnly } from '@/components/join/SchoolAppOnly';
 import { markSchoolStudentTab, rememberClassroomRole } from '@/lib/classroomClient';
 import { api } from '@/lib/clientFetch';
 import { nextPollDelay } from '@/lib/studentCheck';
+import { formatDate, formatTime } from '@/lib/timeFormat';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 
 type ClassInfo = {
   subject: string;
@@ -38,7 +40,7 @@ type Route = {
 );
 
 function time(iso: string | null) {
-  return iso ? new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '';
+  return formatTime(iso);
 }
 function day(iso: string | null) {
   if (!iso) return '';
@@ -47,7 +49,7 @@ function day(iso: string | null) {
   const tomorrow = new Date(Date.now() + 86_400_000);
   if (d.toDateString() === today.toDateString()) return 'Today';
   if (d.toDateString() === tomorrow.toDateString()) return 'Tomorrow';
-  return d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' });
+  return formatDate(d, { long: true });
 }
 function countdown(ms: number) {
   if (ms <= 0) return 'now';
@@ -73,6 +75,7 @@ export default function StudentHome() {
   const [now, setNow] = useState(Date.now());
   const skew = useRef(0);
   const redirecting = useRef(false);
+  useDocumentTitle('My class');
 
   const load = useCallback(async () => {
     const { ok, status, data } = await api<Route>('/api/student/route', { method: 'POST' });

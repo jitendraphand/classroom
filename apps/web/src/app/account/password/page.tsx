@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/Input';
 import { PageLoading } from '@/components/ui/Skeleton';
 import { api } from '@/lib/clientFetch';
 import { loginHref } from '@/lib/sessionClient';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 
 type Me = { role: 'admin' | 'teacher' | null; name?: string; email?: string; mustChangePassword?: boolean };
 
@@ -19,6 +20,7 @@ export default function ChangePasswordPage() {
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  useDocumentTitle('Change password');
 
   useEffect(() => {
     api<Me>('/api/auth/me').then(({ data }) => {

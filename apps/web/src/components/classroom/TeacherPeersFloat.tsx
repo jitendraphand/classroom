@@ -805,6 +805,7 @@ export function TeacherPeersFloat({
   const rawCells = portal ? cells.slice(0, winCount) : cells;
   // No students in the room: drop the empty slots so they never say "Off camera".
   const shownCells = studentsInRoom > 0 ? rawCells : rawCells.filter((id) => id != null);
+  const shownStudents = rawCells.filter((id) => id != null && id !== '__self__').length;
   let blankCursor = 0;
 
   const style: CSSProperties = portal
@@ -961,6 +962,7 @@ export function TeacherPeersFloat({
                 pendingSample,
                 blankIndex: blankCursor,
                 settling,
+                shownStudents,
               });
               blankCursor += 1;
               if (kind === 'empty') return null;
@@ -1157,12 +1159,14 @@ export function PeerCamTile({
         </button>
       )}
       {alert && (
+        // A dot, not a text badge: with several students away the labels
+        // covered the faces. The header chip and roster still name them.
         <span
-          className="absolute left-1 top-1 rounded-full bg-amber-500 px-1.5 py-0.5 text-[9px] font-bold text-black shadow"
+          className="absolute left-1 top-1 h-2.5 w-2.5 rounded-full bg-amber-400 ring-2 ring-black/60"
           title={alert}
-        >
-          {alert}
-        </span>
+          role="img"
+          aria-label={alert}
+        />
       )}
     </div>
   );

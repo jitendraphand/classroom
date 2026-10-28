@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
 import { api } from '@/lib/clientFetch';
 import { formatElapsed, type LiveClass } from '@/lib/liveClassesLogic';
+import { formatTime } from '@/lib/timeFormat';
 import { useSessionEnded } from '@/hooks/useSessionEnded';
 
 type Student = { id: string; name: string; gradeDivision: string; rollNumber: string | null };
@@ -105,7 +106,7 @@ function Observer({ code }: { code: string }) {
           {c && (
             <p className="text-xs text-slate-400">
               {c.gradeDivision} · {c.teacherName} · started{' '}
-              {new Date(c.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              {formatTime(c.startedAt)}
             </p>
           )}
         </div>

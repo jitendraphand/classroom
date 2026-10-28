@@ -37,7 +37,7 @@ export function AppHeader({
       <Link href={homeHref} aria-label="Home" className="group flex items-center gap-3 focus-visible:rounded-xl">
         <LogoMark />
         <div>
-          <p className="font-display text-base font-semibold tracking-tight text-white group-hover:text-brand-200 [.light-landing_&]:text-slate-900 [.light-landing_&]:group-hover:text-brand-700">
+          <p className="font-display text-base font-semibold tracking-tight text-white group-hover:text-brand-200">
             Classroom
           </p>
           <p className="text-2xs text-slate-500">

@@ -1,16 +1,19 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { AdminShell } from '@/components/admin/AdminShell';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { api } from '@/lib/clientFetch';
+import { formatDate } from '@/lib/timeFormat';
 
 type Rank = { percentile: number | null; weekStart: string; eligible: boolean; ratingCount: number } | null;
 type Teacher = {
   teacherId: string;
   name: string;
   classes: number;
+  lateStarts?: number;
   averageAttendance: number | null;
   averageStars: number | null;
   rank: Rank;
@@ -89,22 +92,32 @@ function Performance() {
             ))}
           </select>
         </label>
-        <Button variant="secondary" disabled={busy || !year} onClick={() => void recompute()}>
-          {busy ? 'Recomputing…' : 'Recompute ranks now'}
-        </Button>
+        <p className="text-xs text-slate-400">
+          Ranks update automatically every week.{' '}
+          <button type="button" className="text-brand-300 hover:underline disabled:opacity-50" disabled={busy || !year} onClick={() => void recompute()}>
+            {busy ? 'Updating…' : 'Update now'}
+          </button>
+        </p>
       </div>
       {error && <p className="text-sm text-red-300">{error}</p>}
       <Card>
-        <CardHeader title="Teachers" subtitle="Classes conducted, attendance, stars, and this week's percentile." />
+        <CardHeader
+          title="Teachers"
+          subtitle="Classes held this year, how many started late, attendance, stars and this week's rank. Open Attendance for classes that were not held."
+        />
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead className="text-slate-400">
               <tr>
                 <th className="py-2 pr-3 font-medium">Teacher</th>
-                <th className="py-2 pr-3 font-medium">Classes</th>
+                <th className="py-2 pr-3 font-medium">Classes held</th>
+                <th className="py-2 pr-3 font-medium">Started late</th>
                 <th className="py-2 pr-3 font-medium">Avg attendance</th>
                 <th className="py-2 pr-3 font-medium">Avg stars</th>
-                <th className="py-2 font-medium">Rank</th>
+                <th className="py-2 pr-3 font-medium">Rank</th>
+                <th className="py-2 font-medium">
+                  <span className="sr-only">Attendance</span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -116,10 +129,16 @@ function Performance() {
                     </button>
                   </td>
                   <td className="py-2 pr-3">{t.classes}</td>
+                  <td className={t.lateStarts ? 'py-2 pr-3 text-amber-200' : 'py-2 pr-3'}>{t.lateStarts ?? 0}</td>
                   <td className="py-2 pr-3">{pct(t.averageAttendance)}</td>
                   <td className="py-2 pr-3">{t.averageStars ?? '—'}</td>
+                  <td className="py-2 pr-3">
+                    {t.rank?.percentile == null ? 'Not enough ratings' : `${t.rank.percentile}th · week of ${formatDate(t.rank.weekStart, { weekday: false })}`}
+                  </td>
                   <td className="py-2">
-                    {t.rank?.percentile == null ? 'Not enough ratings' : `${t.rank.percentile}th · week of ${t.rank.weekStart}`}
+                    <Link className="inline-flex min-h-6 items-center text-xs text-brand-300 hover:underline" href={`/admin/reports?teacherId=${encodeURIComponent(t.teacherId)}`}>
+                      Attendance
+                    </Link>
                   </td>
                 </tr>
               ))}
@@ -134,7 +153,7 @@ function Performance() {
             {sessions.map((s) => (
               <li key={s.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
                 <span>
-                  {s.date} · {s.subject} · {s.audience}
+                  {formatDate(s.date)} · {s.subject} · {s.audience}
                 </span>
                 <Button size="sm" variant="secondary" onClick={() => void openFeedback(s.id)}>
                   Feedback

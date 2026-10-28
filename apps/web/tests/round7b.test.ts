@@ -13,7 +13,8 @@ import { effectiveFromForCreate, slotStartsOn } from '../src/lib/slotEffective';
 import { studentSearchClause } from '../src/lib/studentSearch';
 import { studentVideoModeShortLabel } from '../src/lib/studentVideoMode';
 import { displayDivision } from '../src/lib/grades';
-import { canSeeSystemTab, privilegeSetFrom, visibleAdminTabs } from '../src/lib/privileges';
+import { privilegeSetFrom } from '../src/lib/privileges';
+import { visibleAdminSections } from '../src/lib/adminSections';
 import { occurrencesBetween, type SlotLike } from '../src/lib/schedule';
 import { classroomViewSource } from './helpers/classroomSource';
 
@@ -100,7 +101,7 @@ test('createSlot defaults effectiveFrom to the local creation date', () => {
 });
 
 test('video panel rail uses a short label; full sentence stays in title/aria', () => {
-  assert.equal(studentVideoModeShortLabel('both'), 'Both');
+  assert.equal(studentVideoModeShortLabel('both'), 'All');
   assert.equal(studentVideoModeShortLabel('teacher'), 'Teacher');
   assert.equal(studentVideoModeShortLabel('min'), 'Hidden');
   const controls = src('components/classroom/Controls.tsx');
@@ -116,18 +117,16 @@ test('division display keeps two-letter codes as entered', () => {
   assert.equal(displayDivision('MAHAVEER'), 'Mahaveer');
 });
 
-test('Live dashboard tab; System Control hidden when the sub-admin has none of its cards', () => {
-  const shell = src('components/admin/AdminShell.tsx');
-  assert.match(shell, /Live dashboard/);
-  assert.doesNotMatch(shell, /Live classes/);
+test('Live tab; Settings hidden when the sub-admin has none of its cards', () => {
+  const sections = src('lib/adminSections.ts');
+  assert.match(sections, /label: 'Live'/);
+  assert.doesNotMatch(sections, /Live classes/);
   const none = privilegeSetFrom({ kind: 'SUB' });
-  assert.equal(canSeeSystemTab(none, 'SUB'), false);
-  assert.deepEqual(visibleAdminTabs(none, 'SUB'), []);
+  assert.deepEqual(visibleAdminSections(none, 'SUB'), []);
   const liveOnly = privilegeSetFrom({ kind: 'SUB', privMonitorLive: true });
-  assert.equal(canSeeSystemTab(liveOnly, 'SUB'), false);
-  assert.ok(!visibleAdminTabs(liveOnly, 'SUB').includes('system'));
+  assert.ok(!visibleAdminSections(liveOnly, 'SUB').includes('settings'));
   const school = privilegeSetFrom({ kind: 'SUB', privManageSchool: true });
-  assert.equal(canSeeSystemTab(school, 'SUB'), true);
+  assert.ok(visibleAdminSections(school, 'SUB').includes('settings'));
 });
 
 test('whiteboard is full width; class videos float instead of embedding in a side column', () => {

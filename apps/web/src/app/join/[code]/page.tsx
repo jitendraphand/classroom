@@ -13,6 +13,7 @@ import { markSchoolStudentTab, rememberClassroomRole } from '@/lib/classroomClie
 import { PageLoading } from '@/components/ui/Skeleton';
 import { SchoolAppOnly } from '@/components/join/SchoolAppOnly';
 import { lobbyEndedFor } from '@/lib/lobbyState';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 
 type State = {
   code?: string;
@@ -58,6 +59,7 @@ export default function JoinRoomPage() {
     }
   });
   const [leftSchool, setLeftSchool] = useState(false);
+  useDocumentTitle(waiting ? 'Waiting room' : 'Join class');
   const [continueAsStudent, setContinueAsStudent] = useState(
     search.get('as') === 'student' || search.get('as') === '1'
   );
@@ -99,6 +101,12 @@ export default function JoinRoomPage() {
       })
       .catch(() => {});
   }, []);
+
+  // While waiting, download the classroom's code: on a slow phone that was
+  // 3–4 s between "Admit" and the class appearing.
+  useEffect(() => {
+    if (waiting && !lobbyEnded && !left) router.prefetch(`/classroom/${code}`);
+  }, [waiting, lobbyEnded, left, router, code]);
 
   const hidden = usePageHidden();
   useEffect(() => {

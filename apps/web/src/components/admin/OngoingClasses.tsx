@@ -261,7 +261,7 @@ function LiveClassTile({ c, now }: { c: LiveClass; now: number }) {
       <div className="px-3 py-2.5">
         <p className="truncate text-sm font-medium text-white group-hover:text-brand-200">{c.title}</p>
         <p className="truncate text-xs text-slate-400">
-          {c.gradeDivision} · {c.teacherName}
+          {c.title.includes(c.gradeDivision) ? c.teacherName : `${c.gradeDivision} · ${c.teacherName}`}
         </p>
       </div>
     </Link>
