@@ -21,7 +21,7 @@ mic (browser: echo cancellation, AGC; its noise suppression only in Standard)
 | **Standard** | everyone | The browser's own noise suppression. Lightest. |
 | **Enhanced** (default) | everyone | RNNoise (Xiph, BSD-3): a small recurrent network trained on speech vs. noise. Removes fans, AC, traffic, room hum. |
 | **Strong** | everyone; desktops/tablets with 4+ cores | GTCRN (MIT, 2024): a stronger network. Removes much more of fans and typing, but thins your own voice by 2-5 dB when other people talk in the room, so it is opt-in. On phones and 2-core machines it runs Enhanced instead. |
-| **Voice focus** (default on) | teachers | Learns the teacher's own speaking level while they talk and turns down sound more than 18 dB under it between sentences: people talking further away, a TV next door, what the noise remover lets through. Never touches sound at the teacher's level; opens 8 ms before a word starts (look-ahead) and holds 120 ms after it ends. |
+| **Voice focus** (default on) | teachers | Learns the teacher's own speaking level (the loudest 10% of what they said over the last ~20 s, so a cough or a door slam does not move it) and turns down sound more than 15 dB under it between sentences: people talking further away, a TV next door, what the noise remover lets through. Never touches sound at the teacher's level and turns nothing down until the teacher has been heard; opens 8 ms before a word starts (look-ahead) and holds 120 ms after it ends. |
 
 Settings are saved per device (`localStorage` key `classroom.voice.v1`). A
 change republishes the microphone (a ~0.5 s gap for listeners). Students
@@ -54,23 +54,29 @@ switches mid-class (`class-audio` run, 2026-10-28: all checks pass).
 24 s of read speech (LibriSpeech/TIMIT samples from the speechbrain test
 set, 16 kHz upsampled to 48 kHz) with 1.2 s pauses, mixed with noise.
 SI-SDR = scale-invariant signal-to-distortion ratio of the output against
-the clean speech (higher is better; the voice-focus rows are compared with
-the clean speech through the same 70-80 Hz high-pass, whose low-frequency
-phase shift is inaudible but would otherwise count as distortion). "Speech"
-= change of the speaker's own level (should stay near 0 dB).
+the clean speech, in dB (higher is better; the shipped-chain columns are
+compared with the clean speech through the same high-pass, whose
+low-frequency phase shift is inaudible but would otherwise count as
+distortion). "Own voice" = change of the speaker's own level (should stay
+near 0 dB).
 
-| Noise (SNR) | Input | Enhanced | Strong | Enhanced + focus | Speech level, Strong |
-| --- | --- | --- | --- | --- | --- |
-| Clean speech | 96 dB | 22.1 | 25.6 | 27.5 | 0.0 dB |
-| Fan + 120 Hz hum (5 dB) | 2.7 | 11.2 | **17.6** | 10.4 | -0.2 dB |
-| Recorded room noise (5 dB) | 2.7 | 11.2 | 11.7 | 11.4 | -0.6 dB |
-| Typing / clicks (10 dB) | 7.7 | 13.3 | **19.2** | 14.4 | -0.1 dB |
-| Distant talkers, reverberant (10 dB) | 7.7 | 9.7 | 7.7 | 9.8 | **-3.7 dB** |
-| Distant talkers (20 dB) | 17.7 | 16.6 | 13.5 | **18.0** | -0.7 dB |
+| Noise (SNR) | Input | RNNoise | GTCRN | **Enhanced** (shipped chain) | **Strong** (shipped chain) | Own voice, Strong |
+| --- | --- | --- | --- | --- | --- | --- |
+| Clean speech | 96 | 22.1 | 25.6 | 27.4 | 19.1 | +0.2 dB |
+| Fan + 120 Hz hum (5 dB) | 2.7 | 11.2 | 17.6 | 10.4 | **15.8** | -0.1 dB |
+| Recorded room noise (5 dB) | 2.7 | 11.2 | 11.7 | 11.4 | **12.6** | -0.3 dB |
+| Typing / clicks (10 dB) | 7.7 | 13.3 | 19.2 | 14.4 | **16.6** | +0.1 dB |
+| Distant talkers, reverberant (10 dB) | 7.7 | 9.7 | 7.7 | **9.8** | 7.4 | **-3.6 dB** |
+| Distant talkers (20 dB) | 17.7 | 16.6 | 13.5 | **18.2** | 12.5 | -0.5 dB |
 
-Between sentences (pause level, dBFS): distant talkers at 20 dB go from
--44 (input) to -48.7 (Enhanced) and -50.5 (Enhanced + focus); typing from
--34 to -41 (Enhanced) and -78 (Strong).
+"Shipped chain" = high-pass + noise remover + voice focus, exactly as a
+teacher's mic runs it; RNNoise / GTCRN = the noise remover alone.
+
+Between sentences (pause level, dBFS), shipped Enhanced chain vs RNNoise
+alone: recorded room noise -50.4 vs -49.4, distant talkers (20 dB) -52.4 vs
+-48.7 (input -44); typing -42.5 with Enhanced, -79.5 with Strong (input
+-34). The teacher's own level never moved by more than 0.3 dB with
+Enhanced.
 
 CPU (fraction of one core, Xeon 2.1 GHz, Chromium): Enhanced 1.9%, Strong
 5.5%, voice focus 0.1%, plain 0.05%. A mid-range phone is roughly 4-6x

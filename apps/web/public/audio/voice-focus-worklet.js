@@ -4,9 +4,11 @@
  * room, the residue a noise suppressor lets through between words).
  *
  * It is a look-ahead downward expander keyed to the speaker's own level:
- * the upper envelope of the speaker's speech is learned while they talk
- * (rises in ~0.1 s, falls over ~20 s), and sound more than `range` dB under
- * it is turned down 2 dB per dB, to at most `depth` dB. The decision uses
+ * the speaker's level is the loudest 10% of the blocks that are clearly
+ * above the noise floor over the last ~20 s (a decaying level histogram, so
+ * a door slam or a cough cannot raise it), and sound more than `range` dB
+ * under it is turned down 2 dB per dB, to at most `depth` dB. Until the
+ * speaker has been heard nothing is turned down. The decision uses
  * the level over the next ~10 ms (look-ahead, so word onsets are not
  * clipped), opens at once, closes only 6 dB under the opening level
  * (hysteresis) and after a short hold, so word endings are kept. It runs after the noise
@@ -20,6 +22,11 @@
 const BLOCK = 128;
 /** Blocks of look-ahead (3 x 128 samples = 8 ms at 48 kHz). */
 const LOOK = 3;
+/** Level histogram: 1 dB bins from -120 to +99 dB (covers 0..1 and 16-bit sample scales). */
+const BIN_MIN = -120;
+const BINS = 220;
+/** The speaker's level is the top SPEECH_TOP share of active blocks. */
+const SPEECH_TOP = 0.1;
 
 class VoiceFocus {
   /**
@@ -28,18 +35,22 @@ class VoiceFocus {
    */
   constructor(sampleRate, opts = {}) {
     this.sampleRate = sampleRate;
-    this.range = opts.range ?? 22;
+    this.range = opts.range ?? 15;
     this.depth = opts.depth ?? 30;
+    this.top = opts.top ?? SPEECH_TOP;
     const blockSec = BLOCK / sampleRate;
     this.holdBlocks = Math.round((opts.holdMs ?? 120) / 1000 / blockSec);
     this.open = false;
     this.release = 1 - Math.exp(-blockSec / ((opts.releaseMs ?? 80) / 1000));
-    this.rise = 1 - Math.exp(-blockSec / 0.1);
-    this.fall = 1 - Math.exp(-blockSec / 20);
-    /** Upper envelope of the speaker's speech, dBFS. Starts low: open until learned. */
-    this.speech = -45;
-    /** Noise floor, dBFS. */
-    this.floor = -60;
+    /** Histogram weights: each new block counts 1/decay times more than the last (20 s memory). */
+    this.growth = Math.exp(blockSec / 20);
+    this.weight = 1;
+    this.hist = new Float64Array(BINS);
+    this.total = 0;
+    /** The speaker's level, dB; NaN until heard (nothing is turned down before). */
+    this.speech = NaN;
+    /** Noise floor, dB; NaN until the first block. */
+    this.floor = NaN;
     this.gain = 1;
     this.hold = 0;
     /** Delay line of LOOK + 1 blocks and their levels. */
@@ -51,6 +62,28 @@ class VoiceFocus {
     }
     this.head = 0;
     this.enabled = true;
+  }
+
+  /** Add one active block to the level histogram and re-read the speaker's level. */
+  learn(lvl) {
+    const i = Math.max(0, Math.min(BINS - 1, Math.round(lvl) - BIN_MIN));
+    this.hist[i] += this.weight;
+    this.total += this.weight;
+    this.weight *= this.growth;
+    if (this.weight > 1e200) {
+      // Renormalise (relative weights are what matter).
+      for (let k = 0; k < BINS; k++) this.hist[k] /= this.weight;
+      this.total /= this.weight;
+      this.weight = 1;
+    }
+    let acc = 0;
+    for (let k = BINS - 1; k >= 0; k--) {
+      acc += this.hist[k];
+      if (acc >= this.total * this.top) {
+        this.speech = k + BIN_MIN;
+        return;
+      }
+    }
   }
 
   /** Mean square of one block. */
@@ -76,13 +109,12 @@ class VoiceFocus {
     const pw = VoiceFocus.power(input.subarray(0, n));
     const lvl = 10 * Math.log10(pw + 1e-12);
 
-    // Learn the floor (fast down, slow up) and the speaker's level (the upper
-    // envelope of blocks clearly above the floor).
-    if (lvl < this.floor) this.floor += (lvl - this.floor) * 0.2;
+    // Learn the floor (fast down, slow up) and the speaker's level from the
+    // blocks clearly above it.
+    if (Number.isNaN(this.floor)) this.floor = lvl;
+    else if (lvl < this.floor) this.floor += (lvl - this.floor) * 0.2;
     else this.floor += (lvl - this.floor) * 0.0005;
-    if (lvl > this.floor + 15 && lvl > -70) {
-      this.speech += (lvl - this.speech) * (lvl > this.speech ? this.rise : this.fall);
-    }
+    if (lvl > this.floor + 15) this.learn(lvl);
 
     const slot = this.head;
     this.ring[slot].set(input.subarray(0, n));
@@ -96,7 +128,7 @@ class VoiceFocus {
     let e = 0;
     for (let i = 0; i <= LOOK; i++) e += this.energy[i];
     const win = 10 * Math.log10(e / (LOOK + 1) + 1e-12);
-    const threshold = this.speech - this.range;
+    const threshold = Number.isNaN(this.speech) ? -Infinity : this.speech - this.range;
     let target = 1;
     if (win >= (this.open ? threshold - 6 : threshold)) {
       this.open = true;

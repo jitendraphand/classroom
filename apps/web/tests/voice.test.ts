@@ -101,6 +101,8 @@ test('voice focus: registers its processor; output is the input delayed by the l
 test('voice focus: learns the speaking level, turns down sound far below it, opens before an onset', () => {
   const { VoiceFocus } = loadFocus();
   const f = new VoiceFocus(48000, { range: 18 });
+  assert.ok(Number.isNaN(f.speech), 'nothing learned yet: never turns down');
+  run(f, tone(-70, 100)); // room before the teacher speaks
   run(f, tone(-18, 400)); // ~1 s of the teacher speaking
   assert.ok(f.speech > -20 && f.speech < -16, `speech level learned (${f.speech.toFixed(1)})`);
   // Distant voice 30 dB under the teacher for 1 s: turned down after the hold.
@@ -112,6 +114,7 @@ test('voice focus: learns the speaking level, turns down sound far below it, ope
   // Once closed, sound 2 dB under the threshold is only slightly reduced
   // (2 dB per dB); once open, it would stay open down to 6 dB under it.
   const g = new VoiceFocus(48000, { range: 18 });
+  run(g, tone(-70, 100));
   run(g, tone(-18, 400));
   run(g, tone(-60, 400));
   const near = run(g, tone(-38, 400));
@@ -120,6 +123,24 @@ test('voice focus: learns the speaking level, turns down sound far below it, ope
   // The teacher speaks again: the first block of the word goes out at full level.
   const again = run(g, [...tone(-18, 10), ...tone(-120, LOOK)]);
   assert.ok(Math.abs(db(again[LOOK]) + 18) < 1.5, `onset not clipped (${db(again[LOOK]).toFixed(1)} dB)`);
+});
+
+test('voice focus: a door slam does not raise the learned level; a speaker who never paused is left alone', () => {
+  const { VoiceFocus } = loadFocus();
+  const f = new VoiceFocus(48000, { range: 18 });
+  run(f, tone(-70, 100));
+  for (let i = 0; i < 8; i++) run(f, [...tone(-24, 300), ...tone(-70, 60)]); // ~8 s of speech with pauses
+  const before = f.speech;
+  run(f, tone(-2, 40)); // 0.1 s bang, 22 dB louder
+  assert.ok(Math.abs(f.speech - before) <= 1, `level held (${before} -> ${f.speech})`);
+  // Speech right after the bang is not turned down.
+  const after = run(f, tone(-26, 200));
+  assert.ok(after.slice(-50).every((y) => db(y) > -27.5), 'speech after the bang passes');
+  // No quieter block ever seen: the floor is the speech itself, nothing is learned, nothing turned down.
+  const g = new VoiceFocus(48000);
+  const all = run(g, tone(-20, 400));
+  assert.ok(Number.isNaN(g.speech));
+  assert.ok(Math.abs(db(all[399]) + 20) < 1);
 });
 
 test('voice focus: never turns down while disabled, and stays finite on silence', () => {
