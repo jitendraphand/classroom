@@ -29,3 +29,6 @@ OPENCODE_*.txt
 
 # Runtime files
 *.pid
+
+# Noise-suppression worklets/models copied from node_modules at dev/build time
+apps/web/public/audio/vendor/

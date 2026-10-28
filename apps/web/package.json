@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "predev": "node scripts/copy-voice-assets.mjs",
     "dev": "next dev",
+    "prebuild": "node scripts/copy-voice-assets.mjs",
     "build": "prisma generate && next build",
     "start": "prisma migrate deploy && node cluster.js",
     "start:next": "next start",
@@ -33,6 +35,7 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.7",
+    "@sapphi-red/web-noise-suppressor": "0.4.1",
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20.17.6",
     "@types/react": "^19.3.0",

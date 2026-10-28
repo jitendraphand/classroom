@@ -182,6 +182,7 @@ import { StudentMediaPrivacy } from './StudentMediaPrivacy';
 import { TeacherCameraFloat, TeacherStageCamera } from './TeacherCameraFloat';
 import { TeacherPeersFloat } from './TeacherPeersFloat';
 import { enqueueLocalPublish, safeStop } from './localPublish';
+import { primeVoiceAudio } from '@/lib/audio/voiceProcessor';
 import { isTeacherParticipant, useHasTeacherScreen, useTeacherLive } from './participantRoles';
 
 function sleepConnectDelay(body: unknown): Promise<void> {
@@ -1090,6 +1091,21 @@ function RoomInner({
   useEffect(() => {
     if (effectiveMuted) setMicOn(false);
   }, [effectiveMuted]);
+
+  // Teacher: the mic usually goes live without a click on it (on at join), so
+  // the first tap or key press anywhere starts the noise-removal audio, and a
+  // mic published plain until then is republished cleaned up.
+  useEffect(() => {
+    if (!isTeacher) return;
+    const prime = () => primeVoiceAudio(true);
+    const opts = { capture: true, passive: true } as const;
+    document.addEventListener('pointerdown', prime, opts);
+    document.addEventListener('keydown', prime, opts);
+    return () => {
+      document.removeEventListener('pointerdown', prime, opts);
+      document.removeEventListener('keydown', prime, opts);
+    };
+  }, [isTeacher]);
 
   // Teacher away → mic off. It stays off when the teacher returns: the student
   // unmutes themselves (never auto-unmute the class).
@@ -2504,6 +2520,8 @@ function RoomInner({
     onToggleMic: () => {
       if ((effectiveMuted || micLockedNoTeacher) && !isTeacher) return;
       const turningOff = micOn;
+      // In the click itself: Safari starts audio processing only from a tap.
+      if (!turningOff) primeVoiceAudio(isTeacher);
       setMicOn((v) => !v);
       if (!isTeacher && micLimitOn && !effectiveMuted && turningOff) {
         void roomFetch(code, '/mic', {
@@ -2851,7 +2869,10 @@ function RoomInner({
             waitingRoomOn={waitingRoomOn}
             onWaitingRoom={(on) => void setWaitingRoom(on)}
             teacherMicOn={micOn && !effectiveMuted}
-            onToggleTeacherMic={() => setMicOn((v) => !v)}
+            onToggleTeacherMic={() => {
+              if (!micOn) primeVoiceAudio(true);
+              setMicOn((v) => !v);
+            }}
             teacherCamOn={camOn}
             onToggleTeacherCam={() => setCamOn((v) => !v)}
             sideWindowsAllowed={sideWindowsAllowed}
@@ -3492,7 +3513,10 @@ function RoomInner({
       {isTeacher && wbOpen && (
         <WhiteboardMeetingBar
           micOn={micOn && !effectiveMuted}
-          onToggleMic={() => setMicOn((v) => !v)}
+          onToggleMic={() => {
+            if (!micOn) primeVoiceAudio(isTeacher);
+            setMicOn((v) => !v);
+          }}
           camOn={camOn}
           onToggleCam={() => setCamOn((v) => !v)}
           chatUnread={chatUnread}
