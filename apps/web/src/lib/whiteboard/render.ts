@@ -4,7 +4,7 @@
  * units through a view transform, so the picture is identical everywhere and
  * only scaled.
  */
-import { PAGE_H, PAGE_W, type Background, type Item, type Page } from './model';
+import { LASER_MS, PAGE_H, PAGE_W, triPoints, type Background, type Item, type LaserTrail, type Page, type ShapeItem } from './model';
 
 export type View = { scale: number; tx: number; ty: number };
 
@@ -40,6 +40,34 @@ export function bgColor(bg: Background): string {
 function drawBackground(ctx: CanvasRenderingContext2D, bg: Background) {
   ctx.fillStyle = bgColor(bg);
   ctx.fillRect(0, 0, PAGE_W, PAGE_H);
+  if (bg === 'dots') {
+    ctx.fillStyle = '#b8c2cf';
+    const step = 40;
+    for (let y = step; y < PAGE_H; y += step) {
+      for (let x = step; x < PAGE_W; x += step) {
+        ctx.beginPath();
+        ctx.arc(x, y, 2.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    return;
+  }
+  if (bg === 'graph') {
+    // Graph paper: a fine 20-unit grid with a darker line every 100 units.
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = '#e4e9f0';
+    ctx.beginPath();
+    for (let v = 20; v < PAGE_W; v += 20) if (v % 100) { ctx.moveTo(v, 0); ctx.lineTo(v, PAGE_H); }
+    for (let v = 20; v < PAGE_H; v += 20) if (v % 100) { ctx.moveTo(0, v); ctx.lineTo(PAGE_W, v); }
+    ctx.stroke();
+    ctx.lineWidth = 1.6;
+    ctx.strokeStyle = '#b9c6d6';
+    ctx.beginPath();
+    for (let v = 100; v < PAGE_W; v += 100) { ctx.moveTo(v, 0); ctx.lineTo(v, PAGE_H); }
+    for (let v = 100; v < PAGE_H; v += 100) { ctx.moveTo(0, v); ctx.lineTo(PAGE_W, v); }
+    ctx.stroke();
+    return;
+  }
   if (bg === 'grid' || bg === 'lined') {
     ctx.strokeStyle = bg === 'grid' ? '#d6dde6' : '#c9d7ee';
     ctx.lineWidth = 1.5;
@@ -66,6 +94,55 @@ function drawBackground(ctx: CanvasRenderingContext2D, bg: Background) {
   }
 }
 
+/** Width of a pressure stroke at pressure `pr` (0–100): 35 % of the pen width at zero, 125 % at full. */
+export function widthAt(w: number, pr: number): number {
+  return w * (0.35 + (0.9 * pr) / 100);
+}
+
+/**
+ * Stylus stroke: the same midpoint-smoothed path as a plain stroke, drawn as
+ * one segment per point so the width follows the pressure.
+ */
+function drawPressureStroke(ctx: CanvasRenderingContext2D, p: number[], pr: number[], w: number) {
+  const n = p.length / 2;
+  if (n === 1) {
+    ctx.beginPath();
+    ctx.arc(p[0]!, p[1]!, widthAt(w, pr[0]!) / 2, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  let sx = p[0]!, sy = p[1]!;
+  for (let i = 1; i < n - 1; i++) {
+    const mx = (p[2 * i]! + p[2 * i + 2]!) / 2, my = (p[2 * i + 1]! + p[2 * i + 3]!) / 2;
+    ctx.lineWidth = widthAt(w, pr[i]!);
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.quadraticCurveTo(p[2 * i]!, p[2 * i + 1]!, mx, my);
+    ctx.stroke();
+    sx = mx;
+    sy = my;
+  }
+  ctx.lineWidth = widthAt(w, pr[n - 1]!);
+  ctx.beginPath();
+  ctx.moveTo(sx, sy);
+  ctx.lineTo(p[2 * n - 2]!, p[2 * n - 1]!);
+  ctx.stroke();
+}
+
+/** Outline of a closed shape (rect, ellipse, triangle) as the current path. */
+function shapePath(ctx: CanvasRenderingContext2D, it: ShapeItem) {
+  ctx.beginPath();
+  if (it.k === 'rect') ctx.rect(Math.min(it.x1, it.x2), Math.min(it.y1, it.y2), Math.abs(it.x2 - it.x1), Math.abs(it.y2 - it.y1));
+  else if (it.k === 'ellipse') ctx.ellipse((it.x1 + it.x2) / 2, (it.y1 + it.y2) / 2, Math.abs(it.x2 - it.x1) / 2, Math.abs(it.y2 - it.y1) / 2, 0, 0, Math.PI * 2);
+  else {
+    const [a, b, c] = triPoints(it);
+    ctx.moveTo(a[0], a[1]);
+    ctx.lineTo(b[0], b[1]);
+    ctx.lineTo(c[0], c[1]);
+    ctx.closePath();
+  }
+}
+
 export function drawItem(ctx: CanvasRenderingContext2D, it: Item, onImage?: () => void) {
   ctx.save();
   switch (it.k) {
@@ -80,6 +157,10 @@ export function drawItem(ctx: CanvasRenderingContext2D, it: Item, onImage?: () =
       }
       ctx.lineWidth = it.w;
       const p = it.pts;
+      if (it.pr && it.tool === 'pen' && it.pr.length === p.length / 2) {
+        drawPressureStroke(ctx, p, it.pr, it.w);
+        break;
+      }
       if (p.length === 2) {
         ctx.beginPath();
         ctx.arc(p[0]!, p[1]!, it.w / 2, 0, Math.PI * 2);
@@ -121,16 +202,18 @@ export function drawItem(ctx: CanvasRenderingContext2D, it: Item, onImage?: () =
       break;
     }
     case 'rect':
+    case 'ellipse':
+    case 'tri':
+      shapePath(ctx, it);
+      if (it.fl) {
+        ctx.fillStyle = it.c;
+        ctx.globalAlpha = 0.22;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
       ctx.strokeStyle = it.c;
       ctx.lineWidth = it.w;
       ctx.lineJoin = 'round';
-      ctx.strokeRect(Math.min(it.x1, it.x2), Math.min(it.y1, it.y2), Math.abs(it.x2 - it.x1), Math.abs(it.y2 - it.y1));
-      break;
-    case 'ellipse':
-      ctx.strokeStyle = it.c;
-      ctx.lineWidth = it.w;
-      ctx.beginPath();
-      ctx.ellipse((it.x1 + it.x2) / 2, (it.y1 + it.y2) / 2, Math.abs(it.x2 - it.x1) / 2, Math.abs(it.y2 - it.y1) / 2, 0, 0, Math.PI * 2);
       ctx.stroke();
       break;
     case 'text': {
@@ -175,6 +258,44 @@ export function renderPage(
   drawBackground(ctx, page.bg);
   for (const it of page.items) drawItem(ctx, it, opts.onImage);
   for (const it of opts.extra ?? []) drawItem(ctx, it, opts.onImage);
+  ctx.restore();
+}
+
+/**
+ * Laser trail over the page (same view transform as the page). Points fade
+ * out over LASER_MS; the newest point is the bright head.
+ */
+export function drawLaser(ctx: CanvasRenderingContext2D, trail: LaserTrail, v: View, dpr: number, now = Date.now()) {
+  const pts = trail.pts;
+  if (!pts.length) return;
+  ctx.save();
+  ctx.setTransform(dpr * v.scale, 0, 0, dpr * v.scale, dpr * v.tx, dpr * v.ty);
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = '#ef4444';
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1]!, b = pts[i]!;
+    if (b.t - a.t > 250) continue; // a gap: the pointer left and came back
+    ctx.globalAlpha = Math.max(0, 1 - (now - b.t) / LASER_MS) * 0.85;
+    // Screen-constant size: as visible on a phone as on a projector.
+    ctx.lineWidth = 5 / v.scale;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+  }
+  const head = pts[pts.length - 1]!;
+  const alpha = Math.max(0, 1 - (now - head.t) / LASER_MS);
+  if (alpha > 0) {
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = '#ef4444';
+    ctx.beginPath();
+    ctx.arc(head.x, head.y, 8 / v.scale, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(head.x, head.y, 3 / v.scale, 0, Math.PI * 2);
+    ctx.fill();
+  }
   ctx.restore();
 }
 

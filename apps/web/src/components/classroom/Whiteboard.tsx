@@ -17,7 +17,7 @@ import { useRoomContext } from '@livekit/components-react';
 import { ConnectionState, RoomEvent, type RemoteParticipant } from 'livekit-client';
 import { MEETING_BAR_PX } from '@/lib/shareChrome';
 import { WhiteboardBoard } from '@/lib/whiteboard/WhiteboardBoard';
-import { SNAP_STORE_MS, WhiteboardSession, b64ToPackets, opsPackets, packetsToB64 } from '@/lib/whiteboard/session';
+import { SNAP_STORE_MS, WhiteboardSession, b64ToPackets, laserPacket, opsPackets, packetsToB64 } from '@/lib/whiteboard/session';
 import { WB_TOPIC, cleanDoc, encodePacket, isOwnRelayEcho, studentOpAllowed, type Op, type Packet } from '@/lib/whiteboard/model';
 import { canPublishRoomData } from '@/lib/dataPublish';
 import { roomFetch } from '@/lib/classroomClient';
@@ -112,6 +112,14 @@ export function WhiteboardHost({
     [room]
   );
   const sendSnapshot = useCallback(async (to?: string[]) => publish(await session.snapshotPackets(), to), [publish, session]);
+  // Laser pointer: lossy and never retried (a late laser point is useless).
+  const publishLaser = useCallback(
+    (pts: number[]) => {
+      if (room.state !== ConnectionState.Connected) return;
+      void room.localParticipant.publishData(laserPacket(pts) as Uint8Array<ArrayBuffer>, { reliable: false, topic: WB_TOPIC }).catch(() => undefined);
+    },
+    [room]
+  );
 
   // Keep the latest snapshot on the server too (Redis): a student whose request the
   // teacher's device cannot answer (teacher reconnecting, other web instance /
@@ -188,7 +196,7 @@ export function WhiteboardHost({
   return (
     <div className="fixed bottom-0 left-0 top-0 z-40 flex bg-[#0b0f14]" style={{ right: MEETING_BAR_PX }} data-testid="wb-host">
       <div className="relative min-w-0 flex-1">
-        <WhiteboardBoard session={session} mode="edit" identity={identity} onSend={(ops) => void publish(opsPackets(ops))} onClose={stop} hideStop />
+        <WhiteboardBoard session={session} mode="edit" identity={identity} onSend={(ops) => void publish(opsPackets(ops))} onLaser={publishLaser} onClose={stop} hideStop />
       </div>
     </div>
   );
