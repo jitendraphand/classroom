@@ -11,6 +11,7 @@ import { replyTargetFor, resolveChatRecipient } from '../shared/chatReply';
 import { sortRoster } from '../shared/classLogic';
 import { focusLabel, isFocusAlert } from '../shared/session';
 import { filterMessages, filterPeople, normalizeQuery } from '../shared/web/peopleSearch';
+import { ROSTER_PAGE, rosterWindow } from '../shared/web/rosterWindow';
 import { ICONS, type IconName } from './icons';
 import { avatarHue, initials, scopeBadge } from './people';
 
@@ -69,9 +70,19 @@ function formatTime(iso: string): string {
 
 export function RosterView({ snap, send, showLayout = false }: { snap: PanelSnapshot; send: Send; showLayout?: boolean }) {
   const [query, setQuery] = useState('');
+  // Large classes: a page of rows at a time (shared lib/rosterWindow; search finds anyone).
+  const [limit, setLimit] = useState(ROSTER_PAGE);
+  const [waitLimit, setWaitLimit] = useState(ROSTER_PAGE);
+  useEffect(() => {
+    setLimit(ROSTER_PAGE);
+    setWaitLimit(ROSTER_PAGE);
+  }, [query]);
   const students = useMemo(() => sortRoster(snap.admitted.filter((p) => p.role === 'STUDENT')), [snap.admitted]);
-  const shown = useMemo(() => filterPeople(students, query), [students, query]);
-  const waiting = useMemo(() => filterPeople(snap.waiting, query), [snap.waiting, query]);
+  const matched = useMemo(() => filterPeople(students, query), [students, query]);
+  const win = rosterWindow(matched, limit);
+  const shown = win.shown;
+  const waitWin = rosterWindow(filterPeople(snap.waiting, query), waitLimit);
+  const waiting = waitWin.shown;
   const waitingOn = snap.hud.waitingRoomOn;
   // Students may draw on a shared screen or on the shared whiteboard.
   const sharing = snap.hud.sharing || !!snap.hud.whiteboardOn;
@@ -109,6 +120,13 @@ export function RosterView({ snap, send, showLayout = false }: { snap: PanelSnap
                 </span>
               </li>
             ))}
+            {waitWin.hidden > 0 && (
+              <li>
+                <button type="button" className="roster-more" onClick={() => setWaitLimit((n) => n + ROSTER_PAGE)}>
+                  Show {waitWin.next} more ({waitWin.hidden} not shown; search finds anyone)
+                </button>
+              </li>
+            )}
           </ul>
         </div>
       )}
@@ -202,7 +220,7 @@ export function RosterView({ snap, send, showLayout = false }: { snap: PanelSnap
         />
         {query.trim() && (
           <span className="chat-search-count">
-            {shown.length}/{students.length}
+            {matched.length}/{students.length}
           </span>
         )}
       </label>
@@ -217,6 +235,13 @@ export function RosterView({ snap, send, showLayout = false }: { snap: PanelSnap
         {shown.map((p) => (
           <RosterRow key={p.id} p={p} send={send} sharing={sharing} spotlit={snap.spotlight?.participantId === p.id} />
         ))}
+        {win.hidden > 0 && (
+          <li>
+            <button type="button" className="roster-more" onClick={() => setLimit((n) => n + ROSTER_PAGE)}>
+              Show {win.next} more ({win.hidden} not shown; search finds anyone)
+            </button>
+          </li>
+        )}
       </ul>
     </div>
   );

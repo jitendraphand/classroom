@@ -768,3 +768,21 @@ html:has(body.tools), body.tools { background: #0d1219; overflow: hidden; }
 .update-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 16px; padding: 10px 14px; border: 1px solid rgba(89, 166, 255, 0.35); border-radius: 12px; background: rgba(51, 133, 255, 0.1); font-size: 13px; }
 .update-card p { margin: 0; }
 .update-card.required { border-color: rgba(248, 113, 113, 0.5); background: rgba(239, 68, 68, 0.12); }
+
+/* Large classes: the roster shows a page at a time (shared lib/rosterWindow). */
+.roster-more {
+  width: 100%;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  color: #e2e8f0;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.roster-more:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
