@@ -7,7 +7,7 @@
  * (whiteboard.html) in this same renderer process, so it shares the session object.
  */
 import { RoomEvent, type RemoteParticipant, type Room } from 'livekit-client';
-import { SNAP_STORE_MS, WhiteboardSession, opsPackets, packetsToB64 } from '../shared/web/whiteboard/session';
+import { SNAP_STORE_MS, WhiteboardSession, laserPacket, opsPackets, packetsToB64 } from '../shared/web/whiteboard/session';
 import type { PanelSnapshot, TeacherAction } from '../shared/actions';
 import { WB_TOPIC, cleanDoc, studentOpAllowed, type Op, type Packet } from '../shared/web/whiteboard/model';
 
@@ -21,7 +21,7 @@ export type WbMeeting = {
   togglePanel: (kind: 'chat' | 'roster' | 'devices') => void;
 };
 
-type BoardApi = { mount: (session: WhiteboardSession, identity: string, onSend: (ops: Op[]) => void, onClose: () => void, meeting?: WbMeeting) => void };
+type BoardApi = { mount: (session: WhiteboardSession, identity: string, onSend: (ops: Op[]) => void, onClose: () => void, meeting?: WbMeeting, onLaser?: (pts: number[]) => void) => void };
 
 /** Relayed student ops carry `by`: keep only what that student may do. */
 export function filterRelayedOps(session: WhiteboardSession, p: Packet & { by?: string }): boolean {
@@ -138,7 +138,7 @@ export class WindowsWhiteboard {
     for (let i = 0; i < 100; i++) {
       const api = (this.win as unknown as { __board?: BoardApi } | null)?.__board;
       if (api) {
-        api.mount(this.session, this.identity, (ops) => void this.publish(opsPackets(ops)), () => this.stop(), this.meeting);
+        api.mount(this.session, this.identity, (ops) => void this.publish(opsPackets(ops)), () => this.stop(), this.meeting, (pts) => this.publishLaser(pts));
         break;
       }
       await new Promise((r) => setTimeout(r, 50));
@@ -161,6 +161,11 @@ export class WindowsWhiteboard {
     for (const data of packets) {
       await this.room.localParticipant.publishData(data as Uint8Array<ArrayBuffer>, { reliable: true, topic: WB_TOPIC, destinationIdentities: to }).catch((e) => console.warn('whiteboard publish', e));
     }
+  }
+
+  /** Laser pointer: lossy, never retried (a late laser point is useless). */
+  private publishLaser(pts: number[]): void {
+    void this.room.localParticipant.publishData(laserPacket(pts) as Uint8Array<ArrayBuffer>, { reliable: false, topic: WB_TOPIC }).catch(() => undefined);
   }
 
   private async sendSnapshot(to?: string[]): Promise<void> {

@@ -4,7 +4,7 @@
  * by every side (teacher host, student viewer, admin preview).
  */
 import { decodeSnapshot, encodeSnapshot } from './codec';
-import { applyOp, ChunkAssembler, decodePacket, emptyDoc, encodePacket, type Doc, type Op, type Packet } from './model';
+import { applyOp, ChunkAssembler, decodePacket, emptyDoc, encodePacket, LaserTrail, type Doc, type Op, type Packet } from './model';
 
 /** A stroke counts as growing for this long after its last points. */
 export const HOT_MS = 1500;
@@ -24,6 +24,9 @@ export class WhiteboardSession {
   readonly hot = new Map<string, number>();
   private listeners = new Set<() => void>();
   private chunks = new ChunkAssembler();
+  /** Teacher's laser pointer (not part of the document; separate listeners, no board re-render). */
+  readonly laser = new LaserTrail();
+  private laserListeners = new Set<() => void>();
 
   constructor(doc?: Doc, ready = !!doc) {
     this.doc = doc ?? emptyDoc();
@@ -33,6 +36,17 @@ export class WhiteboardSession {
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
+  }
+
+  onLaser(fn: () => void): () => void {
+    this.laserListeners.add(fn);
+    return () => this.laserListeners.delete(fn);
+  }
+
+  /** Laser points (page units) from the teacher's pointer or a `laser` packet. */
+  addLaser(pts: number[], now = Date.now()) {
+    this.laser.add(pts, now);
+    this.laserListeners.forEach((fn) => fn());
   }
 
   private emit() {
@@ -87,6 +101,10 @@ export class WhiteboardSession {
       this.apply(p.ops);
       return null;
     }
+    if (p.t === 'laser') {
+      if (Array.isArray(p.pts)) this.addLaser(p.pts.slice(0, 200));
+      return null;
+    }
     if (p.t === 'snap') {
       const doc = await decodeSnapshot(p);
       if (doc) this.replace(doc);
@@ -98,6 +116,10 @@ export class WhiteboardSession {
   async snapshotPackets(): Promise<Uint8Array[]> {
     return encodePacket(await encodeSnapshot(this.doc));
   }
+}
+
+export function laserPacket(pts: number[]): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify({ v: 1, t: 'laser', pts: pts.map((n) => Math.round(n)) }));
 }
 
 export function opsPackets(ops: Op[]): Uint8Array[] {

@@ -2,19 +2,24 @@
 'use client';
 /**
  * Whiteboard canvas + tools (React, inline styles only, so the same file runs
- * in the Next.js web app and the Windows Electron renderer).
+ * in the Next.js web app and the Windows Electron renderer; the Android app
+ * mirrors the same tools, groups, icons and rendering natively).
  *
  * mode:
- *  - 'edit'     teacher: every tool, pages, background, zoom/pan, image, export
+ *  - 'edit'     teacher: every tool, selection, laser, pages, background, zoom/pan, image, export
  *  - 'annotate' student allowed to draw: pen colours + erase own strokes
- *  - 'view'     student / admin preview: render only
+ *  - 'view'     student / admin preview: render only (and the teacher's laser)
  * The page always fits the viewport the same way on every device; zoom/pan is
  * viewer-local (pinch / wheel / drag, Reset button): nothing is sent, and
  * strokes map back through the transform so annotation stays exact.
- * Tools: a grouped column docked on the LEFT (FlyoutBar: hover / tap a group
- * for its options in a second column).
+ *
+ * Ink feels immediate: every pointer sample (coalesced events, plus the
+ * browser's predicted points) is painted on the next frame, while the network
+ * still gets one `pts` op per BATCH_MS. A stylus records pressure. Holding the
+ * pen still at the end of a stroke snaps a rough line / box / circle /
+ * triangle into a clean shape.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import {
   BACKGROUNDS,
   BATCH_MS,
@@ -26,19 +31,26 @@ import {
   hitItem,
   inkFor,
   inverseOf,
+  itemBounds,
   itemsInRect,
   newId,
+  pressurePct,
+  transformItem,
   type Background,
   type Item,
   type Op,
+  type ShapeKind,
+  type StrokeItem,
 } from './model';
-import { LayeredRenderer, fitView, renderPageToCanvas, toPage, type View } from './render';
+import { LayeredRenderer, drawLaser, fitView, renderPageToCanvas, toPage, type View } from './render';
+import { SNAP_HOLD_MS, SNAP_STILL_PX, recognizeShape } from './recognize';
 import { jpegsToPdf } from './pdf';
 import { FlyoutBar, barBtn, type FlyoutGroup } from './FlyoutBar';
+import { WbIcon, type WbIconName } from './icons';
 import { ZP_IDENTITY, clampZP, isZoomed, panBy, pinchZP, wheelFactor, zoomAt, type ZoomPan } from '../zoomPan';
 import type { WhiteboardSession } from './session';
 
-export type Tool = 'pen' | 'hl' | 'eraser' | 'area' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'text' | 'hand';
+export type Tool = 'select' | 'pen' | 'hl' | 'laser' | 'eraser' | 'area' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'tri' | 'text' | 'hand';
 
 type Props = {
   session: WhiteboardSession;
@@ -46,6 +58,8 @@ type Props = {
   identity: string;
   /** Send ops to everyone (already applied locally). */
   onSend?: (ops: Op[]) => void;
+  /** Teacher's laser pointer points (page units), batched; lossy. */
+  onLaser?: (pts: number[]) => void;
   onClose?: () => void;
   style?: CSSProperties;
   /** Small label shown in view mode while waiting for the first snapshot. */
@@ -54,9 +68,49 @@ type Props = {
   hideStop?: boolean;
 };
 
-const WIDTHS = [2, 4, 8, 14, 24];
+export const WIDTHS = [2, 4, 8, 14, 24];
+const SHAPES: ShapeKind[] = ['line', 'arrow', 'rect', 'ellipse', 'tri'];
+const FILLABLE = new Set<ShapeKind>(['rect', 'ellipse', 'tri']);
+const BG_LABEL: Record<Background, string> = { white: 'Plain', grid: 'Grid', lined: 'Lined', dots: 'Dots', graph: 'Graph', black: 'Black' };
+const TOOL_LABEL: Record<Tool, string> = {
+  select: 'Select, move and resize (V)',
+  pen: 'Pen (P)',
+  hl: 'Highlighter (H)',
+  laser: 'Laser pointer (L)',
+  eraser: 'Eraser (E)',
+  area: 'Area eraser',
+  line: 'Line',
+  arrow: 'Arrow',
+  rect: 'Rectangle',
+  ellipse: 'Ellipse',
+  tri: 'Triangle',
+  text: 'Text (T)',
+  hand: 'Pan',
+};
+const TOOL_ICON: Record<Tool, WbIconName> = {
+  select: 'select', pen: 'pen', hl: 'highlighter', laser: 'laser', eraser: 'eraser', area: 'areaEraser',
+  line: 'line', arrow: 'arrow', rect: 'rect', ellipse: 'ellipse', tri: 'tri', text: 'text', hand: 'hand',
+};
+/** Laser points leave at most this often. */
+const LASER_SEND_MS = 50;
 
-export function WhiteboardBoard({ session, mode, identity, onSend, onClose, style, waitingLabel, hideStop }: Props) {
+type Box = { x: number; y: number; w: number; h: number };
+type Xf = { s: number; ox: number; oy: number; dx: number; dy: number };
+
+function unionBounds(items: Item[]): Box | null {
+  if (!items.length) return null;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const it of items) {
+    const b = itemBounds(it);
+    x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y);
+    x1 = Math.max(x1, b.x + b.w); y1 = Math.max(y1, b.y + b.h);
+  }
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+const xfBox = (b: Box, t: Xf): Box => ({ x: (b.x - t.ox) * t.s + t.ox + t.dx, y: (b.y - t.oy) * t.s + t.oy + t.dy, w: b.w * t.s, h: b.h * t.s });
+
+export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onClose, style, waitingLabel, hideStop }: Props) {
   const version = useSyncExternalStore(
     (fn) => session.subscribe(fn),
     () => session.version,
@@ -65,10 +119,11 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
-  const [tool, setTool] = useState<Tool>('pen');
+  const [tool, setToolState] = useState<Tool>('pen');
   const page = currentPage(session.doc);
   const [color, setColor] = useState<string>(() => inkFor(page.bg));
   const [width, setWidth] = useState(4);
+  const [fill, setFill] = useState(false);
   // Viewer-local zoom / pan on top of the fitted page (lib/zoomPan.ts).
   const [zp, setZp] = useState<ZoomPan>(ZP_IDENTITY);
   const minZoom = mode === 'edit' ? 0.5 : 1;
@@ -76,11 +131,17 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
   const [preview, setPreview] = useState<Item[]>([]);
   const [textAt, setTextAt] = useState<{ x: number; y: number; sx: number; sy: number } | null>(null);
   const [imgTick, setImgTick] = useState(0);
+  const [selection, setSelection] = useState<string[]>([]);
   const undoRef = useRef<{ redo: Op[]; undo: Op[] }[]>([]);
   const redoRef = useRef<{ redo: Op[]; undo: Op[] }[]>([]);
   const [, setStackTick] = useState(0);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const editing = mode !== 'view';
+
+  const setTool = (t: Tool) => {
+    setToolState(t);
+    if (t !== 'select') setSelection([]);
+  };
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -100,12 +161,67 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
   const zoomBy = (factor: number, sx = size.w / 2, sy = size.h / 2) => setZp((t) => zoomAt(t, factor, sx, sy, size.w, size.h, minZoom));
   const resetZoom = () => setZp(ZP_IDENTITY);
 
-  // Render on change only (doc, preview, size, images loading): no idle loop.
-  // At most one paint per animation frame, none while the window is hidden,
-  // and a cached layer for everything but the strokes still growing.
+  // Selection: ids still on the current page (a remote delete or a page change drops them).
+  const selItems = useMemo(() => {
+    if (!selection.length) return [];
+    const ids = new Set(selection);
+    return page.items.filter((it) => ids.has(it.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selection, page, version]);
+  const selBox = useMemo(() => unionBounds(selItems), [selItems]);
+  useEffect(() => {
+    if (selection.length && selItems.length !== selection.length) setSelection(selItems.map((it) => it.id));
+  }, [selection, selItems]);
+
+  // ---- painting ----
+  // Render on change only (doc, preview, size, images, live ink, laser): no
+  // idle loop. At most one paint per animation frame, none while the window
+  // is hidden, and a cached layer for everything but what is moving.
   const layered = useRef(new LayeredRenderer());
   const frame = useRef(0);
   const paintRef = useRef<() => void>(() => undefined);
+  const selXf = useRef<Xf | null>(null);
+  const viewRef = useRef(view);
+  viewRef.current = view;
+
+  const drag = useRef<{
+    kind: Tool;
+    batcher?: PointBatcher;
+    item?: Item;
+    start?: { x: number; y: number };
+    erased?: Set<string>;
+    panFrom?: { x: number; y: number; t: ZoomPan };
+    timer?: number;
+    /** Browser-predicted points (drawn, never sent). */
+    predicted?: number[];
+    /** Hold-to-snap: where the pen last moved, and the pending timer. */
+    holdAt?: { x: number; y: number };
+    snapT?: number;
+    snapped?: boolean;
+    /** Selection: band (pick), move or scale (corner handle). */
+    sel?: 'band' | 'move' | 'scale';
+  } | null>(null);
+
+  /** The growing stroke's points that have not left yet, drawn right away. */
+  const liveTail = (): Item[] => {
+    const d = drag.current;
+    if (!d?.batcher || d.snapped || !d.item) return [];
+    const pend = d.batcher.peek();
+    const pred = d.predicted ?? [];
+    if (!pend.length && !pred.length) return [];
+    const it = currentPage(session.doc).items.find((x) => x.id === d.item!.id) as StrokeItem | undefined;
+    if (!it || it.k !== 'stroke') return [];
+    const n = it.pts.length;
+    const pts = [it.pts[n - 2]!, it.pts[n - 1]!, ...pend, ...pred];
+    const tail: StrokeItem = { ...it, id: 'live-tail', pts };
+    if (it.pr) {
+      const last = it.pr[it.pr.length - 1] ?? 50;
+      const pp = d.batcher.peekPressure();
+      tail.pr = [last, ...pp, ...pred.filter((_, i) => i % 2 === 0).map(() => pp[pp.length - 1] ?? last)];
+    } else delete tail.pr;
+    return [tail];
+  };
+
   paintRef.current = () => {
     const c = canvasRef.current;
     if (!c || !size.w || !size.h) return;
@@ -115,30 +231,62 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
     if (c.height !== H) c.height = H;
     const ctx = c.getContext('2d');
     if (!ctx) return;
-    layered.current.render(ctx, currentPage(session.doc), view, {
+    const now = Date.now();
+    const v = viewRef.current;
+    let pg = currentPage(session.doc);
+    let hot = session.hotIds(now);
+    const xf = selXf.current;
+    if (xf && selection.length) {
+      // Moving / resizing: the selection is drawn live where it is going.
+      const ids = new Set(selection);
+      hot = new Set([...hot, ...ids]);
+      pg = { ...pg, items: pg.items.map((it) => (ids.has(it.id) ? transformItem(it, xf) : it)) };
+    }
+    layered.current.render(ctx, pg, v, {
       cssW: size.w,
       cssH: size.h,
       dpr,
-      extra: preview,
+      extra: [...preview, ...liveTail()],
       onImage: () => {
         layered.current.invalidate();
         setImgTick((n) => n + 1);
       },
       structVersion: session.structVersion,
-      hot: session.hotIds(),
+      hot,
     });
+    if (selBox && mode === 'edit') {
+      const b = xf ? xfBox(selBox, xf) : selBox;
+      ctx.save();
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const x = b.x * v.scale + v.tx, y = b.y * v.scale + v.ty, w = b.w * v.scale, h = b.h * v.scale;
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([6, 4]);
+      ctx.strokeRect(x - 4, y - 4, w + 8, h + 8);
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(x + w - 3, y + h - 3, 14, 14);
+      ctx.strokeRect(x + w - 3, y + h - 3, 14, 14);
+      ctx.restore();
+    }
+    // Laser trail: keep animating while it fades.
+    if (session.laser.prune(now)) {
+      drawLaser(ctx, session.laser, v, dpr, now);
+      schedulePaint();
+    }
   };
-  useEffect(() => {
-    const c = canvasRef.current;
-    const win = c?.ownerDocument.defaultView ?? null;
-    if (!win) return;
-    if (win.document.hidden) return; // repainted on visibilitychange
-    if (frame.current) return;
+  const schedulePaint = useCallback(() => {
+    const win = canvasRef.current?.ownerDocument.defaultView ?? null;
+    if (!win || win.document.hidden || frame.current) return;
     frame.current = win.requestAnimationFrame(() => {
       frame.current = 0;
       paintRef.current();
     });
-  }, [version, preview, size.w, size.h, view, imgTick, session]);
+  }, []);
+  useEffect(() => {
+    schedulePaint();
+  }, [version, preview, size.w, size.h, view, imgTick, session, selection, selBox, schedulePaint]);
+  useEffect(() => session.onLaser(schedulePaint), [session, schedulePaint]);
   useEffect(() => {
     const c = canvasRef.current;
     const doc = c?.ownerDocument;
@@ -169,15 +317,26 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
     [session, onSend]
   );
 
-  // Perform an op, computing its inverse for undo.
-  const act = useCallback(
-    (op: Op) => {
-      const before = 'p' in op ? JSON.parse(JSON.stringify(session.doc.pages.find((p) => p.id === (op as { p: string }).p) ?? null)) : undefined;
-      const undo = inverseOf(op, before ?? undefined, session.doc);
-      send([op], { undo });
+  // Perform ops on one page, recording one undo step that restores it.
+  const actAll = useCallback(
+    (ops: Op[]) => {
+      if (!ops.length) return;
+      const undo: Op[] = [];
+      for (const op of ops) {
+        const pid = 'p' in op ? (op as { p: string }).p : null;
+        const before = pid ? JSON.parse(JSON.stringify(session.doc.pages.find((p) => p.id === pid) ?? null)) : undefined;
+        undo.unshift(...inverseOf(op, before ?? undefined, session.doc));
+        session.apply([op]);
+      }
+      onSend?.(ops);
+      undoRef.current.push({ redo: ops, undo });
+      if (undoRef.current.length > 200) undoRef.current.shift();
+      redoRef.current = [];
+      setStackTick((n) => n + 1);
     },
-    [send, session]
+    [session, onSend]
   );
+  const act = useCallback((op: Op) => actAll([op]), [actAll]);
 
   const undo = () => {
     const e = undoRef.current.pop();
@@ -194,26 +353,38 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
     setStackTick((n) => n + 1);
   };
 
-  // ---- pointer drawing ----
-  const drag = useRef<{
-    kind: Tool;
-    batcher?: PointBatcher;
-    item?: Item;
-    start?: { x: number; y: number };
-    erased?: Set<string>;
-    panFrom?: { x: number; y: number; t: ZoomPan };
-    timer?: number;
-  } | null>(null);
+  // ---- laser (teacher) ----
+  const laserBuf = useRef<number[]>([]);
+  const laserT = useRef<number | null>(null);
+  const laserAt = (x: number, y: number) => {
+    const pt = [Math.round(x), Math.round(y)];
+    session.addLaser(pt);
+    laserBuf.current.push(...pt);
+    if (laserT.current === null) {
+      laserT.current = window.setTimeout(() => {
+        laserT.current = null;
+        const pts = laserBuf.current;
+        laserBuf.current = [];
+        if (pts.length) onLaser?.(pts);
+      }, LASER_SEND_MS);
+    }
+  };
+  useEffect(() => () => {
+    if (laserT.current !== null) window.clearTimeout(laserT.current);
+  }, []);
 
+  // ---- pointer drawing ----
   const mine = useCallback((it: Item) => mode === 'edit' || it.by === identity, [mode, identity]);
 
-  const pagePoint = (e: React.PointerEvent) => {
+  const pageXY = (clientX: number, clientY: number) => {
     const r = canvasRef.current!.getBoundingClientRect();
-    return toPage(view, e.clientX - r.left, e.clientY - r.top);
+    return toPage(viewRef.current, clientX - r.left, clientY - r.top);
   };
+  const pagePoint = (e: { clientX: number; clientY: number }) => pageXY(e.clientX, e.clientY);
 
-  const flushPts = () => {
-    const d = drag.current;
+  // `d` explicitly: on pen-up the drag is already cleared, and the last
+  // points (up to BATCH_MS of drawing) must still leave.
+  const flushPts = (d = drag.current) => {
     const op = d?.batcher?.flush();
     if (op) {
       session.apply([op]);
@@ -236,9 +407,42 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
     return [e.clientX - r.left, e.clientY - r.top];
   };
 
+  /** Hold-to-snap: the pen stayed still long enough; replace the stroke with its clean shape. */
+  const trySnap = () => {
+    const d = drag.current;
+    if (!d?.batcher || d.snapped || d.kind !== 'pen' || mode !== 'edit') return;
+    flushPts();
+    const pg = currentPage(session.doc);
+    const it = pg.items.find((x) => x.id === d.item!.id);
+    if (!it || it.k !== 'stroke') return;
+    const shape = recognizeShape(it.pts);
+    if (!shape) return;
+    window.clearInterval(d.timer);
+    d.snapped = true;
+    d.predicted = [];
+    const item: Item = { ...shape, id: newId('t'), by: identity, c: it.c, w: it.w, ...(fill && FILLABLE.has(shape.k) ? { fl: 1 as const } : {}) };
+    const ops: Op[] = [{ k: 'del', p: pg.id, ids: [it.id] }, { k: 'add', p: pg.id, item }];
+    send(ops);
+    undoRef.current.push({ redo: [{ k: 'add', p: pg.id, item }], undo: [{ k: 'del', p: pg.id, ids: [item.id] }] });
+    redoRef.current = [];
+    setStackTick((n) => n + 1);
+  };
+  const armSnap = (x: number, y: number, force = false) => {
+    const d = drag.current;
+    if (!d || mode !== 'edit' || d.kind !== 'pen' || d.snapped) return;
+    if (!force && d.holdAt && Math.hypot(x - d.holdAt.x, y - d.holdAt.y) < SNAP_STILL_PX) return;
+    d.holdAt = { x, y };
+    window.clearTimeout(d.snapT);
+    d.snapT = window.setTimeout(trySnap, SNAP_HOLD_MS);
+  };
+
   const onDown = (e: React.PointerEvent) => {
     if (textAt) return;
-    (e.target as Element).setPointerCapture?.(e.pointerId);
+    try {
+      (e.target as Element).setPointerCapture?.(e.pointerId);
+    } catch {
+      /* the pointer is already gone (some pens / browsers): draw without capture */
+    }
     pointers.current.set(e.pointerId, local(e));
     if (pointers.current.size >= 2) {
       // Second finger: pinch-zoom / two-finger pan (any mode). A stroke the
@@ -246,9 +450,11 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
       const d = drag.current;
       if (d?.batcher) {
         window.clearInterval(d.timer);
+        window.clearTimeout(d.snapT);
         flushPts();
       }
       setPreview([]);
+      selXf.current = null;
       drag.current = { kind: 'hand' };
       return;
     }
@@ -259,14 +465,23 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
       drag.current = { kind: t, panFrom: { x: e.clientX, y: e.clientY, t: zp } };
       return;
     }
+    if (t === 'laser') {
+      drag.current = { kind: t };
+      laserAt(pt.x, pt.y);
+      return;
+    }
     if (t === 'pen' || t === 'hl') {
       const id = newId(mode === 'edit' ? 't' : 's');
       const w = t === 'hl' ? width * 3 : width;
-      const item: Item = { k: 'stroke', id, by: identity, tool: t, c: color, w, pts: [Math.round(pt.x), Math.round(pt.y)] };
+      // A stylus records pressure (pen strokes only; the highlighter stays even).
+      const withPressure = t === 'pen' && e.pointerType === 'pen';
+      const item: StrokeItem = { k: 'stroke', id, by: identity, tool: t, c: color, w, pts: [Math.round(pt.x), Math.round(pt.y)] };
+      if (withPressure) item.pr = [pressurePct(e.pressure)];
       send([{ k: 'add', p: pg.id, item }]);
-      const batcher = new PointBatcher(pg.id, id);
-      const timer = window.setInterval(flushPts, BATCH_MS);
+      const batcher = new PointBatcher(pg.id, id, withPressure);
+      const timer = window.setInterval(() => flushPts(), BATCH_MS);
       drag.current = { kind: t, batcher, item, timer };
+      armSnap(pt.x, pt.y, true);
       return;
     }
     if (t === 'eraser') {
@@ -277,6 +492,30 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
     if (t === 'text') {
       const r = canvasRef.current!.getBoundingClientRect();
       setTextAt({ x: pt.x, y: pt.y, sx: e.clientX - r.left, sy: e.clientY - r.top });
+      return;
+    }
+    if (t === 'select') {
+      const pad = 10 / view.scale;
+      if (selBox) {
+        const hx = selBox.x + selBox.w, hy = selBox.y + selBox.h;
+        if (Math.abs(pt.x - hx) <= 18 / view.scale && Math.abs(pt.y - hy) <= 18 / view.scale) {
+          drag.current = { kind: t, sel: 'scale', start: pt };
+          return;
+        }
+        if (pt.x >= selBox.x - pad && pt.x <= hx + pad && pt.y >= selBox.y - pad && pt.y <= hy + pad) {
+          drag.current = { kind: t, sel: 'move', start: pt };
+          return;
+        }
+      }
+      // Pressing on an item selects it and starts moving it straight away.
+      const hit = [...pg.items].reverse().find((it) => hitItem(it, pt.x, pt.y, pad));
+      if (hit) {
+        setSelection([hit.id]);
+        drag.current = { kind: t, sel: 'move', start: pt };
+        return;
+      }
+      setSelection([]);
+      drag.current = { kind: t, sel: 'band', start: pt };
       return;
     }
     drag.current = { kind: t, start: pt };
@@ -293,24 +532,65 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
     }
     if (prev) pointers.current.set(e.pointerId, local(e));
     const d = drag.current;
+    // The laser follows the mouse even without a button pressed.
+    if (!d && mode === 'edit' && tool === 'laser' && e.pointerType === 'mouse') {
+      const pt = pagePoint(e);
+      return laserAt(pt.x, pt.y);
+    }
     if (!d) return;
     if (d.kind === 'hand') {
       if (d.panFrom) setZp(panBy(d.panFrom.t, e.clientX - d.panFrom.x, e.clientY - d.panFrom.y, size.w, size.h, minZoom));
       return;
     }
-    const pt = pagePoint(e);
+    if (d.kind === 'laser') {
+      const pt = pagePoint(e);
+      return laserAt(pt.x, pt.y);
+    }
     if (d.batcher) {
-      d.batcher.push(pt.x, pt.y);
+      if (d.snapped) return;
+      // Every sample the hardware delivered (a stylus reports 120–240 Hz),
+      // not just one per frame.
+      const ne = e.nativeEvent as PointerEvent;
+      const list = typeof ne.getCoalescedEvents === 'function' ? ne.getCoalescedEvents() : [];
+      for (const ce of list.length ? list : [ne]) {
+        const p = pageXY(ce.clientX, ce.clientY);
+        d.batcher.push(p.x, p.y, ce.pressure);
+      }
+      const pred = typeof ne.getPredictedEvents === 'function' ? ne.getPredictedEvents() : [];
+      d.predicted = pred.slice(0, 3).flatMap((pe) => {
+        const p = pageXY(pe.clientX, pe.clientY);
+        return [Math.round(p.x), Math.round(p.y)];
+      });
+      const last = pageXY(ne.clientX, ne.clientY);
+      armSnap(last.x, last.y);
+      schedulePaint();
       return;
     }
+    const pt = pagePoint(e);
     if (d.kind === 'eraser') return eraseAt(pt.x, pt.y);
+    if (d.kind === 'select' && d.start) {
+      const s = d.start;
+      if (d.sel === 'band') {
+        setPreview([{ k: 'rect', id: 'preview', by: identity, c: '#3b82f6', w: 2 / view.scale, x1: s.x, y1: s.y, x2: pt.x, y2: pt.y }]);
+      } else if (d.sel === 'move') {
+        selXf.current = { s: 1, ox: 0, oy: 0, dx: Math.round(pt.x - s.x), dy: Math.round(pt.y - s.y) };
+        schedulePaint();
+      } else if (d.sel === 'scale' && selBox) {
+        const sx = (pt.x - selBox.x) / Math.max(1, selBox.w), sy = (pt.y - selBox.y) / Math.max(1, selBox.h);
+        const k = Math.min(10, Math.max(0.1, Math.max(sx, sy)));
+        selXf.current = { s: k, ox: selBox.x, oy: selBox.y, dx: 0, dy: 0 };
+        schedulePaint();
+      }
+      return;
+    }
     if (d.start) {
       const s = d.start;
       const id = 'preview';
       if (d.kind === 'area') {
         setPreview([{ k: 'rect', id, by: identity, c: '#e53935', w: 2 / view.scale, x1: s.x, y1: s.y, x2: pt.x, y2: pt.y }]);
-      } else if (d.kind === 'line' || d.kind === 'arrow' || d.kind === 'rect' || d.kind === 'ellipse') {
-        setPreview([{ k: d.kind, id, by: identity, c: color, w: width, x1: s.x, y1: s.y, x2: pt.x, y2: pt.y }]);
+      } else if (SHAPES.includes(d.kind as ShapeKind)) {
+        const k = d.kind as ShapeKind;
+        setPreview([{ k, id, by: identity, c: color, w: width, x1: s.x, y1: s.y, x2: pt.x, y2: pt.y, ...(fill && FILLABLE.has(k) ? { fl: 1 as const } : {}) }]);
       }
     }
   };
@@ -330,13 +610,30 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
     const pg = currentPage(session.doc);
     if (d.batcher) {
       window.clearInterval(d.timer);
-      flushPts();
+      window.clearTimeout(d.snapT);
+      if (d.snapped) return schedulePaint();
+      flushPts(d);
+      d.predicted = [];
       const full = pg.items.find((x) => x.id === d.item!.id);
       if (full) {
         undoRef.current.push({ redo: [{ k: 'add', p: pg.id, item: JSON.parse(JSON.stringify(full)) }], undo: [{ k: 'del', p: pg.id, ids: [full.id] }] });
         redoRef.current = [];
         setStackTick((n) => n + 1);
       }
+      schedulePaint();
+      return;
+    }
+    if (d.kind === 'select' && d.start) {
+      const pt = pagePoint(e);
+      if (d.sel === 'band') {
+        setPreview([]);
+        if (Math.hypot(pt.x - d.start.x, pt.y - d.start.y) > 4 / view.scale) setSelection(itemsInRect(pg, d.start.x, d.start.y, pt.x, pt.y));
+        return;
+      }
+      const xf = selXf.current;
+      selXf.current = null;
+      if (xf && (xf.s !== 1 || xf.dx || xf.dy) && selection.length) act({ k: 'xf', p: pg.id, ids: selection, ...xf });
+      else schedulePaint();
       return;
     }
     if (d.start) {
@@ -348,11 +645,12 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
         return;
       }
       if (Math.hypot(pt.x - d.start.x, pt.y - d.start.y) < 3) return;
-      if (d.kind === 'line' || d.kind === 'arrow' || d.kind === 'rect' || d.kind === 'ellipse') {
+      if (SHAPES.includes(d.kind as ShapeKind)) {
+        const k = d.kind as ShapeKind;
         act({
           k: 'add',
           p: pg.id,
-          item: { k: d.kind, id: newId('t'), by: identity, c: color, w: width, x1: Math.round(d.start.x), y1: Math.round(d.start.y), x2: Math.round(pt.x), y2: Math.round(pt.y) },
+          item: { k, id: newId('t'), by: identity, c: color, w: width, x1: Math.round(d.start.x), y1: Math.round(d.start.y), x2: Math.round(pt.x), y2: Math.round(pt.y), ...(fill && FILLABLE.has(k) ? { fl: 1 as const } : {}) },
         });
       }
     }
@@ -369,21 +667,49 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
     if (size.w && size.h) setZp((t) => clampZP(t, size.w, size.h, minZoom));
   }, [size.w, size.h, minZoom]);
 
-  // Keyboard shortcuts (edit).
+  const deleteSelection = () => {
+    if (!selection.length) return;
+    act({ k: 'del', p: currentPage(session.doc).id, ids: selection });
+    setSelection([]);
+  };
+  const duplicateSelection = () => {
+    if (!selItems.length) return;
+    const pid = currentPage(session.doc).id;
+    const copies = selItems.map((it) => transformItem({ ...JSON.parse(JSON.stringify(it)), id: newId('t'), by: identity }, { s: 1, ox: 0, oy: 0, dx: 30, dy: 30 }));
+    actAll(copies.map((item) => ({ k: 'add', p: pid, item })));
+    setSelection(copies.map((c) => c.id));
+  };
+
+  // Keyboard shortcuts (edit / annotate).
   useEffect(() => {
     if (mode === 'view') return;
     const win = wrapRef.current?.ownerDocument.defaultView ?? window;
     const onKey = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement)?.tagName === 'TEXTAREA') return;
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'TEXTAREA' || tag === 'INPUT') return;
+      const mod = e.ctrlKey || e.metaKey;
+      const k = e.key.toLowerCase();
+      if (mod && k === 'z') {
         e.preventDefault();
         if (e.shiftKey) redo();
         else undo();
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+      } else if (mod && k === 'y') {
         e.preventDefault();
         redo();
-      } else if (mode === 'edit' && e.key === 'PageDown') goPage(1);
-      else if (mode === 'edit' && e.key === 'PageUp') goPage(-1);
+      } else if (mode !== 'edit') return;
+      else if (mod && k === 'd' && selection.length) {
+        e.preventDefault();
+        duplicateSelection();
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && selection.length) {
+        e.preventDefault();
+        deleteSelection();
+      } else if (e.key === 'Escape') setSelection([]);
+      else if (e.key === 'PageDown') goPage(1);
+      else if (e.key === 'PageUp') goPage(-1);
+      else if (!mod && !e.altKey) {
+        const map: Record<string, Tool> = { v: 'select', p: 'pen', h: 'hl', l: 'laser', e: 'eraser', t: 'text' };
+        if (map[k]) setTool(map[k]!);
+      }
     };
     win.addEventListener('keydown', onKey);
     return () => win.removeEventListener('keydown', onKey);
@@ -392,9 +718,13 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
   const goPage = (delta: number) => {
     const cur = session.doc.cur + delta;
     if (cur < 0 || cur >= session.doc.pages.length) return;
+    setSelection([]);
     act({ k: 'go', cur });
   };
-  const newPage = () => act({ k: 'newpage', at: session.doc.cur + 1, id: newId('p'), bg: currentPage(session.doc).bg });
+  const newPage = () => {
+    setSelection([]);
+    act({ k: 'newpage', at: session.doc.cur + 1, id: newId('p'), bg: currentPage(session.doc).bg });
+  };
   const setBg = (bg: Background) => {
     act({ k: 'bg', p: currentPage(session.doc).id, bg });
     if ((bg === 'black' && color === '#111111') || (bg !== 'black' && color === '#ffffff')) setColor(inkFor(bg));
@@ -421,7 +751,11 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
         const src = c.toDataURL('image/jpeg', 0.8);
         const fit = Math.min(1, (PAGE_W * 0.7) / c.width, (PAGE_H * 0.7) / c.height);
         const w = Math.round(c.width * fit), h = Math.round(c.height * fit);
-        act({ k: 'add', p: currentPage(session.doc).id, item: { k: 'img', id: newId('t'), by: identity, src, x: Math.round((PAGE_W - w) / 2), y: Math.round((PAGE_H - h) / 2), w, h } });
+        const id = newId('t');
+        act({ k: 'add', p: currentPage(session.doc).id, item: { k: 'img', id, by: identity, src, x: Math.round((PAGE_W - w) / 2), y: Math.round((PAGE_H - h) / 2), w, h } });
+        // Placed in the middle and selected, ready to move or resize.
+        setToolState('select');
+        setSelection([id]);
       };
       img.src = String(reader.result);
     };
@@ -455,162 +789,176 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
   };
 
-  const cursor = !editing ? (isZoomed(zp) ? 'grab' : 'default') : tool === 'hand' ? 'grab' : tool === 'text' ? 'text' : 'crosshair';
-  const btn = (active: boolean): CSSProperties => barBtn(active, { minWidth: 36, height: 36, fontSize: 14 });
-  const toolBtn = (t: Tool, label: string, title: string) => (
-    <button key={t} type="button" title={title} aria-label={title} data-wb-tool={t} style={btn(tool === t)} onClick={() => setTool(t)}>
-      {label}
+  const cursor = !editing ? (isZoomed(zp) ? 'grab' : 'default') : tool === 'hand' ? 'grab' : tool === 'text' ? 'text' : tool === 'select' ? 'default' : tool === 'laser' ? 'none' : 'crosshair';
+  const btn = (active: boolean, extra?: CSSProperties): CSSProperties => barBtn(active, { minWidth: 38, height: 38, fontSize: 13, ...extra });
+  const icon = (n: WbIconName) => <WbIcon name={n} />;
+  const toolBtn = (t: Tool) => (
+    <button key={t} type="button" title={TOOL_LABEL[t]} aria-label={TOOL_LABEL[t]} aria-pressed={tool === t} data-wb-tool={t} style={btn(tool === t)} onClick={() => setTool(t)}>
+      {icon(TOOL_ICON[t])}
     </button>
   );
   const isTool = (...ts: Tool[]) => ts.includes(tool);
-  const glyph = (g: string) => <span aria-hidden style={{ fontSize: 17, lineHeight: 1 }}>{g}</span>;
+  const swatch = (c: string, s = 18) => <span aria-hidden style={{ width: s, height: s, borderRadius: s / 2, background: c, border: '2px solid #e2e8f0', display: 'block' }} />;
   const colorGrid = (
     <>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 26px)', gap: 6 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 28px)', gap: 6 }} role="radiogroup" aria-label="Colour">
         {PALETTE.map((c) => (
           <button
             key={c}
             type="button"
+            role="radio"
+            aria-checked={color === c}
             title={`Colour ${c}`}
             aria-label={`Colour ${c}`}
             onClick={() => setColor(c)}
-            style={{ width: 26, height: 26, borderRadius: 13, background: c, border: color === c ? '3px solid #60a5fa' : '1px solid #475569', cursor: 'pointer', padding: 0 }}
+            style={{ width: 28, height: 28, borderRadius: 14, background: c, border: color === c ? '3px solid #60a5fa' : '1px solid #475569', cursor: 'pointer', padding: 0 }}
           />
         ))}
       </div>
-      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }} role="radiogroup" aria-label="Thickness">
+      <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }} role="radiogroup" aria-label="Thickness">
         {WIDTHS.map((w) => (
           <button key={w} type="button" role="radio" aria-checked={width === w} aria-label={`Thickness ${w}px`} title={`${w}px`} onClick={() => setWidth(w)} style={btn(width === w)}>
-            <span style={{ width: Math.min(18, w + 2), height: Math.min(18, w + 2), borderRadius: 9, background: color, display: 'block' }} />
+            <span style={{ width: Math.min(20, w + 2), height: Math.min(20, w + 2), borderRadius: 10, background: color, display: 'block' }} />
           </button>
         ))}
       </div>
     </>
   );
-  const undoRedo = (
-    <>
-      <button type="button" style={btn(false)} onClick={undo} title="Undo (Ctrl+Z)" aria-label="Undo" disabled={!undoRef.current.length}>
-        ↶
-      </button>
-      <button type="button" style={btn(false)} onClick={redo} title="Redo (Ctrl+Y)" aria-label="Redo" disabled={!redoRef.current.length}>
-        ↷
-      </button>
-    </>
-  );
+  const shapeTool = SHAPES.includes(tool as ShapeKind) ? (tool as ShapeKind) : null;
   const editGroups: FlyoutGroup[] = [
+    { id: 'select', label: TOOL_LABEL.select, icon: icon('select'), active: tool === 'select', onClick: () => setTool('select'), testId: 'wb-tool-select' },
     {
       id: 'draw',
       label: 'Draw: pen, highlighter, text',
-      icon: glyph(tool === 'hl' ? '▬' : tool === 'text' ? 'T' : '✎'),
+      icon: icon(tool === 'hl' ? 'highlighter' : tool === 'text' ? 'text' : 'pen'),
       active: isTool('pen', 'hl', 'text'),
       testId: 'wb-group-draw',
       content: (
         <>
-          {toolBtn('pen', '✎', 'Pen')}
-          {toolBtn('hl', '▬', 'Highlighter')}
-          {toolBtn('text', 'T', 'Text')}
+          {toolBtn('pen')}
+          {toolBtn('hl')}
+          {toolBtn('text')}
         </>
       ),
     },
+    { id: 'laser', label: TOOL_LABEL.laser, icon: icon('laser'), active: tool === 'laser', onClick: () => setTool('laser'), testId: 'wb-tool-laser' },
     {
       id: 'shapes',
-      label: 'Shapes: line, arrow, rectangle, ellipse',
-      icon: glyph(tool === 'line' ? '╱' : tool === 'arrow' ? '➚' : tool === 'ellipse' ? '◯' : '▭'),
-      active: isTool('line', 'arrow', 'rect', 'ellipse'),
+      label: 'Shapes: line, arrow, rectangle, ellipse, triangle',
+      icon: icon(shapeTool ?? 'shapes'),
+      active: !!shapeTool,
       content: (
         <>
-          {toolBtn('line', '╱', 'Line')}
-          {toolBtn('arrow', '➚', 'Arrow')}
-          {toolBtn('rect', '▭', 'Rectangle')}
-          {toolBtn('ellipse', '◯', 'Ellipse')}
+          {SHAPES.map((s) => toolBtn(s))}
+          <button type="button" style={btn(fill)} aria-pressed={fill} onClick={() => setFill((f) => !f)} title="Fill rectangles, ellipses and triangles" aria-label="Fill shapes">
+            {icon('fill')}
+          </button>
         </>
       ),
     },
     {
       id: 'erase',
-      label: 'Erase and undo',
-      icon: glyph('⌫'),
+      label: 'Erase',
+      icon: icon(tool === 'area' ? 'areaEraser' : 'eraser'),
       active: isTool('eraser', 'area'),
       content: (
         <>
-          {toolBtn('eraser', '⌫', 'Eraser (strokes)')}
-          {toolBtn('area', '⬚', 'Eraser (area)')}
-          {undoRedo}
+          {toolBtn('eraser')}
+          {toolBtn('area')}
           <button type="button" style={btn(false)} onClick={() => act({ k: 'clear', p: currentPage(session.doc).id })} title="Clear page" aria-label="Clear page">
-            Clear
+            {icon('clear')}
           </button>
         </>
       ),
     },
-    {
-      id: 'color',
-      label: 'Colour and size',
-      icon: <span aria-hidden style={{ width: 18, height: 18, borderRadius: 9, background: color, border: '2px solid #e2e8f0', display: 'block' }} />,
-      content: colorGrid,
-    },
+    { id: 'color', label: 'Colour and size', icon: swatch(color), content: colorGrid },
+    { id: 'undo', label: 'Undo (Ctrl+Z)', icon: icon('undo'), onClick: undo, disabled: !undoRef.current.length },
+    { id: 'redo', label: 'Redo (Ctrl+Y)', icon: icon('redo'), onClick: redo, disabled: !redoRef.current.length },
     {
       id: 'pages',
       label: 'Pages and background',
       icon: <span aria-hidden style={{ fontSize: 11 }} data-testid="wb-page">{session.doc.cur + 1}/{session.doc.pages.length}</span>,
       content: (
         <>
-          <button type="button" style={btn(false)} onClick={() => goPage(-1)} disabled={session.doc.cur === 0} aria-label="Previous page" title="Previous page (PgUp)">
-            ‹
-          </button>
-          <button type="button" style={btn(false)} onClick={() => goPage(1)} disabled={session.doc.cur >= session.doc.pages.length - 1} aria-label="Next page" title="Next page (PgDn)">
-            ›
-          </button>
-          <button type="button" style={btn(false)} onClick={newPage} aria-label="New page" title="New page">
-            +Page
-          </button>
-          {BACKGROUNDS.map((b) => (
-            <button key={b} type="button" style={btn(page.bg === b)} onClick={() => setBg(b)} aria-label={`Background ${b}`} title={`Background: ${b}`}>
-              {b[0]!.toUpperCase() + b.slice(1)}
+          <div style={{ display: 'flex', gap: 4 }}>
+            <button type="button" style={btn(false)} onClick={() => goPage(-1)} disabled={session.doc.cur === 0} aria-label="Previous page" title="Previous page (PgUp)">
+              {icon('prev')}
             </button>
-          ))}
+            <button type="button" style={btn(false)} onClick={() => goPage(1)} disabled={session.doc.cur >= session.doc.pages.length - 1} aria-label="Next page" title="Next page (PgDn)">
+              {icon('next')}
+            </button>
+            <button type="button" style={btn(false)} onClick={newPage} aria-label="New page" title="New page">
+              {icon('addPage')}
+            </button>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, auto)', gap: 4 }} role="radiogroup" aria-label="Background">
+            {BACKGROUNDS.map((b) => (
+              <button key={b} type="button" role="radio" aria-checked={page.bg === b} style={btn(page.bg === b, { padding: '0 8px' })} onClick={() => setBg(b)} aria-label={`Background: ${BG_LABEL[b]}`} title={`Background: ${BG_LABEL[b]}`}>
+                {BG_LABEL[b]}
+              </button>
+            ))}
+          </div>
         </>
       ),
     },
     {
       id: 'view',
       label: 'Zoom, pan, image and export',
-      icon: glyph('⌕'),
+      icon: icon('view'),
       active: isTool('hand'),
       content: (
         <>
-          {toolBtn('hand', '✋', 'Pan')}
+          {toolBtn('hand')}
           <button type="button" style={btn(false)} onClick={() => zoomBy(1 / 1.25)} aria-label="Zoom out" title="Zoom out (Ctrl+wheel)">
-            −
+            {icon('zoomOut')}
           </button>
           <button type="button" style={btn(false)} onClick={resetZoom} aria-label="Fit page" title="Fit page">
             {Math.round(zp.s * 100)}%
           </button>
           <button type="button" style={btn(false)} onClick={() => zoomBy(1.25)} aria-label="Zoom in" title="Zoom in">
-            +
+            {icon('zoomIn')}
           </button>
           <button type="button" style={btn(false)} onClick={() => fileRef.current?.click()} aria-label="Insert image" title="Insert image">
-            🖼
+            {icon('image')}
           </button>
-          <button type="button" style={btn(false)} onClick={exportPng} aria-label="Export PNG" title="Export this page as PNG">
-            PNG
+          <button type="button" style={btn(false, { padding: '0 8px' })} onClick={exportPng} aria-label="Export PNG" title="Export this page as PNG">
+            {icon('download')} PNG
           </button>
-          <button type="button" style={btn(false)} onClick={() => void exportPdf()} aria-label="Export PDF" title="Export all pages as PDF">
-            PDF
+          <button type="button" style={btn(false, { padding: '0 8px' })} onClick={() => void exportPdf()} aria-label="Export PDF" title="Export all pages as PDF">
+            {icon('download')} PDF
           </button>
         </>
       ),
     },
   ];
   const annotateGroups: FlyoutGroup[] = [
-    { id: 'pen', label: 'Pen', icon: glyph('✎'), active: tool !== 'eraser', onClick: () => setTool('pen') },
-    { id: 'eraser', label: 'Erase my drawing', icon: glyph('⌫'), active: tool === 'eraser', onClick: () => setTool('eraser') },
-    { id: 'color', label: 'Colour and size', icon: <span aria-hidden style={{ width: 18, height: 18, borderRadius: 9, background: color, border: '2px solid #e2e8f0', display: 'block' }} />, content: colorGrid },
-    { id: 'undo', label: 'Undo / redo', icon: glyph('↶'), content: undoRedo },
+    { id: 'pen', label: 'Pen', icon: icon('pen'), active: tool !== 'eraser', onClick: () => setTool('pen') },
+    { id: 'eraser', label: 'Erase my drawing', icon: icon('eraser'), active: tool === 'eraser', onClick: () => setTool('eraser') },
+    { id: 'color', label: 'Colour and size', icon: swatch(color), content: colorGrid },
+    { id: 'undo', label: 'Undo', icon: icon('undo'), onClick: undo, disabled: !undoRef.current.length },
+    { id: 'redo', label: 'Redo', icon: icon('redo'), onClick: redo, disabled: !redoRef.current.length },
   ];
   // 54px. Must match WB_TOOL_COLUMN_PX in lib/floatGeometry.ts. Kept as a
   // literal: this file is also bundled by the Windows renderer, which does not
   // resolve the web app's `@/` alias.
   const barW = 54;
+
+  // Floating actions above the selection (touch-friendly; keys: Delete, Ctrl+D).
+  let selBar: ReactNode = null;
+  if (mode === 'edit' && tool === 'select' && selBox && !selXf.current) {
+    const x = Math.max(4, Math.min(size.w - 96, selBox.x * view.scale + view.tx));
+    const y = Math.max(4, selBox.y * view.scale + view.ty - 48);
+    selBar = (
+      <div data-testid="wb-selection-bar" style={{ position: 'absolute', left: x, top: y, zIndex: 4, display: 'flex', gap: 4, padding: 4, borderRadius: 10, background: 'rgba(17,24,39,0.92)', border: '1px solid rgba(255,255,255,0.14)' }}>
+        <button type="button" style={btn(false)} onClick={duplicateSelection} aria-label="Duplicate selection" title="Duplicate (Ctrl+D)">
+          {icon('duplicate')}
+        </button>
+        <button type="button" style={btn(false, { background: '#7f1d1d' })} onClick={deleteSelection} aria-label="Delete selection" title="Delete (Del)">
+          {icon('clear')}
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', background: '#0b0f14', overflow: 'hidden', ...style }} data-whiteboard={mode}>
@@ -633,6 +981,7 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
             Reset zoom
           </button>
         )}
+        {selBar}
         {textAt && (
           <textarea
             autoFocus
@@ -658,7 +1007,7 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onClose, styl
           tail={
             onClose && !hideStop ? (
               <button type="button" style={{ ...btn(false), marginTop: 'auto', background: '#b91c1c' }} onClick={onClose} aria-label="Stop whiteboard" title="Stop whiteboard (students stop seeing it)">
-                ■
+                {icon('stop')}
               </button>
             ) : undefined
           }

@@ -113,14 +113,14 @@ export function MeetingBar({ meeting, onStop }: { meeting: WbMeeting; onStop: ()
   );
 }
 
-function App({ session, identity, onSend, onClose, meeting }: { session: WhiteboardSession; identity: string; onSend: (ops: Op[]) => void; onClose: () => void; meeting?: WbMeeting }) {
+function App({ session, identity, onSend, onClose, meeting, onLaser }: { session: WhiteboardSession; identity: string; onSend: (ops: Op[]) => void; onClose: () => void; meeting?: WbMeeting; onLaser?: (pts: number[]) => void }) {
   useEffect(() => {
     document.title = 'Whiteboard (students see it live)';
   }, []);
   return (
     <div style={{ position: 'fixed', inset: 0, display: 'flex' }}>
       <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
-        <WhiteboardBoard session={session} mode="edit" identity={identity} onSend={onSend} onClose={onClose} hideStop={!!meeting} style={{ position: 'absolute', inset: 0 }} />
+        <WhiteboardBoard session={session} mode="edit" identity={identity} onSend={onSend} onLaser={onLaser} onClose={onClose} hideStop={!!meeting} style={{ position: 'absolute', inset: 0 }} />
       </div>
       {meeting ? <MeetingBar meeting={meeting} onStop={onClose} /> : null}
     </div>
@@ -129,7 +129,7 @@ function App({ session, identity, onSend, onClose, meeting }: { session: Whitebo
 
 const root = createRoot(document.getElementById('root')!);
 (window as unknown as { __board: unknown }).__board = {
-  mount(session: WhiteboardSession, identity: string, onSend: (ops: Op[]) => void, onClose: () => void, meeting?: WbMeeting) {
-    root.render(<App session={session} identity={identity} onSend={onSend} onClose={onClose} meeting={meeting} />);
+  mount(session: WhiteboardSession, identity: string, onSend: (ops: Op[]) => void, onClose: () => void, meeting?: WbMeeting, onLaser?: (pts: number[]) => void) {
+    root.render(<App session={session} identity={identity} onSend={onSend} onClose={onClose} meeting={meeting} onLaser={onLaser} />);
   },
 };
