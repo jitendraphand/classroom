@@ -80,3 +80,17 @@ test('Origin matching X-Forwarded-Host (behind Caddy) is allowed', () => {
   });
   assert.equal(r.ok, true);
 });
+
+test('GETs that say they come from another site are refused (side-effecting GETs, sibling sslip.io pages)', async () => {
+  const { allowsCrossSiteGet } = await import('../src/lib/csrf');
+  const get = (site: string | null, allowCrossSiteGet = false) =>
+    checkCsrf({ method: 'GET', allowCrossSiteGet, headers: h(site ? { 'sec-fetch-site': site, host: 'a-b-c-d.sslip.io' } : { host: 'a-b-c-d.sslip.io' }) });
+  assert.equal(get('same-origin').ok, true);
+  assert.equal(get('none').ok, true);
+  assert.equal(get(null).ok, true, 'native apps / curl send no Sec-Fetch-Site');
+  assert.equal(get('same-site').ok, false);
+  assert.equal(get('cross-site').ok, false);
+  assert.equal(get('cross-site', true).ok, true);
+  assert.equal(allowsCrossSiteGet('/api/student/join'), true);
+  assert.equal(allowsCrossSiteGet('/api/rooms/ABC/token'), false);
+});

@@ -11,9 +11,14 @@ import { ensureRedis, keys } from './redis';
  * 'signed_in_elsewhere'). Best effort: a LiveKit hiccup never fails a login.
  */
 
+/**
+ * The participant or room is already gone. LiveKit answers "no response from
+ * servers" when no node hosts the room (nobody connected yet, or it emptied),
+ * which is the usual case on a fresh sign-in: not an error worth logging.
+ */
 function notFound(e: unknown) {
   const msg = e instanceof Error ? e.message : String(e);
-  return /not.?found|does not exist/i.test(msg);
+  return /not.?found|does not exist|no response from servers/i.test(msg);
 }
 
 /** Back to the idle stage. */

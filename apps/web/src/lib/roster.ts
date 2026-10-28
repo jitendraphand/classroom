@@ -111,7 +111,10 @@ export async function importRoster(rows: RosterRow[]) {
         })
       )
     );
-    for (const r of chunk) existing.has(r.externalId) ? updated++ : created++;
+    for (const r of chunk) {
+      if (existing.has(r.externalId)) updated++;
+      else created++;
+    }
   }
   return { created, updated };
 }

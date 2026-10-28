@@ -2,16 +2,21 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { DATA_SAVER_KEY, parseDataSaver, type DataSaverMode } from '@/lib/dataSaver';
+import { mediaProfile } from '@/lib/videoQuality';
 
 const EVT = 'classroom-data-saver';
 
 /** Shared (all components, persisted per device) data-saver mode. */
 export function useDataSaver(): [DataSaverMode, (m: DataSaverMode) => void] {
   const [mode, setMode] = useState<DataSaverMode>(() => {
+    // No choice saved on this device: the deployment's media profile decides
+    // (MEDIA_PROFILE=low starts students in "Low quality").
+    const fallback: DataSaverMode = mediaProfile() === 'low' ? 'low' : 'off';
     try {
-      return parseDataSaver(localStorage.getItem(DATA_SAVER_KEY));
+      const saved = localStorage.getItem(DATA_SAVER_KEY);
+      return saved == null ? fallback : parseDataSaver(saved);
     } catch {
-      return 'off';
+      return fallback;
     }
   });
   useEffect(() => {

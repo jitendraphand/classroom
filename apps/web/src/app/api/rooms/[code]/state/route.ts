@@ -2,7 +2,6 @@ import { whiteboardOn } from '@/lib/whiteboardServer';
 import { camWanted } from '@/lib/camOnDemand';
 import { prisma } from '@/lib/db';
 import { endedSessionReason, getStudentSessionToken, resolveRoomAccess } from '@/lib/auth';
-import { cachedRead } from '@/lib/dbCache';
 import { recentTakeovers, wasReplaced } from '@/lib/deviceTakeoverServer';
 import { jsonError, jsonOk } from '@/lib/response';
 import { clampMaxVisible, ensureSampleFresh, getVisibleSample } from '@/lib/sample';
@@ -16,6 +15,7 @@ import { selectTeacherVideos } from '@/lib/droppedVideos';
 import { getSchoolSettings } from '@/lib/schoolSettings';
 import { classCapacity } from '@/lib/capacity';
 import { readMicBook, micQueueView } from '@/lib/micBook';
+import { memo, roomVersion, stateCacheMs } from '@/lib/roomStateCache';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,7 +26,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     url.searchParams.get('as') === 'student' ||
     req.headers.get('x-classroom-as') === 'student';
 
-  const room = await cachedRead(`room-state:${code}`, () => prisma.room.findUnique({
+  const loadRoom = () => prisma.room.findUnique({
     where: { code },
     include: {
       teacher: { select: { id: true, name: true } },
@@ -47,7 +47,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
         },
       },
     },
-  }));
+  });
+  // Students share one snapshot per room version for STATE_CACHE_MS (lib/roomStateCache).
+  const cacheMs = stateCacheMs();
+  const ver = cacheMs > 0 ? await roomVersion(code) : '0';
+  let room = cacheMs > 0 ? await memo(`state-room:${code}:${ver}`, cacheMs, loadRoom) : await loadRoom();
   if (!room) return jsonError('Room not found', 404);
 
   // Always surface ENDED quickly so clients can kick to ended UI without auth edge-cases
@@ -71,6 +75,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   const access = await resolveRoomAccess(room, { forceStudent });
   const isTeacher = access.isTeacher;
   const isStudent = access.mode === 'student';
+  // The teacher always gets a fresh read (roster, waiting list, presence).
+  if (isTeacher && cacheMs > 0) room = (await loadRoom()) ?? room;
 
   if (!isTeacher && !isStudent) {
     // A teacher/admin whose session was replaced or revoked (e.g. the class tab
@@ -107,9 +113,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     const stageRaw = await redis.get(keys.stage(code));
     const stageMode =
       stageRaw === 'screen' ? 'screen' : 'idle';
-    const raisedHands = (await redis.smembers(keys.hands(code))).map(String);
 
     if (me?.status !== 'ADMITTED') {
+      const myHand = me ? (await redis.sismember(keys.hands(code), me.id)) === 1 : false;
       const settings = await getSchoolSettings();
       const cap = classCapacity(settings.maxStudentsPerClass);
       const admittedCount = room.participants.filter((p) => p.role === 'STUDENT' && p.status === 'ADMITTED').length;
@@ -133,7 +139,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
               mutedByTeacher: false,
               canPublishVideo: false,
               inVisibleSample: false,
-              handRaised: raisedHands.includes(me.id),
+              handRaised: myHand,
             }
           : null,
         admitted: [],
@@ -146,10 +152,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     }
   }
 
-  await ensureSampleFresh(code);
   const redis = await ensureRedis();
+  const loadShared = async () => {
+  await ensureSampleFresh(code);
   // Independent reads, issued together (ioredis pipelines them on one socket).
-  const [{ visible }, mutedIds, handList, handTimes, stageRaw, focusRaw, drawHolders, drawReqs, desktopInkRaw, panelRaw] = await Promise.all([
+  const [[{ visible }, mutedIds, handList, handTimes, stageRaw, focusRaw, drawHolders, drawReqs, desktopInkRaw, panelRaw], [settings, spotlightId, micBook], whiteboard] = await Promise.all([Promise.all([
     getVisibleSample(code),
     redis.smembers(keys.muted(code)),
     redis.smembers(keys.hands(code)),
@@ -161,7 +168,16 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     drawRequests(code, redis),
     redis.get(keys.desktopInk(code)),
     redis.get(keys.videoPanel(code)),
-  ]);
+  ]), Promise.all([
+    getSchoolSettings(),
+    redis.get(keys.spotlight(code)),
+    readMicBook(code),
+  ]), whiteboardOn(code)]);
+  return { visible, mutedIds, handList, handTimes, stageRaw, focusRaw, drawHolders, drawReqs, desktopInkRaw, panelRaw, settings, spotlightId, micBook, whiteboard };
+  };
+  // Students: one computation per room version per worker, shared by every request.
+  const { visible, mutedIds, handList, handTimes, stageRaw, focusRaw, drawHolders, drawReqs, desktopInkRaw, panelRaw, settings, spotlightId, micBook, whiteboard } =
+    isTeacher ? await loadShared() : await memo(`state-shared:${code}:${ver}`, cacheMs, loadShared);
   const drawingIds = new Set(drawHolders.map((h) => h.participantId));
   // Back-compat single holder: a drawing student sees their own allow (timer).
   const drawHolder = drawHolders.find((h) => !isTeacher && h.participantId === access.student?.id) || drawHolders[0] || null;
@@ -200,7 +216,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   const lateByStudent = new Map<string, boolean>();
   if (room.classSessionId) {
     const csId = room.classSessionId;
-    classSession = await cachedRead(`class-session:v7:${csId}`, () =>
+    const loadCs = () =>
       prisma.classSession.findUnique({
         where: { id: csId },
         select: {
@@ -216,16 +232,15 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
           scheduledEnd: true,
           teacher: { select: { name: true } },
         },
-      })
-    );
+      });
+    // These fields do not change during a class: students share them for 30 s.
+    classSession = await memo(`state-cs:${csId}`, cacheMs > 0 ? 30_000 : 0, loadCs);
     if (classSession && isTeacher) {
       const cid = classSession.id;
-      const recs = await cachedRead(`attendance-late:${cid}`, () =>
-        prisma.attendanceRecord.findMany({
-          where: { classSessionId: cid },
-          select: { studentId: true, late: true },
-        })
-      );
+      const recs = await prisma.attendanceRecord.findMany({
+        where: { classSessionId: cid },
+        select: { studentId: true, late: true },
+      });
       for (const r of recs) lateByStudent.set(r.studentId, r.late);
     }
   }
@@ -268,11 +283,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   // tile back without waiting for the next rotation.
   const visibleForView = isTeacher ? selectTeacherVideos(visible, { dropped: gone, now: Date.now() }) : visible;
 
-  const [settings, spotlightId, micBook] = await Promise.all([
-    getSchoolSettings(),
-    redis.get(keys.spotlight(code)),
-    readMicBook(code),
-  ]);
   const spotlightParticipant = spotlightId ? room.participants.find((p) => p.id === spotlightId && p.status === 'ADMITTED') : undefined;
   const spotlight = spotlightParticipant
     ? { participantId: spotlightParticipant.id, identity: spotlightParticipant.livekitIdentity, name: spotlightParticipant.displayName }
@@ -318,6 +328,55 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       }
     : null;
 
+  const admittedView = (list: typeof admitted) => list.map((p) => ({
+      id: p.id,
+      displayName: p.displayName,
+      role: p.role,
+      livekitIdentity: p.livekitIdentity,
+      mutedByTeacher: p.mutedByTeacher || mutedIds.includes(p.id),
+      isVisible: p.role === 'TEACHER' || visible.includes(p.livekitIdentity),
+      handRaised: p.role === 'STUDENT' && raisedHands.includes(p.id),
+      ...(isTeacher && p.role === 'STUDENT'
+        ? {
+            handRaisedAt: raisedHands.includes(p.id) ? handAt(p.id) : null,
+            pinned: !!p.pinnedAt,
+            pinnedAt: p.pinnedAt ? p.pinnedAt.getTime() : null,
+            drawRequested: drawReqAt.has(p.id),
+            drawRequestedAt: drawReqAt.get(p.id) ?? null,
+            reconnecting: presence.reconnecting.has(p.livekitIdentity),
+            studentId: p.studentId,
+          }
+        : {}),
+      drawing: p.role === 'STUDENT' && drawingIds.has(p.id),
+      micWaiting: p.role === 'STUDENT' && settings.maxOpenStudentMics > 0 && micBook.queue.some((w) => w.id === p.id),
+      ...rosterInfo(p),
+      ...focusOf(p),
+    }));
+  // Students do not get the class roster: their view needs the teacher(s),
+  // the students whose video or ink is on screen (sample, spotlight, drawing)
+  // and themselves. Sending all ~2,000 rows to every student was ~400 KB of
+  // JSON per poll. The shared part is computed once per room version.
+  let admittedOut: ReturnType<typeof admittedView>;
+  if (isTeacher) {
+    admittedOut = admittedView(admitted);
+  } else {
+    const visibleSet = new Set(visible);
+    const shared = await memo(`state-adm:${code}:${ver}`, cacheMs, async () =>
+      admittedView(
+        admitted.filter(
+          (p) =>
+            p.role === 'TEACHER' ||
+            visibleSet.has(p.livekitIdentity) ||
+            p.id === spotlight?.participantId ||
+            drawingIds.has(p.id)
+        )
+      )
+    );
+    const mine = me && me.status === 'ADMITTED' && !shared.some((p) => p.id === me.id) ? admittedView([me]) : [];
+    admittedOut = mine.length ? [...shared, ...mine] : shared;
+  }
+  const admittedStudentCount = admitted.filter((p) => p.role === 'STUDENT').length;
+
   return jsonOk({
     code: room.code,
     name: room.name,
@@ -345,37 +404,16 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
         }
       : null,
     classInfo,
-    admitted: admitted.map((p) => ({
-      id: p.id,
-      displayName: p.displayName,
-      role: p.role,
-      livekitIdentity: p.livekitIdentity,
-      mutedByTeacher: p.mutedByTeacher || mutedIds.includes(p.id),
-      isVisible: p.role === 'TEACHER' || visible.includes(p.livekitIdentity),
-      handRaised: p.role === 'STUDENT' && raisedHands.includes(p.id),
-      ...(isTeacher && p.role === 'STUDENT'
-        ? {
-            handRaisedAt: raisedHands.includes(p.id) ? handAt(p.id) : null,
-            pinned: !!p.pinnedAt,
-            pinnedAt: p.pinnedAt ? p.pinnedAt.getTime() : null,
-            drawRequested: drawReqAt.has(p.id),
-            drawRequestedAt: drawReqAt.get(p.id) ?? null,
-            reconnecting: presence.reconnecting.has(p.livekitIdentity),
-            studentId: p.studentId,
-          }
-        : {}),
-      drawing: p.role === 'STUDENT' && drawingIds.has(p.id),
-      micWaiting: p.role === 'STUDENT' && settings.maxOpenStudentMics > 0 && micBook.queue.some((w) => w.id === p.id),
-      ...rosterInfo(p),
-      ...focusOf(p),
-    })),
+    admitted: admittedOut,
+    /** Students in the class (students get a trimmed `admitted` list). */
+    admittedStudentCount,
     visibleIdentities: visibleForView,
     visibleCount: visibleForView.length,
     raisedHands,
     stageMode,
     /** The share already shows student ink (drawn on the teacher's desktop): skip the stroke overlay. */
     desktopInk: stageMode === 'screen' && desktopInkRaw === '1',
-    whiteboard: await whiteboardOn(code),
+    whiteboard,
     videoPanelOpen: panelRaw !== '0',
     /** Student allowed to draw on the share now (back-compat: first one, or me), for everyone. */
     drawHolder: drawHolder

@@ -17,6 +17,7 @@ import { connectedStudentCount, distinctConnectedStudents } from '../src/lib/con
 import { tallyAttendance } from '../src/lib/attendance';
 import { chatBottomReserve, chatPlaceholder, PHONE_CONTROL_RESERVE_PX } from '../src/hooks/useStudentLayout';
 import { summarizeRoomParticipants } from '../src/lib/liveClassesLogic';
+import { classroomViewSource } from './helpers/classroomSource';
 
 const src = (p: string) => readFileSync(new URL(`../src/${p}`, import.meta.url), 'utf8');
 
@@ -138,6 +139,10 @@ test('blank tiles connect briefly and never say off camera with nobody there', (
   assert.equal(blankTileKind({ studentsInRoom: 80, pendingSample: 2, blankIndex: 0, settling: true }), 'connecting');
   assert.equal(blankTileKind({ studentsInRoom: 80, pendingSample: 2, blankIndex: 2, settling: true }), 'off-camera');
   assert.equal(blankTileKind({ studentsInRoom: 80, pendingSample: 2, blankIndex: 0, settling: false }), 'off-camera');
+  // Every student already has a tile: the spare tiles are empty, not "Off camera".
+  assert.equal(blankTileKind({ studentsInRoom: 3, pendingSample: 0, blankIndex: 0, settling: false, shownStudents: 3 }), 'empty');
+  assert.equal(blankTileKind({ studentsInRoom: 5, pendingSample: 0, blankIndex: 1, settling: false, shownStudents: 3 }), 'off-camera');
+  assert.equal(blankTileKind({ studentsInRoom: 5, pendingSample: 0, blankIndex: 2, settling: false, shownStudents: 3 }), 'empty');
   assert.equal(blankTileKind({ studentsInRoom: 4, pendingSample: 0, blankIndex: 0, settling: true }), 'off-camera');
 });
 
@@ -190,7 +195,7 @@ test('part B is wired: signal before delete, in-page end, hands, 44px targets', 
   const deleteAt = end.indexOf('deleteRoom(');
   assert.ok(signalAt > 0 && deleteAt > signalAt, 'class-ended packet goes out before the room is deleted');
 
-  const room = src('components/classroom/ClassroomRoom.tsx');
+  const room = classroomViewSource();
   assert.match(room, /data-testid="end-class-confirm"/);
   assert.match(room, /End class for everyone\?/);
   assert.doesNotMatch(room, /confirm\('End class for everyone\?'\)/);

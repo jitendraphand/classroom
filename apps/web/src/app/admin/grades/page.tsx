@@ -6,6 +6,7 @@ import { invalidateGradeOptions } from '@/components/admin/GradePickers';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader } from '@/components/ui/Card';
+import { useConfirm } from '@/components/ui/ConfirmDialog';
 import { api } from '@/lib/clientFetch';
 import { cn } from '@/lib/cn';
 import { displayDivision } from '@/lib/grades';
@@ -33,6 +34,7 @@ function GradesPanel() {
   const [newGrade, setNewGrade] = useState({ label: '', divisions: '' });
   const [campusData, setCampusData] = useState<CampusData | null>(null);
   const [newCampus, setNewCampus] = useState('');
+  const [confirm, confirmDialog] = useConfirm();
 
   const load = useCallback(async () => {
     const [g, c] = await Promise.all([api<Data>('/api/admin/grades'), api<CampusData>('/api/admin/campuses')]);
@@ -54,7 +56,11 @@ function GradesPanel() {
     setBusy(false);
     if (!r.ok) {
       const msg = r.data.error || 'Something went wrong';
-      if (r.data.suggest === 'deactivate' && deactivate && confirm(`${msg}\n\nDeactivate it now?`)) {
+      if (
+        r.data.suggest === 'deactivate' &&
+        deactivate &&
+        (await confirm({ title: 'Deactivate it instead?', body: msg, confirmLabel: 'Deactivate', tone: 'primary' }))
+      ) {
         await deactivate();
         return true;
       }
@@ -97,6 +103,7 @@ function GradesPanel() {
 
   return (
     <div className="space-y-6">
+      {confirmDialog}
       {error && (
         <p className="whitespace-pre-line rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-2 text-sm text-danger-fg" role="alert">
           {error}
@@ -134,9 +141,9 @@ function GradesPanel() {
       <Card padding={false}>
         <div className="p-5 sm:p-6">
           <h2 className="font-display text-lg font-semibold">Campuses {campusData ? `(${campuses.length})` : ''}</h2>
-          <p className="mt-1 text-xs text-slate-500">
-            Classes are routed by campus + grade + division. The school app sends the campus as <code>&amp;Campus=</code> in the join link (case
-            and spaces do not matter). A link without a campus is accepted only while exactly one campus is active, and uses that campus.
+          <p className="mt-1 text-xs text-slate-400">
+            Students are matched to their classes by campus, grade and division, as the school app sends them (case and spaces do not
+            matter). A school-app link without a campus works only while exactly one campus is active.
           </p>
           <form
             className="mt-3 flex flex-wrap gap-2"
@@ -174,8 +181,8 @@ function GradesPanel() {
                 busy={busy}
                 onRename={(label) => patchCampus(c, { label }, 'Campus renamed.')}
                 onToggle={() => void patchCampus(c, { active: !c.active }, c.active ? `Campus ${c.name} deactivated.` : `Campus ${c.name} activated.`)}
-                onDelete={() => {
-                  if (!confirm(`Delete campus ${c.label}?`)) return;
+                onDelete={async () => {
+                  if (!(await confirm({ title: `Delete campus ${c.label}?`, confirmLabel: 'Delete campus' }))) return;
                   void run(`/api/admin/campuses/${c.id}`, { method: 'DELETE' }, `Campus ${c.name} deleted.`, () =>
                     patchCampus(c, { active: false }, `Campus ${c.name} deactivated.`)
                   );
@@ -215,8 +222,9 @@ function GradesPanel() {
       <Card padding={false}>
         <div className="p-5 sm:p-6">
           <h2 className="font-display text-lg font-semibold">Grades {data ? `(${grades.length})` : ''}</h2>
-          <p className="mt-1 text-xs text-slate-500">
-            Deactivated entries disappear from dropdowns but existing classes, students and reports keep them. Entries that are in use cannot be deleted or have their name changed (the display label can always change).
+          <p className="mt-1 text-xs text-slate-400">
+            Deactivated entries disappear from dropdowns; existing classes, students and reports keep them. Entries in use cannot be deleted
+            (deactivate them instead), but their display label can always change.
           </p>
         </div>
         {!data ? (
@@ -235,8 +243,9 @@ function GradesPanel() {
                 onMove={(dir) => void move(i, dir)}
                 onRename={(label) => patchGrade(g, { label }, 'Grade renamed.')}
                 onToggle={() => void patchGrade(g, { active: !g.active }, g.active ? `Grade ${g.name} deactivated.` : `Grade ${g.name} activated.`)}
-                onDelete={() => {
-                  if (!confirm(`Delete grade ${g.label}${g.divisions.length ? ` and its ${g.divisions.length} division(s)` : ''}?`)) return;
+                onDelete={async () => {
+                  const title = `Delete grade ${g.label}${g.divisions.length ? ` and its ${g.divisions.length} division(s)` : ''}?`;
+                  if (!(await confirm({ title, confirmLabel: 'Delete grade' }))) return;
                   void run(`/api/admin/grades/${g.id}`, { method: 'DELETE' }, `Grade ${g.name} deleted.`, () =>
                     patchGrade(g, { active: false }, `Grade ${g.name} deactivated.`)
                   );
@@ -244,8 +253,8 @@ function GradesPanel() {
                 onAddDivision={(name) => run(`/api/admin/grades/${g.id}/divisions`, { body: { name } }, 'Division added.')}
                 onRenameDivision={(d, label) => patchDivision(d, { label }, 'Division renamed.')}
                 onToggleDivision={(d) => void patchDivision(d, { active: !d.active }, d.active ? 'Division deactivated.' : 'Division activated.')}
-                onDeleteDivision={(d) => {
-                  if (!confirm(`Delete division ${g.name}-${d.label}?`)) return;
+                onDeleteDivision={async (d) => {
+                  if (!(await confirm({ title: `Delete division ${g.name}-${d.label}?`, confirmLabel: 'Delete division' }))) return;
                   void run(`/api/admin/divisions/${d.id}`, { method: 'DELETE' }, 'Division deleted.', () =>
                     patchDivision(d, { active: false }, 'Division deactivated.')
                   );
@@ -283,10 +292,10 @@ function GradeRow(props: {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <div className="flex flex-col">
-            <button type="button" className="text-xs text-slate-400 hover:text-white disabled:opacity-30" disabled={props.first || busy} onClick={() => props.onMove(-1)} aria-label={`Move ${g.label} up`}>
+            <button type="button" className="chip-icon-btn disabled:opacity-30" disabled={props.first || busy} onClick={() => props.onMove(-1)} aria-label={`Move ${g.label} up`}>
               ▲
             </button>
-            <button type="button" className="text-xs text-slate-400 hover:text-white disabled:opacity-30" disabled={props.last || busy} onClick={() => props.onMove(1)} aria-label={`Move ${g.label} down`}>
+            <button type="button" className="chip-icon-btn disabled:opacity-30" disabled={props.last || busy} onClick={() => props.onMove(1)} aria-label={`Move ${g.label} down`}>
               ▼
             </button>
           </div>
@@ -313,7 +322,7 @@ function GradeRow(props: {
             </p>
           )}
           {!g.active && <Badge tone="warning">Inactive</Badge>}
-          <span className="text-xs text-slate-500">{g.usageCount ? `${g.usageCount} in use` : 'not used'}</span>
+          <span className="text-xs text-slate-400">{g.usageCount ? `${g.usageCount} in use` : 'not used'}</span>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="secondary" onClick={() => setRenaming(g.label)}>
@@ -322,9 +331,13 @@ function GradeRow(props: {
           <Button size="sm" variant={g.active ? 'warning' : 'secondary'} disabled={busy} onClick={props.onToggle}>
             {g.active ? 'Deactivate' : 'Activate'}
           </Button>
-          <Button size="sm" variant="danger" disabled={busy} onClick={props.onDelete}>
-            Delete
-          </Button>
+          {g.usageCount ? (
+            <span className="self-center text-xs text-slate-400">In use, deactivate instead</span>
+          ) : (
+            <Button size="sm" variant="dangerSoft" disabled={busy} onClick={props.onDelete}>
+              Delete
+            </Button>
+          )}
         </div>
       </div>
 
@@ -351,22 +364,24 @@ function GradeRow(props: {
             <span
               key={d.id}
               className={cn(
-                'inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs',
+                'inline-flex items-center gap-0.5 rounded-lg border py-0.5 pl-2 pr-0.5 text-xs',
                 d.active ? 'border-white/15 text-slate-200' : 'border-amber-400/30 text-amber-200/80 line-through decoration-amber-400/40'
               )}
               title={`${d.name} · ${d.usageCount ? `${d.usageCount} in use` : 'not used'}${d.active ? '' : ' · inactive'}`}
             >
               {d.label}
-              {d.usageCount > 0 && <span className="text-slate-500">·{d.usageCount}</span>}
-              <button type="button" className="text-slate-400 hover:text-white" onClick={() => setDivEdit({ id: d.id, label: d.label })} aria-label={`Rename ${d.label}`}>
+              {d.usageCount > 0 && <span className="mr-1 text-slate-400">·{d.usageCount}</span>}
+              <button type="button" className="chip-icon-btn" onClick={() => setDivEdit({ id: d.id, label: d.label })} aria-label={`Rename ${d.label}`}>
                 ✎
               </button>
-              <button type="button" className="text-slate-400 hover:text-amber-200" onClick={() => props.onToggleDivision(d)} aria-label={`${d.active ? 'Deactivate' : 'Activate'} ${d.label}`} title={d.active ? 'Deactivate' : 'Activate'}>
+              <button type="button" className="chip-icon-btn hover:text-amber-200" onClick={() => props.onToggleDivision(d)} aria-label={`${d.active ? 'Deactivate' : 'Activate'} ${d.label}`} title={d.active ? 'Deactivate' : 'Activate'}>
                 {d.active ? '⏸' : '▶'}
               </button>
-              <button type="button" className="text-slate-400 hover:text-red-300" onClick={() => props.onDeleteDivision(d)} aria-label={`Delete ${d.label}`} title="Delete">
-                ×
-              </button>
+              {d.usageCount === 0 && (
+                <button type="button" className="chip-icon-btn hover:text-red-300" onClick={() => props.onDeleteDivision(d)} aria-label={`Delete ${d.label}`} title="Delete">
+                  ×
+                </button>
+              )}
             </span>
           )
         )}
@@ -417,7 +432,7 @@ function CampusRow(props: { c: Campus; busy: boolean; onRename: (label: string) 
           </p>
         )}
         {!c.active && <Badge tone="warning">Inactive</Badge>}
-        <span className="text-xs text-slate-500">{c.usageCount ? `${c.usageCount} in use` : 'not used'}</span>
+        <span className="text-xs text-slate-400">{c.usageCount ? `${c.usageCount} in use` : 'not used'}</span>
       </div>
       <div className="flex flex-wrap gap-2">
         <Button size="sm" variant="secondary" onClick={() => setRenaming(c.label)}>
@@ -426,9 +441,13 @@ function CampusRow(props: { c: Campus; busy: boolean; onRename: (label: string) 
         <Button size="sm" variant={c.active ? 'warning' : 'secondary'} disabled={busy} onClick={props.onToggle}>
           {c.active ? 'Deactivate' : 'Activate'}
         </Button>
-        <Button size="sm" variant="danger" disabled={busy} onClick={props.onDelete}>
-          Delete
-        </Button>
+        {c.usageCount ? (
+          <span className="self-center text-xs text-slate-400">In use, deactivate instead</span>
+        ) : (
+          <Button size="sm" variant="dangerSoft" disabled={busy} onClick={props.onDelete}>
+            Delete
+          </Button>
+        )}
       </div>
     </li>
   );

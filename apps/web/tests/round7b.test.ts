@@ -13,8 +13,10 @@ import { effectiveFromForCreate, slotStartsOn } from '../src/lib/slotEffective';
 import { studentSearchClause } from '../src/lib/studentSearch';
 import { studentVideoModeShortLabel } from '../src/lib/studentVideoMode';
 import { displayDivision } from '../src/lib/grades';
-import { canSeeSystemTab, privilegeSetFrom, visibleAdminTabs } from '../src/lib/privileges';
+import { privilegeSetFrom } from '../src/lib/privileges';
+import { visibleAdminSections } from '../src/lib/adminSections';
 import { occurrencesBetween, type SlotLike } from '../src/lib/schedule';
+import { classroomViewSource } from './helpers/classroomSource';
 
 const src = (p: string) => readFileSync(new URL(`../src/${p}`, import.meta.url), 'utf8');
 
@@ -99,7 +101,7 @@ test('createSlot defaults effectiveFrom to the local creation date', () => {
 });
 
 test('video panel rail uses a short label; full sentence stays in title/aria', () => {
-  assert.equal(studentVideoModeShortLabel('both'), 'Both');
+  assert.equal(studentVideoModeShortLabel('both'), 'All');
   assert.equal(studentVideoModeShortLabel('teacher'), 'Teacher');
   assert.equal(studentVideoModeShortLabel('min'), 'Hidden');
   const controls = src('components/classroom/Controls.tsx');
@@ -115,24 +117,22 @@ test('division display keeps two-letter codes as entered', () => {
   assert.equal(displayDivision('MAHAVEER'), 'Mahaveer');
 });
 
-test('Live dashboard tab; System Control hidden when the sub-admin has none of its cards', () => {
-  const shell = src('components/admin/AdminShell.tsx');
-  assert.match(shell, /Live dashboard/);
-  assert.doesNotMatch(shell, /Live classes/);
+test('Live tab; Settings hidden when the sub-admin has none of its cards', () => {
+  const sections = src('lib/adminSections.ts');
+  assert.match(sections, /label: 'Live'/);
+  assert.doesNotMatch(sections, /Live classes/);
   const none = privilegeSetFrom({ kind: 'SUB' });
-  assert.equal(canSeeSystemTab(none, 'SUB'), false);
-  assert.deepEqual(visibleAdminTabs(none, 'SUB'), []);
+  assert.deepEqual(visibleAdminSections(none, 'SUB'), []);
   const liveOnly = privilegeSetFrom({ kind: 'SUB', privMonitorLive: true });
-  assert.equal(canSeeSystemTab(liveOnly, 'SUB'), false);
-  assert.ok(!visibleAdminTabs(liveOnly, 'SUB').includes('system'));
+  assert.ok(!visibleAdminSections(liveOnly, 'SUB').includes('settings'));
   const school = privilegeSetFrom({ kind: 'SUB', privManageSchool: true });
-  assert.equal(canSeeSystemTab(school, 'SUB'), true);
+  assert.ok(visibleAdminSections(school, 'SUB').includes('settings'));
 });
 
 test('whiteboard is full width; class videos float instead of embedding in a side column', () => {
   const host = src('components/classroom/Whiteboard.tsx');
   assert.doesNotMatch(host, /wb-video-slot/);
-  const room = src('components/classroom/ClassroomRoom.tsx');
+  const room = classroomViewSource();
   assert.doesNotMatch(room, /embedHost=\{wbOpen/);
   assert.match(room, /dock=\{wbOpen \? null : dockArea\}/);
 });
@@ -151,7 +151,7 @@ test('admin students search matches name or student ID case-insensitively', () =
 });
 
 test('share/draw: request banner clears when the student is allowed; in-tab dock is top-left', () => {
-  const room = src('components/classroom/ClassroomRoom.tsx');
+  const room = classroomViewSource();
   assert.match(room, /stillAsking/);
   assert.match(room, /share-draw-actions/);
   const hud = src('components/classroom/TeacherShareHud.tsx');
@@ -160,7 +160,7 @@ test('share/draw: request banner clears when the student is allowed; in-tab dock
 });
 
 test('dropped students: teacher reports ParticipantDisconnected; students disconnect on page leave', () => {
-  const room = src('components/classroom/ClassroomRoom.tsx');
+  const room = classroomViewSource();
   assert.match(room, /StudentLeaveOnPageHide/);
   assert.match(room, /disconnectOnPageLeave: !isTeacher/);
   assert.match(room, /\/presence'/);

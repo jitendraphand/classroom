@@ -22,11 +22,14 @@ import {
   schoolJoinModeFromEnv,
   validateUnsignedJoin,
   readUnsignedFields,
+  isJoinNavigation,
+  joinSidRateLimited,
+  joinSidRateLimitFromEnv,
 } from '../src/lib/schoolJoin';
 import { JoinTokenError, type SchoolJwtConfig } from '../src/lib/schoolJwt';
 import { handleStudentCheck, nextPollDelay } from '../src/lib/studentCheck';
 import { routeSignature } from '../src/lib/studentRouting';
-import { upsertStudentFromClaims } from '../src/lib/studentService';
+import { unsignedUpdatesFromEnv, upsertStudentFromClaims } from '../src/lib/studentService';
 
 const CANONICAL = 'FirstName=Arohi&LastName=Patil&SID=GOS000123&Grade=7&Division=Mahaveer';
 const noJwt: SchoolJwtConfig = { issuer: null, publicKeyPem: null, secret: null, audience: 'classroom', maxLifetimeSeconds: 120, clockSkewSeconds: 30 };
@@ -142,6 +145,9 @@ function memoryDb() {
   return {
     rows,
     student: {
+      async findUnique(a: { where: { externalId: string } }) {
+        return rows.get(a.where.externalId) ?? null;
+      },
       async upsert(a: { where: { externalId: string }; create: Record<string, unknown> & { externalId: string }; update: Record<string, unknown> }) {
         const cur = rows.get(a.where.externalId);
         const next = (cur ? { ...cur, ...a.update } : { id: `st${++n}`, rollNumber: null, email: null, phone: null, ...a.create }) as Student;
@@ -157,7 +163,7 @@ function memoryDb() {
   };
 }
 
-test('first join creates the student keyed on SID; a later join updates name/grade/division', async () => {
+test('first join creates the student keyed on SID; a later signed join updates name/grade/division', async () => {
   const db = memoryDb();
   const first = await upsertStudentFromClaims({ ...validateUnsignedJoin(readUnsignedFields(new URLSearchParams(CANONICAL + '&Roll=12'))), campus: 'CC' }, db);
   assert.equal(first.externalId, 'GOS000123');
@@ -178,6 +184,58 @@ test('first join creates the student keyed on SID; a later join updates name/gra
   assert.equal(later.grade, '8');
   assert.equal(later.division, 'SHIVAJI');
   assert.equal(later.rollNumber, '12', 'a link without a roll number keeps the stored one');
+});
+
+test('unsigned links are lookup-only for an existing student (no rewrite, no restore)', async () => {
+  const db = memoryDb();
+  const claims = (q: string) => ({ ...validateUnsignedJoin(readUnsignedFields(new URLSearchParams(q))), campus: 'CC' });
+  const first = await upsertStudentFromClaims(claims(CANONICAL), db, { signed: false });
+  assert.equal(first.grade, '7');
+  const forged = await upsertStudentFromClaims(
+    claims('FirstName=Someone&LastName=Else&SID=GOS000123&Grade=9&Division=B'),
+    db,
+    { signed: false }
+  );
+  assert.equal(forged.id, first.id);
+  assert.equal(forged.name, 'Arohi Patil');
+  assert.equal(forged.grade, '7');
+  assert.equal(forged.division, 'MAHAVEER');
+  assert.ok(forged.lastSeenAt instanceof Date);
+  // Deleted by the admin: an unsigned link cannot bring the student back.
+  db.rows.set('GOS000123', { ...db.rows.get('GOS000123')!, deletedAt: new Date() });
+  await assert.rejects(upsertStudentFromClaims(claims(CANONICAL), db, { signed: false }), /unknown_student/);
+  // The operator can opt back in to updates from unsigned links.
+  const updated = await upsertStudentFromClaims(claims('FirstName=Arohi&SID=GOS000123&Grade=8&Division=A'), db, {
+    signed: false,
+    allowUnsignedUpdates: true,
+  });
+  assert.equal(updated.grade, '8');
+  assert.equal(updated.deletedAt, null);
+  assert.equal(unsignedUpdatesFromEnv({}), false);
+  assert.equal(unsignedUpdatesFromEnv({ SCHOOL_JOIN_UNSIGNED_UPDATES: 'true' }), true);
+});
+
+test('join links act only as top-level navigations; per-SID throttle is on by default', async () => {
+  const h = (o: Record<string, string>) => ({ get: (k: string) => o[k.toLowerCase()] ?? null });
+  assert.equal(isJoinNavigation(h({})), true);
+  assert.equal(isJoinNavigation(h({ 'sec-fetch-dest': 'document', 'sec-fetch-mode': 'navigate' })), true);
+  assert.equal(isJoinNavigation(h({ 'sec-fetch-dest': 'image', 'sec-fetch-mode': 'no-cors' })), false);
+  assert.equal(isJoinNavigation(h({ 'sec-fetch-dest': 'iframe', 'sec-fetch-mode': 'navigate' })), false);
+  assert.equal(isJoinNavigation(h({ 'sec-fetch-dest': 'empty', 'sec-fetch-mode': 'cors' })), false);
+  assert.equal(joinSidRateLimitFromEnv({}), 6);
+  assert.equal(joinSidRateLimitFromEnv({ JOIN_SID_RATE_LIMIT_PER_MINUTE: '0' }), 0);
+  const counts = new Map<string, number>();
+  const redis = {
+    incr: async (k: string) => {
+      counts.set(k, (counts.get(k) ?? 0) + 1);
+      return counts.get(k)!;
+    },
+    expire: async () => 1,
+  };
+  const results: boolean[] = [];
+  for (let i = 0; i < 4; i++) results.push(await joinSidRateLimited('GOS1', redis, 3));
+  assert.deepEqual(results, [false, false, false, true]);
+  assert.equal(await joinSidRateLimited('gos2', redis, 0), false);
 });
 
 // ---------------------------------------------------------------- word divisions
@@ -224,7 +282,8 @@ test('per-IP join rate limit (fixed window, fails open)', async () => {
   assert.equal(await joinRateLimited('5.6.7.8', redis, 3), false);
   const broken = { incr: async () => { throw new Error('down'); }, expire: async () => 1 };
   assert.equal(await joinRateLimited('1.2.3.4', broken, 3), false);
-  assert.equal(joinRateLimitFromEnv({}), 120);
+  assert.equal(joinRateLimitFromEnv({}), 0);
+  assert.equal(joinRateLimitFromEnv({ JOIN_RATE_LIMIT_PER_MINUTE: '120' }), 120);
   assert.equal(joinRateLimitFromEnv({ JOIN_RATE_LIMIT_PER_MINUTE: '0' }), 0);
 });
 

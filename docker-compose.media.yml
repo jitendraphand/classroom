@@ -4,12 +4,19 @@
 #   docker compose -f docker-compose.media.yml --profile media up -d
 # Needs infra/livekit-media.yaml (copy infra/livekit-media.example.yaml) and
 # MEDIA_DOMAIN in .env (DNS A record to this VM).
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: ${LOG_MAX_SIZE:-10m}
+    max-file: "${LOG_MAX_FILES:-3}"
+
 services:
   livekit-media:
     image: livekit/livekit-server:v1.13.9
     profiles: ["media"]
     restart: unless-stopped
     network_mode: host
+    logging: *logging
     command: ["--config", "/etc/livekit.yaml"]
     ulimits:
       nofile:
@@ -24,6 +31,7 @@ services:
     profiles: ["media"]
     restart: unless-stopped
     network_mode: host
+    logging: *logging
     ulimits:
       nofile:
         soft: 1048576

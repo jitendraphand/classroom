@@ -61,12 +61,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
   }
 
   const redis = await ensureRedis();
-  await redis.srem(keys.waiting(code), target.id);
-  await redis.srem(keys.admitted(code), target.id);
-  await redis.srem(keys.muted(code), target.id);
-  await redis.srem(keys.hands(code), target.id);
-  await redis.hdel(keys.handsAt(code), target.id);
-  await redis.srem(keys.visible(code), target.livekitIdentity);
+  const cleared = await redis
+    .multi()
+    .srem(keys.waiting(code), target.id)
+    .srem(keys.admitted(code), target.id)
+    .srem(keys.muted(code), target.id)
+    .srem(keys.hands(code), target.id)
+    .hdel(keys.handsAt(code), target.id)
+    .srem(keys.visible(code), target.livekitIdentity)
+    .exec();
+  const wasVisible = Number(cleared?.[5]?.[1] ?? 0) > 0;
 
   if (self && self.id === target.id) await clearStudentCookie();
 
@@ -78,11 +82,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
   }
 
   if (target.role === 'STUDENT') {
-    // Frees the departing student's sticky speak-pin along with their slot.
+    // Frees the departing student's speaker pin along with their slot. Only a
+    // student who held a video slot needs a re-sample (2,000 students leaving
+    // at the bell used to re-read the whole roster 2,000 times).
     await unpinSpeaker(code, target.livekitIdentity);
-    await rotateVisibleSample(code);
+    if (wasVisible) await rotateVisibleSample(code);
   }
 
-  nudgeRoomState(room.code, 'all');
+  // The teacher's roster changes; other students' views do not (a removed
+  // student is disconnected above, a sample change nudges its own students).
+  nudgeRoomState(room.code, target.role === 'TEACHER' ? 'all' : 'teacher');
   return jsonOk({ ok: true });
 }

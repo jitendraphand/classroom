@@ -133,10 +133,8 @@ async function oneStudent(lk, code, index, teacher) {
     const st = await api(jar, 'GET', `/api/rooms/${code}/state?as=student`, undefined, {
       headers: { 'x-classroom-as': 'student' },
     });
-    if (st.json?.me?.status === 'ADMITTED' || st.json?.status === 'LIVE') {
-      admitted = st.json?.me?.status === 'ADMITTED' || st.json?.me?.role === 'STUDENT';
-      if (st.json?.me?.status === 'ADMITTED') break;
-    }
+    // Only ADMITTED counts: a waiting student in a live room is still waiting,
+    // and the server refuses its media token.
     if (st.json?.me?.status === 'ADMITTED') {
       admitted = true;
       break;
@@ -144,6 +142,7 @@ async function oneStudent(lk, code, index, teacher) {
     if (st.json?.ended) return { ok: false, stage: 'ended', ms: Date.now() - t0 };
     await new Promise((r) => setTimeout(r, 400));
   }
+  if (!admitted) return { ok: false, stage: 'admit', error: 'not admitted within 60 s', ms: Date.now() - t0 };
   const tok = await api(jar, 'GET', `/api/rooms/${code}/token?as=student`, undefined, {
     headers: { 'x-classroom-as': 'student' },
   });

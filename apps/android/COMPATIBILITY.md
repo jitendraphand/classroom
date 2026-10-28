@@ -38,10 +38,12 @@ The repository has three branches that make one product:
 |---|---|---|
 | `main` | The only server: Next.js app + web UI for admins, teachers and students, plus LiveKit, Postgres, Redis, Caddy | — |
 | `windows` | Electron teacher app (separate project) | HTTP API + LiveKit; 22 web logic modules are copied byte for byte and CI checks them against `main` |
-| `android` | This app (`apps/android`). The branch also carries an old copy of `apps/web`: do not deploy the server from this branch | HTTP API + LiveKit; the web logic is ported to Kotlin by hand |
+| `android` | `main` plus this app (`apps/android`). `main` is merged in whenever it changes, so `apps/web` here matches it; still deploy the server from `main` | HTTP API + LiveKit; the web logic is ported to Kotlin by hand |
 
-Deploy the server from `main` only. When `main` changes a contract below, this app must follow by hand
-(there is no automatic drift check as on Windows), so check this list on every server change.
+Deploy the server from `main` only. Keep `android` in step: merge `main` into it after every `main` change
+(`git merge main`, keeping `apps/android` and the Android workflow from this branch), then check this list.
+When `main` changes a contract below, this app must follow by hand: there is no automatic drift check as
+on Windows.
 
 What the app relies on (server `main`, 2026-10-28 or later):
 - Teacher session cookie `__Host-classroom_teacher` (https) or `classroom_teacher` (http on the school

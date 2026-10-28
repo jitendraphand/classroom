@@ -11,7 +11,10 @@ import { jsonOk } from '@/lib/response';
 
 export const dynamic = 'force-dynamic';
 
-/** Known students (first signed join or roster import), filterable. */
+/** Students per page in the admin list. */
+const STUDENTS_PAGE_SIZE = 50;
+
+/** Known students (first signed join or roster import), filterable, a page at a time (?page=0..). */
 export async function GET(req: Request) {
   const { res } = await requireAdminApi('manageSchool');
   if (res) return res;
@@ -20,6 +23,7 @@ export async function GET(req: Request) {
   const grade = url.searchParams.get('grade');
   const division = url.searchParams.get('division');
   const q = url.searchParams.get('q')?.trim();
+  const page = Math.max(0, Math.min(10_000, Number.parseInt(url.searchParams.get('page') || '0', 10) || 0));
   const where = {
     deletedAt: null,
     ...(campus ? { campus: normalizeCampus(campus) } : {}),
@@ -32,7 +36,8 @@ export async function GET(req: Request) {
     prisma.student.findMany({
       where,
       orderBy: [{ campus: 'asc' }, { grade: 'asc' }, { division: 'asc' }, { rollNumber: 'asc' }, { name: 'asc' }],
-      take: 500,
+      skip: page * STUDENTS_PAGE_SIZE,
+      take: STUDENTS_PAGE_SIZE,
       select: { id: true, externalId: true, name: true, campus: true, grade: true, division: true, rollNumber: true, source: true, lastSeenAt: true },
     }),
     prisma.student.groupBy({
@@ -44,6 +49,8 @@ export async function GET(req: Request) {
   ]);
   return jsonOk({
     total,
+    page,
+    pageSize: STUDENTS_PAGE_SIZE,
     students,
     groups: groups.map((g) => ({ campus: g.campus, grade: g.grade, division: g.division, count: g._count._all })),
   });

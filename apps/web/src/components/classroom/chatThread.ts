@@ -4,11 +4,12 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRoomContext } from '@livekit/components-react';
-import { ConnectionState, RoomEvent, DataPacket_Kind } from 'livekit-client';
+import { RoomEvent, DataPacket_Kind } from 'livekit-client';
 import { replyTargetFor, resolveChatRecipient } from '@/lib/chatReply';
 import { getClassroomRole, roomFetch } from '@/lib/classroomClient';
-import { chatPollMs } from '@/lib/pollPolicy';
+import { chatPollMs, jitterMs } from '@/lib/pollPolicy';
 import { CHAT_TOPIC, chatPacketTrusted } from '@/lib/realtimePackets';
+import { canPublishRoomData } from '@/lib/dataPublish';
 import { usePageHidden, usePushLive } from '@/hooks/usePollSignals';
 
 export { replyTargetFor, resolveChatRecipient };
@@ -26,7 +27,7 @@ export type ChatMessage = {
   createdAt: string;
 };
 
-export type StudentOpt = { id: string; displayName: string; sid?: string | null };
+export type StudentOpt = { id: string; displayName: string; sid?: string | null; gradeDivision?: string | null };
 
 export type ThreadProps = {
   code: string;
@@ -77,21 +78,29 @@ export function useChatThread({
   /** Messages created before this client joined are history, not unread. */
   const joinedAt = useRef(Date.now());
 
+  /** Newest createdAt seen: later polls ask only for what is newer. */
+  const newestAt = useRef<string | null>(null);
   const mergeMessages = useCallback((incoming: ChatMessage[]) => {
+    for (const m of incoming) {
+      if (!newestAt.current || m.createdAt > newestAt.current) newestAt.current = m.createdAt;
+    }
     setMessages((prev) => {
       const map = new Map<string, ChatMessage>();
       for (const m of prev) map.set(m.id, m);
       for (const m of incoming) map.set(m.id, m);
-      return Array.from(map.values()).sort(
+      const sorted = Array.from(map.values()).sort(
         (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
       );
+      // Bounded like the server's history (500).
+      return sorted.length > 500 ? sorted.slice(-500) : sorted;
     });
   }, []);
 
   const fetchMessages = useCallback(async () => {
     if (stopped || ended) return;
     try {
-      const res = await roomFetch(code, '/messages');
+      const since = newestAt.current;
+      const res = await roomFetch(code, since ? `/messages?since=${encodeURIComponent(since)}` : '/messages');
       const data = await res.json();
       if (!res.ok) {
         if (res.status === 410 || res.status === 401 || data.ended) {
@@ -164,7 +173,7 @@ export function useChatThread({
   }, [code, stopped, ended, mergeMessages, pushLive]);
   useEffect(() => {
     if (stopped) return;
-    const t = setInterval(fetchMessages, chatPollMs({ hidden, pushLive: sseLive || pushLive }));
+    const t = setInterval(fetchMessages, jitterMs(chatPollMs({ hidden, pushLive: sseLive || pushLive })));
     return () => clearInterval(t);
   }, [fetchMessages, stopped, hidden, pushLive, sseLive]);
 
@@ -277,7 +286,8 @@ export function useChatThread({
           // SFU fan-out so the web process is not on the hot path. Recipients
           // merge by id with the server backup sendData.
           try {
-            if (room?.localParticipant && room.state === ConnectionState.Connected) {
+            // Teacher only (students hold no data grant; the server pushes theirs).
+            if (canPublishRoomData(room)) {
               const bytes = new TextEncoder().encode(JSON.stringify({ v: 1, type: 'message', message: data.message }));
               void room.localParticipant.publishData(bytes as Uint8Array<ArrayBuffer>, { reliable: true, topic: CHAT_TOPIC });
             }

@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db';
 import { livekitRoomName, sendRoomData } from '@/lib/livekit';
-import { STATE_TOPIC, mergeAudience, type NudgeAudience } from '@/lib/pollPolicy';
+import { STATE_TOPIC, mergeAudience, nudgeSpreadMs, type NudgeAudience } from '@/lib/pollPolicy';
+import { bumpRoomVersion } from '@/lib/roomStateCache';
 import { SIGNAL_TOPIC, type SignalPacket } from '@/lib/realtimePackets';
 
 /**
@@ -14,6 +15,8 @@ const pending = new Map<string, { audience: NudgeAudience; timer: ReturnType<typ
 
 export function nudgeRoomState(roomCode: string | null | undefined, audience: NudgeAudience = 'all') {
   if (!roomCode) return;
+  // Invalidate cached student /state views right away (not after the coalesce).
+  bumpRoomVersion(roomCode);
   const cur = pending.get(roomCode);
   if (cur) {
     cur.audience = mergeAudience(cur.audience, audience);
@@ -52,7 +55,9 @@ async function send(roomCode: string, audience: NudgeAudience) {
     }
     await sendRoomData(
       livekitRoomName(room.code, room.sessionId),
-      { v: 1, type: 'state' },
+      // `spread`: students wait a random 0..spread ms before refetching so a
+      // class-wide change does not make every student hit /state at once.
+      { v: 1, type: 'state', spread: nudgeSpreadMs(audience) },
       { topic: STATE_TOPIC, destinationIdentities }
     );
   } catch (e) {
@@ -67,6 +72,7 @@ async function send(roomCode: string, audience: NudgeAudience) {
  */
 export function pushMuteState(roomCode: string, sessionId: string, identities: string[], muted: boolean) {
   if (!identities.length) return;
+  bumpRoomVersion(roomCode);
   void sendRoomData(
     livekitRoomName(roomCode, sessionId),
     { v: 1, type: 'mute', muted },
@@ -76,10 +82,12 @@ export function pushMuteState(roomCode: string, sessionId: string, identities: s
 
 /** Hand / draw-request: one SFU packet; clients apply locally (no /state refetch). */
 export function pushSignal(roomCode: string, sessionId: string, packet: SignalPacket) {
+  bumpRoomVersion(roomCode);
   void sendRoomData(livekitRoomName(roomCode, sessionId), packet, { topic: SIGNAL_TOPIC }).catch(() => undefined);
 }
 
 export function pushSignalForCode(roomCode: string, packet: SignalPacket) {
+  bumpRoomVersion(roomCode);
   void (async () => {
     try {
       const room = await prisma.room.findUnique({

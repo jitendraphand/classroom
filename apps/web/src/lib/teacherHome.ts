@@ -8,7 +8,7 @@ import { latestRank, ensureWeeklySnapshots } from './rankingService';
 import { occurrenceBaseKey, pickSessionForOccurrence } from './occurrenceRuns';
 import { formatHHMM, isLocalDate, localDateOf, localMinuteOf } from './schedule';
 import { occurrencesForRange } from './scheduleService';
-import { attendanceRatio, averageAttendance, enrolledStudents } from './sessionStats';
+import { averageAttendance, sessionAttendance } from './sessionStats';
 import { appTimeZone } from './schoolConfig';
 
 function monthOf(raw: string | null, today: string) {
@@ -86,7 +86,8 @@ export async function buildTeacherHome(teacherId: string, url: URL) {
   const grades = [...new Set(sessions.map((s) => s.grade))];
   const pupils = grades.length
     ? await prisma.student.findMany({
-        where: { grade: { in: grades } },
+        // Not filtered by the raw grade string: "5" and "Grade 5" are the same
+        // grade to audienceIncludes (normalised), but not to SQL.
         select: { id: true, campus: true, grade: true, division: true, createdAt: true, deletedAt: true },
       })
     : [];
@@ -112,9 +113,7 @@ export async function buildTeacherHome(teacherId: string, url: URL) {
   }
 
   function counts(cs: SessionRow) {
-    const present = cs.attendance.filter((a) => a.admittedAt).length;
-    const enrolled = enrolledStudents(cs, pupils).length;
-    return { present, enrolled, ratio: attendanceRatio(present, enrolled) };
+    return sessionAttendance(cs, pupils);
   }
 
   const conducted = sessions.filter((s) => s.startedAt);

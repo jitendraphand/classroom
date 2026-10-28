@@ -5,7 +5,8 @@ import { academicYearForDate, academicYearProblem, formatAcademicYear, isAcademi
 import { CLASS_FULL_MESSAGE, classCapacity, classTone, seatsLeft, todayTag } from '../src/lib/capacity';
 import { averageStars, feedbackProblem, normalizeFeedbackComment, presentStars } from '../src/lib/feedbackText';
 import { normalizeMicLimit, studentSetMic, teacherSetMic } from '../src/lib/micSlots';
-import { hasPrivilege, parsePrivilegeBody, privilegeSetFrom, visibleAdminTabs } from '../src/lib/privileges';
+import { hasPrivilege, parsePrivilegeBody, privilegeSetFrom } from '../src/lib/privileges';
+import { visibleAdminSections } from '../src/lib/adminSections';
 import { RANK_MIN_RATINGS, bayesianAverage, rankTeachers, weekStartMonday } from '../src/lib/ranking';
 import { nextStudentVideoMode, parseStudentVideoMode } from '../src/lib/studentVideoMode';
 import { chatVisibleTo } from '../src/lib/chatBus';
@@ -78,9 +79,9 @@ test('privileges: system has all, sub-admins only what was checked, tabs follow'
   const sub = privilegeSetFrom({ kind: 'SUB', privSchedule: true, privViewReports: false });
   assert.equal(hasPrivilege(sub, 'SUB', 'schedule'), true);
   assert.equal(hasPrivilege(sub, 'SUB', 'viewReports'), false);
-  assert.deepEqual(visibleAdminTabs(sub, 'SUB'), ['today', 'system']);
+  assert.deepEqual(visibleAdminSections(sub, 'SUB'), ['today', 'timetable', 'teachers']);
   const liveOnly = privilegeSetFrom({ kind: 'SUB', privMonitorLive: true });
-  assert.deepEqual(visibleAdminTabs(liveOnly, 'SUB'), ['today', 'live']);
+  assert.deepEqual(visibleAdminSections(liveOnly, 'SUB'), ['today', 'live']);
   assert.equal(parsePrivilegeBody({ manageTeachers: true }), null);
   const parsed = parsePrivilegeBody({
     manageTeachers: true,
@@ -128,10 +129,11 @@ test('class full only when a positive limit is configured', () => {
   assert.equal(CLASS_FULL_MESSAGE, 'This class is full.');
   assert.equal(classTone({ date: '2026-10-20', today: '2026-10-20', nowMinute: 600, startMinute: 540, endMinute: 600, started: true, ended: false }), 'today');
   assert.equal(classTone({ date: '2026-10-19', today: '2026-10-20', nowMinute: 600, startMinute: 540, endMinute: 600, started: false, ended: false }), 'skipped');
-  assert.equal(todayTag({ nowMinute: 500, startMinute: 540, started: false, ended: false, live: false }), 'starts');
-  assert.equal(todayTag({ nowMinute: 600, startMinute: 540, started: false, ended: false, live: false }), 'not_taken');
-  assert.equal(todayTag({ nowMinute: 600, startMinute: 540, started: true, ended: false, live: true }), 'ongoing');
-  assert.equal(todayTag({ nowMinute: 700, startMinute: 540, started: true, ended: true, live: false }), 'completed');
+  assert.equal(todayTag({ nowMinute: 500, startMinute: 540, endMinute: 585, started: false, ended: false, live: false }), 'starts');
+  assert.equal(todayTag({ nowMinute: 545, startMinute: 540, endMinute: 585, started: false, ended: false, live: false }), 'late');
+  assert.equal(todayTag({ nowMinute: 600, startMinute: 540, endMinute: 585, started: false, ended: false, live: false }), 'not_taken');
+  assert.equal(todayTag({ nowMinute: 600, startMinute: 540, endMinute: 585, started: true, ended: false, live: true }), 'ongoing');
+  assert.equal(todayTag({ nowMinute: 700, startMinute: 540, endMinute: 585, started: true, ended: true, live: false }), 'completed');
 });
 
 test('student video panel cycles both → teacher → minimized', () => {

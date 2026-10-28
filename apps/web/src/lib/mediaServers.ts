@@ -127,6 +127,12 @@ export function pickLeastLoaded(
 /** In-process cache of room → node (sticky anyway; saves a Redis hop per API call). */
 const assignCache = new Map<string, { id: string; at: number }>();
 const ASSIGN_CACHE_MS = 60_000;
+const ASSIGN_CACHE_MAX = 5000;
+function rememberAssign(room: string, id: string) {
+  assignCache.delete(room);
+  assignCache.set(room, { id, at: Date.now() });
+  while (assignCache.size > ASSIGN_CACHE_MAX) assignCache.delete(assignCache.keys().next().value as string);
+}
 
 async function currentLoads(servers: MediaServer[]): Promise<Record<string, number>> {
   const r = await ensureRedis();
@@ -165,7 +171,7 @@ export async function serverForRoom(roomName: string): Promise<MediaServer> {
       s = ok ? pick : serverById(await r.get(mediaKeys.assign(roomName))) ?? pick;
       await r.hset(mediaKeys.load(s.id), roomName, '0').then(() => r.expire(mediaKeys.load(s!.id), LOAD_TTL_S));
     }
-    assignCache.set(roomName, { id: s.id, at: Date.now() });
+    rememberAssign(roomName, s.id);
     return s;
   } catch (e) {
     console.warn('media server assignment failed; using the first node', e instanceof Error ? e.message : e);

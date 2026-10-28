@@ -67,15 +67,23 @@ division, and teachers are assigned per campus (`CC · 7-A`).
   "Unrecognised grade/divisions seen from the school app" with a one-click
   **Add**; typos should be fixed in the school app instead.
 - Bad input lands on `/student/error` with `missing_details` / `invalid_details`
-  and the field name. Too many joins from one IP (default 120 per minute,
-  `JOIN_RATE_LIMIT_PER_MINUTE`, 0 = off) → `rate_limited`.
+  and the field name. Too many joins from one IP (`JOIN_RATE_LIMIT_PER_MINUTE`,
+  off by default: a school may share one IP) or for one student ID
+  (`JOIN_SID_RATE_LIMIT_PER_MINUTE`, default 6) → `rate_limited`.
+- An unsigned link only **looks up** a student who already exists: it never
+  changes their name, grade or division and never restores a student the admin
+  deleted (keep those up to date with the admin's CSV import, or use signed
+  links, which do update them). `SCHOOL_JOIN_UNSIGNED_UPDATES=true` restores the
+  old behaviour, at the cost that anyone with a SID can rewrite that student.
+- The link works only as a top-level navigation (the school app opening it).
+  A page that embeds it (image, iframe, fetch) is refused.
 
 > **Impersonation risk.** Nothing in an unsigned link proves it came from the
 > school app. Anyone who knows or guesses a student's SID, grade and division
 > can open the class as that student (and be counted present), or create
 > students that do not exist. The teacher still admits every student from the
-> waiting room, and the per-IP limit slows guessing, but neither prevents
-> impersonation. Use non-guessable SIDs, and switch to signed links
+> waiting room, and the per-SID limit caps replaying one ID (for example to
+> keep taking over that student's seat), but neither prevents impersonation. Use non-guessable SIDs, and switch to signed links
 > (`SCHOOL_JOIN_MODE=signed`, sections 1–3) when the school app can sign.
 
 Unsigned mode needs no `SCHOOL_APP_JWT_*` settings. If they are set, a signed
@@ -92,6 +100,58 @@ node scripts/make-join-link.mjs --unsigned --url https://CLASSROOM_HOST \
 ## Signed mode (`SCHOOL_JOIN_MODE=signed`)
 
 Only `/join?t=<JWT>` is accepted; plain-parameter links get `unsigned_disabled`.
+In signed mode the dev-only code + name form is also always off (even with
+`ALLOW_MANUAL_STUDENT_JOIN=true`), so the **only** way a student gets in is a
+fresh link signed by the school's server. Each worker logs
+`[school-join] …` at start-up if signed mode is on but the issuer or key is
+missing (it never logs key or secret values).
+
+### Switching a deployment to signed mode
+
+1. School side: generate the key pair (section 1), keep the private key on the
+   website server, give the classroom operator the **public** key only.
+2. Classroom `.env`:
+   ```
+   SCHOOL_JOIN_MODE=signed
+   SCHOOL_APP_JWT_ISSUER=https://app.your-school.org
+   SCHOOL_APP_JWT_PUBLIC_KEY_FILE=/app/secrets/school-app-public.pem
+   ```
+   then `docker compose --profile tls up -d web` (no rebuild needed; env only).
+3. Check `docker compose logs web | grep school-join` shows nothing, open a link
+   from the website once (works), open it again (`replayed`), open an old
+   plain-parameter link (`unsigned_disabled`).
+4. To go back: `SCHOOL_JOIN_MODE=unsigned` and restart `web`.
+
+### Sample signer for the school website
+
+[`docs/examples/school-website-signer.mjs`](examples/school-website-signer.mjs)
+is a copy-and-use, zero-dependency Node 18+ signer (Ed25519/RSA/HS256 with
+`node:crypto` only). As a library: `classroomJoinUrl({ id, name, grade,
+division, campus })` returns the link to redirect the student to. As a CLI:
+
+```bash
+SCHOOL_SIGNER_PRIVATE_KEY_FILE=school-app-private.pem \
+SCHOOL_SIGNER_ISSUER=https://app.your-school.org CLASSROOM_URL=https://class.your-school.org \
+node docs/examples/school-website-signer.mjs --sid GOS000123 --name "Arohi Patil" --grade 7 --division A
+```
+
+The unit tests check that its tokens are accepted once, replays are refused,
+and tokens from another key are refused.
+
+### PHP (firebase/php-jwt ≥ 6, `composer require firebase/php-jwt`)
+
+```php
+use Firebase\JWT\JWT;
+$now = time();
+$token = JWT::encode([
+  'sub' => (string)$student->id, 'name' => $student->name,
+  'grade' => (string)$student->grade, 'division' => $student->division,
+  'campus' => $student->campus,            // optional with one campus
+  'iss' => 'https://app.your-school.org', 'aud' => 'classroom',
+  'iat' => $now, 'exp' => $now + 60, 'jti' => bin2hex(random_bytes(16)),
+], file_get_contents('school-app-private.pem'), 'RS256');  // or 'EdDSA' with a sodium Ed25519 key
+header('Location: https://class.your-school.org/join?t=' . $token);
+```
 
 ## 1. Keys (pick one)
 

@@ -5,6 +5,19 @@
 #   ws://PUBLIC_IP:7880 (see docs/DEPLOY-VPS.md + scripts/configure-public-ip.sh).
 # - Domain HTTPS: DOMAIN + Caddy profile tls (see docs/DEPLOY-CADDY.md +
 #   scripts/configure-domain-tls.sh). Do not expose 5432/6379 on the public firewall.
+# - Sizing: ./scripts/configure-resources.sh detects the box (CPU, RAM, and
+#   optionally EGRESS_MBPS) and writes the *_MEM_LIMIT / Postgres / Redis /
+#   web worker / MEDIA_PROFILE values below into .env (docs/CONSTRAINED-DEPLOY.md).
+#   A *_MEM_LIMIT or *_CPUS of 0 means no container limit.
+
+# Container logs are capped (json-file rotation): an unrotated log is a disk-full
+# outage waiting to happen on a small VPS.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: ${LOG_MAX_SIZE:-10m}
+    max-file: "${LOG_MAX_FILES:-3}"
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -22,19 +35,33 @@ services:
       # published 5432 on every interface; the firewall was the only control.
       - -c
       - listen_addresses=127.0.0.1
-      # Defaults sized for a large one-box deploy (docs/CAPACITY.md). A 2 GB VPS
-      # should set POSTGRES_MAX_CONNECTIONS=50 and POSTGRES_SHARED_BUFFERS=256MB.
+      # Defaults fit a 2-4 GB box; scripts/configure-resources.sh scales them
+      # to the host (docs/CONSTRAINED-DEPLOY.md, docs/CAPACITY.md).
       - -c
-      - shared_buffers=${POSTGRES_SHARED_BUFFERS:-256MB}
+      - shared_buffers=${POSTGRES_SHARED_BUFFERS:-128MB}
       - -c
-      - effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-1536MB}
+      - effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-512MB}
       - -c
-      - maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-128MB}
+      - maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-64MB}
+      - -c
+      - work_mem=${POSTGRES_WORK_MEM:-4MB}
       - -c
       - max_wal_size=${POSTGRES_MAX_WAL_SIZE:-512MB}
       - -c
-      - max_connections=${POSTGRES_MAX_CONNECTIONS:-280}
-    shm_size: 256mb
+      - max_connections=${POSTGRES_MAX_CONNECTIONS:-100}
+      # SSD-backed VPS: index scans are cheap; no parallel query storms on few cores.
+      - -c
+      - random_page_cost=${POSTGRES_RANDOM_PAGE_COST:-1.1}
+      - -c
+      - effective_io_concurrency=${POSTGRES_IO_CONCURRENCY:-100}
+      - -c
+      - max_parallel_workers_per_gather=${POSTGRES_PARALLEL_WORKERS:-0}
+      - -c
+      - checkpoint_completion_target=0.9
+    shm_size: ${POSTGRES_SHM_SIZE:-128mb}
+    mem_limit: ${POSTGRES_MEM_LIMIT:-0}
+    cpus: ${POSTGRES_CPUS:-0}
+    logging: *logging
     ulimits:
       nofile:
         soft: 1048576
@@ -43,17 +70,20 @@ services:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-classroom} -d ${POSTGRES_DB:-classroom} -h 127.0.0.1"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
-      retries: 15
+      retries: 12
+      start_period: 20s
 
   redis:
     image: redis:7-alpine
     restart: unless-stopped
     network_mode: host
-    # Loopback only, with a hard memory ceiling and LRU eviction. The previous
-    # config had maxmemory 0 + noeviction alongside AOF, so unbounded room keys
-    # could grow until the 2 GB host was OOM-killed.
+    # Loopback only, with a hard memory ceiling. Eviction is volatile-ttl: only
+    # keys with an expiry can go, shortest-lived first (short caches and
+    # throttles). The attendance queue, its in-flight batch, locks and room
+    # state are never evicted to make room (allkeys-lru could silently drop
+    # queued attendance events or single-use join-token markers).
     command:
       - redis-server
       - --appendonly
@@ -66,14 +96,21 @@ services:
       - --port
       - "6379"
       - --maxmemory
-      - ${REDIS_MAXMEMORY:-192mb}
+      - ${REDIS_MAXMEMORY:-256mb}
+      # AOF only: an RDB snapshot forks the process (and can briefly double its
+      # memory) on top of the AOF it already writes.
+      - --save
+      - ""
       - --maxmemory-policy
-      - allkeys-lru
+      - volatile-ttl
       - --tcp-keepalive
       - "60"
       # Soft/hard/seconds. Drop a stalled subscriber before Redis OOM.
       - --client-output-buffer-limit
       - pubsub 32mb 8mb 60
+    mem_limit: ${REDIS_MEM_LIMIT:-0}
+    cpus: ${REDIS_CPUS:-0}
+    logging: *logging
     ulimits:
       nofile:
         soft: 1048576
@@ -82,14 +119,21 @@ services:
       - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "-h", "127.0.0.1", "ping"]
-      interval: 5s
+      interval: 10s
       timeout: 3s
-      retries: 15
+      retries: 12
 
   livekit:
     image: livekit/livekit-server:v1.13.9
     restart: unless-stopped
     network_mode: host
+    # Media first on a shared box: under CPU contention LiveKit gets 8× the
+    # web workers' share (Docker default is 1024). Idle cores are still used
+    # by everyone; this only decides who wins when all cores are busy.
+    cpu_shares: 8192
+    mem_limit: ${LIVEKIT_MEM_LIMIT:-0}
+    cpus: ${LIVEKIT_CPUS:-0}
+    logging: *logging
     command: ["--config", "/etc/livekit.yaml"]
     ulimits:
       nofile:
@@ -115,6 +159,11 @@ services:
         NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
     restart: unless-stopped
     network_mode: host
+    # Lower CPU weight than LiveKit (cpu_shares 8192), plus WEB_NICE below.
+    cpu_shares: 512
+    mem_limit: ${WEB_MEM_LIMIT:-0}
+    cpus: ${WEB_CPUS:-0}
+    logging: *logging
     env_file:
       - .env
     # Admin bootstrap password file (gitignored ./secrets, mode 700, owned by the
@@ -135,12 +184,25 @@ services:
       SPEAKER_PIN_TTL_SECONDS: ${SPEAKER_PIN_TTL_SECONDS:-18}
       NODE_ENV: production
       PORT: "3000"
-      HOSTNAME: "0.0.0.0"
-      # Empty = CPU count, capped to fit POSTGRES_MAX_CONNECTIONS (cluster.js).
-      WEB_WORKERS: ${WEB_WORKERS:-}
-      DB_POOL_PER_WORKER: ${DB_POOL_PER_WORKER:-8}
+      # 0.0.0.0 for bare-IP deploys (browsers reach :3000); 127.0.0.1 behind
+      # Caddy (scripts/configure-domain-tls.sh sets it) so :3000 is never
+      # reachable from outside, whatever the firewall says.
+      HOSTNAME: ${WEB_HOSTNAME:-0.0.0.0}
+      # auto = every CPU on ≤ 8-CPU boxes, else WEB_CPU_FRACTION (0.5) of them
+      # so LiveKit keeps the rest; the Prisma pool per worker (default 10)
+      # shrinks to fit POSTGRES_MAX_CONNECTIONS (docs/SCALING.md).
+      WEB_WORKERS: ${WEB_WORKERS:-auto}
+      WEB_CPU_FRACTION: ${WEB_CPU_FRACTION:-0.5}
+      DB_POOL_PER_WORKER: ${DB_POOL_PER_WORKER:-auto}
+      # Web workers run at this nice level so LiveKit stays ahead (0 = off).
+      WEB_NICE: ${WEB_NICE:-5}
       DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-10}
-      POSTGRES_MAX_CONNECTIONS: ${POSTGRES_MAX_CONNECTIONS:-280}
+      POSTGRES_MAX_CONNECTIONS: ${POSTGRES_MAX_CONNECTIONS:-100}
+      # Share of RAM the web workers may use together (cluster.js sizes each
+      # worker's heap from it); the rest is for LiveKit, Postgres and Redis.
+      WEB_MEM_FRACTION: ${WEB_MEM_FRACTION:-0.35}
+      # standard | low (lib/videoQuality): lower bitrates for small egress.
+      MEDIA_PROFILE: ${MEDIA_PROFILE:-standard}
     ulimits:
       nofile:
         soft: 1048576
@@ -158,7 +220,7 @@ services:
     stop_grace_period: 45s
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
-      interval: 10s
+      interval: 15s
       timeout: 5s
       retries: 18
       start_period: 45s
@@ -171,6 +233,8 @@ services:
     profiles: ["tls"]
     restart: unless-stopped
     network_mode: host
+    mem_limit: ${CADDY_MEM_LIMIT:-0}
+    logging: *logging
     ulimits:
       nofile:
         soft: 1048576

@@ -1,5 +1,4 @@
 import { privilegeSetFrom, type PrivilegeSet } from './privileges';
-import { cachedRead } from './dbCache';
 import { cookies } from 'next/headers';
 import bcrypt from 'bcryptjs';
 import { prisma } from './db';
@@ -9,6 +8,9 @@ import {
   verifySession,
   sessionStatus,
   newSessionId,
+  linkedTeacherOk,
+  sessionTtlHours,
+  STAFF_REFRESH_AFTER_S,
   type SessionStatus,
   type EndedSessionReason,
 } from './sessionTokens';
@@ -142,7 +144,32 @@ export async function endedSessionReason(): Promise<EndedSessionReason | undefin
 }
 
 export async function setTeacherCookie(token: string) {
-  (await cookies()).set(teacherCookieName(), token, cookieOptions(60 * 60 * 24 * 7));
+  (await cookies()).set(teacherCookieName(), token, cookieOptions(60 * 60 * sessionTtlHours('teacher')));
+}
+
+/**
+ * Sliding staff session: re-issue the teacher/admin cookie (same session id,
+ * same version) once it is STAFF_REFRESH_AFTER_S old and still valid. Called
+ * from /api/auth/me, which every signed-in page polls.
+ */
+export async function refreshStaffCookies(): Promise<void> {
+  const jar = await cookies();
+  const now = Date.now() / 1000;
+  const stale = (iat: unknown) => now - (typeof iat === 'number' ? iat : 0) >= STAFF_REFRESH_AFTER_S;
+
+  const t = await verifySession(jar.get(teacherCookieName())?.value, 'teacher').catch(() => null);
+  if (t && stale(t.iat)) {
+    const row = await prisma.teacher.findUnique({ where: { id: t.sub } });
+    if (row && sessionStatus(t, row) === 'ok' && !row.deletedAt) await setTeacherCookie(await createTeacherToken(row));
+  }
+  const a = await verifySession(jar.get(adminCookieName())?.value, 'admin').catch(() => null);
+  if (a && stale(a.iat)) {
+    const row = await prisma.admin.findUnique({ where: { id: a.sub } });
+    if (row && sessionStatus(a, row) === 'ok') {
+      const tv = typeof a.tv === 'number' ? a.tv : undefined;
+      await setAdminCookie(await createAdminToken(row, tv));
+    }
+  }
 }
 
 export async function clearTeacherCookie() {
@@ -171,7 +198,7 @@ export async function getTeacherSession(
   const claims = await verifySession(token, 'teacher').catch(() => null);
   if (!claims) return null;
   try {
-    const teacher = await cachedRead(`teacher:${claims.sub}`, () => prisma.teacher.findUnique({ where: { id: claims.sub } }));
+    const teacher = await prisma.teacher.findUnique({ where: { id: claims.sub } });
     if (sessionStatus(claims, teacher) !== 'ok' || !teacher) return null;
     if (teacher.mustChangePassword && !opts.allowPendingPasswordChange) return null;
     let permanentCode = teacher.permanentCode;
@@ -200,16 +227,36 @@ export async function requireTeacher() {
 
 // ---------------------------------------------------------------- admin
 
-export async function createAdminToken(admin: {
-  id: string;
-  sessionVersion: number;
-  activeSessionId?: string | null;
-}) {
-  return signSession('admin', admin.id, admin.sessionVersion, { sid: admin.activeSessionId ?? undefined });
+export async function createAdminToken(
+  admin: {
+    id: string;
+    sessionVersion: number;
+    activeSessionId?: string | null;
+  },
+  /** Linked teacher's sessionVersion: a teacher password change/reset/disable also ends the admin view. */
+  teacherSessionVersion?: number
+) {
+  return signSession('admin', admin.id, admin.sessionVersion, {
+    sid: admin.activeSessionId ?? undefined,
+    ...(teacherSessionVersion !== undefined ? { tv: teacherSessionVersion } : {}),
+  });
 }
 
+/**
+ * Admin view for a teacher who also holds a sub-admin role (Admin.teacherId).
+ * Only reachable from a valid teacher session (see /api/auth/switch-view).
+ */
+export async function startLinkedAdminSession(adminId: string, teacherSessionVersion: number) {
+  const updated = await prisma.admin.update({
+    where: { id: adminId },
+    data: { activeSessionId: newSessionId() },
+  });
+  return createAdminToken(updated, teacherSessionVersion);
+}
+
+
 export async function setAdminCookie(token: string) {
-  (await cookies()).set(adminCookieName(), token, cookieOptions(60 * 60 * 12));
+  (await cookies()).set(adminCookieName(), token, cookieOptions(60 * 60 * sessionTtlHours('admin')));
 }
 
 export async function clearAdminCookie() {
@@ -223,6 +270,8 @@ export type AdminSession = {
   mustChangePassword: boolean;
   kind: 'SYSTEM' | 'SUB';
   privileges: PrivilegeSet;
+  /** Set when this sub-admin role belongs to a teacher (switch back to teacher view). */
+  linkedTeacherId: string | null;
 };
 
 /** The signed-in admin, or null (same rules as getTeacherSession). */
@@ -235,8 +284,12 @@ export async function getAdminSession(
   try {
     const admin = await prisma.admin.findUnique({ where: { id: claims.sub } });
     if (sessionStatus(claims, admin) !== 'ok' || !admin) return null;
-    if (admin.mustChangePassword && !opts.allowPendingPasswordChange) return null;
+    if (admin.teacherId) {
+      const teacher = await prisma.teacher.findUnique({ where: { id: admin.teacherId } });
+      if (!linkedTeacherOk(claims, teacher)) return null;
+    } else if (admin.mustChangePassword && !opts.allowPendingPasswordChange) return null;
     return {
+      linkedTeacherId: admin.teacherId ?? null,
       id: admin.id,
       email: admin.email,
       name: admin.name,
@@ -301,12 +354,11 @@ export async function getStudentSessionToken() {
 export async function getStudentParticipant() {
   const token = await getStudentSessionToken();
   if (!token) return null;
-  return cachedRead(`student-token:${token}`, () =>
-    prisma.participant.findUnique({
-      where: { sessionToken: token },
-      include: { room: true },
-    })
-  );
+  // One indexed lookup (unique sessionToken + room by primary key).
+  return prisma.participant.findUnique({
+    where: { sessionToken: token },
+    include: { room: true },
+  });
 }
 
 /** Prefer student identity when a teacher also has a session (join-as-student). */

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { FLYOUT_CLOSED, flyoutReduce, hoverOpenDelay, HOVER_OPEN_MS } from '../src/lib/whiteboard/flyout';
 import { ZP_IDENTITY, clampZP, isZoomed, panBy, pinchZP, toContent, zoomAt } from '../src/lib/zoomPan';
 import { AudioRegistry, MIC_CAPTURE, keepShareAudio } from '../src/lib/audioPolicy';
+import { classroomViewSource } from './helpers/classroomSource';
 
 const src = (p: string) => fs.readFileSync(path.join(__dirname, '..', 'src', p), 'utf8');
 
@@ -80,7 +81,7 @@ test('audio registry: one element per remote track across mode switches and reco
 });
 
 test('web teacher mic uses explicit echo cancellation / NS / AGC; share audio goes through the echo guard', () => {
-  const room = src('components/classroom/ClassroomRoom.tsx');
+  const room = classroomViewSource();
   assert.match(room, /createLocalAudioTrack\(\{ \.\.\.MIC_CAPTURE \}\)/);
   assert.match(room, /keepShareAudio\(audioSurface/);
   // RoomAudioRenderer exactly once per path (student, teacher): no duplicate playback.
@@ -90,7 +91,7 @@ test('web teacher mic uses explicit echo cancellation / NS / AGC; share audio go
 });
 
 test('whiteboard mode: meeting bar stops the board; roster chips can allow and deny drawing', () => {
-  const room = src('components/classroom/ClassroomRoom.tsx');
+  const room = classroomViewSource();
   assert.match(room, /WhiteboardMeetingBar/);
   assert.match(room, /onStopWhiteboard=/);
   assert.match(room, /isTeacher && screenOn && !wbOpen/);
@@ -116,7 +117,7 @@ test('waiting room Leave leaves (no reload into the same page) and shows Rejoin'
 });
 
 test('fullscreen cover keeps the whiteboard mounted underneath', () => {
-  const room = src('components/classroom/ClassroomRoom.tsx');
+  const room = classroomViewSource();
   assert.match(room, /\{state\?\.whiteboard && !teacherGone \? \(/);
   assert.match(room, /\) : covered \? null : showTeacherScreen \? \(/);
 });

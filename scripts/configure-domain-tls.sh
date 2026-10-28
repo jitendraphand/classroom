@@ -68,6 +68,8 @@ upsert LIVEKIT_INTERNAL_URL "http://127.0.0.1:7880"
 upsert LIVEKIT_USE_EXTERNAL_IP "true"
 upsert LIVEKIT_NODE_IP "$PUBLIC_IP"
 upsert COOKIE_SECURE "true"
+# Only Caddy (loopback) talks to the web app: never listen on the public NIC.
+upsert WEB_HOSTNAME "127.0.0.1"
 if [[ -n "$ACME_EMAIL" ]]; then
   upsert ACME_EMAIL "$ACME_EMAIL"
 fi
@@ -94,10 +96,25 @@ cat > "$CADDYFILE" << CADDY
 
 {
 	${EMAIL_LINE}
+	servers {
+		timeouts {
+			read_body 30s
+			read_header 15s
+			write 0
+			idle 5m
+		}
+		keepalive_interval 30s
+	}
 }
 
 ${DOMAIN} {
-	encode zstd gzip
+	# HTTPS only from now on (this host is always served over TLS by Caddy).
+	header Strict-Transport-Security "max-age=31536000"
+	header -Server
+	# Never compress SSE: the encoder buffers it and Caddy logs an
+	# incomplete response when the stream ends mid-chunk.
+	@compressible not path */messages/stream
+	encode @compressible zstd gzip
 	# Hashed build assets never change: cache for a year.
 	@immutable path /_next/static/*
 	header @immutable Cache-Control "public, max-age=31536000, immutable"
@@ -114,7 +131,7 @@ ${DOMAIN} {
 		health_interval 10s
 		health_timeout 3s
 		transport http {
-			keepalive 2m
+			keepalive 55s
 			keepalive_idle_conns 512
 			dial_timeout 10s
 			read_timeout 0
@@ -129,7 +146,7 @@ ${LIVEKIT_HOST} {
 	reverse_proxy 127.0.0.1:7880 {
 		flush_interval -1
 		transport http {
-			keepalive 2m
+			keepalive 55s
 			keepalive_idle_conns 256
 			dial_timeout 10s
 			read_timeout 0

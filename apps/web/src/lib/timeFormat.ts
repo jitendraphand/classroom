@@ -1,0 +1,86 @@
+/**
+ * One display format for dates and times across the app (client and server):
+ * 24-hour "09:26", dates as "Wed 28 Oct" ("Wed 28 Oct 2026" with the year).
+ * Class times are school time: pass the school's IANA time zone when known
+ * (schedules, reports); without one the device's zone is used (chat stamps).
+ * CSV exports keep ISO dates; this is for what people read on screen.
+ */
+
+const cache = new Map<string, Intl.DateTimeFormat>();
+
+function formatter(key: string, opts: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  let f = cache.get(key);
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-GB', opts);
+    cache.set(key, f);
+  }
+  return f;
+}
+
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+const CLOCK = /^(\d{1,2}):(\d{2})$/;
+
+function toDate(value: Date | string | number): Date | null {
+  const d = value instanceof Date ? value : new Date(typeof value === 'string' && DATE_ONLY.test(value) ? `${value}T00:00:00Z` : value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** "09:26". "HH:MM" strings (already school time) pass through, zero-padded. */
+export function formatTime(value: Date | string | number | null | undefined, timeZone?: string): string {
+  if (value == null || value === '') return '';
+  if (typeof value === 'string') {
+    const m = CLOCK.exec(value.trim());
+    if (m) return `${m[1]!.padStart(2, '0')}:${m[2]}`;
+  }
+  const d = toDate(value);
+  if (!d) return '';
+  return formatter(`t|${timeZone ?? ''}`, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone }).format(d);
+}
+
+/** "09:26–10:11" */
+export function formatTimeRange(start: Date | string | null | undefined, end: Date | string | null | undefined, timeZone?: string): string {
+  const a = formatTime(start, timeZone);
+  const b = formatTime(end, timeZone);
+  return a && b ? `${a}–${b}` : a || b;
+}
+
+/**
+ * "Wed 28 Oct" / "Wed 28 Oct 2026" / "Wednesday 28 October".
+ * A "YYYY-MM-DD" string is a calendar date and is never shifted by a time zone.
+ */
+export function formatDate(
+  value: Date | string | number | null | undefined,
+  opts: { year?: boolean; long?: boolean; weekday?: boolean; timeZone?: string } = {}
+): string {
+  if (value == null || value === '') return '';
+  const d = toDate(value);
+  if (!d) return '';
+  const calendar = typeof value === 'string' && DATE_ONLY.test(value);
+  const timeZone = calendar ? 'UTC' : opts.timeZone;
+  const weekday = opts.weekday !== false;
+  const key = `d|${timeZone ?? ''}|${opts.long ? 1 : 0}|${opts.year ? 1 : 0}|${weekday ? 1 : 0}`;
+  const parts = formatter(key, {
+    weekday: weekday ? (opts.long ? 'long' : 'short') : undefined,
+    day: 'numeric',
+    month: opts.long ? 'long' : 'short',
+    year: opts.year ? 'numeric' : undefined,
+    timeZone,
+  }).formatToParts(d);
+  const get = (t: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === t)?.value;
+  return [weekday ? get('weekday') : undefined, get('day'), get('month'), opts.year ? get('year') : undefined].filter(Boolean).join(' ');
+}
+
+/** "Wed 28 Oct, 09:40" (with the year when it is not the current one). */
+export function formatDateTime(value: Date | string | number | null | undefined, timeZone?: string, now: Date = new Date()): string {
+  const d = value == null || value === '' ? null : toDate(value);
+  if (!d) return '';
+  const year = formatter(`y|${timeZone ?? ''}`, { year: 'numeric', timeZone });
+  const otherYear = year.format(d) !== year.format(now);
+  return `${formatDate(d, { timeZone, year: otherYear })}, ${formatTime(d, timeZone)}`;
+}
+
+/** "YYYY-MM" → "October 2026" */
+export function formatMonth(month: string): string {
+  if (!/^\d{4}-\d{2}$/.test(month)) return month;
+  return formatter('m', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${month}-01T00:00:00Z`));
+}

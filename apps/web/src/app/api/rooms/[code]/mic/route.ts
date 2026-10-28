@@ -4,7 +4,7 @@ import { jsonError, jsonOk } from '@/lib/response';
 import { ensureRedis, keys } from '@/lib/redis';
 import { nudgeRoomState, pushMuteState } from '@/lib/roomNudge';
 import { getSchoolSettings } from '@/lib/schoolSettings';
-import { readMicBook, writeMicBook } from '@/lib/micBook';
+import { updateMicBook } from '@/lib/micBook';
 import { studentSetMic } from '@/lib/micSlots';
 import { setParticipantMicAllowed } from '@/lib/livekit';
 import { getVisibleSample } from '@/lib/sample';
@@ -35,9 +35,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     return jsonOk({ granted: false, waiting: false, position: null, limited: false });
   }
 
-  const book = await readMicBook(code);
-  const next = studentSetMic(book, me.id, body.want, limit);
-  await writeMicBook(code, next);
+  const { next } = await updateMicBook(code, (book) => ({ next: studentSetMic(book, me.id, body.want as boolean, limit) }));
 
   const redis = await ensureRedis();
   const granted = next.granted && body.want;
@@ -66,6 +64,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     }
   }
 
-  nudgeRoomState(code, 'all');
+  // The teacher's queue view, this student and anyone promoted; nobody else.
+  nudgeRoomState(code, { participantIds: promoted ? [me.id, promoted] : [me.id] });
   return jsonOk({ granted, waiting: next.waiting, position: next.position, limited: true });
 }

@@ -1,7 +1,13 @@
 'use client';
 
-import { selfTileLabel } from '@/lib/rosterLabels';
-import { classEndedCopy, finishCopy, finishFromState, type FinishReason } from '@/lib/classFinish';
+import {
+  classEndedCopy,
+  classSummaryFacts,
+  finishCopy,
+  finishFromState,
+  type ClassSummaryRow,
+  type FinishReason,
+} from '@/lib/classFinish';
 import {
   classEndedNoted,
   noteClassEnded,
@@ -25,11 +31,9 @@ import {
   useRoomContext,
 } from '@livekit/components-react';
 import '@livekit/components-styles';
-import type { TrackReference } from '@livekit/components-react';
 import {
   Track,
   LocalVideoTrack,
-  createLocalAudioTrack,
   LocalAudioTrack,
   RoomEvent,
   ConnectionQuality,
@@ -37,28 +41,23 @@ import {
   DisconnectReason,
   AudioPresets,
   VideoPreset,
-  VideoQuality,
   type LocalTrackPublication,
   type Participant,
-  type ParticipantTrackPermission,
   type RemoteParticipant,
   type TrackPublication,
 } from 'livekit-client';
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-  type PointerEvent as ReactPointerEvent,
-  type ReactNode,
-} from 'react';
-import { createPortal } from 'react-dom';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
-import { TEACHER_ABSENCE_GRACE_MS } from '@/lib/graceTimer';
-import { MIC_CAPTURE, keepShareAudio } from '@/lib/audioPolicy';
-import { STUCK_RECONNECT_MS, rejoinDelayMs, rejoinOutcome, shouldAutoRejoin } from '@/lib/rejoinPolicy';
+import { keepShareAudio } from '@/lib/audioPolicy';
+import {
+  STUCK_RECONNECT_MS,
+  classroomReconnectPolicy,
+  connectRetryDelayMs,
+  isOwnStaleDuplicate,
+  rejoinDelayMs,
+  rejoinOutcome,
+  shouldAutoRejoin,
+} from '@/lib/rejoinPolicy';
 import { SESSION_CHECK_EVENT, SESSION_ENDED_EVENT, isEndedReason, loginHref } from '@/lib/sessionClient';
 import { useRoomState, type RosterInfo } from '@/hooks/useRoomState';
 import { compactViewport, studentChatBox, usePseudoFullscreen, useViewport } from '@/hooks/useStudentLayout';
@@ -68,12 +67,7 @@ import { LocalPreview } from './LocalPreview';
 import { DrawOverlay, ShareDrawingProvider, useDrawingActions, useShareDrawing } from './ShareDrawing';
 import { TeacherInkOverlay, TeacherInkProvider } from './TeacherInk';
 import { WhiteboardMeetingBar } from './MeetingBar';
-import {
-  MEETING_BAR_PX,
-  SHARE_POSITION_NOTICE_KEY,
-  inlineShareDockHint,
-  sharePositionNoticeOpen,
-} from '@/lib/shareChrome';
+import { SHARE_POSITION_NOTICE_KEY, inlineShareDockHint, sharePositionNoticeOpen } from '@/lib/shareChrome';
 import { ZoomPanSurface } from './ZoomPanSurface';
 import { WhiteboardHost, WhiteboardViewer, hasSavedBoard } from './Whiteboard';
 import { useChatThread } from './chatThread';
@@ -81,29 +75,11 @@ import { useChatThread } from './chatThread';
 const ChatView = dynamic(() => import('./Chat').then((m) => m.ChatView), { ssr: false });
 import { useStudentFocus } from './useStudentFocus';
 import { countFocusAlerts, focusLabel, fullscreenGate, fullscreenGateText, isFocusAlert } from '@/lib/focusStatus';
-import { FloatingPanel, floatInsets, useFloatDrag, readFloatPref, writeFloatPref, type FloatPos } from './FloatingPanel';
-import {
-  VIDEO_PANEL_MIN_W,
-  WB_TOOL_CLEAR_PX,
-  clampVideoPanelSize,
-  parseStoredPos,
-  parseStoredSize,
-  placeWhiteboardVideo,
-  shareControlsPlacement,
-  showLocalSharePreview,
-  tilesInPane,
-  videoPanelSizeFromDrag,
-  type FloatRect,
-  type VideoPanelClampOpts,
-} from '@/lib/floatGeometry';
+import { FloatingPanel } from './FloatingPanel';
+import { WB_TOOL_CLEAR_PX, shareControlsPlacement, showLocalSharePreview } from '@/lib/floatGeometry';
 import { isRosterDropped, selectTeacherVideos, videoHidden } from '@/lib/droppedVideos';
 import { candidateScreens, surfaceFromTrack, windowPositionsTrusted } from '@/lib/screenMask';
-import {
-  maskPipelineSupported,
-  resolveScreenGeometry,
-  startMaskPipeline,
-  type MaskPipeline,
-} from '@/lib/screenMaskPipeline';
+import { maskPipelineSupported, resolveScreenGeometry, startMaskPipeline, type MaskPipeline } from '@/lib/screenMaskPipeline';
 import {
   InlineShareDock,
   TeacherShareHud,
@@ -116,12 +92,25 @@ import { Avatar } from '@/components/ui/Avatar';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { pageTitle, useTabTitle } from '@/hooks/useDocumentTitle';
 import { PageLoading } from '@/components/ui/Skeleton';
-import { IconDoor, IconHand, IconHandDown, IconMic, IconMicOff, IconPen, IconPin, IconScreen, IconSearch, IconUserPlus, IconUsers, IconVideo } from '@/components/ui/Icons';
+import {
+  IconDoor,
+  IconHand,
+  IconHandDown,
+  IconMic,
+  IconMicOff,
+  IconPen,
+  IconPin,
+  IconStar,
+  IconScreen,
+  IconSearch,
+  IconUserPlus,
+  IconUsers,
+  IconVideo,
+} from '@/components/ui/Icons';
 import {
   panelSlotsForCap,
-  pickTiles,
-  activeStickySpeakers,
   sortRoster,
   studentCapForSlots,
   teacherTabTitle,
@@ -136,7 +125,6 @@ import {
   openSideWindow,
   sideWindow,
   sideWindows,
-  SideWindowPortal,
   useSideWindows,
 } from './shareSideWindows';
 import { MIC_LOCKED_NO_TEACHER } from '@/lib/teacherPresenceLogic';
@@ -151,33 +139,26 @@ import {
 } from '@/lib/classroomClient';
 import { forwardActivityFrom, setLiveSession } from '@/lib/liveSession';
 import { filterPeople } from '@/lib/peopleSearch';
+import { peerWindowOuterSize } from '@/lib/peerWindow';
 import {
-  PEER_WIN_TILE_W,
-  TILE_CONNECT_MS,
-  blankTileKind,
-  peerWindowGrid,
-  peerWindowOuterSize,
-  peerWindowTileCount,
-  peerWindowTileWForWidth,
-} from '@/lib/peerWindow';
-import {
-  cameraProfile,
-  SCREEN_SHARE,
+  parseMediaProfile,
+  screenShare,
   screenShareSimulcastFor,
+  setMediaProfile,
   shareEncodingsFor,
   shareProfile,
-  STUDENT_CAMERA,
-  TEACHER_CAMERA,
+  studentCamera,
   SHARE_CODEC,
   shareUsesVp9,
 } from '@/lib/videoQuality';
-import { effectiveCamWanted, panelShown } from '@/lib/camOnDemand';
+import { effectiveCamWanted } from '@/lib/camOnDemand';
 import { nextDataSaver } from '@/lib/dataSaver';
 import { useDataSaver } from '@/hooks/useDataSaver';
 import { TeacherMediaDemand } from './TeacherMediaDemand';
 import { ClassInfoButton } from './ClassInfoButton';
 import { FeedbackForm } from './FeedbackForm';
 import { SpotlightFloat } from './SpotlightFloat';
+import { clientConnectDelayMs, isNegotiationError } from '@/lib/joinPacingLogic';
 import {
   nextStudentVideoMode,
   parseStudentVideoMode,
@@ -194,6 +175,19 @@ import {
   type PresencePhase,
 } from '@/lib/studentPresenceLogic';
 
+/** Wait the server-assigned connect slot (lib/joinPacingLogic). */
+import { CameraErrorBanner, SelectivePublisher } from './SelectivePublisher';
+import { StudentMediaPrivacy } from './StudentMediaPrivacy';
+import { TeacherCameraFloat, TeacherStageCamera } from './TeacherCameraFloat';
+import { TeacherPeersFloat } from './TeacherPeersFloat';
+import { enqueueLocalPublish, safeStop } from './localPublish';
+import { isTeacherParticipant, useHasTeacherScreen, useTeacherLive } from './participantRoles';
+
+function sleepConnectDelay(body: unknown): Promise<void> {
+  const ms = clientConnectDelayMs(body);
+  return ms > 0 ? new Promise((r) => window.setTimeout(r, ms)) : Promise.resolve();
+}
+
 type TokenPayload = {
   token: string;
   url: string;
@@ -201,91 +195,9 @@ type TokenPayload = {
   canPublishVideo: boolean;
   visibleIdentities: string[];
   mutedByTeacher: boolean;
+  /** Server MEDIA_PROFILE (lib/videoQuality): applied before anything is published. */
+  mediaProfile?: string;
 };
-
-/**
- * Live teacher presence from the LiveKit room (not the DB roster): true while a
- * teacher participant is connected, false when none is, null until this
- * client's own connection is up (so a join does not flash "absent").
- * While this client is itself reconnecting, the last answer is kept.
- */
-function useTeacherLive(teacherIdentities: string[]): boolean | null {
-  const room = useRoomContext();
-  const key = teacherIdentities.join(',');
-  const [live, setLive] = useState<boolean | null>(null);
-  useEffect(() => {
-    if (!room) return;
-    const set = new Set(key ? key.split(',') : []);
-    // Grace period: a teacher who was here and drops (device switch, reload,
-    // blip) still counts as present for TEACHER_ABSENCE_GRACE_MS, matching the
-    // server, so students see no "teacher left" flicker or mic lock.
-    let shown: boolean | null = null;
-    let grace: number | null = null;
-    const show = (v: boolean | null) => {
-      shown = v;
-      setLive(v);
-    };
-    const clearGrace = () => {
-      if (grace !== null) window.clearTimeout(grace);
-      grace = null;
-    };
-    const teacherHere = () =>
-      Array.from(room.remoteParticipants.values()).some((p) => isTeacherParticipant(p, set));
-    const update = () => {
-      if (room.state !== ConnectionState.Connected) {
-        if (room.state === ConnectionState.Disconnected) {
-          clearGrace();
-          show(null);
-        }
-        return;
-      }
-      if (teacherHere()) {
-        clearGrace();
-        show(true);
-        return;
-      }
-      if (shown !== true) {
-        show(false);
-        return;
-      }
-      if (grace === null) {
-        grace = window.setTimeout(() => {
-          grace = null;
-          if (room.state === ConnectionState.Connected && !teacherHere()) show(false);
-        }, TEACHER_ABSENCE_GRACE_MS);
-      }
-    };
-    update();
-    room.on(RoomEvent.ParticipantConnected, update);
-    room.on(RoomEvent.ParticipantDisconnected, update);
-    room.on(RoomEvent.ConnectionStateChanged, update);
-    room.on(RoomEvent.Reconnected, update);
-    return () => {
-      room.off(RoomEvent.ParticipantConnected, update);
-      room.off(RoomEvent.ParticipantDisconnected, update);
-      room.off(RoomEvent.ConnectionStateChanged, update);
-      room.off(RoomEvent.Reconnected, update);
-      clearGrace();
-    };
-  }, [room, key]);
-  return live;
-}
-
-export function isTeacherParticipant(
-  p: { metadata?: string; identity: string; name?: string },
-  teacherIdentities: Set<string>
-) {
-  if (teacherIdentities.has(p.identity)) return true;
-  if (p.identity.startsWith('teacher_')) return true;
-  if (p.identity.startsWith('student_')) return false;
-  try {
-    const meta = p.metadata ? JSON.parse(p.metadata) : {};
-    if (meta.role === 'TEACHER') return true;
-  } catch {
-    /* ignore */
-  }
-  return false;
-}
 
 function ParticipantGrid({
   isTeacher,
@@ -296,7 +208,14 @@ function ParticipantGrid({
   onStopShare,
   entireShareInfo,
   hiddenIdentities = [],
+  onShareScreen,
+  onPrepareShare,
+  onOpenWhiteboard,
 }: {
+  /** Teacher, nothing shared: quick starts shown on the empty stage. */
+  onShareScreen?: () => void;
+  onPrepareShare?: () => void;
+  onOpenWhiteboard?: () => void;
   entireShareInfo?: EntireShareInfo;
   /** What this teacher tab is capturing; decides whether the local share may be previewed. */
   localShareSurface?: string;
@@ -318,7 +237,7 @@ function ParticipantGrid({
     { onlySubscribed: true }
   );
 
-  const teacherSet = new Set(teacherIdentities);
+  const teacherSet = useMemo(() => new Set(teacherIdentities), [teacherIdentities]);
 
   const screenShares = tracks.filter((t) => {
     if (t.source !== Track.Source.ScreenShare) return false;
@@ -341,9 +260,29 @@ function ParticipantGrid({
   const hasScreen = screenShares.length > 0;
 
   if (!hasScreen && cameras.length === 0) {
-    // Teacher: the stage stays empty until a share; the teacher's own camera
-    // preview lives only in the docked Class panel (no duplicate tile here).
-    if (isTeacher) return <div className="stage-empty min-h-0 flex-1" aria-hidden />;
+    // Teacher: until a share, the stage offers the two ways to fill it; the
+    // teacher's own camera preview lives only in the docked Class panel.
+    if (isTeacher)
+      return (
+        <div className="stage-empty flex min-h-0 flex-1 items-center justify-center p-6">
+          <div className="max-w-sm text-center">
+            <p className="font-semibold text-white">Nothing is shared yet</p>
+            <p className="mt-1 text-sm text-slate-400">Share your screen or open the whiteboard to fill this space for everyone.</p>
+            <div className="mt-4 flex flex-wrap justify-center gap-2">
+              {onShareScreen && (
+                <Button onPointerDown={onPrepareShare} onClick={onShareScreen}>
+                  Share screen
+                </Button>
+              )}
+              {onOpenWhiteboard && (
+                <Button variant="secondary" onClick={onOpenWhiteboard}>
+                  Open whiteboard
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      );
     return (
       <div className="flex min-h-0 flex-col gap-3">
         <EmptyState
@@ -430,7 +369,6 @@ function ParticipantGrid({
     </div>
   );
 }
-
 
 /**
  * Teacher's own stage during an entire-screen (or unknown-surface) share.
@@ -564,7 +502,7 @@ export function TeacherScreenStage({ teacherIdentities, zoomable = false, drawin
     [{ source: Track.Source.ScreenShare, withPlaceholder: false }],
     { onlySubscribed: true }
   );
-  const teacherSet = new Set(teacherIdentities);
+  const teacherSet = useMemo(() => new Set(teacherIdentities), [teacherIdentities]);
   const screens = tracks.filter((t) => {
     if (t.source !== Track.Source.ScreenShare) return false;
     if (t.participant.isLocal) return false;
@@ -606,15 +544,6 @@ export function TeacherScreenStage({ teacherIdentities, zoomable = false, drawin
   );
 }
 
-
-/**
- * One student tile as it appears today: the 16:9 video area of the students
- * float at its single-tile width (~372px pane → ~354×199 content).
- * 2 and 4 are one column (2 or 4 rows). 6 is two columns × 3 rows.
- * The window grows with that grid and only shrinks a tile when the stack would leave the screen.
- */
-const PEER_TILE_W = 354;
-const PEER_TILE_H = 199;
 /** True when the browser exposes getDisplayMedia (required for screen share). */
 function canShareScreen(): boolean {
   return (
@@ -722,7 +651,7 @@ function captureScreen(videoMode = false): Promise<MediaStream> {
   if (safari) return bare();
 
   const withHints = {
-    video: { ...SCREEN_SHARE.capture, ...shareProfile(videoMode).capture },
+    video: { ...screenShare().capture, ...shareProfile(videoMode).capture },
     // Tab audio (any Chromium OS) or system audio (entire screen, Windows /
     // ChromeOS). The picker shows a "Share audio" checkbox; unticked = no track.
     audio: SCREEN_SHARE_AUDIO_CAPTURE,
@@ -748,1852 +677,12 @@ function captureScreen(videoMode = false): Promise<MediaStream> {
   }
 }
 
-
-const PEER_TOP_RESERVE = 152;
-/** Gap between the docked Class panel and the stage edges. */
-const PEER_DOCK_MARGIN = 8;
-/**
- * Below this stage width the expanded Class panel docks as a top band (stage
- * below it) instead of a left column, and is limited to about half the stage
- * height, so a phone-width stage keeps usable room.
- */
-const PEER_DOCK_NARROW_W = 640;
-const PEER_DOCK_NARROW_MAX_H = 0.5;
-/** Wide stages: the expanded column never takes more than this share of the stage width. */
-const PEER_DOCK_MAX_W = 0.45;
-/** Above the teacher dock. The share bar is no longer in this page. */
-const PEER_BOTTOM_RESERVE = 120;
-
-function peerFloatLayout(
-  slots: 2 | 4 | 6,
-  vw: number,
-  vh: number,
-  availH?: number,
-  availW?: number
-) {
-  const cols = slots === 6 ? 2 : 1;
-  const rows = slots === 2 ? 2 : slots === 4 ? 4 : 3;
-  const header = 34;
-  const pad = 16;
-  const gap = 6;
-  const border = 2;
-  const bottomReserve = PEER_BOTTOM_RESERVE;
-  const maxPaneW = availW !== undefined ? Math.max(200, availW) : Math.max(200, vw - 16);
-  const maxPaneH =
-    availH !== undefined ? Math.max(180, availH) : Math.max(180, vh - PEER_TOP_RESERVE - bottomReserve);
-  const scale = Math.min(
-    1,
-    (maxPaneW - pad - border - gap * (cols - 1)) / (PEER_TILE_W * cols),
-    (maxPaneH - header - pad - gap * (rows - 1)) / (PEER_TILE_H * rows)
-  );
-  const tileW = Math.max(112, Math.floor(PEER_TILE_W * scale));
-  const tileH = Math.max(63, Math.floor((tileW * 9) / 16));
-  const paneW = border + pad + cols * tileW + gap * (cols - 1);
-  const paneH = header + pad + rows * tileH + gap * (rows - 1);
-  return { cols, rows, tileW, tileH, paneW, paneH, gap };
-}
-
-/** Board rectangle the compact whiteboard video must stay inside (below the header, above the footer). */
-function whiteboardVideoBoard(vw: number, vh: number): FloatRect {
-  const insets = typeof document === 'undefined' ? { top: 0, right: 0, bottom: 0, left: 0 } : floatInsets();
-  const top = insets.top;
-  // The footer is hidden while the board is open. Keep the panel left of the meeting bar.
-  const bottom = Math.max(insets.bottom, 8);
-  const right = Math.max(insets.right, MEETING_BAR_PX);
-  return { x: 0, y: top, w: Math.max(200, vw - right), h: Math.max(160, vh - top - bottom) };
-}
-
-
-function TeacherCameraFloat({
-  teacherIdentities,
-  roomCode,
-  selfName,
-  selfStream,
-  camOn,
-  mode,
-}: {
-  teacherIdentities: string[];
-  roomCode: string;
-  selfName: string;
-  selfStream: MediaStream | null;
-  camOn: boolean;
-  /** both = teacher + self, teacher = teacher only, min = draggable "Videos" pill. */
-  mode: StudentVideoMode;
-}) {
-  const room = useRoomContext();
-  const [dataSaver] = useDataSaver();
-  const teacherSet = new Set(teacherIdentities);
-  const [tick, setTick] = useState(0);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const selfVideoRef = useRef<HTMLVideoElement | null>(null);
-  const paneRef = useRef<HTMLDivElement | null>(null);
-  const minimized = mode === 'min';
-  const showSelf = mode === 'both';
-
-  // Bottom-right by default (clamped above the control bar by the hook).
-  const defaultPos = useCallback(
-    (): FloatPos => ({ x: window.innerWidth - 372, y: window.innerHeight - 200 }),
-    []
-  );
-  const { pos, handleProps } = useFloatDrag({ id: 'student_videos', paneRef, defaultPos });
-
-  useEffect(() => {
-    if (!room) return;
-    const bump = () => setTick((n) => n + 1);
-    /** Subscribes any missing teacher camera; true when it had to. */
-    const subscribeMissing = () => {
-      let did = false;
-      for (const p of Array.from(room.remoteParticipants.values())) {
-        if (!isTeacherParticipant(p, teacherSet)) continue;
-        const pub = p.getTrackPublication(Track.Source.Camera);
-        if (pub && !pub.isSubscribed) {
-          did = true;
-          try {
-            pub.setSubscribed(true);
-          } catch (e) {
-            console.warn('subscribe teacher cam', e);
-          }
-        }
-      }
-      return did;
-    };
-    const ensure = () => {
-      subscribeMissing();
-      bump();
-    };
-    ensure();
-    room.on(RoomEvent.TrackPublished, ensure);
-    room.on(RoomEvent.TrackUnpublished, bump);
-    room.on(RoomEvent.TrackSubscribed, ensure);
-    room.on(RoomEvent.TrackUnsubscribed, bump);
-    room.on(RoomEvent.TrackMuted, bump);
-    room.on(RoomEvent.TrackUnmuted, ensure);
-    room.on(RoomEvent.ParticipantConnected, ensure);
-    room.on(RoomEvent.ParticipantDisconnected, bump);
-    room.on(RoomEvent.TrackSubscriptionFailed, ensure);
-    // Safety net only: events above drive re-renders, so the timer re-renders
-    // only when it actually had to subscribe something.
-    const iv = window.setInterval(() => {
-      if (subscribeMissing()) bump();
-    }, 3000);
-    return () => {
-      room.off(RoomEvent.TrackPublished, ensure);
-      room.off(RoomEvent.TrackUnpublished, bump);
-      room.off(RoomEvent.TrackSubscribed, ensure);
-      room.off(RoomEvent.TrackUnsubscribed, bump);
-      room.off(RoomEvent.TrackMuted, bump);
-      room.off(RoomEvent.TrackUnmuted, ensure);
-      room.off(RoomEvent.ParticipantConnected, ensure);
-      room.off(RoomEvent.ParticipantDisconnected, bump);
-      room.off(RoomEvent.TrackSubscriptionFailed, ensure);
-      window.clearInterval(iv);
-    };
-  }, [room, teacherIdentities]);
-
-  void tick;
-
-  let teacherPub: {
-    track?: { mediaStreamTrack?: MediaStreamTrack } | null;
-    isSubscribed?: boolean;
-    isMuted?: boolean;
-  } | null = null;
-  let teacherName = 'Teacher';
-  if (room) {
-    for (const p of Array.from(room.remoteParticipants.values())) {
-      if (!isTeacherParticipant(p, teacherSet)) continue;
-      teacherName = p.name || p.identity || 'Teacher';
-      const pub = p.getTrackPublication(Track.Source.Camera);
-      // Only treat as published when the camera track is live (not muted/unpublished).
-      if (pub && !pub.isMuted && pub.track) {
-        teacherPub = pub;
-      }
-      break;
-    }
-  }
-
-  const mediaTrack = teacherPub?.track?.mediaStreamTrack ?? null;
-
-  useEffect(() => {
-    const el = videoRef.current;
-    if (!el) return;
-    if (!mediaTrack) {
-      el.srcObject = null;
-      return;
-    }
-    el.srcObject = new MediaStream([mediaTrack]);
-    void el.play().catch(() => {});
-    return () => {
-      el.srcObject = null;
-    };
-  }, [mediaTrack, mode]);
-
-  const hasVideo = !!mediaTrack && !teacherPub?.isMuted;
-
-  useEffect(() => {
-    const el = selfVideoRef.current;
-    if (!el) return;
-    const track = selfStream?.getVideoTracks().find((t) => t.readyState === 'live') ?? null;
-    if (!track || !showSelf || minimized) {
-      el.srcObject = null;
-      return;
-    }
-    el.srcObject = new MediaStream([track]);
-    void el.play().catch(() => {});
-    return () => {
-      el.srcObject = null;
-    };
-  }, [selfStream, showSelf, minimized, camOn]);
-
-  const style = pos ? { left: pos.x, top: pos.y } : { right: 12, bottom: 88 };
-
-  return (
-    <>
-    <TeacherMediaDemand teacherIdentities={teacherIdentities} mode={dataSaver} camPaneMinimized={minimized} />
-    <div
-      ref={paneRef}
-      className="student-media-float"
-      data-minimized={minimized ? '1' : '0'}
-      data-room={roomCode}
-      data-video-mode={mode}
-      style={style}
-      aria-label="Videos — drag the top bar to move"
-    >
-      {minimized ? (
-        <div className="student-media-restore" {...handleProps} title="Drag to move">
-          <span>Videos</span>
-        </div>
-      ) : (
-        <>
-          <div className="student-media-head" {...handleProps} title="Drag to move">
-            <span className="student-media-title">
-              <span aria-hidden className="mr-1 text-white/40">⠿</span>Videos
-            </span>
-          </div>
-          <div className="student-media-row">
-            <div className="student-media-tile" aria-label="Teacher camera">
-              {hasVideo ? (
-                <video
-                  ref={videoRef}
-                  className="pointer-events-none h-full w-full object-cover"
-                  autoPlay
-                  playsInline
-                  muted
-                />
-              ) : (
-                <div className="flex h-full items-center justify-center px-2 text-center text-[10px] text-slate-300">
-                  Camera off
-                </div>
-              )}
-              <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-2 pb-1 pt-4">
-                <span className="text-2xs font-semibold tracking-wide text-white">{teacherName}</span>
-              </div>
-            </div>
-            {showSelf && (
-              <div className="student-media-tile" aria-label="Your camera">
-                {camOn && selfStream ? (
-                  <video
-                    ref={selfVideoRef}
-                    className="student-media-mirror pointer-events-none h-full w-full object-cover"
-                    autoPlay
-                    playsInline
-                    muted
-                  />
-                ) : (
-                  <div className="flex h-full items-center justify-center px-2 text-center text-[10px] text-slate-300">
-                    Camera off
-                  </div>
-                )}
-                <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-1.5 pb-1 pt-4">
-                  <span className="truncate text-2xs font-semibold text-white">{selfName || 'Me'}</span>
-                </div>
-              </div>
-            )}
-          </div>
-        </>
-      )}
-    </div>
-    </>
-  );
-}
-
-const EMPTY_DROPPED: ReadonlyMap<string, number> = new Map();
-
-function TeacherPeersFloat({
-  roomCode,
-  teacherIdentities,
-  visibleIdentities,
-  selfName,
-  selfStream,
-  onSlotsChange,
-  slots: slotsProp,
-  dock = null,
-  minLeft = 0,
-  whiteboard = false,
-  sharing = false,
-  onDockSpace,
-  focusAlerts = {},
-  pinnedIdentities = [],
-  onTogglePin,
-  portalWindow = null,
-  onShownChange,
-  embedHost = null,
-  videosHidden = false,
-  droppedStudents = EMPTY_DROPPED,
-  liveRoster = null,
-  spotlightIdentity = null,
-}: {
-  /** Panel visibility to the teacher (drives student cameras on demand). */
-  onShownChange?: (shown: boolean) => void;
-  /** Hide the in-tab panel (meeting bar / share pill "student videos" toggle). */
-  videosHidden?: boolean;
-  /**
-   * Whiteboard side column. When set, the pane is portaled here instead of
-   * floating. A separate videos window (portalWindow) still wins.
-   */
-  embedHost?: HTMLElement | null;
-  /**
-   * While sharing: render the panel inside this separate window (beside the
-   * share toolbar) instead of the classroom tab. Same tiles, pins, rotation.
-   */
-  portalWindow?: Window | null;
-  /** LiveKit identity → "Left fullscreen" / "Switched away". */
-  focusAlerts?: Record<string, string>;
-  /** Students the teacher pinned (oldest first): they keep a tile, bypassing rotation. */
-  pinnedIdentities?: string[];
-  /** Pin / unpin a student from their tile. */
-  onTogglePin?: (identity: string, pinned: boolean) => void;
-  roomCode: string;
-  teacherIdentities: string[];
-  visibleIdentities: string[];
-  selfName: string;
-  selfStream: MediaStream | null;
-  /**
-   * Roster drop times (identity → moment the grace already elapsed). The
-   * mosaic, the floating panel and the sample selection all use this set.
-   */
-  droppedStudents?: ReadonlyMap<string, number>;
-  /** Admitted students. Null until the roster has loaded. */
-  liveRoster?: ReadonlySet<string> | null;
-  /** Keep this camera subscribed even when it is not one of the mosaic tiles. */
-  spotlightIdentity?: string | null;
-  /** Student-camera count that fills this window (tiles minus the teacher). */
-  onSlotsChange?: (studentSlots: number) => void;
-  /** Panel size chosen by the room (synced with the server student cap). */
-  slots?: PanelSlots | null;
-  /**
-   * Stage rectangle (viewport px). The panel docks to the stage's top-left
-   * corner (no dragging) and reports the room it needs via onDockSpace so the
-   * stage makes space instead of being covered: a top band when minimized, a
-   * left column when expanded (a top band on narrow stages). While sharing it
-   * starts minimized each share; otherwise the teacher's saved choice holds.
-   */
-  dock?: { top: number; left: number; width: number; height: number } | null;
-  /** Floating: keep the panel right of this x (whiteboard tool column). */
-  minLeft?: number;
-  /**
-   * Whiteboard is open: float a compact 2-tile pane (separate from the docked
-   * class panel's size). 4/6 still grows it; the class camera cap changes only
-   * when the teacher clicks 2/4/6.
-   */
-  whiteboard?: boolean;
-  /** Teacher is screen sharing: the docked panel starts minimized each share. */
-  sharing?: boolean;
-  onDockSpace?: (space: { left: number; top: number }) => void;
-}) {
-  const room = useRoomContext();
-  const teacherSet = new Set(teacherIdentities);
-  const paneRef = useRef<HTMLDivElement | null>(null);
-  const sizeRef = useRef({ w: 372, h: 250 });
-  const stickySpeakersRef = useRef<Set<string>>(new Set());
-  const resizeDrag = useRef<{
-    pointerId: number;
-    x: number;
-    y: number;
-    w: number;
-    h: number;
-    key: string;
-  } | null>(null);
-  /** identity → last time heard speaking (sticky pins expire, see activeStickySpeakers). */
-  const lastSpokeRef = useRef<Map<string, number>>(new Map());
-  const seenCamsRef = useRef<Set<string>>(new Set());
-  const mosaicPoolRef = useRef<string[]>([]);
-  const lastRotationTickRef = useRef(0);
-  const [slotCount, setSlotCount] = useState<2 | 4 | 6>(() => {
-    try {
-      const v = sessionStorage.getItem(`peers_slots_${roomCode.toUpperCase()}`);
-      if (v === '2' || v === '4' || v === '6') return Number(v) as 2 | 4 | 6;
-    } catch {
-      /* ignore */
-    }
-    return 4;
-  });
-  useEffect(() => {
-    if (slotsProp && slotsProp !== slotCount) setSlotCount(slotsProp);
-    // Only follow the room's value when it changes. Does not touch the
-    // whiteboard's own tile count.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slotsProp]);
-  // Whiteboard opens at 2 tiles. Growing to 4/6 is for this open only; the
-  // next open starts compact again and does not rewrite the docked panel.
-  const [wbSlots, setWbSlots] = useState<2 | 4 | 6>(2);
-  const [wbEpoch, setWbEpoch] = useState(whiteboard);
-  if (whiteboard !== wbEpoch) {
-    setWbEpoch(whiteboard);
-    if (whiteboard) setWbSlots(2);
-  }
-  const activeSlots: 2 | 4 | 6 = whiteboard ? wbSlots : slotCount;
-  const [minimized, setMinimized] = useState(() => {
-    try {
-      return sessionStorage.getItem(`peers_min_${roomCode.toUpperCase()}`) === '1';
-    } catch {
-      return false;
-    }
-  });
-  // Docked in the stage corner by default (the stage reserves its space).
-  // Dragging the header floats it anywhere; Dock / double-click re-docks.
-  const [floating, setFloating] = useState(() => readFloatPref('class_panel.floating') === '1');
-  useEffect(() => {
-    writeFloatPref('class_panel.floating', floating ? '1' : '0');
-  }, [floating]);
-  const portal = !!portalWindow && !portalWindow.closed;
-  const docked = !!dock && !floating && !portal;
-  const sharingDock = docked && sharing;
-  // Minimized state during a share. Starts collapsed at every share; the
-  // teacher's saved (non-share) minimized preference is untouched.
-  const [shareMinimized, setShareMinimized] = useState(true);
-  useEffect(() => {
-    if (sharingDock) setShareMinimized(true);
-  }, [sharingDock]);
-  const isMin = portal ? false : sharingDock ? shareMinimized : minimized;
-  const narrowDock = !!dock && dock.width < PEER_DOCK_NARROW_W;
-  // Cameras on demand: report shown / minimized (incl. an OS-minimized popup).
-  const [portalHidden, setPortalHidden] = useState(false);
-  useEffect(() => {
-    if (!portal || !portalWindow) {
-      setPortalHidden(false);
-      return;
-    }
-    const doc = portalWindow.document;
-    const on = () => setPortalHidden(doc.visibilityState === 'hidden');
-    on();
-    doc.addEventListener('visibilitychange', on);
-    return () => doc.removeEventListener('visibilitychange', on);
-  }, [portal, portalWindow]);
-  const shown = !videosHidden && panelShown({ minimized: isMin, portalHidden });
-  const onShownRef = useRef(onShownChange);
-  onShownRef.current = onShownChange;
-  useEffect(() => {
-    // Debounced: a quick minimize/restore does not bounce every camera.
-    const t = window.setTimeout(() => onShownRef.current?.(shown), shown ? 0 : 1500);
-    return () => window.clearTimeout(t);
-  }, [shown]);
-  const [rotationTick, setRotationTick] = useState(0);
-  const [speakingId, setSpeakingId] = useState<string | null>(null);
-  const [stickyVersion, setStickyVersion] = useState(0);
-  const [tick, setTick] = useState(0);
-  const [viewport, setViewport] = useState({ w: 1400, h: 900 });
-  const manualKey = whiteboard ? 'class_panel_wb_manual' : sharing ? 'class_panel_share_manual' : 'class_panel_manual';
-  const [manualSize, setManualSize] = useState<{ w: number; h: number } | null>(null);
-
-  const dockAvailH = dock
-    ? Math.max(0, (narrowDock ? dock.height * PEER_DOCK_NARROW_MAX_H : dock.height) - 2 * PEER_DOCK_MARGIN)
-    : undefined;
-  const dockAvailW = dock
-    ? Math.max(0, (narrowDock ? dock.width : dock.width * PEER_DOCK_MAX_W) - 2 * PEER_DOCK_MARGIN)
-    : undefined;
-  const wbPlaced = useMemo(() => {
-    if (!whiteboard || activeSlots !== 2) return null;
-    return placeWhiteboardVideo(
-      parseStoredPos(readFloatPref('class_panel_wb')),
-      parseStoredSize(readFloatPref('class_panel_wb_size')),
-      whiteboardVideoBoard(viewport.w, viewport.h)
-    );
-  }, [whiteboard, activeSlots, viewport.w, viewport.h]);
-  const layout = useMemo(() => {
-    if (wbPlaced) {
-      const tiles = tilesInPane(wbPlaced.w, wbPlaced.h, 1, 2);
-      return {
-        cols: 1,
-        rows: 2,
-        tileW: tiles.tileW,
-        tileH: tiles.tileH,
-        paneW: wbPlaced.w,
-        paneH: wbPlaced.h,
-        gap: 6,
-      };
-    }
-    return peerFloatLayout(activeSlots, viewport.w, viewport.h, dockAvailH, dockAvailW);
-  }, [wbPlaced, activeSlots, viewport.w, viewport.h, dockAvailH, dockAvailW]);
-  const embedLayout = !!embedHost && !portal;
-  // Floating panel in whiteboard, share (docked, floated, or the videos window)
-  // and whenever the class panel itself is undocked. The docked class grid
-  // keeps the 2/4/6 preset until the teacher floats it.
-  const allowResize = !isMin && !embedLayout && (whiteboard || sharing || floating || portal);
-  const panelClampOpts: VideoPanelClampOpts = {
-    insets: (() => {
-      const base = floatInsets();
-      return {
-        top: base.top,
-        right: Math.max(base.right, whiteboard ? MEETING_BAR_PX : 0),
-        bottom: base.bottom,
-        left: Math.max(base.left, whiteboard ? WB_TOOL_CLEAR_PX : 0),
-      };
-    })(),
-  };
-  const clampedManual =
-    allowResize && manualSize ? clampVideoPanelSize(manualSize, viewport, panelClampOpts) : null;
-  const manualTiles =
-    clampedManual != null ? tilesInPane(clampedManual.w, clampedManual.h, layout.cols, layout.rows) : null;
-  const view =
-    clampedManual && manualTiles
-      ? {
-          cols: layout.cols,
-          rows: layout.rows,
-          gap: layout.gap,
-          tileW: manualTiles.tileW,
-          tileH: manualTiles.tileH,
-          paneW: clampedManual.w,
-          paneH: clampedManual.h,
-        }
-      : layout;
-  sizeRef.current = isMin
-    ? { w: 168, h: 36 }
-    : { w: view.paneW, h: view.paneH };
-
-  const defaultPos = useCallback((): FloatPos => {
-    if (whiteboard && typeof window !== 'undefined') {
-      const placed = placeWhiteboardVideo(null, null, whiteboardVideoBoard(window.innerWidth, window.innerHeight));
-      return { x: placed.x, y: placed.y };
-    }
-    const h = sizeRef.current.h;
-    return { x: 12, y: Math.max(PEER_TOP_RESERVE, window.innerHeight - h - PEER_BOTTOM_RESERVE) };
-  }, [whiteboard]);
-
-  const { pos, reclamp, moveTo, handleProps } = useFloatDrag({
-    // Separate key so the docked panel's left-side position is not reused on the board.
-    id: whiteboard ? 'class_panel_wb' : 'class_panel',
-    paneRef,
-    defaultPos,
-    // Dragging the docked panel pulls it out to float (the hook starts the
-    // drag from where it is drawn, so it does not jump).
-    onDragStart: () => setFloating(true),
-    extraInsets: whiteboard ? () => ({ left: WB_TOOL_CLEAR_PX, right: MEETING_BAR_PX }) : undefined,
-    insetKey: whiteboard ? 'wb' : 'dock',
-  });
-  const dock_ = useCallback(() => setFloating(false), []);
-  const undock = useCallback(() => {
-    const r = paneRef.current?.getBoundingClientRect();
-    if (r) moveTo({ x: r.left + 24, y: r.top + 24 });
-    setFloating(true);
-  }, [moveTo]);
-
-  useEffect(() => {
-    try {
-      sessionStorage.setItem(`peers_slots_${roomCode.toUpperCase()}`, String(slotCount));
-    } catch {
-      /* ignore */
-    }
-  }, [slotCount, roomCode]);
-
-  useEffect(() => {
-    try {
-      sessionStorage.setItem(`peers_min_${roomCode.toUpperCase()}`, minimized ? '1' : '0');
-    } catch {
-      /* ignore */
-    }
-  }, [minimized, roomCode]);
-
-  // A 4/6-tile whiteboard pane is remembered so the next open can clamp it
-  // back down. The compact 2-tile size is not written (opening always reclamps).
-  useEffect(() => {
-    if (!whiteboard || isMin || portal || activeSlots === 2) return;
-    writeFloatPref('class_panel_wb_size', JSON.stringify({ w: layout.paneW, h: layout.paneH }));
-  }, [whiteboard, isMin, portal, activeSlots, layout.paneW, layout.paneH]);
-
-  useEffect(() => {
-    const read = () => setViewport({ w: window.innerWidth, h: window.innerHeight });
-    read();
-    window.addEventListener('resize', read);
-    return () => window.removeEventListener('resize', read);
-  }, []);
-
-  useEffect(() => {
-    setManualSize(parseStoredSize(readFloatPref(manualKey)));
-  }, [manualKey]);
-
-  useEffect(() => {
-    const el = paneRef.current;
-    if (!el) return;
-    const sync = () => {
-      const w = el.offsetWidth || view.paneW;
-      const h = el.offsetHeight || (isMin ? 36 : view.paneH);
-      sizeRef.current = { w, h };
-      if (docked) {
-        // Expanded: a left column (top band when narrow). Minimized: a thin
-        // top band for the pill.
-        onDockSpace?.(
-          isMin || narrowDock
-            ? { left: 0, top: h + 2 * PEER_DOCK_MARGIN }
-            : { left: w + 2 * PEER_DOCK_MARGIN, top: 0 }
-        );
-      } else {
-        reclamp();
-      }
-    };
-    sync();
-    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null;
-    ro?.observe(el);
-    return () => ro?.disconnect();
-  }, [view.paneW, view.paneH, isMin, docked, narrowDock, reclamp, onDockSpace]);
-
-  useEffect(() => {
-    if (!docked) onDockSpace?.({ left: 0, top: 0 });
-  }, [docked, onDockSpace]);
-
-  // Random mosaic rotation ~8s among non-sticky students
-  useEffect(() => {
-    const iv = window.setInterval(() => setRotationTick((n) => n + 1), 8000);
-    return () => window.clearInterval(iv);
-  }, []);
-
-  const isMicMuted = useCallback((p: Participant) => {
-    try {
-      if (!p.isMicrophoneEnabled) return true;
-      const pub = p.getTrackPublication(Track.Source.Microphone);
-      if (!pub) return true;
-      if (pub.isMuted) return true;
-      return false;
-    } catch {
-      return true;
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!room) return;
-    const onSpeakers = (speakers: Participant[]) => {
-      const sticky = stickySpeakersRef.current;
-      let changed = false;
-      let topSpeaking: string | null = null;
-
-      for (const s of speakers) {
-        if (s.isLocal) continue;
-        if (isTeacherParticipant(s, teacherSet)) continue;
-        if (isMicMuted(s)) {
-          if (sticky.delete(s.identity)) changed = true;
-          continue;
-        }
-        // Unmuted + speaking → sticky for STICKY_SPEAKER_TTL_MS after the last word
-        lastSpokeRef.current.set(s.identity, Date.now());
-        if (!sticky.has(s.identity)) {
-          sticky.add(s.identity);
-          changed = true;
-        }
-        if (!topSpeaking) topSpeaking = s.identity;
-      }
-
-      // Drop sticky entries that left or are now muted
-      if (room) {
-        for (const id of Array.from(sticky)) {
-          const p = room.remoteParticipants.get(id);
-          if (!p || isMicMuted(p)) {
-            sticky.delete(id);
-            changed = true;
-          }
-        }
-      }
-
-      setSpeakingId(topSpeaking);
-      if (changed) setStickyVersion((n) => n + 1);
-    };
-    room.on(RoomEvent.ActiveSpeakersChanged, onSpeakers);
-    return () => {
-      room.off(RoomEvent.ActiveSpeakersChanged, onSpeakers);
-    };
-  }, [room, teacherIdentities, isMicMuted]);
-
-  // Ensure peer cameras in sample are subscribed
-  useEffect(() => {
-    if (!room) return;
-    const ensure = (fromTimer = false) => {
-      let changedAny = !fromTimer;
-      for (const p of Array.from(room.remoteParticipants.values())) {
-        if (isTeacherParticipant(p, teacherSet)) continue;
-        // Subscriptions follow the tiles actually shown (effect below);
-        // here we only notice cameras that appeared or went away.
-        const pub = p.getTrackPublication(Track.Source.Camera);
-        if (pub && !seenCamsRef.current.has(pub.trackSid)) {
-          seenCamsRef.current.add(pub.trackSid);
-          changedAny = true;
-        }
-        // Keep sticky set in sync with mute state even without speak events
-        if (stickySpeakersRef.current.has(p.identity) && isMicMuted(p)) {
-          stickySpeakersRef.current.delete(p.identity);
-          setStickyVersion((n) => n + 1);
-        }
-      }
-      // The 2 s timer is a safety net: re-render only when it changed something.
-      if (changedAny) setTick((n) => n + 1);
-    };
-    const onEvent = () => ensure(false);
-    ensure();
-    room.on(RoomEvent.TrackPublished, onEvent);
-    room.on(RoomEvent.TrackSubscribed, onEvent);
-    room.on(RoomEvent.ParticipantConnected, onEvent);
-    room.on(RoomEvent.ParticipantDisconnected, onEvent);
-    room.on(RoomEvent.TrackMuted, onEvent);
-    room.on(RoomEvent.TrackUnmuted, onEvent);
-    room.on(RoomEvent.TrackUnpublished, onEvent);
-    room.on(RoomEvent.TrackUnsubscribed, onEvent);
-    const iv = window.setInterval(() => ensure(true), 3000);
-    return () => {
-      room.off(RoomEvent.TrackPublished, onEvent);
-      room.off(RoomEvent.TrackSubscribed, onEvent);
-      room.off(RoomEvent.ParticipantConnected, onEvent);
-      room.off(RoomEvent.ParticipantDisconnected, onEvent);
-      room.off(RoomEvent.TrackMuted, onEvent);
-      room.off(RoomEvent.TrackUnmuted, onEvent);
-      room.off(RoomEvent.TrackUnpublished, onEvent);
-      room.off(RoomEvent.TrackUnsubscribed, onEvent);
-      window.clearInterval(iv);
-    };
-  }, [room, teacherIdentities, visibleIdentities, isMicMuted]);
-
-  void tick;
-  void stickyVersion;
-
-  const peerIds = useMemo(() => {
-    const tSet = new Set(teacherIdentities);
-    const hasLiveCamera = (id: string) => {
-      if (!room) return false;
-      const p = room.remoteParticipants.get(id);
-      if (!p || isTeacherParticipant(p, tSet)) return false;
-      const pub = p.getTrackPublication(Track.Source.Camera);
-      if (!pub || pub.isMuted) return false;
-      // Not subscribed yet (we only subscribe shown tiles) counts as live.
-      const media = pub.track?.mediaStreamTrack;
-      return !media || media.readyState !== 'ended';
-    };
-    // Only cameras actually publishing in the sample, minus anyone the roster
-    // has dropped. Everyone else stays a blank slot. Same identity cannot
-    // appear twice (selectTeacherVideos collapses duplicates on reconnect).
-    const pool = selectTeacherVideos(
-      visibleIdentities.filter((id) => !tSet.has(id) && !id.startsWith('teacher_') && hasLiveCamera(id)),
-      { dropped: droppedStudents, now: Date.now(), liveRoster }
-    );
-    const pins = pinnedIdentities.filter((id) => pool.includes(id));
-    const studentSlots = Math.max(0, activeSlots - 1);
-    for (const id of Array.from(lastSpokeRef.current.keys())) {
-      if (!stickySpeakersRef.current.has(id)) lastSpokeRef.current.delete(id);
-    }
-    const sticky = activeStickySpeakers({
-      lastSpoke: lastSpokeRef.current,
-      now: Date.now(),
-      pool,
-      pins,
-      speakingId,
-      studentSlots,
-    });
-
-    // Rotation runs among everyone who is not pinned / speaking. Pinned
-    // students (teacher), then the active speaker, then sticky speakers take
-    // tiles first (see pickTiles in lib/classSlots).
-    const rest = pool.filter((id) => !pins.includes(id) && id !== speakingId && !sticky.includes(id));
-    const prevMosaic = mosaicPoolRef.current.filter((id) => rest.includes(id));
-    const needSlots = Math.max(0, studentSlots - pins.length - sticky.length);
-    const membershipChanged =
-      prevMosaic.length !== rest.length || prevMosaic.some((id) => !rest.includes(id));
-    let mosaic = prevMosaic;
-    if (membershipChanged || mosaic.length === 0 || mosaic.length < Math.min(rest.length, needSlots)) {
-      const shuffled = [...rest];
-      for (let i = shuffled.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-      }
-      mosaic = shuffled;
-      mosaicPoolRef.current = mosaic;
-    }
-    if (lastRotationTickRef.current !== rotationTick) {
-      lastRotationTickRef.current = rotationTick;
-      const rotating = mosaic.filter((id) => rest.includes(id));
-      for (const id of rest) {
-        if (!rotating.includes(id)) rotating.push(id);
-      }
-      mosaic = rotating.length > 1 ? [...rotating.slice(1), rotating[0]] : rotating;
-      mosaicPoolRef.current = mosaic;
-    }
-
-    // Never backfill with students who are not publishing a sample camera.
-    // The grid still paints `activeSlots` cells; the rest stay blank.
-    return pickTiles({
-      pool: [...pins, ...(speakingId ? [speakingId] : []), ...sticky, ...mosaic].filter((id) => pool.includes(id)),
-      teacherPins: pins,
-      speakingId,
-      sticky,
-      rotation: mosaic,
-      studentSlots,
-    });
-  }, [
-    visibleIdentities,
-    teacherIdentities,
-    room,
-    speakingId,
-    rotationTick,
-    activeSlots,
-    tick,
-    stickyVersion,
-    pinnedIdentities,
-    droppedStudents,
-    liveRoster,
-  ]);
-
-  // Bandwidth: subscribe to a student camera only while its tile is shown
-  // and the panel is open, and at the lowest layer. A dropped student is
-  // unsubscribed entirely (camera and mic) until the roster takes them back.
-  const shownKey = isMin ? '' : peerIds.join(',');
-  const droppedRef = useRef(droppedStudents);
-  droppedRef.current = droppedStudents;
-  const liveRosterRef = useRef(liveRoster);
-  liveRosterRef.current = liveRoster;
-  const spotlightRef = useRef(spotlightIdentity);
-  spotlightRef.current = spotlightIdentity;
-  useEffect(() => {
-    if (!room) return;
-    const want = new Set(shownKey ? shownKey.split(',') : []);
-    if (spotlightRef.current && !videoHidden(spotlightRef.current, { dropped: droppedRef.current, now: Date.now(), liveRoster: liveRosterRef.current })) {
-      want.add(spotlightRef.current);
-    }
-    const hiddenNow = (identity: string) =>
-      videoHidden(identity, { dropped: droppedRef.current, now: Date.now(), liveRoster: liveRosterRef.current });
-    const sync = (dropOnly: boolean) => {
-      for (const p of Array.from(room.remoteParticipants.values())) {
-        if (isTeacherParticipant(p, teacherSet)) continue;
-        const drop = hiddenNow(p.identity);
-        for (const pub of Array.from(p.trackPublications.values())) {
-          try {
-            if (drop) {
-              if (pub.isSubscribed) pub.setSubscribed(false);
-              continue;
-            }
-            if (dropOnly) continue;
-            if (pub.source === Track.Source.Microphone) {
-              if (!pub.isSubscribed) pub.setSubscribed(true);
-            } else if (pub.source === Track.Source.Camera) {
-              const w = want.has(p.identity);
-              if (pub.isSubscribed !== w) pub.setSubscribed(w);
-              if (w) pub.setVideoQuality(VideoQuality.LOW);
-            }
-          } catch (e) {
-            console.warn('peer cam subscription', e);
-          }
-        }
-      }
-    };
-    const apply = () => sync(false);
-    // A spotlight subscribe must not be undone, but a dropped student's
-    // auto-subscribed tracks must still be released.
-    const onSubscribed = () => sync(true);
-    apply();
-    room.on(RoomEvent.TrackPublished, apply);
-    room.on(RoomEvent.TrackSubscribed, onSubscribed);
-    room.on(RoomEvent.ParticipantConnected, apply);
-    return () => {
-      room.off(RoomEvent.TrackPublished, apply);
-      room.off(RoomEvent.TrackSubscribed, onSubscribed);
-      room.off(RoomEvent.ParticipantConnected, apply);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [room, shownKey, teacherIdentities.join(','), droppedStudents, liveRoster, spotlightIdentity]);
-
-  const cells: Array<string | null> = ['__self__'];
-  for (let i = 0; i < activeSlots - 1; i++) cells.push(peerIds[i] ?? null);
-
-  // A newly opened slot may say "Connecting…" for a few seconds. Rotating the
-  // sample must not reset that timer, or every tile stays on "Connecting…".
-  const [settling, setSettling] = useState(false);
-  useEffect(() => {
-    setSettling(true);
-    const t = window.setTimeout(() => setSettling(false), TILE_CONNECT_MS);
-    return () => window.clearTimeout(t);
-  }, [activeSlots]);
-  const studentsInRoom = room
-    ? Array.from(room.remoteParticipants.values()).filter(
-        (p) => p.identity.startsWith('student_') && !isTeacherParticipant(p, teacherSet)
-      ).length
-    : 0;
-  const pendingSample = visibleIdentities.filter((id) => {
-    if (!id.startsWith('student_') || peerIds.includes(id)) return false;
-    const p = room?.remoteParticipants.get(id);
-    if (p && isTeacherParticipant(p, teacherSet)) return false;
-    if (videoHidden(id, { dropped: droppedStudents, now: Date.now(), liveRoster })) return false;
-    return true;
-  }).length;
-
-  // Student videos window (during a share): only the tiles actually shown,
-  // and the window is resized to exactly fit them (lib/peerWindow).
-  const [winTileW, setWinTileW] = useState(PEER_WIN_TILE_W);
-  const winCount = peerWindowTileCount({
-    slots: activeSlots,
-    filled: Math.min(peerIds.length, activeSlots - 1),
-    connecting: settling ? pendingSample : 0,
-  });
-  const winGrid = useMemo(() => peerWindowGrid(winCount, winTileW), [winCount, winTileW]);
-  const [paneEl, setPaneEl] = useState<HTMLDivElement | null>(null);
-  const setPaneRef = useCallback((el: HTMLDivElement | null) => {
-    paneRef.current = el;
-    setPaneEl(el);
-  }, []);
-  const fitRef = useRef<{ w: number; h: number; at: number; tries: number } | null>(null);
-  useEffect(() => {
-    if (!portal || !portalWindow || !paneEl) return;
-    const pw = portalWindow;
-    fitRef.current = null;
-    const fit = () => {
-      if (pw.closed) return;
-      const r = paneEl.getBoundingClientRect();
-      const w = Math.ceil(r.width);
-      const h = Math.ceil(r.height);
-      if (!w || !h) return;
-      if (Math.abs(pw.innerWidth - w) <= 1 && Math.abs(pw.innerHeight - h) <= 1) {
-        fitRef.current = { w, h, at: Date.now(), tries: 0 };
-        return;
-      }
-      const prev = fitRef.current;
-      const tries = prev && prev.w === w && prev.h === h ? prev.tries + 1 : 1;
-      // The window manager may refuse an exact size: give up after a few tries.
-      if (tries > 4) return;
-      fitRef.current = { w, h, at: Date.now(), tries };
-      const extraW = pw.innerWidth > 0 && pw.outerWidth > 0 ? Math.max(0, pw.outerWidth - pw.innerWidth) : 16;
-      const extraH = pw.innerHeight > 0 && pw.outerHeight > 0 ? Math.max(0, pw.outerHeight - pw.innerHeight) : 72;
-      try {
-        pw.resizeTo(w + extraW, h + extraH);
-      } catch {
-        /* ignore */
-      }
-    };
-    const onResize = () => {
-      const last = fitRef.current;
-      // The teacher dragged the window wider / narrower: scale the tiles to the
-      // new width; the height then snaps to the tiles.
-      if (last && Date.now() - last.at > 700 && Math.abs(pw.innerWidth - last.w) > 8) {
-        setWinTileW(peerWindowTileWForWidth(winCount, pw.innerWidth));
-        return;
-      }
-      window.setTimeout(fit, 120);
-    };
-    fit();
-    const t1 = window.setTimeout(fit, 250);
-    const t2 = window.setTimeout(fit, 1000);
-    pw.addEventListener('load', fit);
-    pw.addEventListener('resize', onResize);
-    const RO = (pw as Window & { ResizeObserver?: typeof ResizeObserver }).ResizeObserver ?? ResizeObserver;
-    const ro = RO ? new RO(() => fit()) : null;
-    ro?.observe(paneEl);
-    return () => {
-      window.clearTimeout(t1);
-      window.clearTimeout(t2);
-      pw.removeEventListener('load', fit);
-      pw.removeEventListener('resize', onResize);
-      ro?.disconnect();
-    };
-  }, [portal, portalWindow, paneEl, winGrid.paneW, winGrid.paneH, winCount]);
-  if (videosHidden && !portal) return null;
-  const L = portal && !clampedManual ? winGrid : view;
-  const rawCells = portal ? cells.slice(0, winCount) : cells;
-  // No students in the room: drop the empty slots so they never say "Off camera".
-  const shownCells = studentsInRoom > 0 ? rawCells : rawCells.filter((id) => id != null);
-  let blankCursor = 0;
-
-  const style: CSSProperties = portal
-    ? { position: 'relative', left: 0, top: 0, width: 'max-content', height: 'auto', borderRadius: 0, border: 0 }
-    : docked && dock
-      ? { left: dock.left + PEER_DOCK_MARGIN, top: dock.top + PEER_DOCK_MARGIN }
-      : pos
-        ? { left: Math.max(minLeft, pos.x), top: pos.y }
-        : { left: Math.max(12, minLeft), top: PEER_TOP_RESERVE };
-  if (!isMin && !portal) {
-    // Preset (2/4/6) or the teacher's dragged size, even when some tiles are blank.
-    style.width = view.paneW;
-    style.height = view.paneH;
-  }
-  if (portal && clampedManual) {
-    style.width = view.paneW;
-    style.height = view.paneH;
-  }
-  const embed = !!embedHost && !portal;
-  if (embed) {
-    style.position = 'relative';
-    style.left = 0;
-    style.top = 0;
-    style.width = '100%';
-    style.maxWidth = '100%';
-    style.height = 'auto';
-  }
-
-  // Pointer-up, cancel, and a lost capture all save the same clamped size.
-  // Clearing the drag ref first keeps a follow-up lostpointercapture from writing twice.
-  const finishResize = (e: ReactPointerEvent<HTMLElement>) => {
-    const d = resizeDrag.current;
-    if (!d || d.pointerId !== e.pointerId) return;
-    resizeDrag.current = null;
-    try {
-      if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
-    } catch {
-      /* already released */
-    }
-    const next = videoPanelSizeFromDrag(
-      { w: d.w, h: d.h },
-      e.clientX - d.x,
-      e.clientY - d.y,
-      viewport,
-      panelClampOpts
-    );
-    setManualSize(next);
-    writeFloatPref(d.key, JSON.stringify(next));
-  };
-
-  const pane = (
-    <div
-      ref={setPaneRef}
-      className="peers-float-pane"
-      role="region"
-      data-slots={activeSlots}
-      data-minimized={isMin ? '1' : '0'}
-      data-docked={docked ? '1' : '0'}
-      style={style}
-      aria-label={portal ? 'Student videos' : 'Class videos — drag the top bar to move'}
-    >
-      <div
-        className="peers-float-header"
-        {...(portal ? {} : handleProps)}
-        onDoubleClick={(e) => {
-          if ((e.target as HTMLElement).closest('button')) return;
-          if (floating && dock) dock_();
-        }}
-        title={docked ? 'Drag to float this panel' : 'Drag to move · double-click to dock'}
-      >
-        <span className="peers-float-grip" aria-hidden>
-          ⋮⋮
-        </span>
-        <div className="flex min-w-0 flex-1 items-center gap-1" data-no-drag>
-          {!portal && (
-            <button
-              type="button"
-              className="peers-float-slot"
-              data-testid="videos-min"
-              onClick={() => (sharingDock ? setShareMinimized((v) => !v) : setMinimized((v) => !v))}
-              aria-label={isMin ? 'Expand class videos' : 'Minimize class videos'}
-              title={isMin ? 'Show student videos' : 'Minimise student videos'}
-            >
-              {isMin ? `▢ ${peerIds.length + 1}` : '—'}
-            </button>
-          )}
-          {!isMin &&
-            ([2, 4, 6] as const).map((n) => (
-              <button
-                key={n}
-                type="button"
-                data-testid={`videos-layout-${n}`}
-                className={cn('peers-float-slot', activeSlots === n && 'is-on')}
-                aria-pressed={activeSlots === n}
-                onClick={() => {
-                  if (whiteboard) setWbSlots(n);
-                  else setSlotCount(n);
-                  // A 2/4/6 pick is a preset: drop the dragged size so the
-                  // button visibly changes the panel again.
-                  setManualSize(null);
-                  writeFloatPref(manualKey, null);
-                  onSlotsChange?.(studentCapForSlots(n));
-                }}
-                aria-label={`Show ${n} videos`}
-                title={`Show ${n} videos: you + ${n - 1} student${n - 1 === 1 ? '' : 's'}`}
-              >
-                {n}
-              </button>
-            ))}
-          {dock && !portal && (
-            <button
-              type="button"
-              className="peers-float-slot"
-              onClick={floating ? dock_ : undock}
-              aria-label={floating ? 'Dock class videos beside the stage' : 'Float class videos'}
-              title={floating ? 'Dock beside the stage' : 'Float (drag anywhere)'}
-            >
-              {floating ? 'Dock' : 'Float'}
-            </button>
-          )}
-        </div>
-      </div>
-      {!isMin && (
-        <div
-          className="peers-float-grid"
-          data-slots={activeSlots}
-          style={{
-            gridTemplateRows: `repeat(${L.rows}, ${L.tileH}px)`,
-            ...(portal ? { gridTemplateColumns: `repeat(${L.cols}, ${L.tileW}px)` } : {}),
-          }}
-        >
-          {shownCells.map((identity, i) => {
-            if (identity === '__self__') {
-              const selfTrack =
-                selfStream
-                  ?.getVideoTracks()
-                  .find((track) => track.readyState === 'live' && track.enabled) ?? null;
-              return (
-                <PeerCamTile
-                  key="self"
-                  name={selfTileLabel(selfName)}
-                  mediaTrack={selfTrack}
-                  speaking={false}
-                  pinned={false}
-                  mirror
-                  tileW={L.tileW}
-                  tileH={L.tileH}
-                />
-              );
-            }
-            if (!identity) {
-              const kind = blankTileKind({
-                studentsInRoom,
-                pendingSample,
-                blankIndex: blankCursor,
-                settling,
-              });
-              blankCursor += 1;
-              if (kind === 'empty') return null;
-              return (
-                <div
-                  key={`empty-${i}`}
-                  className="peers-float-tile"
-                  data-empty="1"
-                  style={{
-                    width: L.tileW,
-                    height: L.tileH,
-                    display: 'grid',
-                    placeItems: 'center',
-                    color: '#94a3b8',
-                    fontSize: 10,
-                    fontWeight: 650,
-                  }}
-                >
-                  {kind === 'connecting' ? 'Connecting…' : 'Off camera'}
-                </div>
-              );
-            }
-            let name = identity;
-            let mediaTrack: MediaStreamTrack | null = null;
-            let speaking = false;
-            if (room) {
-              const p = room.remoteParticipants.get(identity);
-              if (p) {
-                name = p.name || p.identity;
-                speaking = p.isSpeaking || speakingId === identity;
-                const pub = p.getTrackPublication(Track.Source.Camera);
-                mediaTrack = pub?.track?.mediaStreamTrack ?? null;
-              }
-            }
-            return (
-              <PeerCamTile
-                key={identity}
-                name={name}
-                mediaTrack={mediaTrack}
-                speaking={speaking}
-                pinned={stickySpeakersRef.current.has(identity) || speakingId === identity}
-                teacherPinned={pinnedIdentities.includes(identity)}
-                onTogglePin={onTogglePin ? (on) => onTogglePin(identity, on) : undefined}
-                tileW={L.tileW}
-                tileH={L.tileH}
-                alert={focusAlerts[identity]}
-              />
-            );
-          })}
-        </div>
-      )}
-      {allowResize && (
-        <div
-          role="slider"
-          aria-label="Resize videos"
-          aria-valuemin={VIDEO_PANEL_MIN_W}
-          aria-valuenow={Math.round(view.paneW)}
-          data-testid="video-panel-resize"
-          data-no-drag
-          className="peers-float-resize"
-          onPointerDown={(e) => {
-            if (e.pointerType === 'mouse' && e.button !== 0) return;
-            e.preventDefault();
-            e.stopPropagation();
-            const shown = clampedManual ?? { w: view.paneW, h: view.paneH };
-            resizeDrag.current = {
-              pointerId: e.pointerId,
-              x: e.clientX,
-              y: e.clientY,
-              w: shown.w,
-              h: shown.h,
-              key: manualKey,
-            };
-            try {
-              e.currentTarget.setPointerCapture(e.pointerId);
-            } catch {
-              /* pointer capture is missing in a few embedded webviews */
-            }
-          }}
-          onPointerMove={(e) => {
-            const d = resizeDrag.current;
-            if (!d || d.pointerId !== e.pointerId) return;
-            e.preventDefault();
-            setManualSize(
-              videoPanelSizeFromDrag(
-                { w: d.w, h: d.h },
-                e.clientX - d.x,
-                e.clientY - d.y,
-                viewport,
-                panelClampOpts
-              )
-            );
-          }}
-          onPointerUp={finishResize}
-          onPointerCancel={finishResize}
-          onLostPointerCapture={finishResize}
-        />
-      )}
-    </div>
-  );
-  if (portal && portalWindow) {
-    return (
-      <SideWindowPortal win={portalWindow} title="Student videos">
-        {pane}
-      </SideWindowPortal>
-    );
-  }
-  if (embedHost) return createPortal(pane, embedHost);
-  return pane;
-}
-
-function PeerCamTile({
-  name,
-  mediaTrack,
-  speaking,
-  pinned,
-  tileW,
-  tileH,
-  mirror = false,
-  alert,
-  teacherPinned = false,
-  onTogglePin,
-}: {
-  /** Student left fullscreen / switched away. */
-  alert?: string;
-  /** The teacher pinned this student (stays in the panel, no rotation). */
-  teacherPinned?: boolean;
-  onTogglePin?: (pinned: boolean) => void;
-  name: string;
-  mediaTrack: MediaStreamTrack | null;
-  speaking: boolean;
-  pinned: boolean;
-  tileW: number;
-  tileH: number;
-  mirror?: boolean;
-}) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  useEffect(() => {
-    const el = videoRef.current;
-    if (!el) return;
-    if (!mediaTrack) {
-      el.srcObject = null;
-      return;
-    }
-    el.srcObject = new MediaStream([mediaTrack]);
-    void el.play().catch(() => {});
-    return () => {
-      el.srcObject = null;
-    };
-  }, [mediaTrack]);
-
-  return (
-    <div
-      className={cn(
-        'peers-float-tile',
-        speaking && 'ring-2 ring-brand-400'
-      )}
-      style={{ width: tileW, height: tileH }}
-    >
-      {mediaTrack ? (
-        <video
-          ref={videoRef}
-          className={cn('h-full w-full object-cover', mirror && 'video-mirror')}
-          autoPlay
-          playsInline
-          muted
-        />
-      ) : (
-        <div className="flex h-full items-center justify-center bg-gradient-to-br from-surface-3 to-ink-950">
-          <Avatar name={name} size="sm" />
-        </div>
-      )}
-      <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-1 bg-gradient-to-t from-black/75 to-transparent px-1.5 pb-1 pt-4">
-        <span className="flex min-w-0 items-center gap-1 truncate text-[10px] font-medium text-white">
-          {teacherPinned && (
-            <span className="shrink-0 text-amber-300" aria-label="Pinned" title="Pinned: stays in the panel">
-              <IconPin size={10} />
-            </span>
-          )}
-          <span className="truncate">{name}</span>
-        </span>
-        {pinned && <span className="shrink-0 text-[9px] text-brand-300">Speaking</span>}
-      </div>
-      {onTogglePin && (
-        <button
-          type="button"
-          className={cn('peer-pin-btn', teacherPinned && 'is-pinned')}
-          onClick={() => onTogglePin(!teacherPinned)}
-          aria-pressed={teacherPinned}
-          aria-label={teacherPinned ? `Unpin ${name}` : `Pin ${name} (keep in the panel)`}
-          title={teacherPinned ? 'Unpin (back to rotation)' : 'Pin: keep this student in the panel'}
-        >
-          <IconPin size={12} />
-        </button>
-      )}
-      {alert && (
-        <span
-          className="absolute left-1 top-1 rounded-full bg-amber-500 px-1.5 py-0.5 text-[9px] font-bold text-black shadow"
-          title={alert}
-        >
-          {alert}
-        </span>
-      )}
-    </div>
-  );
-}
-
-function useHasTeacherScreen(teacherIdentities: string[]) {
-  const tracks = useTracks(
-    [{ source: Track.Source.ScreenShare, withPlaceholder: false }],
-    { onlySubscribed: true }
-  );
-  const teacherSet = new Set(teacherIdentities);
-  return tracks.some((t) => {
-    if (t.source !== Track.Source.ScreenShare) return false;
-    if (t.participant.isLocal) return false;
-    return isTeacherParticipant(t.participant, teacherSet);
-  });
-}
-
-
-/** Release a local track. LocalVideoTrack.stop throws if a simulcast MediaStreamTrack is null. */
-function safeStop(track: LocalVideoTrack | LocalAudioTrack | null | undefined) {
-  if (!track) return;
-  if (track instanceof LocalVideoTrack) {
-    track.simulcastCodecs.forEach((info) => {
-      try {
-        const raw = info?.mediaStreamTrack;
-        if (raw && raw.readyState !== 'ended') raw.stop();
-      } catch {
-        /* already stopped */
-      }
-    });
-  }
-  try {
-    const raw = track.mediaStreamTrack;
-    if (raw && raw.readyState !== 'ended') raw.stop();
-  } catch {
-    /* media track already released */
-  }
-  try {
-    track.stop();
-  } catch {
-    /* simulcast mediaStreamTrack already null */
-  }
-}
-
-function simulcastMediaTracks(track: LocalVideoTrack | LocalAudioTrack): MediaStreamTrack[] {
-  if (!(track instanceof LocalVideoTrack)) return [];
-  const tracks: MediaStreamTrack[] = [];
-  track.simulcastCodecs.forEach((info) => {
-    if (info?.mediaStreamTrack) tracks.push(info.mediaStreamTrack);
-  });
-  return tracks;
-}
-
-/**
- * Negotiate the unpublish before the media track ends. The default path stops
- * the track first, which throws once a simulcast MediaStreamTrack is null and
- * ends the remote subscription before publication metadata arrives.
- */
-async function unpublishThenStop(
-  localParticipant: {
-    unpublishTrack: (
-      track: LocalVideoTrack | LocalAudioTrack,
-      stopOnUnpublish?: boolean
-    ) => Promise<unknown>;
-  },
-  track: LocalVideoTrack | LocalAudioTrack
-) {
-  const simulcast = simulcastMediaTracks(track);
-  try {
-    await localParticipant.unpublishTrack(track, false);
-  } catch {
-    /* already unpublished */
-  }
-  for (const raw of simulcast) {
-    try {
-      if (raw.readyState !== 'ended') raw.stop();
-    } catch {
-      /* already stopped */
-    }
-  }
-  safeStop(track);
-}
-
-/**
- * One local publish or unpublish at a time. A second offer that starts before
- * the first answer arrives times out; LiveKit then reconnects and unpublishes
- * the screen share, which used to close the teacher's controls.
- */
-let localPublishChain: Promise<void> = Promise.resolve();
-function enqueueLocalPublish(task: () => Promise<void>): Promise<void> {
-  const run = localPublishChain.catch(() => undefined).then(task);
-  localPublishChain = run.then(
-    () => undefined,
-    () => undefined
-  );
-  return run;
-}
-
-const viewportW = () => (typeof window === 'undefined' ? 1280 : window.innerWidth);
-const viewportH = () => (typeof window === 'undefined' ? 800 : window.innerHeight);
+/** A share parked behind the whiteboard is really stopped after this long. */
+const PARK_MAX_MS = 20 * 60_000;
 
 function screenCaptureLive(pub?: LocalTrackPublication | null): boolean {
   const media = pub?.track?.mediaStreamTrack;
   return !!media && media.readyState !== 'ended';
-}
-
-/** Human-readable camera failure. Shown instead of publishing a fake camera. */
-function cameraErrorMessage(err: unknown): string {
-  const name =
-    err && typeof err === 'object' && 'name' in err ? String((err as { name: unknown }).name) : '';
-  if (name === 'NotAllowedError' || name === 'SecurityError') {
-    return 'Camera access was blocked. Allow the camera for this site in your browser settings, then turn the camera on again.';
-  }
-  if (name === 'NotFoundError' || name === 'OverconstrainedError') {
-    return 'No camera was found on this device.';
-  }
-  if (name === 'NotReadableError' || name === 'AbortError') {
-    return 'The camera is in use by another app or could not be started. Close other apps using it, then turn the camera on again.';
-  }
-  if (typeof navigator !== 'undefined' && !navigator.mediaDevices?.getUserMedia) {
-    return 'This browser cannot open a camera here. Use an https address and a current browser.';
-  }
-  return 'Could not start the camera.';
-}
-
-/**
- * Local camera + mic publishing.
- *
- * The camera is opened ONCE (getUserMedia) for the self-preview. When this
- * client is allowed to publish video, a clone of that same MediaStreamTrack is
- * published: cloning does not open the device a second time, so mobile
- * browsers and drivers that only allow one capture keep working, and stopping
- * the published clone never freezes the preview. If the camera cannot be
- * opened, nothing is published and `onCameraError` explains why.
- */
-function SelectivePublisher({
-  isTeacher,
-  canPublishVideo,
-  camWanted = true,
-  mutedByTeacher,
-  camDesired,
-  micDesired,
-  localCamStream,
-  setLocalCamStream,
-  onCameraError,
-}: {
-  /** Teacher: 720p simulcast camera; student: small single-layer camera. */
-  isTeacher: boolean;
-  canPublishVideo: boolean;
-  /** Students: send camera video only while the teacher shows it (lib/camOnDemand). */
-  camWanted?: boolean;
-  mutedByTeacher: boolean;
-  camDesired: boolean;
-  micDesired: boolean;
-  localCamStream: MediaStream | null;
-  setLocalCamStream: (s: MediaStream | null) => void;
-  onCameraError: (message: string | null) => void;
-}) {
-  const { localParticipant } = useLocalParticipant();
-  const room = useRoomContext();
-  const camTrackRef = useRef<LocalVideoTrack | null>(null);
-  /** The preview MediaStreamTrack the published clone was made from. */
-  const camSourceRef = useRef<MediaStreamTrack | null>(null);
-  const micTrackRef = useRef<LocalAudioTrack | null>(null);
-  const videoGen = useRef(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    let stream: MediaStream | null = null;
-
-    async function setupLocal() {
-      if (!camDesired) {
-        localCamStream?.getTracks().forEach((t) => t.stop());
-        setLocalCamStream(null);
-        return;
-      }
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: cameraProfile(isTeacher).capture,
-          audio: false,
-        });
-      } catch (deviceErr) {
-        console.warn('camera unavailable', deviceErr);
-        if (!cancelled) {
-          setLocalCamStream(null);
-          onCameraError(cameraErrorMessage(deviceErr));
-        }
-        return;
-      }
-      if (cancelled) {
-        stream.getTracks().forEach((t) => t.stop());
-        return;
-      }
-      onCameraError(null);
-      setLocalCamStream(stream);
-    }
-
-    void setupLocal();
-    return () => {
-      cancelled = true;
-      stream?.getTracks().forEach((t) => t.stop());
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [camDesired]);
-
-  const previewTrack =
-    localCamStream?.getVideoTracks().find((t) => t.readyState === 'live') ?? null;
-
-  // A student can learn it entered the sample (server push) a moment before the
-  // SFU grants the camera; retry the publish when our permissions change.
-  const [permTick, setPermTick] = useState(0);
-  useEffect(() => {
-    if (!room || isTeacher) return;
-    const on = (_prev: unknown, p: Participant) => {
-      if (p === room.localParticipant) setPermTick((n) => n + 1);
-    };
-    room.on(RoomEvent.ParticipantPermissionsChanged, on);
-    return () => {
-      room.off(RoomEvent.ParticipantPermissionsChanged, on);
-    };
-  }, [room, isTeacher]);
-
-  useEffect(() => {
-    if (!localParticipant || !room) return;
-    void permTick;
-    const gen = ++videoGen.current;
-    const source = camDesired && canPublishVideo ? previewTrack : null;
-    const participant = localParticipant;
-
-    void enqueueLocalPublish(async () => {
-      if (gen !== videoGen.current) return;
-
-      const current = camTrackRef.current;
-      const published = participant.getTrackPublication(Track.Source.Camera);
-      if (
-        source &&
-        current &&
-        camSourceRef.current === source &&
-        published?.track === current
-      ) {
-        return; // Already publishing a clone of this preview.
-      }
-
-      // Anything else: drop the old clone first (the preview keeps running).
-      if (current) {
-        camTrackRef.current = null;
-        camSourceRef.current = null;
-        await unpublishThenStop(participant, current);
-      }
-      if (!source || source.readyState !== 'live') return;
-      if (gen !== videoGen.current) return;
-
-      const clone = source.clone();
-      const track = new LocalVideoTrack(clone, undefined, true);
-      try {
-        await participant.publishTrack(
-          track,
-          isTeacher
-            ? {
-                source: Track.Source.Camera,
-                simulcast: TEACHER_CAMERA.simulcast,
-                videoEncoding: TEACHER_CAMERA.encoding,
-                videoSimulcastLayers: TEACHER_CAMERA.layers.map(
-                  (l) => new VideoPreset(l.width, l.height, l.maxBitrate, l.maxFramerate)
-                ),
-              }
-            : {
-                source: Track.Source.Camera,
-                simulcast: STUDENT_CAMERA.simulcast,
-                videoEncoding: STUDENT_CAMERA.encoding,
-              }
-        );
-      } catch (e) {
-        console.warn('publish video', e);
-        await unpublishThenStop(participant, track);
-        return;
-      }
-      if (gen !== videoGen.current) {
-        await unpublishThenStop(participant, track);
-        return;
-      }
-      camTrackRef.current = track;
-      camSourceRef.current = source;
-      if (!isTeacher && !camWantedRef.current) await track.pauseUpstream().catch(() => undefined);
-    });
-  }, [canPublishVideo, camDesired, previewTrack, localParticipant, room, isTeacher, permTick]);
-
-  // Cameras on demand: pause / resume the published track (no renegotiation).
-  const camWantedRef = useRef(camWanted);
-  camWantedRef.current = camWanted;
-  useEffect(() => {
-    if (isTeacher || !localParticipant) return;
-    void enqueueLocalPublish(async () => {
-      const track = camTrackRef.current;
-      if (!track) return;
-      try {
-        if (camWantedRef.current) {
-          if (track.isUpstreamPaused) await track.resumeUpstream();
-        } else if (!track.isUpstreamPaused) {
-          await track.pauseUpstream();
-        }
-      } catch (e) {
-        console.warn('camera on demand', e);
-      }
-    });
-  }, [camWanted, isTeacher, localParticipant]);
-
-  // Unmount: stop the published clone (the preview stream is stopped by its owner).
-  useEffect(() => {
-    return () => {
-      const track = camTrackRef.current;
-      camTrackRef.current = null;
-      camSourceRef.current = null;
-      safeStop(track);
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    const participant = localParticipant;
-    if (!participant) return;
-    void enqueueLocalPublish(async () => {
-      if (cancelled) return;
-      // Teacher mute is authoritative — never publish audio while mutedByTeacher
-      const want = micDesired && !mutedByTeacher;
-      if (!want) {
-        const track = micTrackRef.current;
-        micTrackRef.current = null;
-        if (track) {
-          await unpublishThenStop(participant, track);
-        }
-        if (cancelled) return;
-        try {
-          await participant.setMicrophoneEnabled(false);
-        } catch {
-          /* publication already removed */
-        }
-        return;
-      }
-      try {
-        if (!micTrackRef.current) {
-          const track = await createLocalAudioTrack({ ...MIC_CAPTURE });
-          if (cancelled || mutedByTeacher) {
-            safeStop(track);
-            return;
-          }
-          try {
-            await participant.publishTrack(track, {
-              source: Track.Source.Microphone,
-              audioPreset: AudioPresets.speech,
-              dtx: true,
-              // RED re-sends every Opus frame (~2x audio bitrate). Worth it for
-              // the one teacher voice; students hear each other, so N student
-              // mics with RED cost every listener 2N streams of audio.
-              red: isTeacher,
-            });
-          } catch (e) {
-            safeStop(track);
-            throw e;
-          }
-          if (cancelled || mutedByTeacher) {
-            await unpublishThenStop(participant, track);
-            return;
-          }
-          micTrackRef.current = track;
-        }
-        if (cancelled) return;
-        if (mutedByTeacher) {
-          await participant.setMicrophoneEnabled(false);
-          return;
-        }
-        await participant.setMicrophoneEnabled(true);
-      } catch (e) {
-        console.warn('mic', e);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [micDesired, mutedByTeacher, localParticipant]);
-
-  return null;
-}
-
-function CameraErrorBanner({ message, onDismiss }: { message: string; onDismiss: () => void }) {
-  return (
-    <div
-      role="alert"
-      className="fixed left-1/2 top-3 z-[70] flex max-w-[min(92vw,34rem)] -translate-x-1/2 items-start gap-3 rounded-xl border border-danger-fg/30 bg-surface-1/95 px-4 py-3 text-sm text-slate-100 shadow-lift backdrop-blur"
-    >
-      <span className="flex-1">
-        <span className="font-semibold text-danger-fg">Camera unavailable. </span>
-        {message}
-      </span>
-      <button
-        type="button"
-        className="shrink-0 text-xs font-semibold text-slate-300 hover:underline"
-        onClick={onDismiss}
-      >
-        Dismiss
-      </button>
-    </div>
-  );
-}
-
-/**
- * Student-side media privacy (H-4).
- *
- * Subscriber side: the student connects with autoSubscribe off and subscribes
- * only to the teacher's tracks (camera, microphone, screen) and to classmates'
- * microphones (class audio is not limited by the sample). Other students'
- * cameras stay unsubscribed, except the one teacher-spotlighted student.
- *
- * Publisher side (enforced by the SFU for this student's own tracks): only
- * the teacher may subscribe to everything; classmates may subscribe to the
- * microphone track only, plus this camera while this student is spotlighted.
- */
-function StudentMediaPrivacy({
-  teacherIdentities,
-  studentIdentities,
-  spotlightIdentity = null,
-}: {
-  teacherIdentities: string[];
-  studentIdentities: string[];
-  /** LiveKit identity of the spotlighted student, if any. */
-  spotlightIdentity?: string | null;
-}) {
-  const room = useRoomContext();
-  const teacherKey = teacherIdentities.join(',');
-  const studentKey = studentIdentities.join(',');
-  const lastPermKey = useRef('');
-
-  useEffect(() => {
-    if (!room) return;
-    const teacherSet = new Set(teacherKey ? teacherKey.split(',') : []);
-    const rosterStudents = studentKey ? studentKey.split(',') : [];
-
-    const sync = () => {
-      if (room.state !== ConnectionState.Connected) return;
-      const teachers = new Set<string>(teacherSet);
-      const classmates = new Set<string>(rosterStudents);
-
-      // Bandwidth: while the teacher shares, their camera is a corner tile,
-      // so take its small simulcast layer only (≈90 kbps instead of ≈300).
-      const sharing = Array.from(room.remoteParticipants.values()).some(
-        (p) => isTeacherParticipant(p, teacherSet) && !!p.getTrackPublication(Track.Source.ScreenShare)
-      );
-      for (const p of Array.from(room.remoteParticipants.values())) {
-        const isTeacherP = isTeacherParticipant(p, teacherSet);
-        if (isTeacherP) teachers.add(p.identity);
-        else classmates.add(p.identity);
-        if (isTeacherP) {
-          const cam = p.getTrackPublication(Track.Source.Camera);
-          if (cam) {
-            try {
-              cam.setVideoQuality(sharing ? VideoQuality.LOW : VideoQuality.HIGH);
-            } catch {
-              /* not subscribed yet */
-            }
-          }
-        }
-        for (const pub of Array.from(p.trackPublications.values())) {
-          const spotlightCam = !!spotlightIdentity && p.identity === spotlightIdentity && pub.source === Track.Source.Camera;
-          const want = isTeacherP || pub.source === Track.Source.Microphone || spotlightCam;
-          if (pub.isSubscribed !== want) {
-            try {
-              pub.setSubscribed(want);
-            } catch (e) {
-              console.warn('subscription', e);
-            }
-          }
-        }
-      }
-
-      const me = room.localParticipant;
-      classmates.delete(me.identity);
-      for (const t of Array.from(teachers)) classmates.delete(t);
-      const micSid = me.getTrackPublication(Track.Source.Microphone)?.trackSid;
-      const camSid = me.getTrackPublication(Track.Source.Camera)?.trackSid;
-      const spotlighted = !!spotlightIdentity && me.identity === spotlightIdentity;
-      const perms: ParticipantTrackPermission[] = Array.from(teachers)
-        .sort()
-        .map((identity) => ({ participantIdentity: identity, allowAll: true }));
-      const classmateSids = [
-        ...(micSid ? [micSid] : []),
-        ...(spotlighted && camSid ? [camSid] : []),
-      ];
-      if (classmateSids.length) {
-        for (const identity of Array.from(classmates).sort()) {
-          perms.push({ participantIdentity: identity, allowAll: false, allowedTrackSids: classmateSids });
-        }
-      }
-      const key = JSON.stringify(perms);
-      if (key === lastPermKey.current) return;
-      lastPermKey.current = key;
-      try {
-        me.setTrackSubscriptionPermissions(false, perms);
-      } catch (e) {
-        lastPermKey.current = '';
-        console.warn('track subscription permissions', e);
-      }
-    };
-
-    const resync = () => {
-      lastPermKey.current = '';
-      sync();
-    };
-
-    sync();
-    room.on(RoomEvent.Connected, resync);
-    room.on(RoomEvent.Reconnected, resync);
-    room.on(RoomEvent.ParticipantConnected, sync);
-    room.on(RoomEvent.ParticipantDisconnected, sync);
-    room.on(RoomEvent.TrackPublished, sync);
-    room.on(RoomEvent.TrackUnpublished, sync);
-    room.on(RoomEvent.TrackSubscribed, sync);
-    room.on(RoomEvent.LocalTrackPublished, sync);
-    room.on(RoomEvent.LocalTrackUnpublished, sync);
-    const iv = window.setInterval(sync, 3000);
-    return () => {
-      room.off(RoomEvent.Connected, resync);
-      room.off(RoomEvent.Reconnected, resync);
-      room.off(RoomEvent.ParticipantConnected, sync);
-      room.off(RoomEvent.ParticipantDisconnected, sync);
-      room.off(RoomEvent.TrackUnpublished, sync);
-      room.off(RoomEvent.TrackSubscribed, sync);
-      room.off(RoomEvent.TrackPublished, sync);
-      room.off(RoomEvent.LocalTrackPublished, sync);
-      room.off(RoomEvent.LocalTrackUnpublished, sync);
-      window.clearInterval(iv);
-    };
-  }, [room, teacherKey, studentKey, spotlightIdentity]);
-
-  return null;
 }
 
 function RoomInner({
@@ -2614,7 +703,8 @@ function RoomInner({
   visibleIdentities: string[];
   displayName: string;
   onVisibilityChange: (v: boolean) => void;
-  onClassEnded: () => void;
+  /** The class ended; teachers get that session's summary on the finished screen. */
+  onClassEnded: (classSessionId: string | null) => void;
   /** Student: the class view stops for good (left / ended / removed / another device). */
   onFinished: (r: FinishReason) => void;
 }) {
@@ -2918,7 +1008,7 @@ function RoomInner({
   const myParticipantId = state?.me?.id ?? null;
   const chatStudents = (state?.admitted ?? [])
     .filter((a) => a.role === 'STUDENT')
-    .map((a) => ({ id: a.id, displayName: a.displayName, sid: a.sid ?? null }));
+    .map((a) => ({ id: a.id, displayName: a.displayName, sid: a.sid ?? null, gradeDivision: a.gradeDivision ?? null }));
   /** Teacher chat recipient, shared by the dock panel and the share HUD; it
    * stays on the chosen student after each send (Reply / hand chip set it). */
   const [chatTo, setChatTo] = useState<'all' | string>('all');
@@ -2934,12 +1024,18 @@ function RoomInner({
   const rawStage = state?.stageMode ?? 'idle';
   // Whiteboard product surface removed — treat legacy redis value as idle.
   const stageMode: 'idle' | 'screen' = rawStage === 'screen' ? 'screen' : 'idle';
-  const teacherIdentities = (state?.admitted ?? [])
+  // Stable arrays (same contents → same identity) so the children's LiveKit
+  // listeners are not torn down and re-added on every render of this view.
+  const teacherKey = (state?.admitted ?? [])
     .filter((a) => a.role === 'TEACHER')
-    .map((a) => a.livekitIdentity);
-  const studentIdentities = (state?.admitted ?? [])
+    .map((a) => a.livekitIdentity)
+    .join(',');
+  const studentKey = (state?.admitted ?? [])
     .filter((a) => a.role === 'STUDENT')
-    .map((a) => a.livekitIdentity);
+    .map((a) => a.livekitIdentity)
+    .join(',');
+  const teacherIdentities = useMemo(() => (teacherKey ? teacherKey.split(',') : []), [teacherKey]);
+  const studentIdentities = useMemo(() => (studentKey ? studentKey.split(',') : []), [studentKey]);
   // Fallback: if teacher screen track(s) exist, treat as screen present even if redis idle
   const hasTeacherScreen = useHasTeacherScreen(teacherIdentities);
   const effectiveStage: 'idle' | 'screen' =
@@ -3016,6 +1112,11 @@ function RoomInner({
     return () => window.clearTimeout(t);
   }, [takeoverToast]);
 
+  // The ENDED reply may carry no class details, so keep the last one seen.
+  const classSessionIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (state?.classInfo?.classSessionId) classSessionIdRef.current = state.classInfo.classSessionId;
+  }, [state?.classInfo?.classSessionId]);
   useEffect(() => {
     if (state?.status === 'ENDED' || state?.ended) {
       noteClassEnded(code);
@@ -3024,9 +1125,9 @@ function RoomInner({
       } catch {
         /* ignore */
       }
-      onClassEnded();
+      onClassEnded(state?.classInfo?.classSessionId ?? classSessionIdRef.current);
     }
-  }, [state?.status, state?.ended, room, onClassEnded]);
+  }, [state?.status, state?.ended, state?.classInfo?.classSessionId, room, onClassEnded, code]);
 
   useEffect(() => {
     if (!isTeacher || !room) return;
@@ -3117,7 +1218,6 @@ function RoomInner({
     },
     [code, isTeacher, refresh]
   );
-
 
   // NOTE: `chromeVisible` / `bumpChrome` were removed. The state was only ever
   // ever set to `true` (the auto-hide timer that would have cleared it was
@@ -3464,6 +1564,98 @@ function RoomInner({
   );
 
   /**
+   * Share ↔ whiteboard swap without a republish (load test: unpublishing the
+   * share in front of ~2,000 subscribers renegotiated every subscriber at once
+   * and set off a reconnect storm). Opening the board MUTES the screen
+   * publication and keeps the capture; going back to the share unmutes it. Only
+   * a mute flag travels to subscribers, no SDP renegotiation, and the LiveKit
+   * connection is never touched. A parked share is released (really
+   * unpublished) when the board closes some other way, when the capture ends,
+   * or after PARK_MAX_MS.
+   */
+  const parkedShareRef = useRef<{ timer: number } | null>(null);
+  const releaseParkedShare = useCallback(async () => {
+    const p = parkedShareRef.current;
+    if (!p) return;
+    parkedShareRef.current = null;
+    window.clearTimeout(p.timer);
+    if (!localParticipant) return;
+    stageSwitchRef.current = true;
+    try {
+      await enqueueLocalPublish(async () => {
+        try {
+          await localParticipant.setScreenShareEnabled(false);
+        } catch {
+          /* ignore */
+        }
+      });
+    } finally {
+      stageSwitchRef.current = false;
+    }
+    endShareSession();
+  }, [localParticipant, endShareSession]);
+
+  /** true = the share is parked (muted, still published); false = caller must unpublish. */
+  const parkShare = useCallback(async (): Promise<boolean> => {
+    if (!localParticipant || maskRef.current || parkedShareRef.current) return false;
+    const pub = localParticipant.getTrackPublication(Track.Source.ScreenShare);
+    if (!pub?.track || !screenCaptureLive(pub)) return false;
+    stageSwitchRef.current = true;
+    try {
+      await pub.mute();
+      await screenAudioRef.current?.track.mute().catch(() => undefined);
+    } catch {
+      return false;
+    } finally {
+      stageSwitchRef.current = false;
+    }
+    shareWantedRef.current = false;
+    attachShareSurface(null);
+    closeAllSideWindows();
+    setScreenOn(false);
+    setHudOpen(false);
+    parkedShareRef.current = { timer: window.setTimeout(() => void releaseParkedShare(), PARK_MAX_MS) };
+    const media = pub.track.mediaStreamTrack;
+    media?.addEventListener('ended', () => void releaseParkedShare(), { once: true });
+    void postStage('idle');
+    return true;
+  }, [localParticipant, attachShareSurface, releaseParkedShare, postStage]);
+
+  /**
+   * Called synchronously from the share click: true = the parked share is
+   * coming back (no getDisplayMedia). The controls window opens in the same
+   * turn so the user gesture is not spent.
+   */
+  const resumeParkedShare = useCallback((): boolean => {
+    const p = parkedShareRef.current;
+    if (!p || !localParticipant) return false;
+    const pub = localParticipant.getTrackPublication(Track.Source.ScreenShare);
+    if (!pub?.track || !screenCaptureLive(pub)) {
+      void releaseParkedShare();
+      return false;
+    }
+    parkedShareRef.current = null;
+    window.clearTimeout(p.timer);
+    const controlsPromise = beginShareControls();
+    void (async () => {
+      try {
+        await pub.unmute();
+        await screenAudioRef.current?.track.unmute().catch(() => undefined);
+      } catch (e) {
+        console.warn('resume share', e);
+      }
+      shareWantedRef.current = true;
+      setScreenOn(true);
+      setChatOpen(false);
+      setRosterOpen(false);
+      const controls = await controlsPromise.catch(() => null);
+      attachShareSurface(controls);
+      await postStage('screen');
+    })();
+    return true;
+  }, [localParticipant, releaseParkedShare, attachShareSurface, postStage]);
+
+  /**
    * The click fires getDisplayMedia and the controls window in the same turn,
    * before any await. Awaiting either one first spends the user gesture, and
    * the other call is rejected.
@@ -3490,6 +1682,7 @@ function RoomInner({
     }
 
     if (shareStartRef.current) return;
+    if (resumeParkedShare()) return;
 
     if (!canShareScreen()) {
       setHudNotice(screenShareErrorMessage(null));
@@ -3638,7 +1831,7 @@ function RoomInner({
     try {
       const published = new LocalVideoTrack(mask ? mask.track : media, undefined, true);
       const { width: capW, height: capH } = media.getSettings();
-      const simulcast = SCREEN_SHARE.simulcast && screenShareSimulcastFor(capW, capH);
+      const simulcast = screenShare().simulcast && screenShareSimulcastFor(capW, capH);
       // Slides: text must stay sharp, so under CPU/bandwidth pressure drop
       // frames, not pixels. Video mode: the reverse (smooth 30 fps).
       const profile = shareProfile(videoModeRef.current);
@@ -3663,7 +1856,7 @@ function RoomInner({
         screenShareEncoding: profile.top,
         degradationPreference: profile.degradationPreference as RTCDegradationPreference,
         screenShareSimulcastLayers: layered
-          ? SCREEN_SHARE.layers.map(
+          ? screenShare().layers.map(
               (l) => new VideoPreset(l.width, l.height, profile.low.maxBitrate, profile.low.maxFramerate)
             )
           : undefined,
@@ -3761,7 +1954,7 @@ function RoomInner({
       void postStage('idle');
     };
     media.addEventListener('ended', onMediaEnded);
-  }, [localParticipant, screenOn, isTeacher, postStage, endShareSession, attachShareSurface, room]);
+  }, [localParticipant, screenOn, isTeacher, postStage, endShareSession, attachShareSurface, room, resumeParkedShare]);
 
   async function leave() {
     // Student: show "You left" first (the server's removal from LiveKit would
@@ -3797,7 +1990,7 @@ function RoomInner({
       room?.disconnect();
       // Teacher: stay on the "Class finished" screen (it has a Dashboard button)
       // instead of jumping straight back to the dashboard.
-      onClassEnded();
+      onClassEnded(classSessionIdRef.current);
     } catch {
       setHudNotice('Could not end the class. Everyone is still in the room.');
       setEndingClass(false);
@@ -3815,11 +2008,21 @@ function RoomInner({
   }
 
   async function muteStudent(participantId: string, muted: boolean) {
-    await roomFetch(code, '/mute', {
+    setMuteOverrides((cur) => ({ ...cur, [participantId]: muted }));
+    const ok = await roomFetch(code, '/mute', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ participantId, muted }),
-    });
+    })
+      .then((r) => r.ok)
+      .catch(() => false);
+    if (!ok) {
+      setMuteOverrides((cur) => {
+        const next = { ...cur };
+        delete next[participantId];
+        return next;
+      });
+    }
     refresh();
   }
 
@@ -3894,10 +2097,12 @@ function RoomInner({
     else void roomFetch(code, '/whiteboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'off' }) });
   }, [isTeacher, state, code]);
   const wbStopRef = useRef<(() => void) | null>(null);
-  const closeWhiteboard = useCallback(() => {
+  const closeWhiteboard = useCallback((opts?: { keepParkedShare?: boolean }) => {
     setWbOpen(false);
+    // Board closed without going back to the share: really stop the parked share.
+    if (!opts?.keepParkedShare) void releaseParkedShare();
     void roomFetch(code, '/whiteboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'off' }) });
-  }, [code]);
+  }, [code, releaseParkedShare]);
 
   // Waiting room toggle (per class session, saved on the server). Off admits
   // everyone waiting and lets new students straight in (still muted).
@@ -3981,6 +2186,20 @@ function RoomInner({
     }
   }
 
+  const [muteOverrides, setMuteOverrides] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    // Drop an override once the server agrees (or the student left).
+    setMuteOverrides((cur) => {
+      const ids = Object.keys(cur);
+      if (!ids.length) return cur;
+      const next = { ...cur };
+      for (const id of ids) {
+        const p = state?.admitted?.find((x) => x.id === id);
+        if (!p || !!p.mutedByTeacher === cur[id]) delete next[id];
+      }
+      return Object.keys(next).length === ids.length ? cur : next;
+    });
+  }, [state?.admitted]);
   const waitingCount = state?.waiting?.length ?? 0;
   // Roster panel: students only (the teacher is not listed), raised hands
   // first by raise time, then pinned, then by name. Two devices of one
@@ -3989,7 +2208,12 @@ function RoomInner({
     sortRoster(
       (state?.admitted ?? [])
         .filter((p) => p.role === 'STUDENT' && !isRosterDropped(p.livekitIdentity, droppedStudents, Date.now()))
-        .map((p) => ({ ...p, handRaised: !!(p.handRaised || (state?.raisedHands ?? []).includes(p.id)) }))
+        .map((p) => ({
+          ...p,
+          handRaised: !!(p.handRaised || (state?.raisedHands ?? []).includes(p.id)),
+          // Item 14: per-student mute flips at once; the server state confirms it.
+          mutedByTeacher: p.id in muteOverrides ? muteOverrides[p.id] : p.mutedByTeacher,
+        }))
     ).map((p) => ({
       ...p,
       identity: p.livekitIdentity,
@@ -4008,11 +2232,7 @@ function RoomInner({
   // the tab strip / taskbar while the teacher looks at the shared display.
   const handsN = isTeacher ? raisedHands.length : 0;
   const unreadN = isTeacher ? chatUnread : 0;
-  useEffect(() => {
-    if (!isTeacher || typeof document === 'undefined') return;
-    const base = document.title.replace(/^\([^)]*\)\s*/, '');
-    document.title = teacherTabTitle(base, handsN, unreadN);
-  }, [isTeacher, handsN, unreadN]);
+  useTabTitle(teacherTabTitle(pageTitle(state?.name || 'Class'), handsN, unreadN));
   useEffect(
     () => () => {
       if (typeof document !== 'undefined') document.title = document.title.replace(/^\([^)]*\)\s*/, '');
@@ -4153,6 +2373,15 @@ function RoomInner({
       setHudNotice('Could not lower hand');
     }
   }
+  /** Raised hand → give the student the floor: unmute them, then lower the hand. */
+  async function letSpeak(participantId: string) {
+    await muteStudent(participantId, false);
+    await lowerHand(participantId);
+  }
+  const mutedStudentIds = useMemo(
+    () => new Set((state?.admitted ?? []).filter((p) => p.role === 'STUDENT' && p.mutedByTeacher).map((p) => p.id)),
+    [state?.admitted]
+  );
   // —— Student drawing on the shared screen (ShareDrawing.tsx, lib/drawLogic.ts) ——
   const drawActions = useDrawingActions(code);
   const drawHolders = state?.drawHolders ?? (state?.drawHolder ? [state.drawHolder] : []);
@@ -4255,6 +2484,9 @@ function RoomInner({
   const micLimitOn = (state?.micLimit ?? 0) > 0;
   const micWaiting = !!state?.me?.micWaiting;
   const showAskToSpeak = !isTeacher && micLimitOn && effectiveMuted && !state?.me?.micGranted;
+  // No mic cap: asking to speak raises the hand, and the teacher's raised-hands
+  // bar has "Let … speak" (unmutes and lowers it).
+  const askByHand = !isTeacher && !micLimitOn && effectiveMuted;
   const controlsProps = {
     micOn: micOn && !effectiveMuted,
     camOn,
@@ -4274,7 +2506,7 @@ function RoomInner({
     onToggleCam: () => setCamOn((v) => !v),
     onToggleScreen: () => {
       // Screen share and whiteboard are exclusive: starting a share closes the board.
-      if (!screenOn && wbOpen) closeWhiteboard();
+      if (!screenOn && wbOpen) closeWhiteboard({ keepParkedShare: true });
       void toggleScreen();
     },
     whiteboardOn: wbOpen,
@@ -4290,20 +2522,27 @@ function RoomInner({
             setWbOpen(true);
             return;
           }
-          let opened = false;
-          const onUnpub = (pub: LocalTrackPublication) => {
-            if (pub?.source !== Track.Source.ScreenShare) return;
-            if (opened) return;
-            opened = true;
-            room.off(RoomEvent.LocalTrackUnpublished, onUnpub);
-            setWbOpen(true);
+          const unpublishThenOpen = () => {
+            let opened = false;
+            const onUnpub = (pub: LocalTrackPublication) => {
+              if (pub?.source !== Track.Source.ScreenShare) return;
+              if (opened) return;
+              opened = true;
+              room.off(RoomEvent.LocalTrackUnpublished, onUnpub);
+              setWbOpen(true);
+            };
+            room.on(RoomEvent.LocalTrackUnpublished, onUnpub);
+            void toggleScreen().finally(() => {
+              if (opened) return;
+              opened = true;
+              room.off(RoomEvent.LocalTrackUnpublished, onUnpub);
+              setWbOpen(true);
+            });
           };
-          room.on(RoomEvent.LocalTrackUnpublished, onUnpub);
-          void toggleScreen().finally(() => {
-            if (opened) return;
-            opened = true;
-            room.off(RoomEvent.LocalTrackUnpublished, onUnpub);
-            setWbOpen(true);
+          // Preferred: park the share (mute only, no republish / renegotiation).
+          void parkShare().then((parked) => {
+            if (parked) setWbOpen(true);
+            else unpublishThenOpen();
           });
         }
       : undefined,
@@ -4323,11 +2562,15 @@ function RoomInner({
             body: JSON.stringify({ want: !micWaiting }),
           }).then(() => refresh());
         }
-      : undefined,
+      : askByHand && !handRaised
+        ? () => void toggleHand()
+        : undefined,
     micWaitNote:
       !isTeacher && micWaiting
         ? `Waiting to speak${state?.me?.micPosition ? ` (#${state.me.micPosition})` : ''}`
-        : null,
+        : askByHand && handRaised
+          ? 'Hand raised. Your teacher can let you speak.'
+          : null,
     onLeave: leave,
     isTeacher,
     canPublishVideo: effectiveCanPublish,
@@ -4367,6 +2610,9 @@ function RoomInner({
     const teacherGone = teacherLive === false;
     const teacherHere = teacherIdentities.length > 0 && !teacherGone;
     const showTeacherScreen = effectiveStage === 'screen' && !teacherGone;
+    // Nothing shared: the teacher's camera fills the stage (unless the student
+    // minimised videos to save data or space).
+    const teacherOnStage = teacherHere && !showTeacherScreen && !state?.whiteboard && studentVideoMode !== 'min';
     const fsGate = fullscreenGate({
       status: focus.status,
       everFullscreen: focus.everFullscreen,
@@ -4401,7 +2647,21 @@ function RoomInner({
         />
         <RoomAudioRenderer />
 
-        <div className="stage-fullscreen-badge">{badge}</div>
+        {/* Status and class details share one row, so the phone's "Muted by
+            teacher" pill (below it) never covers the info button. Class
+            details hide under the fullscreen cover, same as the video float. */}
+        <div className="stage-top-left">
+          <div className="stage-fullscreen-badge">{badge}</div>
+          {!covered && (
+            <ClassInfoButton
+              teacherName={state?.classInfo?.teacherName || state?.teacherName || null}
+              subject={state?.classInfo ? state.classInfo.subject : state?.name || null}
+              audience={state?.classInfo?.audience || null}
+              scheduledStart={state?.classInfo?.scheduledStart ?? null}
+              scheduledEnd={state?.classInfo?.scheduledEnd ?? null}
+            />
+          )}
+        </div>
 
         {camError && camOn && (
           <CameraErrorBanner message={camError} onDismiss={() => setCamError(null)} />
@@ -4443,7 +2703,7 @@ function RoomInner({
 
         {/* Small portrait screens (any device): a hint only, never blocks taps or audio. */}
         {focus.portrait && viewport.w < 640 && showTeacherScreen && (
-          <div className="pointer-events-none fixed inset-x-3 top-3 z-[70] rounded-xl border border-white/15 bg-black/70 px-3 py-2 text-center text-xs font-semibold text-white backdrop-blur">
+          <div className="pointer-events-none fixed inset-x-3 top-[6.5rem] z-[30] rounded-xl border border-white/15 bg-black/70 px-3 py-2 text-center text-xs font-semibold text-white backdrop-blur">
             Rotate your phone to landscape for a bigger view
           </div>
         )}
@@ -4469,6 +2729,11 @@ function RoomInner({
             />
           ) : covered ? null : showTeacherScreen ? (
             <TeacherScreenStage teacherIdentities={teacherIdentities} zoomable drawing={myDrawState === 'drawing'} />
+          ) : teacherOnStage ? (
+            <TeacherStageCamera
+              teacherIdentities={teacherIdentities}
+              fallback="Their screen will fill this view when they share it."
+            />
           ) : (
             <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-ink-950 px-6 text-center text-slate-400">
               <IconVideo size={32} />
@@ -4483,18 +2748,6 @@ function RoomInner({
 
         {/* Teacher video hidden: receive no teacher camera at all. */}
         {covered && <TeacherMediaDemand teacherIdentities={teacherIdentities} mode={dataSaver} camPaneMinimized />}
-        {/* Class details. Hidden under the fullscreen cover, same as the video float. */}
-        {!covered && (
-          <div className="absolute left-3 top-12 z-40">
-            <ClassInfoButton
-              teacherName={state?.classInfo?.teacherName || state?.teacherName || null}
-              subject={state?.classInfo ? state.classInfo.subject : state?.name || null}
-              audience={state?.classInfo?.audience || null}
-              scheduledStart={state?.classInfo?.scheduledStart ?? null}
-              scheduledEnd={state?.classInfo?.scheduledEnd ?? null}
-            />
-          </div>
-        )}
         {/* The one student video float (teacher, screen share and whiteboard). */}
         {!covered && (
           <TeacherCameraFloat
@@ -4504,6 +2757,7 @@ function RoomInner({
             selfStream={localCamStream}
             camOn={camOn}
             mode={studentVideoMode}
+            teacherOnStage={teacherOnStage}
           />
         )}
         {!covered && state?.spotlight && state.spotlight.identity !== state.me?.livekitIdentity && (
@@ -4675,6 +2929,15 @@ function RoomInner({
             onOpenRoster={screenOn ? undefined : openRoster}
           />
         )}
+        {isTeacher && raisedHands.length > 0 && (
+          <RaisedHandsBar
+            hands={raisedHands}
+            mutedIds={mutedStudentIds}
+            onLetSpeak={(id) => void letSpeak(id)}
+            onLower={(id) => void lowerHand(id)}
+            onOpenRoster={screenOn ? undefined : openRoster}
+          />
+        )}
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone={isTeacher ? 'brand' : 'neutral'}>
@@ -4730,24 +2993,6 @@ function RoomInner({
         </span>
       )}
 
-      {isTeacher && raisedHands.length > 0 && (
-        <div className="raised-hands-toast" role="status" data-testid="raised-hands-toast" aria-label="Raised hands">
-          <p className="font-semibold">Raised hands</p>
-          <ul>
-            {raisedHands.slice(0, 8).map((h) => (
-              <li key={h.id}>
-                <span className="min-w-0 truncate">{h.displayName}</span>
-                <button type="button" onClick={() => void lowerHand(h.id)} aria-label={`Lower hand for ${h.displayName}`}>
-                  Lower
-                </button>
-              </li>
-            ))}
-          </ul>
-          {raisedHands.length > 8 && (
-            <p className="mt-1 text-xs text-slate-400">+{raisedHands.length - 8} more in the roster</p>
-          )}
-        </div>
-      )}
       {isTeacher && takeoverToast && (
         <div className="teacher-toast" role="status" data-testid="takeover-toast">
           <span className="flex-1">{takeoverToast}</span>
@@ -4854,6 +3099,11 @@ function RoomInner({
                 teacherIdentities={teacherIdentities}
                 localShareSurface={shareSurface}
                 onStopShare={() => void toggleScreen()}
+                onShareScreen={isTeacher && canShareScreen() ? controlsProps.onToggleScreen : undefined}
+                onPrepareShare={() => {
+                  if (!screenOn && canShareScreen()) preopenShareControls();
+                }}
+                onOpenWhiteboard={isTeacher ? controlsProps.onToggleWhiteboard : undefined}
                 entireShareInfo={{
                   controlsInTab: !shareMount,
                   hands: raisedHands.length,
@@ -4871,7 +3121,6 @@ function RoomInner({
               />
             </div>
           </section>
-
 
         <FloatingPanel
           title="Roster"
@@ -5079,18 +3328,14 @@ function RoomInner({
                           Allow
                         </button>
                       ) : null}
-                      <button
-                        type="button"
-                        className={cn(
-                          'shrink-0 rounded px-1 text-[10px] font-semibold leading-4',
-                          state?.spotlight?.participantId === p.id
-                            ? 'bg-amber-500/25 text-amber-100'
-                            : 'bg-white/10 text-slate-200 hover:bg-white/20'
-                        )}
+                      <RosterIconButton
+                        label={state?.spotlight?.participantId === p.id ? `Stop spotlight on ${p.displayName}` : `Spotlight ${p.displayName} (shown large to the class)`}
+                        tone={state?.spotlight?.participantId === p.id ? 'on' : 'plain'}
+                        pressed={state?.spotlight?.participantId === p.id}
                         onClick={() => void setSpotlight(state?.spotlight?.participantId === p.id ? null : p.id)}
                       >
-                        {state?.spotlight?.participantId === p.id ? 'Stop spotlight' : 'Spotlight'}
-                      </button>
+                        <IconStar size={13} />
+                      </RosterIconButton>
                     </span>
                   </li>
                 );
@@ -5369,6 +3614,46 @@ function WaitingAdmitBar({
   );
 }
 
+/** Raised hands in the header: give the first student the floor, or lower the hand. */
+function RaisedHandsBar({
+  hands,
+  mutedIds,
+  onLetSpeak,
+  onLower,
+  onOpenRoster,
+}: {
+  hands: Array<{ id: string; displayName: string }>;
+  mutedIds: Set<string>;
+  onLetSpeak: (id: string) => void;
+  onLower: (id: string) => void;
+  onOpenRoster?: () => void;
+}) {
+  const first = hands[0];
+  if (!first) return null;
+  const n = hands.length;
+  return (
+    <div className="raised-hands-toast order-first" role="status" aria-live="polite" data-testid="raised-hands-toast" aria-label="Raised hands">
+      <IconHand size={14} className="shrink-0 text-violet-200" />
+      <span className="min-w-0 flex-1 truncate font-semibold">
+        {n === 1 ? `${first.displayName} raised a hand` : `${n} hands raised · ${shortName(first.displayName)} first`}
+      </span>
+      {mutedIds.has(first.id) && (
+        <Button variant="secondary" size="sm" onClick={() => onLetSpeak(first.id)} title={`Unmute ${first.displayName} and lower the hand`}>
+          Let {shortName(first.displayName)} speak
+        </Button>
+      )}
+      <Button variant="ghost" size="sm" onClick={() => onLower(first.id)} aria-label={`Lower hand for ${first.displayName}`}>
+        Lower
+      </Button>
+      {n > 1 && onOpenRoster && (
+        <Button variant="ghost" size="sm" onClick={onOpenRoster}>
+          All hands
+        </Button>
+      )}
+    </div>
+  );
+}
+
 /** Floating window → the HUD portals itself; otherwise wrap it in the in-page dock. */
 function ShareHudSlot({
   floating,
@@ -5437,6 +3722,12 @@ export function ClassroomRoom({ code }: { code: string }) {
   const [connKey, setConnKey] = useState(0);
   const [rejoining, setRejoining] = useState(false);
   const rejoinRef = useRef<{ running: boolean; unmounted: boolean }>({ running: false, unmounted: false });
+  /** When this tab last (re)built its Room; see isOwnStaleDuplicate. */
+  const connectedAtRef = useRef<number | null>(null);
+  /** This LiveKitRoom mount reached Connected at least once (a failed first connect is retried). */
+  const everConnectedRef = useRef(false);
+  /** Consecutive failed first connects (reset on Connected): drives connectRetryDelayMs. */
+  const connectFailuresRef = useRef(0);
   useEffect(() => {
     const r = rejoinRef.current;
     r.unmounted = false;
@@ -5451,14 +3742,18 @@ export function ClassroomRoom({ code }: { code: string }) {
    * network, fetches a fresh token and mounts a new Room, retrying with
    * backoff until it works or the class is over.
    */
-  const rejoin = useCallback(async () => {
+  const rejoin = useCallback(async (opts?: { connectFailures?: number }) => {
     const r = rejoinRef.current;
     if (r.running) return;
     r.running = true;
     setRejoining(true);
+    const failures = opts?.connectFailures ?? 0;
     try {
       for (let attempt = 0; !r.unmounted; attempt++) {
-        await new Promise((res) => window.setTimeout(res, rejoinDelayMs(attempt)));
+        // A failed connect backs off by how many connects failed in a row (the
+        // SFU is likely overloaded); other rejoins use the normal schedule.
+        const wait = failures > 0 ? connectRetryDelayMs(failures + attempt) : rejoinDelayMs(attempt);
+        await new Promise((res) => window.setTimeout(res, wait));
         if (r.unmounted) return;
         if (typeof navigator !== 'undefined' && navigator.onLine === false) {
           await new Promise<void>((res) => {
@@ -5492,7 +3787,12 @@ export function ClassroomRoom({ code }: { code: string }) {
           setTokenData(null);
           return;
         }
+        await sleepConnectDelay(body);
+        if (r.unmounted) return;
+        everConnectedRef.current = false;
+        setMediaProfile(parseMediaProfile(body.mediaProfile));
         setTokenData(body);
+        connectedAtRef.current = Date.now();
         setConnKey((k) => k + 1);
         return;
       }
@@ -5510,6 +3810,8 @@ export function ClassroomRoom({ code }: { code: string }) {
         return;
       }
       if (reason === DisconnectReason.DUPLICATE_IDENTITY) {
+        // Our own previous connection being evicted by this tab's rejoin: not another device.
+        if (isOwnStaleDuplicate({ rejoining: rejoinRef.current.running, connectedAt: connectedAtRef.current, now: Date.now() })) return;
         if (!isTeacher) {
           setFinished((f) => f ?? 'replaced');
           setTokenData(null);
@@ -5613,8 +3915,10 @@ export function ClassroomRoom({ code }: { code: string }) {
     router.push(studentHomePath(school));
   }, [isTeacher, schoolStudent, router]);
 
-  const markEnded = useCallback(() => {
+  const [endedSessionId, setEndedSessionId] = useState<string | null>(null);
+  const markEnded = useCallback((classSessionId: string | null) => {
     setClassEnded(true);
+    if (classSessionId) setEndedSessionId(classSessionId);
     setTokenData(null);
   }, []);
   const finish = useCallback((r: FinishReason) => {
@@ -5698,6 +4002,9 @@ export function ClassroomRoom({ code }: { code: string }) {
       setError(tok.error || 'Could not get media token');
       return;
     }
+    // Join-wave pacing slot from the server (students only; 0 when quiet).
+    await sleepConnectDelay(tok);
+    setMediaProfile(parseMediaProfile(tok.mediaProfile));
     setTokenData(tok);
   }, [code, router]);
 
@@ -5742,9 +4049,8 @@ export function ClassroomRoom({ code }: { code: string }) {
       <StudentFinished
         reason={shownFinish ?? 'ended'}
         code={code}
-        offerFeedback={Boolean(
-          schoolStudent && (shownFinish === 'left' || shownFinish === 'ended' || (endedAnyway && !shownFinish))
-        )}
+        offerFeedback={Boolean(schoolStudent && (shownFinish === 'ended' || (endedAnyway && !shownFinish)))}
+        schoolStudent={!!schoolStudent}
       />
     );
   }
@@ -5781,9 +4087,17 @@ export function ClassroomRoom({ code }: { code: string }) {
         <div className="max-w-md rounded-2xl border border-white/10 bg-surface-1 p-8 text-center shadow-lift">
           <p className="font-display text-2xl font-semibold tracking-tight">{endCopy.title}</p>
           <p className="mt-2 text-sm text-slate-400">{endCopy.body}</p>
-          <Button className="mt-6" variant="secondary" onClick={() => void goHomeAfterEnd()}>
-            {isTeacher ? 'Dashboard' : 'Home'}
-          </Button>
+          {isTeacher && endedSessionId && <TeacherClassSummary classSessionId={endedSessionId} />}
+          <div className="mt-6 flex flex-wrap justify-center gap-3">
+            <Button variant={isTeacher ? 'primary' : 'secondary'} onClick={() => void goHomeAfterEnd()}>
+              {isTeacher ? 'Dashboard' : 'Home'}
+            </Button>
+            {isTeacher && (
+              <Button variant="secondary" onClick={() => router.push('/teacher/attendance')}>
+                Attendance
+              </Button>
+            )}
+          </div>
         </div>
       </main>
     );
@@ -5829,6 +4143,8 @@ export function ClassroomRoom({ code }: { code: string }) {
         adaptiveStream: { pauseVideoInBackground: false, pixelDensity: subscriberPixelDensity() },
         // Publishers stop encoding simulcast layers nobody is receiving.
         dynacast: true,
+        // Jittered exponential backoff: a mass drop must not retry in lockstep.
+        reconnectPolicy: classroomReconnectPolicy(),
         // Per-track options in SelectivePublisher / screen share override these.
         publishDefaults: {
           simulcast: false,
@@ -5836,8 +4152,8 @@ export function ClassroomRoom({ code }: { code: string }) {
           dtx: true,
           red: true,
           audioPreset: AudioPresets.speech,
-          videoEncoding: STUDENT_CAMERA.encoding,
-          screenShareEncoding: SCREEN_SHARE.encoding,
+          videoEncoding: studentCamera().encoding,
+          screenShareEncoding: screenShare().encoding,
         },
       }}
       // Students never auto-subscribe: StudentMediaPrivacy subscribes them to
@@ -5845,7 +4161,21 @@ export function ClassroomRoom({ code }: { code: string }) {
       // students' cameras. The teacher keeps auto-subscribe (sampled cameras).
       connectOptions={{ peerConnectionTimeout: 20_000, autoSubscribe: isTeacher }}
       className="h-[100dvh] overflow-hidden"
-      onError={(e) => console.error('LiveKit', e)}
+      onConnected={() => {
+        everConnectedRef.current = true;
+        connectFailuresRef.current = 0;
+      }}
+      onError={(e) => {
+        console.error('LiveKit', e);
+        // Join wave: the first connect (or its negotiation) timed out. Retry
+        // quickly with a fresh token instead of leaving the student stuck.
+        // Retry with a fresh token (and a fresh pacing slot) after a backoff that
+        // grows with each consecutive failure, so an overloaded SFU is not hammered.
+        if (!everConnectedRef.current && (isNegotiationError(e) || e?.name === 'ConnectionError')) {
+          connectFailuresRef.current += 1;
+          void rejoin({ connectFailures: connectFailuresRef.current });
+        }
+      }}
       onDisconnected={onDisconnected}
     >
       {!isTeacher && <StudentLeaveOnPageHide />}
@@ -5937,6 +4267,35 @@ function ReconnectWatchdog({ onStuck }: { onStuck: () => void }) {
 }
 
 /**
+ * Teacher's finished screen: when the class ran, and who came, from the same
+ * report the attendance page uses. One request; nothing shows if it fails.
+ */
+function TeacherClassSummary({ classSessionId }: { classSessionId: string }) {
+  const [facts, setFacts] = useState<string[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void fetch(`/api/teacher/attendance/sessions?sessionId=${encodeURIComponent(classSessionId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { rows?: ClassSummaryRow[] } | null) => {
+        const row = d?.rows?.[0];
+        if (alive && row) setFacts(classSummaryFacts(row));
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [classSessionId]);
+  if (!facts) return null;
+  return (
+    <ul className="mt-4 space-y-1 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm text-slate-200" data-testid="class-summary">
+      {facts.map((f) => (
+        <li key={f}>{f}</li>
+      ))}
+    </ul>
+  );
+}
+
+/**
  * Static end screen for students. Rendering it unmounted LiveKitRoom and
  * RoomInner (LiveKit disconnected, tracks stopped, polls and listeners gone);
  * it makes no requests itself. window.close() works when the tab was opened
@@ -5946,24 +4305,41 @@ function StudentFinished({
   reason,
   code,
   offerFeedback,
+  schoolStudent,
 }: {
   reason: FinishReason;
   code: string;
   offerFeedback?: boolean;
+  schoolStudent?: boolean;
 }) {
-  const showForm = !!offerFeedback && (reason === 'left' || reason === 'ended');
+  // Item 7: only students still in class when it ended get the form; the
+  // server decides (a student who left mid-class gets the plain screen).
+  const [eligible, setEligible] = useState<boolean | null>(offerFeedback && reason === 'ended' ? null : false);
+  useEffect(() => {
+    if (eligible !== null) return;
+    let alive = true;
+    void roomFetch(code, '/feedback')
+      .then((r) => r.json())
+      .then((d: { eligible?: boolean }) => alive && setEligible(!!d.eligible))
+      .catch(() => alive && setEligible(false));
+    return () => {
+      alive = false;
+    };
+  }, [code, eligible]);
+  const showForm = eligible === true;
   const [formDone, setFormDone] = useState(false);
   useEffect(() => {
     window.dispatchEvent(new Event(CLASS_FINISHED_EVENT));
   }, []);
   useEffect(() => {
-    if (showForm && !formDone) return;
+    // A student who left can rejoin, so that screen stays open.
+    if ((showForm && !formDone) || eligible === null || reason === 'left') return;
     try {
       window.close();
     } catch {
       /* blocked: the screen stays */
     }
-  }, [showForm, formDone]);
+  }, [showForm, formDone, eligible, reason]);
   const copy = finishCopy(reason);
   return (
     <main className="flex min-h-screen flex-col items-center justify-center gap-4 px-6" data-finished={reason}>
@@ -5971,6 +4347,15 @@ function StudentFinished({
         <p className="font-display text-2xl font-semibold tracking-tight">{copy.title}</p>
         <p className="mt-2 text-sm text-slate-400">{copy.body}</p>
         {showForm && !formDone && <FeedbackForm code={code} onDone={() => setFormDone(true)} />}
+        {reason === 'left' && (
+          <a
+            href={schoolStudent ? '/student' : `/join/${code}`}
+            className="btn-primary mt-5 inline-flex px-4 py-2 text-sm"
+            data-testid="rejoin-class"
+          >
+            Rejoin class
+          </a>
+        )}
       </div>
     </main>
   );
@@ -5985,48 +4370,6 @@ function rosterLabel(p: { displayName: string } & RosterInfo): string {
   if (p.viaSchoolApp && !p.onTimetable) bits.push(p.adHocClass ? 'outside class audience' : 'not on timetable');
   if (!p.viaSchoolApp) bits.push('guest');
   return bits.join(' · ');
-}
-
-/** Fullscreen / focus status under a student's name (teacher roster). */
-function FocusChip({ focus, iphone }: { focus?: import('@/lib/focusStatus').FocusStatus; iphone?: boolean }) {
-  const label = focusLabel(focus, iphone);
-  if (!label) return null;
-  return (
-    <span
-      className={cn(
-        'mt-0.5 inline-flex rounded px-1 text-2xs font-semibold',
-        isFocusAlert(focus) ? 'bg-amber-500/20 text-amber-200' : 'bg-white/10 text-slate-300'
-      )}
-    >
-      {label}
-    </span>
-  );
-}
-
-/** Roll number, grade-division and timetable / late markers under a student's name (teacher roster). */
-function RosterMeta({ info }: { info: RosterInfo }) {
-  if (info.viaSchoolApp === undefined) return null;
-  return (
-    <span className="mt-0.5 flex flex-wrap items-center gap-1 text-2xs text-slate-400">
-      {info.rollNumber && <span>Roll {info.rollNumber}</span>}
-      {info.gradeDivision && <span>· {info.gradeDivision}</span>}
-      {info.viaSchoolApp ? (
-        info.onTimetable ? (
-          // Ad-hoc classes are not on the timetable: matching students need no tag.
-          info.adHocClass ? null : (
-            <span className="rounded bg-emerald-500/15 px-1 font-semibold text-emerald-200">On timetable</span>
-          )
-        ) : info.adHocClass ? (
-          <span className="rounded bg-amber-500/15 px-1 font-semibold text-amber-100">Outside class audience</span>
-        ) : (
-          <span className="rounded bg-amber-500/15 px-1 font-semibold text-amber-100">Not on timetable</span>
-        )
-      ) : (
-        <span className="rounded bg-white/10 px-1 font-semibold text-slate-300">Guest (no school ID)</span>
-      )}
-      {info.late && <span className="rounded bg-red-500/15 px-1 font-semibold text-red-200">Late</span>}
-    </span>
-  );
 }
 
 /** Small square icon button for roster rows, with tooltip and aria-label. */

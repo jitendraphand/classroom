@@ -21,7 +21,7 @@ export function studentVideoModeLabel(mode: StudentVideoMode): string {
 
 /** Short rail label. Full sentence stays in title / aria-description. */
 export function studentVideoModeShortLabel(mode: StudentVideoMode): string {
-  if (mode === 'both') return 'Both';
+  if (mode === 'both') return 'All';
   if (mode === 'teacher') return 'Teacher';
   return 'Hidden';
 }

@@ -17,7 +17,8 @@ const sans = Inter({
 });
 
 export const metadata: Metadata = {
-  title: 'Classroom — Live Online Teaching',
+  // Client pages set the same "%s · Classroom" shape with useDocumentTitle.
+  title: { default: 'Classroom', template: '%s · Classroom' },
   description:
     'Premium live classes with selective student video, screen share, and privacy-minded bandwidth controls.',
   icons: {

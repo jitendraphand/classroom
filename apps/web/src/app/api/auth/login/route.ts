@@ -78,7 +78,8 @@ async function handleLogin(req: Request, raw: unknown) {
     }
 
     const admin = await prisma.admin.findUnique({ where: { email } });
-    if (admin) {
+    // A teacher's linked sub-admin role is never a login of its own (one login: the teacher's).
+    if (admin && !admin.teacherId) {
       if (!(await verifyPassword(body.password, admin.passwordHash))) {
         await recordLoginFailure(email, ip);
         return jsonError('Invalid email or password', 401);
@@ -122,6 +123,7 @@ async function handleLogin(req: Request, raw: unknown) {
       name: teacher.name,
       permanentCode: teacher.permanentCode,
       mustChangePassword: teacher.mustChangePassword,
+      adminAvailable: !!(await prisma.admin.findUnique({ where: { teacherId: teacher.id }, select: { id: true } })),
     });
   } catch (e) {
     if (e instanceof z.ZodError) return jsonError(e.errors[0]?.message || 'Invalid input');

@@ -30,6 +30,7 @@ import {
   shareToolbarSeparators,
   toolWidth,
 } from '../src/lib/shareChrome';
+import { classroomViewSource } from './helpers/classroomSource';
 
 const src = (p: string) => fs.readFileSync(path.join(__dirname, '..', 'src', p), 'utf8');
 
@@ -192,7 +193,7 @@ test('Wayland position note is a tooltip and a one-time toast, not the yellow st
   assert.equal(inlineShareDockHint('', hints), 'share');
   assert.equal(sharePositionNoticeOpen(null), true);
   assert.equal(sharePositionNoticeOpen('1'), false);
-  const room = src('components/classroom/ClassroomRoom.tsx');
+  const room = classroomViewSource();
   assert.match(room, /inlineShareDockHint\(/);
   assert.match(room, /SHARE_POSITION_NOTICE_KEY/);
   assert.match(room, /data-testid="share-position-toast"/);
@@ -213,7 +214,7 @@ test('share pill, meeting bar, and video header are wired without dropping the o
   assert.doesNotMatch(hud, /Share controls \(compact\)/);
   assert.doesNotMatch(hud, /aria-label="Low power/);
   assert.doesNotMatch(hud, /Send computer sound/);
-  const room = src('components/classroom/ClassroomRoom.tsx');
+  const room = classroomViewSource();
   assert.match(room, /minLeft=\{wbOpen \? WB_TOOL_CLEAR_PX : 0\}/);
   assert.match(room, /dock=\{wbOpen \? null : dockArea\}/);
   assert.match(room, /data-testid="video-panel-resize"/);

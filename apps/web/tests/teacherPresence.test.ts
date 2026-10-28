@@ -182,6 +182,8 @@ test('webhook route rejects missing / bad signatures and accepts a valid one', a
 
   const ok = await POST(new Request(url, { method: 'POST', body, headers: { ...type, authorization: await signed(body) } }));
   assert.equal(ok.status, 200);
-  const data = (await ok.json()) as { handled: boolean };
-  assert.equal(data.handled, false);
+  // Acked at once; room_started is not a classroom event, so nothing is queued.
+  const data = (await ok.json()) as { ok: boolean; queued: boolean };
+  assert.equal(data.ok, true);
+  assert.equal(data.queued, false);
 });

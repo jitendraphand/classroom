@@ -19,7 +19,7 @@ import { MEETING_BAR_PX } from '@/lib/shareChrome';
 import { WhiteboardBoard } from '@/lib/whiteboard/WhiteboardBoard';
 import { SNAP_STORE_MS, WhiteboardSession, b64ToPackets, opsPackets, packetsToB64 } from '@/lib/whiteboard/session';
 import { WB_TOPIC, cleanDoc, encodePacket, isOwnRelayEcho, studentOpAllowed, type Op, type Packet } from '@/lib/whiteboard/model';
-import { wbStudentPacketAllowed } from '@/lib/realtimePackets';
+import { canPublishRoomData } from '@/lib/dataPublish';
 import { roomFetch } from '@/lib/classroomClient';
 
 export const wbStoreKey = (code: string) => `wb_doc_${code.toUpperCase()}`;
@@ -149,11 +149,10 @@ export function WhiteboardHost({
           return;
         }
         if (!p) return;
-        if (participant) {
-          if (isTeacherId(participant.identity)) return;
-          if (!participant.identity.startsWith('student_') || !wbStudentPacketAllowed(p.t)) return;
-          p.by = participant.identity;
-        }
+        // Host: only server-originated packets (snapshot requests, and student
+        // ops the server relayed after checking their draw permission, with
+        // `by` stamped by the server). Students cannot publish data.
+        if (participant) return;
         if (p.t === 'req') return void sendSnapshot([p.to]);
         if (p.t === 'ops' && !filterRelayed(session, p)) return;
         await session.receive(new TextEncoder().encode(JSON.stringify(p)));
@@ -233,15 +232,8 @@ export function WhiteboardViewer({
           return;
         }
         if (!p || p.t === 'req') return;
-        if (participant) {
-          if (isTeacherId(participant.identity)) {
-            /* teacher host */
-          } else if (participant.identity.startsWith('student_') && wbStudentPacketAllowed(p.t)) {
-            p.by = participant.identity;
-          } else {
-            return;
-          }
-        }
+        // Viewer: the teacher's host, or the server (relayed student ops).
+        if (participant && !isTeacherId(participant.identity)) return;
         if (isOwnRelayEcho(p, identityRef.current)) return; // my own stroke, already drawn locally
         if (p.t === 'ops' && !filterRelayed(session, p)) return;
         await session.receive(new TextEncoder().encode(JSON.stringify(p)));
@@ -280,7 +272,7 @@ export function WhiteboardViewer({
         const ops = queue.current.splice(0, 20);
         let published = false;
         try {
-          if (room.state === ConnectionState.Connected) {
+          if (canPublishRoomData(room)) {
             for (const data of encodePacket({ v: 1, t: 'ops', ops, by: identityRef.current })) {
               await room.localParticipant.publishData(data as Uint8Array<ArrayBuffer>, { reliable: true, topic: WB_TOPIC });
             }

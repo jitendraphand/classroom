@@ -6,7 +6,7 @@ import { RoomEvent, Track, VideoQuality, type RemoteTrackPublication } from 'liv
 import { teacherVideoDemand, type DataSaverMode } from '@/lib/dataSaver';
 import { createStepUp, type LinkPhase } from '@/lib/reconnectQuality';
 import { SMALL_SCREEN_SHARE_DIMENSIONS, isSmallScreen, shareLayerFor } from '@/lib/subscriberCodecs';
-import { isTeacherParticipant } from './ClassroomRoom';
+import { isTeacherParticipant } from './participantRoles';
 
 /**
  * Student side: what to receive of the teacher's video (lib/dataSaver).

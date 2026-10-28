@@ -8,8 +8,9 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
-import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { ConfirmDialog, useConfirm } from '@/components/ui/ConfirmDialog';
 import { api } from '@/lib/clientFetch';
+import { useAdminPrivileges } from '@/components/admin/useAdminPrivileges';
 
 type Teacher = {
   id: string;
@@ -40,6 +41,10 @@ function TeachersPanel() {
   const [filter, setFilter] = useState('');
   const gradeOptions = useGradeOptions();
   const [deleting, setDeleting] = useState<Teacher | null>(null);
+  // Item 10: reports-only / schedule-only sub-admins see the list, not the actions.
+  const canManage = useAdminPrivileges().can('manageTeachers');
+  const [adding, setAdding] = useState(false);
+  const [confirm, confirmDialog] = useConfirm();
 
   const load = useCallback(async () => {
     const { ok, data } = await api<{ teachers: Teacher[] }>('/api/admin/teachers');
@@ -72,6 +77,7 @@ function TeachersPanel() {
       ],
     });
     setForm({ name: '', email: '', assignments: '' });
+    setAdding(false);
     void load();
   }
 
@@ -87,7 +93,13 @@ function TeachersPanel() {
   }
 
   async function resetPassword(t: Teacher) {
-    if (!confirm(`Reset the password for ${t.name}? Their current sessions end immediately.`)) return;
+    const go = await confirm({
+      title: `Reset the password for ${t.name}?`,
+      body: 'They are signed out everywhere and get a new temporary password, shown to you once.',
+      confirmLabel: 'Reset password',
+      tone: 'primary',
+    });
+    if (!go) return;
     const { ok, data } = await api<{ temporaryPassword: string }>(`/api/admin/teachers/${t.id}/reset-password`, {
       method: 'POST',
     });
@@ -123,6 +135,7 @@ function TeachersPanel() {
   return (
     <div className="space-y-6">
       <LiveNowBanner />
+      {confirmDialog}
       {deleting && (
         <ConfirmDialog
           title={`Delete ${deleting.name}?`}
@@ -148,10 +161,16 @@ function TeachersPanel() {
         </p>
       )}
 
+      {canManage && adding && (
       <Card>
         <CardHeader
           title="Add teacher"
           subtitle="The teacher gets a temporary password (shown once) and a permanent meeting code."
+          action={
+            <Button size="sm" variant="ghost" onClick={() => setAdding(false)}>
+              Cancel
+            </Button>
+          }
         />
         <form onSubmit={create} className="grid gap-4 sm:grid-cols-2">
           <Input label="Name" name="name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required maxLength={80} />
@@ -167,8 +186,7 @@ function TeachersPanel() {
             <span className="label">Assigned grades / divisions</span>
             <AssignmentsPicker value={form.assignments} onChange={(a) => setForm({ ...form, assignments: a })} options={gradeOptions} />
             <p className="mt-1.5 text-xs text-slate-500">
-              Pick a campus, a grade and a division (or All divisions for the whole grade). Ad-hoc classes are limited to these. Lists come from
-              Grades &amp; divisions.
+              Pick a campus, a grade and a division (or All divisions for the whole grade). Teachers can start extra classes only for these.
             </p>
           </div>
           <div className="sm:col-span-2">
@@ -178,27 +196,35 @@ function TeachersPanel() {
           </div>
         </form>
       </Card>
+      )}
 
       <Card padding={false}>
         <div className="flex flex-wrap items-center justify-between gap-3 p-5 sm:p-6">
           <h2 className="font-display text-lg font-semibold">All teachers {teachers ? `(${teachers.length})` : ''}</h2>
-          <input
-            className="input max-w-xs"
-            placeholder="Search name, email, campus, grade"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            aria-label="Search teachers"
-          />
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+            <input
+              className="input sm:w-72"
+              placeholder="Search name, email, campus, grade"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              aria-label="Search teachers"
+            />
+            {canManage && !adding && (
+              <Button onClick={() => setAdding(true)} className="whitespace-nowrap">
+                Add teacher
+              </Button>
+            )}
+          </div>
         </div>
         {!teachers ? (
           <p className="px-6 pb-6 text-sm text-slate-400">Loading…</p>
         ) : shown.length === 0 ? (
-          <p className="px-6 pb-6 text-sm text-slate-400">No teachers yet.</p>
+          <p className="px-6 pb-6 text-sm text-slate-400">{filter ? 'No teachers match that search.' : 'No teachers yet.'}</p>
         ) : (
           <ul className="divide-y divide-white/5">
             {shown.map((t) => (
               <li key={t.id} className="flex flex-col gap-3 px-5 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
-                {editing === t.id ? (
+                {editing === t.id && canManage ? (
                   <form
                     className="grid w-full items-start gap-3 sm:grid-cols-[1fr_2fr_auto]"
                     onSubmit={async (e) => {
@@ -227,6 +253,7 @@ function TeachersPanel() {
                         {t.assignmentsText ? t.assignmentsText.replace(/@/g, ' · ') : 'No grades assigned'}
                       </p>
                     </div>
+                    {canManage && (
                     <div className="flex flex-wrap gap-2">
                       <Button
                         size="sm"
@@ -244,18 +271,24 @@ function TeachersPanel() {
                       <Button
                         size="sm"
                         variant={t.disabled ? 'secondary' : 'warning'}
-                        onClick={() => {
-                          if (t.disabled || confirm(`Disable ${t.name}? They are signed out and cannot sign in.`)) {
-                            void patch(t.id, { disabled: !t.disabled });
-                          }
+                        onClick={async () => {
+                          const ok =
+                            t.disabled ||
+                            (await confirm({
+                              title: `Disable ${t.name}?`,
+                              body: 'They are signed out and cannot sign in until you enable them again. Their classes and history are kept.',
+                              confirmLabel: 'Disable',
+                            }));
+                          if (ok) void patch(t.id, { disabled: !t.disabled });
                         }}
                       >
                         {t.disabled ? 'Enable' : 'Disable'}
                       </Button>
-                      <Button size="sm" variant="danger" onClick={() => setDeleting(t)}>
+                      <Button size="sm" variant="dangerSoft" onClick={() => setDeleting(t)}>
                         Delete
                       </Button>
                     </div>
+                    )}
                   </>
                 )}
               </li>

@@ -7,7 +7,7 @@ import { ensureRedis, keys } from '@/lib/redis';
 import { setManyParticipantMics, setParticipantMicAllowed } from '@/lib/livekit';
 import { clearPinnedSpeakers, getVisibleSample, unpinSpeaker } from '@/lib/sample';
 import { getSchoolSettings } from '@/lib/schoolSettings';
-import { readMicBook, writeMicBook } from '@/lib/micBook';
+import { updateMicBook } from '@/lib/micBook';
 import { teacherSetMic } from '@/lib/micSlots';
 
 const schema = z.union([
@@ -20,6 +20,13 @@ const schema = z.union([
     muted: z.boolean(),
   }),
 ]);
+
+/** Swap the room's muted set in one transaction (readers never see it empty mid-update). */
+async function replaceMutedSet(redis: Awaited<ReturnType<typeof ensureRedis>>, code: string, ids: string[]) {
+  const m = redis.multi().del(keys.muted(code));
+  if (ids.length) m.sadd(keys.muted(code), ...ids);
+  await m.exec();
+}
 
 export async function POST(req: Request, { params }: { params: Promise<{ code: string }> }) {
   const teacher = await getTeacherSession();
@@ -45,30 +52,29 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
         const { visible } = await getVisibleSample(code);
         const inSample = new Set(visible);
         if (body.muted) {
-          await writeMicBook(code, { open: [], queue: [] });
+          await updateMicBook(code, () => ({ next: { open: [], queue: [] } }));
           await prisma.participant.updateMany({
             where: { roomId: room.id, role: 'STUDENT', status: 'ADMITTED' },
             data: { mutedByTeacher: true },
           });
           const ids = students.map((s) => s.id);
-          if (ids.length) {
-            await redis.del(keys.muted(code));
-            await redis.sadd(keys.muted(code), ...ids);
-          } else await redis.del(keys.muted(code));
+          await replaceMutedSet(redis, code, ids);
           void setManyParticipantMics(code, students.map((s) => s.livekitIdentity), false, (identity) => inSample.has(identity));
           await clearPinnedSpeakers(code);
           pushMuteState(room.code, room.sessionId, students.map((s) => s.livekitIdentity), true);
           nudgeRoomState(room.code, 'all');
           return jsonOk({ ok: true, all: true, muted: true, count: ids.length, waiting: 0 });
         }
-        let book = { open: [] as string[], queue: [] as { id: string; source: 'teacher' | 'student' }[] };
-        const openIds: string[] = [];
-        for (const s of students) {
-          const next = teacherSetMic(book, s.id, false, micLimit);
-          book = next;
-          if (next.granted) openIds.push(s.id);
-        }
-        await writeMicBook(code, book);
+        const { openIds } = await updateMicBook(code, () => {
+          let book = { open: [] as string[], queue: [] as { id: string; source: 'teacher' | 'student' }[] };
+          const opened: string[] = [];
+          for (const s of students) {
+            const next = teacherSetMic(book, s.id, false, micLimit);
+            book = next;
+            if (next.granted) opened.push(s.id);
+          }
+          return { next: book, openIds: opened };
+        });
         const waiting = students.filter((s) => !openIds.includes(s.id)).map((s) => s.id);
         if (openIds.length) {
           await prisma.participant.updateMany({ where: { id: { in: openIds } }, data: { mutedByTeacher: false } });
@@ -76,14 +82,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
         if (waiting.length) {
           await prisma.participant.updateMany({ where: { id: { in: waiting } }, data: { mutedByTeacher: true } });
         }
-        if (waiting.length) {
-          await redis.del(keys.muted(code));
-          await redis.sadd(keys.muted(code), ...waiting);
-        } else await redis.del(keys.muted(code));
+        await replaceMutedSet(redis, code, waiting);
         const openSet = new Set(openIds);
-        for (const s of students) {
-          void setParticipantMicAllowed(code, s.livekitIdentity, openSet.has(s.id), inSample.has(s.livekitIdentity));
-        }
+        const openIdentities = new Set(students.filter((s) => openSet.has(s.id)).map((s) => s.livekitIdentity));
+        void setManyParticipantMics(
+          code,
+          students.map((s) => s.livekitIdentity),
+          (identity) => openIdentities.has(identity),
+          (identity) => inSample.has(identity)
+        );
         pushMuteState(room.code, room.sessionId, students.filter((s) => openSet.has(s.id)).map((s) => s.livekitIdentity), false);
         pushMuteState(room.code, room.sessionId, students.filter((s) => !openSet.has(s.id)).map((s) => s.livekitIdentity), true);
         nudgeRoomState(room.code, 'all');
@@ -97,16 +104,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
         data: { mutedByTeacher: body.muted },
       });
 
-      if (body.muted) {
-        if (ids.length) {
-          await redis.del(keys.muted(code));
-          await redis.sadd(keys.muted(code), ...ids);
-        } else {
-          await redis.del(keys.muted(code));
-        }
-      } else {
-        await redis.del(keys.muted(code));
-      }
+      await replaceMutedSet(redis, code, body.muted ? ids : []);
 
       // Force LiveKit mic off / restore so clients cannot self-unmute. Camera
       // permission must follow current sample membership, otherwise this would
@@ -120,7 +118,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
         (identity) => inSample.has(identity)
       );
 
-      // Sticky speak-pins last until mute — clear all when muting everyone
+      // Speaker pins end on mute — clear all when muting everyone
       if (body.muted) {
         await clearPinnedSpeakers(code);
       }
@@ -136,9 +134,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     if (!participant) return jsonError('Participant not found', 404);
 
     if (micLimit > 0) {
-      const book = await readMicBook(code);
-      const next = teacherSetMic(book, participant.id, body.muted, micLimit);
-      await writeMicBook(code, next);
+      const { next } = await updateMicBook(code, (book) => ({ next: teacherSetMic(book, participant.id, body.muted, micLimit) }));
       const muted = body.muted || !next.granted;
       await prisma.participant.update({ where: { id: participant.id }, data: { mutedByTeacher: muted } });
       if (muted) await redis.sadd(keys.muted(code), participant.id);
@@ -157,7 +153,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
           pushMuteState(room.code, room.sessionId, [nextStudent.livekitIdentity], false);
         }
       }
-      nudgeRoomState(room.code, 'all');
+      // Item 14: one student's mute only refreshes the teacher + affected students, not 2,000 clients.
+      nudgeRoomState(room.code, { participantIds: promoted ? [participant.id, promoted] : [participant.id] });
       return jsonOk({ ok: true, muted, waiting: next.waiting });
     }
 
@@ -183,7 +180,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     }
 
     pushMuteState(room.code, room.sessionId, [participant.livekitIdentity], body.muted);
-    nudgeRoomState(room.code, 'all');
+    nudgeRoomState(room.code, { participantIds: [participant.id] });
     return jsonOk({ ok: true, muted: body.muted });
   } catch (e) {
     if (e instanceof z.ZodError) return jsonError(e.errors[0]?.message || 'Invalid input');

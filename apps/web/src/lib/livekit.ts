@@ -11,6 +11,7 @@ import { resolvePublicLiveKitUrl } from './url';
 import { isTeacherPresent } from './teacherPresence';
 import { studentMicAllowed } from './teacherPresenceLogic';
 import { mediaServers, serverForRoom, type MediaServer } from './mediaServers';
+import { forgetMemo, memo } from './roomStateCache';
 
 /**
  * LiveKit access-token lifetime. Short on purpose: LiveKit refreshes the token
@@ -117,9 +118,9 @@ export type ParticipantGrantInput = {
  *
  * - Teacher: publish every source, plus data (whiteboard, chat fan-out, signals).
  * - Student: publish camera (only while in the sample) and microphone (only
- *   while not teacher-muted); **data publishing** for strokes / chat / hand
- *   (recipients trust LiveKit's sender identity; mute-all stays server-side);
- *   **no screen share**.
+ *   while not teacher-muted); **no data publishing** (strokes, whiteboard ops,
+ *   chat and hands go through the web server, which checks the draw permission
+ *   and stamps the sender) and **no screen share**.
  */
 export function classroomGrant(input: ParticipantGrantInput) {
   const isTeacher = input.role === 'TEACHER';
@@ -135,14 +136,20 @@ export function classroomGrant(input: ParticipantGrantInput) {
   return {
     roomJoin: true,
     room: input.roomName,
-    canPublish: true,
+    ...publishPermission(sources),
     canSubscribe: true,
-    // Teacher and students publish data (wb / draw / chat / cls-signal). Clients
-    // accept packets only from a matching identity or the server. Mute-all is
-    // still enforced with updateParticipant / mutePublishedTrack.
-    canPublishData: true,
-    canPublishSources: sources,
+    canPublishData: isTeacher,
   };
+}
+
+/**
+ * `canPublish` + `canPublishSources` for a source list. LiveKit treats an
+ * EMPTY `canPublishSources` as "every source allowed" (livekit-client mirrors
+ * the server: `canPublishSources.length === 0 || includes(source)`), so
+ * "nothing" must be `canPublish: false`, never `canPublish: true` with `[]`.
+ */
+export function publishPermission(sources: TrackSource[]): { canPublish: boolean; canPublishSources: TrackSource[] } {
+  return sources.length ? { canPublish: true, canPublishSources: sources } : { canPublish: false, canPublishSources: [] };
 }
 
 export async function createParticipantToken(
@@ -231,13 +238,27 @@ export function livekitRoomName(code: string, sessionId: string) {
   return `classroom_${code}_${sessionId}`;
 }
 
-/** Current LiveKit room name for a class code, or null when the room is unknown. */
+/**
+ * Current LiveKit room name for a class code, or null when the room is unknown.
+ * Shared for a few seconds per worker: every relayed stroke / whiteboard op /
+ * nudge needs it, and it only changes when the room is reopened (which calls
+ * forgetLivekitRoomName).
+ */
 export async function livekitRoomNameForCode(code: string): Promise<string | null> {
-  const room = await prisma.room.findUnique({
-    where: { code },
-    select: { code: true, sessionId: true },
+  return memo(roomNameKey(code), ROOM_NAME_TTL_MS, async () => {
+    const room = await prisma.room.findUnique({
+      where: { code },
+      select: { code: true, sessionId: true },
+    });
+    return room ? livekitRoomName(room.code, room.sessionId) : null;
   });
-  return room ? livekitRoomName(room.code, room.sessionId) : null;
+}
+
+const ROOM_NAME_TTL_MS = 3_000;
+const roomNameKey = (code: string) => `lk-room-name:${code}`;
+
+export function forgetLivekitRoomName(code: string) {
+  forgetMemo(roomNameKey(code));
 }
 
 /**
@@ -258,10 +279,10 @@ export async function removeLiveKitParticipant(roomName: string, identity: strin
 }
 
 /**
- * Server-originated data packet. Used for chat (backup fan-out with
- * destinationIdentities), mute, and state nudges. Clients also accept
- * identity-stamped packets from teachers and students on chat / wb / draw /
- * cls-signal; mute-all is still this path plus updateParticipant.
+ * Server-originated data packet: chat (with destinationIdentities), mute,
+ * state nudges, and every student-originated stroke / whiteboard op / hand
+ * (students cannot publish data themselves). Clients also accept packets from
+ * the teacher's identity.
  */
 export async function sendRoomData(
   roomName: string,
@@ -280,100 +301,153 @@ export async function sendRoomData(
   }
 }
 
-/** True when this identity is the student the teacher is currently spotlighting. */
-async function spotlightKeepsCamera(code: string, identity: string): Promise<boolean> {
+/**
+ * Shared per-room context for permission pushes: resolved once per batch,
+ * not once per student (a teacher reconnect in a 1,000-student class used to
+ * repeat the room lookup, presence check and spotlight lookup 1,000 times).
+ */
+export type PermissionContext = {
+  code: string;
+  roomName: string;
+  svc: RoomServiceClient;
+  teacherPresent: boolean;
+  /** LiveKit identity of the spotlighted student (keeps their camera grant), or null. */
+  spotlightIdentity: string | null;
+};
+
+async function spotlightIdentityFor(code: string): Promise<string | null> {
   try {
     const id = await (await ensureRedis()).get(keys.spotlight(code));
-    if (!id) return false;
+    if (!id) return null;
     const part = await prisma.participant.findFirst({
-      where: { id, livekitIdentity: identity, role: 'STUDENT' },
-      select: { id: true },
+      where: { id, role: 'STUDENT' },
+      select: { livekitIdentity: true },
     });
-    return !!part;
+    return part?.livekitIdentity ?? null;
   } catch {
-    return false;
+    return null;
   }
 }
 
+export async function permissionContext(
+  code: string,
+  opts: { teacherPresent?: boolean; room?: { code: string; sessionId: string } | null } = {}
+): Promise<PermissionContext | null> {
+  const room =
+    opts.room ?? (await prisma.room.findUnique({ where: { code }, select: { code: true, sessionId: true } }));
+  if (!room) return null;
+  const roomName = livekitRoomName(room.code, room.sessionId);
+  const [svc, teacherPresent, spotlightIdentity] = await Promise.all([
+    roomServiceFor(roomName),
+    opts.teacherPresent ?? isTeacherPresent(code, room),
+    spotlightIdentityFor(code),
+  ]);
+  return { code, roomName, svc, teacherPresent, spotlightIdentity };
+}
+
+export type StudentPublishRequest = { identity: string } & PublishPermissions;
+
+/** Effective sources for one student: teacher absence locks the mic, spotlight keeps the camera. */
+export function effectiveStudentSources(
+  req: StudentPublishRequest,
+  ctx: Pick<PermissionContext, 'teacherPresent' | 'spotlightIdentity'>
+): { allowCamera: boolean; allowMic: boolean; sources: TrackSource[] } {
+  const allowMic = studentMicAllowed({ mutedByTeacher: !req.allowMic, teacherPresent: ctx.teacherPresent });
+  const allowCamera = req.allowCamera || (!!ctx.spotlightIdentity && ctx.spotlightIdentity === req.identity);
+  return { allowCamera, allowMic, sources: publishSourcesFor({ allowCamera, allowMic }) };
+}
+
+/** Published tracks (from a ParticipantInfo) that the new permissions no longer allow. */
+export function tracksToMute(
+  tracks: { sid?: string; type?: TrackType; source?: TrackSource; muted?: boolean }[] | undefined,
+  allow: { allowCamera: boolean; allowMic: boolean }
+): string[] {
+  const out: string[] = [];
+  for (const t of tracks ?? []) {
+    if (!t.sid || t.muted) continue;
+    const isMic =
+      t.source === TrackSource.MICROPHONE ||
+      (t.type === TrackType.AUDIO && t.source !== TrackSource.SCREEN_SHARE_AUDIO);
+    const isCam = t.source === TrackSource.CAMERA;
+    if ((isMic && !allow.allowMic) || (isCam && !allow.allowCamera)) out.push(t.sid);
+  }
+  return out;
+}
+
+async function pushOne(ctx: PermissionContext, req: StudentPublishRequest): Promise<void> {
+  const eff = effectiveStudentSources(req, ctx);
+  let info: { tracks?: { sid?: string; type?: TrackType; source?: TrackSource; muted?: boolean }[] };
+  try {
+    // The response is the participant's current info (tracks included), so no
+    // extra listParticipants call is needed to find tracks to mute.
+    info = await ctx.svc.updateParticipant(ctx.roomName, req.identity, {
+      permission: { ...publishPermission(eff.sources), canSubscribe: true, canPublishData: false },
+    });
+  } catch (e) {
+    // Not connected (yet): the token grant and the DB/Redis flags apply when they connect.
+    const msg = e instanceof Error ? e.message : String(e);
+    if (!/not.?found|does not exist/i.test(msg)) console.warn('LiveKit updateParticipant', req.identity, msg);
+    return;
+  }
+  for (const sid of tracksToMute(info.tracks, eff)) {
+    try {
+      await ctx.svc.mutePublishedTrack(ctx.roomName, req.identity, sid, true);
+    } catch (err) {
+      console.warn('LiveKit mutePublishedTrack', req.identity, sid, err instanceof Error ? err.message : err);
+    }
+  }
+}
+
+/** Parallel LiveKit API calls per batch (PERMISSION_PUSH_CONCURRENCY, default 8). */
+export function permissionPushConcurrency(env: Record<string, string | undefined> = process.env): number {
+  const n = Number.parseInt(env.PERMISSION_PUSH_CONCURRENCY ?? '', 10);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 64) : 8;
+}
+
+/** Run `fn` over `items` with at most `n` in flight. */
+export async function runBounded<T>(items: readonly T[], n: number, fn: (t: T) => Promise<void>): Promise<void> {
+  let i = 0;
+  const workers = Array.from({ length: Math.min(Math.max(1, n), items.length) }, async () => {
+    while (i < items.length) {
+      const item = items[i++]!;
+      try {
+        await fn(item);
+      } catch (e) {
+        console.warn('permission push', e instanceof Error ? e.message : e);
+      }
+    }
+  });
+  await Promise.all(workers);
+}
+
 /**
- * Server-side force of a participant's publish permissions via LiveKit.
+ * Server-side force of student publish permissions via LiveKit, for one or
+ * many students. Updates each participant's permission AND mutes any
+ * already-published track the new permissions no longer allow, so a client
+ * that ignores the grant stops sending at once.
  *
- * Updates the participant permission AND mutes any already-published track that
- * the new permissions no longer allow, so a client that ignores the grant stops
- * sending immediately rather than at its next token refresh.
- *
- * Both flags are always sent together: writing canPublishSources is a full
- * replacement, so a mic-only update would silently re-grant camera.
+ * Camera and mic are always sent together: writing canPublishSources is a
+ * full replacement, so a mic-only update would silently re-grant camera.
  */
+export async function pushStudentPermissions(
+  code: string,
+  requests: StudentPublishRequest[],
+  opts: { teacherPresent?: boolean; room?: { code: string; sessionId: string } | null; ctx?: PermissionContext } = {}
+): Promise<void> {
+  const students = requests.filter((r) => r.identity.startsWith('student_'));
+  if (!students.length) return;
+  const ctx = opts.ctx ?? (await permissionContext(code, opts));
+  if (!ctx) return;
+  await runBounded(students, permissionPushConcurrency(), (r) => pushOne(ctx, r));
+}
+
 export async function setParticipantPublishPermissions(
   code: string,
   identity: string,
   requested: PublishPermissions,
   opts: { teacherPresent?: boolean } = {}
 ): Promise<void> {
-  const roomName = await livekitRoomNameForCode(code);
-  if (!roomName) return;
-  const svc = await roomServiceFor(roomName);
-  // Students are force-muted while the teacher is not connected, whatever the
-  // caller asked for (sample rotation, "Unmute all", …). The teacher's own mute
-  // state is already folded into requested.allowMic.
-  const teacherPresent = opts.teacherPresent ?? (await isTeacherPresent(code));
-  const perms: PublishPermissions = {
-    ...requested,
-    allowMic: studentMicAllowed({ mutedByTeacher: !requested.allowMic, teacherPresent }),
-    // Spotlight keeps the camera grant when a sample rotation or a mute update
-    // would otherwise take it away. The spotlight key is cleared before a stop.
-    allowCamera: requested.allowCamera || (await spotlightKeepsCamera(code, identity)),
-  };
-  // Students keep data publishing (strokes / chat / hand). Screen share is never
-  // in `allowed` (publishSourcesFor omits it unless asked).
-  const allowed = publishSourcesFor({ allowCamera: perms.allowCamera, allowMic: perms.allowMic });
-
-  try {
-    await svc.updateParticipant(roomName, identity, {
-      permission: {
-        canPublish: true,
-        canSubscribe: true,
-        canPublishData: true,
-        canPublishSources: allowed,
-      },
-    });
-  } catch (e) {
-    // Participant may not be connected yet — the token grant and the DB/Redis
-    // flags still apply when they (re)connect.
-    console.warn('LiveKit updateParticipant publish permissions', identity, e);
-    return;
-  }
-
-  // Mute any track that is no longer permitted.
-  const toMute: TrackSource[] = [];
-  if (!perms.allowCamera) toMute.push(TrackSource.CAMERA);
-  if (!perms.allowMic) toMute.push(TrackSource.MICROPHONE);
-  if (!toMute.length) return;
-
-  try {
-    const participants = await svc.listParticipants(roomName);
-    const p = participants.find((x) => x.identity === identity);
-    if (!p?.tracks) return;
-    for (const t of p.tracks) {
-      if (!t.sid) continue;
-      const isMic =
-        t.source === TrackSource.MICROPHONE ||
-        (t.type === TrackType.AUDIO && t.source !== TrackSource.SCREEN_SHARE_AUDIO);
-      const isCam = t.source === TrackSource.CAMERA;
-      const shouldMute =
-        (isMic && toMute.includes(TrackSource.MICROPHONE)) ||
-        (isCam && toMute.includes(TrackSource.CAMERA));
-      if (!shouldMute) continue;
-      try {
-        await svc.mutePublishedTrack(roomName, identity, t.sid, true);
-      } catch (err) {
-        console.warn('LiveKit mutePublishedTrack', identity, t.sid, err);
-      }
-    }
-  } catch (e) {
-    console.warn('LiveKit listParticipants/mute', identity, e);
-  }
+  await pushStudentPermissions(code, [{ identity, ...requested }], opts);
 }
 
 /**
@@ -400,14 +474,17 @@ export async function setParticipantCameraAllowed(
   await setParticipantPublishPermissions(code, identity, { allowCamera: allowed, allowMic });
 }
 
+/** One batch (shared context, bounded concurrency) for many students. */
 export async function setManyParticipantMics(
   code: string,
   identities: string[],
-  allowed: boolean,
+  allowed: boolean | ((identity: string) => boolean),
   inSample: (identity: string) => boolean = () => true
 ): Promise<void> {
-  await Promise.allSettled(
-    identities.map((id) => setParticipantMicAllowed(code, id, allowed, inSample(id)))
+  const mic = typeof allowed === 'function' ? allowed : () => allowed;
+  await pushStudentPermissions(
+    code,
+    identities.map((identity) => ({ identity, allowMic: mic(identity), allowCamera: inSample(identity) }))
   );
 }
 

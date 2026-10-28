@@ -5,6 +5,7 @@ import { emptyDoc, isOwnRelayEcho, applyOp, type Op } from '../src/lib/whiteboar
 import { WhiteboardSession, b64ToPackets, packetsToB64, opsPackets } from '../src/lib/whiteboard/session';
 import { layerKey } from '../src/lib/whiteboard/render';
 import { DUCK_GAIN, DUCK_IDLE, HOLD_MS, duckStep, rmsDb } from '../src/lib/micDuck';
+import { classroomViewSource } from './helpers/classroomSource';
 
 const src = (p: string) => readFileSync(new URL(`../src/${p}`, import.meta.url), 'utf8');
 
@@ -109,7 +110,7 @@ test('B5: portrait phones get the student controls in a bottom row', () => {
 });
 
 test('item 3: whiteboard uses the same floating video panel as a screen share', () => {
-  const room = src('components/classroom/ClassroomRoom.tsx');
+  const room = classroomViewSource();
   assert.match(room, /dock=\{wbOpen \? null : dockArea\}/);
   assert.match(room, /minLeft=\{wbOpen \? WB_TOOL_CLEAR_PX : 0\}/);
   assert.match(room, /whiteboard=\{wbOpen\}/);

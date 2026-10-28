@@ -22,7 +22,7 @@ flowchart LR
 
 | Service | Role |
 |---------|------|
-| **web** | Next.js 14 App Router — teacher/student UI, auth, room APIs, sample rotation |
+| **web** | Next.js 15 App Router (Node cluster) — teacher/student UI, auth, room APIs, sample rotation |
 | **livekit** | Open-source WebRTC SFU |
 | **postgres** | Teachers, rooms, participants, chat messages |
 | **redis** | Waiting/admitted sets, visible-sample identities, stage, hands |
@@ -37,7 +37,7 @@ flowchart LR
 4. The server **rotates** the sample every `SAMPLE_ROTATION_SECONDS` (default **8**), or when the teacher clicks **Rotate sample**.
 5. When a **student speaks**, the teacher client pins them into the visible sample (`POST /api/rooms/{code}/sample/pin`) so their camera publishes; pins last ~18s and are preferred during random rotation.
 6. Teachers can **Mute all students** / **Unmute all**; students muted by the teacher cannot unmute themselves.
-7. **Chat** (sidebar): students message the teacher only; teachers broadcast to everyone or DM one student. History lives in Postgres for the life of the class (cleared from API when room is ENDED). LiveKit `chat` topic + 2s poll.
+7. **Chat** (sidebar): students message the teacher only; teachers broadcast to everyone or DM one student. History lives in Postgres for the life of the class (cleared from API when room is ENDED). Delivered as a server LiveKit data packet (+ SSE fallback and a slow safety poll). Students cannot publish LiveKit data at all: their messages, hands and drawing go through the API, which checks permissions and relays them.
 8. UI always shows **“In class · may be visible”** so students feel present even when not in the sample.
 9. **Audio** and **screen share** are not limited by the sample (teacher mute still applies).
 
@@ -128,8 +128,9 @@ displays (or HiDPI) receive the 1080p layer, the admin tiles the 720p one.
   teacher, grade, divisions, scheduled and actual start/end).
 - **Students join only from the school app.** Default `SCHOOL_JOIN_MODE=unsigned`:
   a plain link `GET /join?FirstName=…&LastName=…&SID=…&Grade=…&Division=…` (no
-  signature or expiry — anyone with a student's SID can join as them; per-IP
-  rate limit). `SCHOOL_JOIN_MODE=signed`: a signed, single-use, ≤120 s link
+  signature or expiry — anyone with a student's SID can join as them; the link
+  only looks up an existing student and never rewrites their record; per-SID
+  throttle). **Use signed mode in production.** `SCHOOL_JOIN_MODE=signed`: a signed, single-use, ≤120 s link
   `GET /join?t=<JWT>` (EdDSA/RS256 public key preferred, HS256 secret fallback).
   See **[docs/SCHOOL_APP_INTEGRATION.md](docs/SCHOOL_APP_INTEGRATION.md)**.
   Divisions may be letters or words ("Mahaveer"), matched case-insensitively.
@@ -200,6 +201,8 @@ cd classroom   # or: git clone … && cd classroom
 
 ./scripts/sync-livekit-keys.sh   # creates .env if needed, generates fresh secrets,
                                  # writes the (gitignored) infra/livekit.yaml
+./scripts/configure-resources.sh # sizes workers, Postgres, Redis, memory limits and
+                                 # the media profile for this machine
 
 docker compose up --build -d
 ```
@@ -241,8 +244,11 @@ docker compose down -v
 cp -n .env.example .env
 PUBLIC_IP=203.0.113.10 ./scripts/configure-public-ip.sh   # your VM public IPv4
 ./scripts/sync-livekit-keys.sh
+./scripts/configure-resources.sh                          # size for this VM (and EGRESS_MBPS=…)
 docker compose up --build -d
 ```
+
+Small VPS (2–4 GB, limited uplink)? See [docs/CONSTRAINED-DEPLOY.md](docs/CONSTRAINED-DEPLOY.md).
 
 Open `http://PUBLIC_IP:3000`. Firewall must allow **3000/tcp**, **7880/tcp**, **7881/tcp**, and **50000–60000/udp**. Full steps: [docs/DEPLOY-VPS.md](docs/DEPLOY-VPS.md).
 
@@ -316,6 +322,14 @@ See `.env.example`. Important:
 | `ADMIN_EMAIL` | _(unset)_ | Email of the single school admin, created on first boot or by `scripts/create-admin.sh` (generated password → `./secrets/admin-initial-password`) |
 | `DATABASE_URL` | `postgresql://…@127.0.0.1:5432/…` | Host-network Postgres |
 | `REDIS_URL` | `redis://127.0.0.1:6379` | Host-network Redis |
+| `MEDIA_PROFILE` | `standard` | `low` roughly halves the SFU's egress per student (docs/CONSTRAINED-DEPLOY.md) |
+| `WEB_HOSTNAME` | `0.0.0.0` | `127.0.0.1` behind Caddy (set by `configure-domain-tls.sh`) |
+| `TRUSTED_PROXIES` | _(loopback)_ | Extra proxies whose `X-Forwarded-For` is believed for rate limits |
+| `TEACHER_SESSION_HOURS` / `ADMIN_SESSION_HOURS` | `24` / `12` | Sliding staff session lifetime |
+| `JOIN_SID_RATE_LIMIT_PER_MINUTE` | `6` | Join-link opens per student ID per minute |
+| `SCHOOL_JOIN_UNSIGNED_UPDATES` | `false` | Let unsigned links rewrite student details (not recommended) |
+| `PARTICIPANT_RETENTION_DAYS` | `30` | Old student participant rows are deleted after this |
+| `*_MEM_LIMIT`, `POSTGRES_*`, `REDIS_MAXMEMORY`, `WEB_WORKERS` | sized per host | Written by `scripts/configure-resources.sh` |
 
 ## Project layout
 
@@ -328,8 +342,11 @@ See `.env.example`. Important:
 ├── scripts/sync-livekit-keys.sh
 ├── scripts/configure-public-ip.sh
 ├── scripts/configure-domain-tls.sh
+├── scripts/configure-resources.sh  # sizes the stack for the host (CPU, RAM, uplink)
 ├── docs/DEPLOY-VPS.md          # bare public-IP VPS guide
 ├── docs/DEPLOY-CADDY.md        # domain + Caddy Let's Encrypt
+├── docs/CONSTRAINED-DEPLOY.md  # small VPS / limited bandwidth
+├── .github/workflows/ci.yml    # typecheck, lint, unit + integration tests, build, image
 ├── README.md
 └── apps/web                    # Next.js app
     ├── Dockerfile
@@ -354,11 +371,23 @@ See `.env.example`. Important:
 
 ## Scale design notes
 
-Targets: ~20 concurrent rooms × ~150 attendees. Selective publish is the main lever: at most `N` student cameras + teacher media hit the SFU per room instead of 150 uplink videos.
+Selective publish is the main lever: at most `N` student cameras + teacher media hit the SFU per room. Server work per class event is O(affected students), not O(class): nudges are targeted, permission pushes are batched with bounded concurrency, students get a trimmed `/state`. See [docs/CAPACITY.md](docs/CAPACITY.md), [docs/SCALING.md](docs/SCALING.md) and, for small boxes, [docs/CONSTRAINED-DEPLOY.md](docs/CONSTRAINED-DEPLOY.md).
+
+## Tests
+
+```bash
+cd apps/web
+npm test                 # unit tests
+npm run lint && npm run typecheck
+# integration tests need Postgres + Redis (CI starts them as services):
+DATABASE_URL=postgresql://… REDIS_URL=redis://…/1 npx prisma migrate deploy
+DATABASE_URL=postgresql://… REDIS_URL=redis://…/1 npm run test:integration
+```
 
 ## Versions
 
-- **LiveKit server:** `livekit/livekit-server:v1.12.0` (aligned with `livekit-client` 2.x)
+- **LiveKit server:** `livekit/livekit-server:v1.13.9` (aligned with `livekit-client` 2.x)
+- **Next.js:** 15.5, **Prisma:** 5.22, **Node:** 20
 - **livekit-client:** `^2.6` (resolves to 2.22.x in lockfile)
 
 ## Known limitations (MVP)

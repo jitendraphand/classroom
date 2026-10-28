@@ -2,6 +2,7 @@
   "name": "classroom",
   "private": true,
   "scripts": {
+    "tune": "./scripts/configure-resources.sh",
     "sync-keys": "./scripts/sync-livekit-keys.sh",
     "up": "./scripts/sync-livekit-keys.sh && docker compose up --build -d",
     "down": "docker compose down",

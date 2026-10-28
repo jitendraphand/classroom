@@ -2,7 +2,7 @@ import { roomServiceFor } from './livekit';
 import { prisma } from './db';
 import { acquireLock, releaseLock } from './leaderLock';
 import { ensureRedis, keys } from './redis';
-import { livekitRoomName, setParticipantPublishPermissions } from './livekit';
+import { livekitRoomName, pushStudentPermissions } from './livekit';
 import { TEACHER_ABSENCE_GRACE_MS, createGraceTimers } from './graceTimer';
 import { teacherPresentAmong, type PresenceParticipant, type RoomRef } from './teacherPresenceLogic';
 
@@ -202,6 +202,9 @@ export async function isTeacherPresent(code: string, known?: RoomRef | null): Pr
  * SFU: locked while the teacher is away; while present, each student's own
  * teacher-mute state decides (a teacher mute always wins). Restoring the
  * permission never turns a student's microphone on; they unmute themselves.
+ *
+ * One participant listing (none when `onlyIdentities` names the students) and
+ * one batched, concurrency-bounded permission push; see pushStudentPermissions.
  */
 export async function applyStudentMicLock(
   room: RoomRef,
@@ -209,15 +212,19 @@ export async function applyStudentMicLock(
   onlyIdentities?: string[]
 ): Promise<void> {
   let identities: string[];
-  try {
-    identities = (await listRoomParticipants(room))
-      .filter((p) => p.identity.startsWith('student_'))
-      .map((p) => p.identity);
-  } catch (e) {
-    console.warn('applyStudentMicLock: listParticipants failed', room.code, e);
-    return;
+  if (onlyIdentities) {
+    // A student who just joined: push to them directly (not connected = no-op).
+    identities = onlyIdentities.filter((i) => i.startsWith('student_'));
+  } else {
+    try {
+      identities = (await listRoomParticipants(room))
+        .filter((p) => p.identity.startsWith('student_'))
+        .map((p) => p.identity);
+    } catch (e) {
+      console.warn('applyStudentMicLock: listParticipants failed', room.code, e);
+      return;
+    }
   }
-  if (onlyIdentities) identities = identities.filter((i) => onlyIdentities.includes(i));
   if (!identities.length) return;
 
   const dbRoom = await prisma.room.findUnique({ where: { code: room.code }, select: { id: true } });
@@ -234,17 +241,13 @@ export async function applyStudentMicLock(
   const muted = new Set(mutedIds);
   const inSample = new Set(visible);
 
-  await Promise.allSettled(
-    students.map((s) =>
-      setParticipantPublishPermissions(
-        room.code,
-        s.livekitIdentity,
-        {
-          allowCamera: inSample.has(s.livekitIdentity),
-          allowMic: !(s.mutedByTeacher || muted.has(s.id)),
-        },
-        { teacherPresent }
-      )
-    )
+  await pushStudentPermissions(
+    room.code,
+    students.map((s) => ({
+      identity: s.livekitIdentity,
+      allowCamera: inSample.has(s.livekitIdentity),
+      allowMic: !(s.mutedByTeacher || muted.has(s.id)),
+    })),
+    { teacherPresent, room }
   );
 }

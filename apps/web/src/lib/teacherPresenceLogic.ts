@@ -29,6 +29,16 @@ export function isTeacherIdentity(identity: string, metadata?: string | null): b
 }
 
 /**
+ * The teacher's own connection (not the Windows app's screen-share sidecar
+ * `teacher_…__screen`, which publishes only the share). Presence and the
+ * student mic lock follow this: a sidecar starting or stopping a share must
+ * not count as the teacher arriving or leaving.
+ */
+export function isPresenceTeacher(identity: string, metadata?: string | null): boolean {
+  return isTeacherIdentity(identity, metadata) && !identity.endsWith('__screen');
+}
+
+/**
  * Is a teacher connected, given the room's participant list?
  * `leftSid` removes a participant the caller knows just left (LiveKit may still
  * list it for a moment); `joined` adds one the caller knows just joined. Using
@@ -43,7 +53,7 @@ export function teacherPresentAmong(
     (p) => p.state !== DISCONNECTED && !(opts.leftSid && p.sid && p.sid === opts.leftSid)
   );
   if (opts.joined && opts.joined.state !== DISCONNECTED) list.push(opts.joined);
-  return list.some((p) => isTeacherIdentity(p.identity, p.metadata));
+  return list.some((p) => isPresenceTeacher(p.identity, p.metadata));
 }
 
 /**
@@ -93,7 +103,9 @@ export function presenceActionFor(event: WebhookLike): PresenceAction {
 
   const p = event.participant;
   if (!p?.identity) return { kind: 'ignore' };
-  const teacher = isTeacherIdentity(p.identity, p.metadata);
+  // Screen-share sidecar: not a presence change (see isPresenceTeacher).
+  if (isTeacherIdentity(p.identity, p.metadata) && !isPresenceTeacher(p.identity, p.metadata)) return { kind: 'ignore' };
+  const teacher = isPresenceTeacher(p.identity, p.metadata);
 
   if (event.event === 'participant_joined') {
     if (teacher) return { kind: 'teacher', ...room, joined: p, leftSid: null };

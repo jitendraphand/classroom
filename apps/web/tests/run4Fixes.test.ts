@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { activeStickySpeakers, freshSpeakerPins, STICKY_SPEAKER_TTL_MS } from '../src/lib/classSlots';
-import { rejoinDelayMs, rejoinOutcome, shouldAutoRejoin, NO_REJOIN_REASONS } from '../src/lib/rejoinPolicy';
+import { classroomReconnectPolicy, isOwnStaleDuplicate, rejoinDelayMs, rejoinOutcome, shouldAutoRejoin, NO_REJOIN_REASONS } from '../src/lib/rejoinPolicy';
 import { envWaitingRoomDefault, resolveWaitingRoomDefault } from '../src/lib/waitingRoomPref';
 import { parseMediaServers, pickLeastLoaded } from '../src/lib/mediaServers';
 
@@ -48,7 +48,9 @@ test('rejoin: only real drops rejoin, with capped backoff', () => {
   const mid = () => 0.5;
   assert.equal(rejoinDelayMs(0, mid), 1000);
   assert.equal(rejoinDelayMs(3, mid), 8000);
-  assert.equal(rejoinDelayMs(30, mid), 10_000);
+  assert.equal(rejoinDelayMs(30, mid), 30_000);
+  assert.equal(rejoinDelayMs(0, () => 0), 500);
+  assert.equal(rejoinDelayMs(0, () => 0.999), 1499);
   assert.equal(rejoinOutcome(200), 'ok');
   assert.equal(rejoinOutcome(410), 'ended');
   assert.equal(rejoinOutcome(403), 'stop');
@@ -106,4 +108,32 @@ test('media servers: least loaded by students/capacity, draining skipped', () =>
   assert.equal(pickLeastLoaded(s, {}).id, 'a');
   assert.equal(pickLeastLoaded(s, { a: 0, b: 0 }, new Set(['a'])).id, 'b');
   assert.equal(pickLeastLoaded(s, {}, new Set(['a', 'b'])).id, 'a');
+});
+
+test('SDK reconnect policy: jittered, bounded, gives up for a fresh rejoin', () => {
+  const lo = classroomReconnectPolicy(() => 0);
+  const hi = classroomReconnectPolicy(() => 0.999);
+  assert.ok(lo.nextRetryDelayInMs({ retryCount: 0, elapsedMs: 0 })! >= 300);
+  assert.ok(hi.nextRetryDelayInMs({ retryCount: 0, elapsedMs: 0 })! <= 1500);
+  assert.ok(hi.nextRetryDelayInMs({ retryCount: 9, elapsedMs: 30_000 })! <= 15_000);
+  assert.ok(lo.nextRetryDelayInMs({ retryCount: 9, elapsedMs: 30_000 })! >= 7_500);
+  assert.equal(lo.nextRetryDelayInMs({ retryCount: 3, elapsedMs: 61_000 }), null);
+  assert.equal(isOwnStaleDuplicate({ rejoining: true, connectedAt: null, now: 0 }), true);
+  assert.equal(isOwnStaleDuplicate({ rejoining: false, connectedAt: 1000, now: 5000 }), true);
+  assert.equal(isOwnStaleDuplicate({ rejoining: false, connectedAt: 1000, now: 60_000 }), false);
+});
+
+test('draw-allow push: server-only, applied locally', async () => {
+  const { decodeSignalPacket, signalPacketTrusted, applyDrawAllowPush } = await import('../src/lib/realtimePackets');
+  const pkt = decodeSignalPacket({ v: 1, type: 'draw-allow', on: true, participantId: 'p1', identity: 'student_p1', name: 'Asha', until: 99 });
+  assert.ok(pkt && pkt.type === 'draw-allow');
+  assert.equal(signalPacketTrusted(pkt!, 'student_p1', 'p1'), false);
+  assert.equal(signalPacketTrusted(pkt!, undefined, 'p1'), true);
+  const s0 = { me: { id: 'p1', canDraw: false }, drawHolders: [], drawHolder: null };
+  const s1 = applyDrawAllowPush(s0, pkt as never);
+  assert.equal(s1.me?.canDraw, true);
+  assert.equal(s1.drawHolders.length, 1);
+  const s2 = applyDrawAllowPush(s1, { ...(pkt as object), on: false } as never);
+  assert.equal(s2.me?.canDraw, false);
+  assert.equal(s2.drawHolders.length, 0);
 });

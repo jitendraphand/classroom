@@ -19,7 +19,10 @@ export function AppHeader({
   right,
   compact,
   subtitle,
+  homeHref = '/',
 }: {
+  /** Where the logo goes. Admin and teacher pages point it at their "Today's classes" view. */
+  homeHref?: string;
   right?: ReactNode;
   compact?: boolean;
   subtitle?: string;
@@ -31,10 +34,10 @@ export function AppHeader({
         compact ? 'mb-6' : 'mb-10'
       )}
     >
-      <Link href="/" className="group flex items-center gap-3 focus-visible:rounded-xl">
+      <Link href={homeHref} aria-label="Home" className="group flex items-center gap-3 focus-visible:rounded-xl">
         <LogoMark />
         <div>
-          <p className="font-display text-base font-semibold tracking-tight text-white group-hover:text-brand-200 [.light-landing_&]:text-slate-900 [.light-landing_&]:group-hover:text-brand-700">
+          <p className="font-display text-base font-semibold tracking-tight text-white group-hover:text-brand-200">
             Classroom
           </p>
           <p className="text-2xs text-slate-500">

@@ -6,6 +6,11 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
+        // Tailwind's slate-500 (#64748b) is 3.6–4.1:1 on our dark surfaces; this
+        // one is ≥ 4.8:1 on surface-0..3, so secondary text meets WCAG AA.
+        slate: {
+          500: '#8291a7',
+        },
         brand: {
           50: '#eef7ff',
           100: '#d9ecff',

@@ -69,7 +69,11 @@ export function FeedbackForm({ code, onDone }: { code: string; onDone: () => voi
         aria-label="Comment"
         className="w-full resize-none rounded-lg border border-white/10 bg-black/30 px-2 py-1.5 text-sm text-white outline-none placeholder:text-slate-500"
         onChange={(e) => setComment(e.target.value.slice(0, FEEDBACK_MAX_COMMENT))}
+        aria-describedby="feedback-privacy"
       />
+      <p id="feedback-privacy" className="text-center text-xs text-slate-400">
+        Your teacher sees only the class&apos;s average stars. Comments go to the school administrator, not your teacher.
+      </p>
       {error && (
         <p
           className="rounded-lg border border-red-400/40 bg-red-500/15 px-2 py-1.5 text-center text-sm text-red-100"

@@ -1,12 +1,15 @@
 # syntax=docker/dockerfile:1
 
-FROM node:20-bookworm-slim AS deps
+# ---------------------------------------------------------------- all deps (build)
+FROM node:22-bookworm-slim AS deps
 WORKDIR /app
 RUN apt-get update -qq && apt-get install -y -qq openssl ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY package.json package-lock.json* ./
-RUN npm install --legacy-peer-deps
+COPY package.json package-lock.json ./
+# npm ci: exactly the lockfile, or fail (npm install could silently drift).
+RUN npm ci --legacy-peer-deps --no-audit --no-fund
 
-FROM node:20-bookworm-slim AS builder
+# ---------------------------------------------------------------- build
+FROM node:22-bookworm-slim AS builder
 WORKDIR /app
 RUN apt-get update -qq && apt-get install -y -qq openssl ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=deps /app/node_modules ./node_modules
@@ -23,18 +26,35 @@ ENV DATABASE_URL="postgresql://placeholder:placeholder@127.0.0.1:5432/placeholde
 RUN npx prisma generate
 RUN npm run build
 
-FROM node:20-bookworm-slim AS runner
+# ---------------------------------------------------------------- runtime deps only
+# The standalone server traces what the app needs; the entrypoint additionally
+# runs `prisma migrate deploy` and scripts/admin.mjs (Prisma client, bcryptjs).
+# Production dependencies only: no TypeScript, Tailwind, tsx or @types in the image.
+FROM node:22-bookworm-slim AS prod-deps
+WORKDIR /app
+RUN apt-get update -qq && apt-get install -y -qq openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY package.json package-lock.json ./
+COPY prisma ./prisma
+# Next itself, its SWC compilers and sharp (~475 MB) are dropped: the standalone
+# output copied below carries the traced subset the server actually loads.
+RUN npm ci --omit=dev --legacy-peer-deps --no-audit --no-fund \
+  && DATABASE_URL="postgresql://placeholder:placeholder@127.0.0.1:5432/placeholder" npx prisma generate \
+  && rm -rf node_modules/next node_modules/@next node_modules/@img node_modules/sharp \
+  && npm cache clean --force
+
+# ---------------------------------------------------------------- runtime
+FROM node:22-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN apt-get update -qq && apt-get install -y -qq openssl ca-certificates wget && rm -rf /var/lib/apt/lists/*
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl ca-certificates wget && rm -rf /var/lib/apt/lists/*
 RUN groupadd --system --gid 1001 nodejs && useradd --system --uid 1001 nextjs
 
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/scripts ./scripts
 COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/node_modules ./node_modules
+COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY cluster.js ./cluster.js

@@ -19,6 +19,20 @@ import {
   IconVideo,
 } from '@/components/ui/Icons';
 import { cn } from '@/lib/cn';
+import type { ReactNode } from 'react';
+
+/** A toolbar button with a short visible caption under it (dock and phone bar; not the narrow rail). */
+function Tool({ caption, show, wide, children }: { caption: string; show: boolean; wide?: boolean; children: ReactNode }) {
+  if (!show) return <>{children}</>;
+  return (
+    <div className={cn('flex flex-col items-center gap-1', wide ? 'min-w-[3.5rem]' : 'w-12')}>
+      {children}
+      <span className="max-w-full truncate text-[10px] font-medium leading-none text-slate-300" aria-hidden>
+        {caption}
+      </span>
+    </div>
+  );
+}
 
 type Props = {
   micOn: boolean;
@@ -143,6 +157,9 @@ export function Controls({
   const isFloat = variant === 'float';
   const rail = isFloat && layout === 'rail';
   const btn = rail ? ('sm' as const) : undefined;
+  // Visible words under the icons wherever there is room (not the landscape rail).
+  const captions = !rail;
+  const wide = !isFloat;
 
   return (
     <>
@@ -159,9 +176,10 @@ export function Controls({
         className={cn(
           'flex items-center justify-center',
           rail ? 'flex-col gap-1' : 'flex-wrap',
-          !rail && (isFloat ? 'gap-1.5' : 'gap-2')
+          !rail && (isFloat ? 'gap-1' : 'gap-2')
         )}
       >
+        <Tool caption={micLocked ? 'Muted' : 'Mic'} show={captions} wide={wide}>
         <IconButton
           size={btn}
           label={
@@ -183,7 +201,9 @@ export function Controls({
         >
           {micOn && !micLocked ? <IconMic /> : <IconMicOff />}
         </IconButton>
+        </Tool>
 
+        <Tool caption="Camera" show={captions} wide={wide}>
         <IconButton
           size={btn}
           label={camOn ? 'Turn camera off' : 'Turn camera on'}
@@ -193,26 +213,31 @@ export function Controls({
         >
           {camOn ? <IconCam /> : <IconCamOff />}
         </IconButton>
+        </Tool>
 
         {onCycleVideoPanel && (
+          <Tool caption="Videos" show={captions} wide={wide}>
           <button
             type="button"
             data-testid="video-panel"
             aria-label="Video panel"
-            aria-description={videoPanelLabel || 'Video panel'}
+            // The full sentence is the title, which assistive tech also reads
+            // as the description (aria-description is not valid on a button).
             title={videoPanelLabel || 'Video panel'}
             onClick={onCycleVideoPanel}
             className={cn(
               'inline-flex items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-center font-semibold leading-tight text-slate-100 hover:bg-white/[0.12]',
               rail
                 ? 'h-auto min-h-[var(--rail-btn,36px)] w-[var(--rail-btn,36px)] flex-col gap-0.5 px-0.5 py-1 text-[8px]'
-                : 'h-11 max-w-[11rem] gap-1 px-2 text-[10px]'
+                : 'h-11 w-11'
             )}
           >
-            <IconVideo size={rail ? 14 : 16} />
-            <span className="max-w-full truncate">{videoPanelShortLabel || 'Videos'}</span>
+            <IconVideo size={rail ? 14 : 18} />
+            {/* The rail has no captions: a one-word state (All / Teacher / Hidden) under the icon. */}
+            {rail && <span className="max-w-full truncate">{videoPanelShortLabel || 'Videos'}</span>}
             <span className="sr-only">{videoPanelLabel || 'Video panel'}</span>
           </button>
+          </Tool>
         )}
 
         {onAskToSpeak && (
@@ -230,6 +255,7 @@ export function Controls({
         )}
 
         {showScreenShare && (
+          <Tool caption={screenOn ? 'Stop share' : 'Share'} show={captions} wide={wide}>
           <IconButton
             label={screenOn ? 'Stop sharing screen' : 'Share screen'}
             active={screenOn}
@@ -244,15 +270,19 @@ export function Controls({
           >
             <IconScreen />
           </IconButton>
+          </Tool>
         )}
 
         {onToggleWhiteboard && (
+          <Tool caption="Whiteboard" show={captions} wide={wide}>
           <IconButton label={whiteboardOn ? 'Stop whiteboard sharing' : 'Share a whiteboard (students see it live)'} active={!!whiteboardOn} onClick={onToggleWhiteboard}>
             <IconBoard />
           </IconButton>
+          </Tool>
         )}
 
         {!isTeacher && onToggleHand && (
+          <Tool caption={handRaised ? 'Lower' : 'Hand'} show={captions} wide={wide}>
           <IconButton
             size={btn}
             label={handRaised ? 'Lower hand' : 'Raise hand'}
@@ -261,9 +291,11 @@ export function Controls({
           >
             <IconHand />
           </IconButton>
+          </Tool>
         )}
 
         {!isTeacher && drawState && onToggleDraw && (
+          <Tool caption="Draw" show={captions} wide={wide}>
           <IconButton
             size={btn}
             label={
@@ -283,9 +315,11 @@ export function Controls({
               )}
             </span>
           </IconButton>
+          </Tool>
         )}
 
         {!isTeacher && dataSaver && onCycleDataSaver && (
+          <Tool caption="Quality" show={captions} wide={wide}>
           <IconButton
             size={btn}
             label={dataSaverLabel(dataSaver)}
@@ -296,9 +330,11 @@ export function Controls({
               {dataSaverBadge(dataSaver)}
             </span>
           </IconButton>
+          </Tool>
         )}
 
         {onToggleChat && (
+          <Tool caption="Chat" show={captions} wide={wide}>
           <IconButton
             size={btn}
             label={chatOpen ? 'Close chat' : 'Open chat'}
@@ -314,9 +350,11 @@ export function Controls({
               )}
             </span>
           </IconButton>
+          </Tool>
         )}
 
         {isTeacher && onToggleRoster && (
+          <Tool caption="People" show={captions} wide={wide}>
           <IconButton
             label={
               rosterOpen
@@ -346,12 +384,15 @@ export function Controls({
               )}
             </span>
           </IconButton>
+          </Tool>
         )}
 
         {isTeacher && onRotateSample && !isFloat && (
+          <Tool caption="Next videos" show={captions} wide={wide}>
           <IconButton label="Rotate video sample" onClick={onRotateSample}>
             <IconRotate />
           </IconButton>
+          </Tool>
         )}
 
         {!isFloat && (
@@ -369,14 +410,21 @@ export function Controls({
           </Button>
         )}
 
-        <IconButton size={btn} label="Leave class" danger onClick={onLeave}>
-          <IconLeave />
-        </IconButton>
+        {/* Teacher: Leave (just me) is neutral and set apart from End class (everyone),
+            so the two are not one mis-click apart. Students only have Leave. */}
+        <Tool caption="Leave" show={captions} wide={wide}>
+          <IconButton size={btn} label="Leave class" danger={!isTeacher} onClick={onLeave}>
+            <IconLeave />
+          </IconButton>
+        </Tool>
 
         {isTeacher && onEnd && !isFloat && (
-          <Button variant="danger" size="sm" onClick={onEnd}>
-            End class
-          </Button>
+          <>
+            <div className="mx-2 hidden h-8 w-px bg-white/10 sm:block" aria-hidden />
+            <Button variant="danger" size="sm" onClick={onEnd}>
+              End class
+            </Button>
+          </>
         )}
       </div>
 

@@ -33,6 +33,9 @@ export async function POST(req: Request) {
   }
 
   const admin = await getAdminSession({ allowPendingPasswordChange: true });
+  if (admin?.linkedTeacherId) {
+    return jsonError('Your password is your teacher password. Switch to the teacher view to change it.', 400);
+  }
   if (admin) {
     const row = await prisma.admin.findUnique({ where: { id: admin.id } });
     if (!row || !(await verifyPassword(body.currentPassword, row.passwordHash))) {

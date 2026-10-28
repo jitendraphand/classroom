@@ -24,6 +24,7 @@ import { loadSchedule, toSlotLike } from './scheduleService';
 import { audienceUnknownMessage } from './gradeMaster';
 import { appTimeZone } from './schoolConfig';
 import { effectiveFromForCreate } from './slotEffective';
+import { substituteProblem } from './overrideRules';
 
 export class TimetableError extends Error {
   constructor(message: string, public status = 400, public extra?: Record<string, unknown>) {
@@ -203,6 +204,8 @@ export const overrideBody = z.object({
   start: z.string().optional().nullable(),
   end: z.string().optional().nullable(),
   note: z.string().max(200).optional().nullable(),
+  /** Admin's pick from the year dropdown; defaults from `date`. */
+  academicYear: z.string().max(16).optional().nullable(),
   force: z.boolean().optional(),
 });
 export type OverrideBody = z.infer<typeof overrideBody>;
@@ -247,6 +250,10 @@ export async function createOverride(body: OverrideBody) {
     }
     if ((s.effectiveFrom && body.date < s.effectiveFrom) || (s.effectiveTo && body.date > s.effectiveTo)) {
       throw new TimetableError('That slot is not in effect on this date');
+    }
+    if (body.kind === 'MODIFY' && teacherId === s.teacherId) {
+      const original = await prisma.teacher.findUnique({ where: { id: s.teacherId }, select: { name: true } });
+      throw new TimetableError(substituteProblem('MODIFY', teacherId, s.teacherId, original?.name)!, 400, { conflict: 'same-teacher' });
     }
   }
 
@@ -293,7 +300,10 @@ export async function createOverride(body: OverrideBody) {
     startMinute: body.kind === 'CANCEL' ? null : startMinute,
     endMinute: body.kind === 'CANCEL' ? null : endMinute,
     note: body.note?.trim() || null,
-    academicYear: academicYearForDate(body.date),
+    academicYear:
+      body.academicYear && isAcademicYearLabel(body.academicYear)
+        ? body.academicYear
+        : slot?.academicYear || academicYearForDate(body.date),
   };
 
   // Conflict check on that date with the change applied.
@@ -309,7 +319,15 @@ export async function createOverride(body: OverrideBody) {
     const t = c.teacher.filter(involves);
     if (t.length) {
       const other = t[0]!.find((o) => o.key !== changedKey)!;
-      throw new TimetableError(`The teacher already has a class then: ${describeOcc(other, names)}`, 409, { conflict: 'teacher' });
+      const who = names.get(other.teacherId) ?? 'The teacher';
+      const what = body.kind === 'MODIFY' && teacherId ? `${who} (the substitute) is not free` : `${who} is not free`;
+      throw new TimetableError(
+        `${what} on ${body.date} ${formatHHMM(effStart)}–${formatHHMM(effEnd)}: already teaching ${describeOcc(other, names)}${
+          other.extra ? ' (extra class)' : other.modified ? ' (one-off change)' : ''
+        }`,
+        409,
+        { conflict: 'teacher' }
+      );
     }
     const a = c.audience.filter(involves);
     if (a.length && !body.force) {

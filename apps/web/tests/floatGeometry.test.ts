@@ -22,6 +22,7 @@ import {
   videoPanelSizeFromDrag,
   whiteboardShareDockPos,
 } from '../src/lib/floatGeometry';
+import { classroomViewSource } from './helpers/classroomSource';
 
 const vp = { w: 800, h: 400 };
 
@@ -148,7 +149,7 @@ test('a pointer drag grows from the start size and then clamps', () => {
 });
 
 test('the floating video handle resizes with pointer capture in whiteboard and share', () => {
-  const room = readFileSync(new URL('../src/components/classroom/ClassroomRoom.tsx', import.meta.url), 'utf8');
+  const room = classroomViewSource();
   assert.match(room, /data-testid="video-panel-resize"/);
   assert.match(room, /aria-label="Resize videos"/);
   assert.match(room, /onPointerDown=\{/);

@@ -49,10 +49,27 @@ export function parseReportFilter(url: URL, opts: { forceTeacherId?: string } = 
   };
 }
 
-type SessionWith = ClassSession & { attendance: AttendanceRecord[]; teacher: { name: string } };
+/** Only the attendance columns reports read (no SID arrays). */
+const ATTENDANCE_FIELDS = {
+  studentId: true,
+  firstJoinedAt: true,
+  admittedAt: true,
+  leftAt: true,
+  connectedMs: true,
+  connectedSince: true,
+  late: true,
+} as const;
+type ReportAttendance = Pick<
+  AttendanceRecord,
+  'studentId' | 'firstJoinedAt' | 'admittedAt' | 'leftAt' | 'connectedMs' | 'connectedSince' | 'late'
+>;
+type SessionWith = ClassSession & { attendance: ReportAttendance[]; teacher: { name: string } };
 
-async function loadSessions(f: ReportFilter): Promise<SessionWith[]> {
-  const where: Prisma.ClassSessionWhereInput = {
+/** Sessions per page: bounds memory for a year-long report on a small box. */
+const SESSION_PAGE = 200;
+
+function sessionWhere(f: ReportFilter): Prisma.ClassSessionWhereInput {
+  return {
     sessionDate: { gte: dateValue(f.from), lte: dateValue(f.to) },
     ...(f.teacherId ? { teacherId: f.teacherId } : {}),
     ...(f.campus ? { campus: f.campus } : {}),
@@ -62,22 +79,76 @@ async function loadSessions(f: ReportFilter): Promise<SessionWith[]> {
     ...(f.classSessionId ? { id: f.classSessionId } : {}),
     ...(f.academicYear ? { academicYear: f.academicYear } : {}),
   };
-  return prisma.classSession.findMany({
-    where,
-    include: { attendance: true, teacher: { select: { name: true } } },
-    orderBy: [{ sessionDate: 'asc' }, { scheduledStart: 'asc' }, { startedAt: 'asc' }],
-  });
 }
 
-async function loadStudents(grades: string[]): Promise<Student[]> {
-  if (!grades.length) return [];
-  return prisma.student.findMany({ where: { grade: { in: grades } } });
+const SESSION_ORDER: Prisma.ClassSessionOrderByWithRelationInput[] = [
+  { sessionDate: 'asc' },
+  { scheduledStart: 'asc' },
+  { startedAt: 'asc' },
+  { id: 'asc' },
+];
+
+/**
+ * Matching sessions, a page at a time (with their attendance), yielding to the
+ * event loop between pages so a long report does not stall the live classes
+ * this worker also serves.
+ */
+async function* sessionPages(f: ReportFilter, extra: Prisma.ClassSessionWhereInput = {}): AsyncGenerator<SessionWith[]> {
+  const where = { ...sessionWhere(f), ...extra };
+  let skip = 0;
+  for (;;) {
+    const page = await prisma.classSession.findMany({
+      where,
+      include: { attendance: { select: ATTENDANCE_FIELDS }, teacher: { select: { name: true } } },
+      orderBy: SESSION_ORDER,
+      skip,
+      take: SESSION_PAGE,
+    });
+    if (!page.length) return;
+    yield page;
+    if (page.length < SESSION_PAGE) return;
+    skip += page.length;
+    await new Promise((r) => setImmediate(r));
+  }
+}
+
+type ReportStudent = Pick<Student, 'id' | 'externalId' | 'name' | 'campus' | 'grade' | 'division' | 'rollNumber' | 'createdAt' | 'deletedAt'>;
+const STUDENT_FIELDS = {
+  id: true,
+  externalId: true,
+  name: true,
+  campus: true,
+  grade: true,
+  division: true,
+  rollNumber: true,
+  createdAt: true,
+  deletedAt: true,
+} as const;
+
+/** Students of the given grades, indexed by canonical campus|grade (audience lookups touch one group). */
+async function loadStudentIndex(grades: string[]): Promise<Map<string, ReportStudent[]>> {
+  const index = new Map<string, ReportStudent[]>();
+  if (!grades.length) return index;
+  const rows = await prisma.student.findMany({ where: { grade: { in: grades } }, select: STUDENT_FIELDS });
+  for (const s of rows) {
+    const k = `${normalizeCampus(s.campus)}|${normalizeGrade(s.grade)}`;
+    const list = index.get(k) ?? [];
+    list.push(s);
+    index.set(k, list);
+  }
+  return index;
+}
+
+async function sessionGrades(f: ReportFilter, extra: Prisma.ClassSessionWhereInput = {}): Promise<string[]> {
+  const rows = await prisma.classSession.findMany({ where: { ...sessionWhere(f), ...extra }, distinct: ['grade'], select: { grade: true } });
+  return rows.map((r) => r.grade);
 }
 
 /** Students the system knew for this session's audience by the time it ended. */
-function knownStudents(cs: ClassSession, students: Student[], division?: string) {
+function knownStudents(cs: ClassSession, index: Map<string, ReportStudent[]>, division?: string) {
   const cutoff = (cs.endedAt ?? cs.scheduledEnd ?? new Date()).getTime();
-  return students.filter(
+  const group = index.get(`${normalizeCampus(cs.campus)}|${normalizeGrade(cs.grade)}`) ?? [];
+  return group.filter(
     (s) =>
       audienceIncludes(cs, s) &&
       s.createdAt.getTime() <= cutoff &&
@@ -122,48 +193,66 @@ export type SessionRow = {
 export async function sessionSummary(f: ReportFilter): Promise<SessionRow[]> {
   const tz = appTimeZone();
   const now = new Date();
-  const sessions = await loadSessions(f);
-  const students = await loadStudents([...new Set(sessions.map((s) => s.grade))]);
+  const students = await loadStudentIndex(await sessionGrades(f));
   const teacherNames = new Map(
     (await prisma.teacher.findMany({ select: { id: true, name: true } })).map((t) => [t.id, t.name])
   );
 
-  const rows: SessionRow[] = sessions.map((cs) => {
-    const known = knownStudents(cs, students, f.division);
-    const knownIds = new Set(known.map((s) => s.id));
-    const recs = cs.attendance.filter((r) => !f.division || knownIds.has(r.studentId));
-    const seen = new Set<string>();
-    for (const r of recs) {
-      if (r.studentId) seen.add(r.studentId);
+  const rows: SessionRow[] = [];
+  const have = new Set<string>();
+  for await (const page of sessionPages(f)) {
+    for (const cs of page) {
+      if (cs.occurrenceKey) have.add(occurrenceBaseKey(cs.occurrenceKey));
+      rows.push(sessionRow(cs, students, f, tz, now));
     }
-    const counts = tallyAttendance(recs.map((r) => ({ studentId: r.studentId, status: attendanceStatus(r) })));
-    const absent = cs.startedAt ? known.filter((s) => !seen.has(s.id)).length : 0;
-    return {
-      sessionId: cs.id,
-      date: dateOnly(cs.sessionDate)!,
-      subject: cs.subject,
-      teacher: cs.teacher.name,
-      audience: formatAudience(cs.campus, cs.grade, cs.divisions, cs.allDivisions),
-      type: cs.adHoc ? 'Ad-hoc' : cs.slotId ? 'Timetable' : 'Extra',
-      scheduledStart: hhmm(cs.scheduledStart, tz),
-      scheduledEnd: hhmm(cs.scheduledEnd, tz),
-      startedAt: hhmm(cs.startedAt, tz),
-      endedAt: hhmm(cs.endedAt, tz),
-      startDelayMin:
-        cs.startedAt && cs.scheduledStart ? Math.round((cs.startedAt.getTime() - cs.scheduledStart.getTime()) / 60_000) : null,
-      status: sessionStatus(cs, now),
-      ...counts,
-      absent,
-      knownStudents: known.length,
-    };
-  });
+  }
+  await appendNotHeld(rows, have, f, teacherNames, tz, now);
+  return rows.sort((a, b) => a.date.localeCompare(b.date) || (a.scheduledStart || a.startedAt).localeCompare(b.scheduledStart || b.startedAt));
+}
 
-  // Timetabled classes that never got a session row (nobody opened them).
+function sessionRow(cs: SessionWith, students: Map<string, ReportStudent[]>, f: ReportFilter, tz: string, now: Date): SessionRow {
+  const known = knownStudents(cs, students, f.division);
+  const knownIds = new Set(known.map((s) => s.id));
+  const recs = cs.attendance.filter((r) => !f.division || knownIds.has(r.studentId));
+  const seen = new Set<string>();
+  for (const r of recs) {
+    if (r.studentId) seen.add(r.studentId);
+  }
+  const counts = tallyAttendance(recs.map((r) => ({ studentId: r.studentId, status: attendanceStatus(r) })));
+  const absent = cs.startedAt ? known.filter((s) => !seen.has(s.id)).length : 0;
+  return {
+    sessionId: cs.id,
+    date: dateOnly(cs.sessionDate)!,
+    subject: cs.subject,
+    teacher: cs.teacher.name,
+    audience: formatAudience(cs.campus, cs.grade, cs.divisions, cs.allDivisions),
+    type: cs.adHoc ? 'Ad-hoc' : cs.slotId ? 'Timetable' : 'Extra',
+    scheduledStart: hhmm(cs.scheduledStart, tz),
+    scheduledEnd: hhmm(cs.scheduledEnd, tz),
+    startedAt: hhmm(cs.startedAt, tz),
+    endedAt: hhmm(cs.endedAt, tz),
+    startDelayMin:
+      cs.startedAt && cs.scheduledStart ? Math.round((cs.startedAt.getTime() - cs.scheduledStart.getTime()) / 60_000) : null,
+    status: sessionStatus(cs, now),
+    ...counts,
+    absent,
+    knownStudents: known.length,
+  };
+}
+
+/** Timetabled classes that never got a session row (nobody opened them). */
+async function appendNotHeld(
+  rows: SessionRow[],
+  have: Set<string>,
+  f: ReportFilter,
+  teacherNames: Map<string, string>,
+  tz: string,
+  now: Date
+) {
   if (!f.classSessionId) {
     const today = localDateOf(now, tz);
     const to = f.to < today ? f.to : today;
     if (f.from <= to) {
-      const have = new Set(sessions.map((s) => s.occurrenceKey && occurrenceBaseKey(s.occurrenceKey)).filter(Boolean));
       const allKeys = new Set(
         (await prisma.classSession.findMany({
           where: { sessionDate: { gte: dateValue(f.from), lte: dateValue(to) }, occurrenceKey: { not: null } },
@@ -213,7 +302,6 @@ export async function sessionSummary(f: ReportFilter): Promise<SessionRow[]> {
       }
     }
   }
-  return rows.sort((a, b) => a.date.localeCompare(b.date) || (a.scheduledStart || a.startedAt).localeCompare(b.scheduledStart || b.startedAt));
 }
 
 export function sessionSummaryCsv(rows: SessionRow[]) {
@@ -244,46 +332,58 @@ export type DetailRow = {
   connectedMin: number;
 };
 
-export async function attendanceDetail(f: ReportFilter): Promise<DetailRow[]> {
+/**
+ * Every (session, student) detail row, handed to `emit` one at a time and a
+ * page of sessions at a time, so a year-long report never holds every session,
+ * attendance record and row in memory at once.
+ */
+async function forEachDetailRow(f: ReportFilter, emit: (row: DetailRow) => void): Promise<void> {
   const tz = appTimeZone();
   const now = new Date();
-  const sessions = (await loadSessions(f)).filter((s) => s.startedAt);
-  const students = await loadStudents([...new Set(sessions.map((s) => s.grade))]);
-  const byId = new Map(students.map((s) => [s.id, s]));
-  // Students with a record but outside the audience grade (manual / moved).
-  const missing = [...new Set(sessions.flatMap((s) => s.attendance.map((r) => r.studentId)))].filter((id) => !byId.has(id));
-  if (missing.length) for (const s of await prisma.student.findMany({ where: { id: { in: missing } } })) byId.set(s.id, s);
+  const started = { startedAt: { not: null } } as const;
+  const index = await loadStudentIndex(await sessionGrades(f, started));
+  const byId = new Map<string, ReportStudent>();
+  for (const list of index.values()) for (const st of list) byId.set(st.id, st);
 
-  const rows: DetailRow[] = [];
-  for (const cs of sessions) {
-    const recBy = new Map(cs.attendance.map((r) => [r.studentId, r]));
-    const ids = new Set([...knownStudents(cs, students, f.division).map((s) => s.id), ...recBy.keys()]);
-    for (const id of ids) {
-      const st = byId.get(id);
-      if (!st) continue;
-      if (f.division && normalizeDivision(st.division) !== f.division) continue;
-      const r = recBy.get(id) ?? null;
-      const status = attendanceStatus(r);
-      rows.push({
-        sessionId: cs.id,
-        date: dateOnly(cs.sessionDate)!,
-        subject: cs.subject,
-        teacher: cs.teacher.name,
-        audience: formatAudience(cs.campus, cs.grade, cs.divisions, cs.allDivisions),
-        studentId: st.id,
-        externalId: st.externalId,
-        name: st.name,
-        rollNumber: st.rollNumber ?? '',
-        gradeDivision: `${st.campus} · ${st.grade}-${st.division}`,
-        status,
-        statusLabel: STATUS_LABEL[status],
-        firstJoined: hhmm(r?.firstJoinedAt, tz),
-        admitted: hhmm(r?.admittedAt, tz),
-        left: hhmm(r?.leftAt, tz),
-        connectedMin: r ? Math.round(totalConnectedMs(r, cs.endedAt ?? now) / 60_000) : 0,
-      });
+  for await (const page of sessionPages(f, started)) {
+    // Students with a record but outside the audience grade (manual / moved).
+    const missing = [...new Set(page.flatMap((cs) => cs.attendance.map((r) => r.studentId)))].filter((id) => !byId.has(id));
+    if (missing.length) {
+      for (const st of await prisma.student.findMany({ where: { id: { in: missing } }, select: STUDENT_FIELDS })) byId.set(st.id, st);
+    }
+    for (const cs of page) {
+      const recBy = new Map(cs.attendance.map((r) => [r.studentId, r]));
+      const ids = new Set([...knownStudents(cs, index, f.division).map((st) => st.id), ...recBy.keys()]);
+      for (const id of ids) {
+        const st = byId.get(id);
+        if (!st) continue;
+        if (f.division && normalizeDivision(st.division) !== f.division) continue;
+        const r = recBy.get(id) ?? null;
+        const status = attendanceStatus(r);
+        emit({
+          sessionId: cs.id,
+          date: dateOnly(cs.sessionDate)!,
+          subject: cs.subject,
+          teacher: cs.teacher.name,
+          audience: formatAudience(cs.campus, cs.grade, cs.divisions, cs.allDivisions),
+          studentId: st.id,
+          externalId: st.externalId,
+          name: st.name,
+          rollNumber: st.rollNumber ?? '',
+          gradeDivision: `${st.campus} · ${st.grade}-${st.division}`,
+          status,
+          statusLabel: STATUS_LABEL[status],
+          firstJoined: hhmm(r?.firstJoinedAt, tz),
+          admitted: hhmm(r?.admittedAt, tz),
+          left: hhmm(r?.leftAt, tz),
+          connectedMin: r ? Math.round(totalConnectedMs(r, cs.endedAt ?? now) / 60_000) : 0,
+        });
+      }
     }
   }
+}
+
+function sortDetail(rows: DetailRow[]): DetailRow[] {
   return rows.sort(
     (a, b) =>
       a.date.localeCompare(b.date) ||
@@ -292,6 +392,19 @@ export async function attendanceDetail(f: ReportFilter): Promise<DetailRow[]> {
       a.rollNumber.localeCompare(b.rollNumber, undefined, { numeric: true }) ||
       a.name.localeCompare(b.name)
   );
+}
+
+export async function attendanceDetail(f: ReportFilter): Promise<DetailRow[]> {
+  const rows: DetailRow[] = [];
+  await forEachDetailRow(f, (r) => rows.push(r));
+  return sortDetail(rows);
+}
+
+/** Per-student summary straight from the detail stream (the detail rows are never all kept). */
+export async function studentSummary(f: ReportFilter): Promise<StudentRow[]> {
+  const acc = studentAccumulator();
+  await forEachDetailRow(f, acc.add);
+  return acc.result();
 }
 
 export function attendanceDetailCsv(rows: DetailRow[]) {
@@ -318,10 +431,9 @@ export type StudentRow = {
   connectedMin: number;
 };
 
-/** Aggregate detail rows per student. attendance % = (present + late) / classes held. */
-export function summariseByStudent(rows: DetailRow[]): StudentRow[] {
+function studentAccumulator() {
   const m = new Map<string, StudentRow>();
-  for (const r of rows) {
+  const add = (r: DetailRow) => {
     let s = m.get(r.studentId);
     if (!s) {
       s = {
@@ -346,14 +458,24 @@ export function summariseByStudent(rows: DetailRow[]): StudentRow[] {
     else if (r.status === 'late') s.late++;
     else if (r.status === 'not_admitted') s.notAdmitted++;
     else s.absent++;
-  }
-  for (const s of m.values()) s.attendancePct = s.classes ? Math.round(((s.present + s.late) / s.classes) * 1000) / 10 : null;
-  return [...m.values()].sort(
-    (a, b) =>
-      a.gradeDivision.localeCompare(b.gradeDivision) ||
-      a.rollNumber.localeCompare(b.rollNumber, undefined, { numeric: true }) ||
-      a.name.localeCompare(b.name)
-  );
+  };
+  const result = () => {
+    for (const s of m.values()) s.attendancePct = s.classes ? Math.round(((s.present + s.late) / s.classes) * 1000) / 10 : null;
+    return [...m.values()].sort(
+      (a, b) =>
+        a.gradeDivision.localeCompare(b.gradeDivision) ||
+        a.rollNumber.localeCompare(b.rollNumber, undefined, { numeric: true }) ||
+        a.name.localeCompare(b.name)
+    );
+  };
+  return { add, result };
+}
+
+/** Aggregate detail rows per student. attendance % = (present + late) / classes held. */
+export function summariseByStudent(rows: DetailRow[]): StudentRow[] {
+  const acc = studentAccumulator();
+  for (const r of rows) acc.add(r);
+  return acc.result();
 }
 
 export function studentSummaryCsv(rows: StudentRow[]) {

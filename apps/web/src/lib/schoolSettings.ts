@@ -16,11 +16,11 @@ export function clearSchoolSettingsCache() {
 
 export async function getSchoolSettings(): Promise<SchoolSettings> {
   if (cache && Date.now() - cache.at < TTL_MS) return cache.row;
-  const row = await prisma.schoolSetting.upsert({
-    where: { id: 'default' },
-    update: {},
-    create: { id: 'default' },
-  });
+  // A read on every refresh; the row is created once (an upsert here was a
+  // write per worker every 15 s).
+  const row =
+    (await prisma.schoolSetting.findUnique({ where: { id: 'default' } })) ??
+    (await prisma.schoolSetting.upsert({ where: { id: 'default' }, update: {}, create: { id: 'default' } }));
   const next: SchoolSettings = {
     maxOpenStudentMics: normalizeMicLimit(row.maxOpenStudentMics),
     maxStudentsPerClass: classCapacity(row.maxStudentsPerClass),

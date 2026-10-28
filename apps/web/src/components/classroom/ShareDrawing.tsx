@@ -6,8 +6,9 @@
  * the allowed student. Rules and the overview: lib/drawLogic.ts.
  */
 import { useRoomContext } from '@livekit/components-react';
-import { ConnectionState, RoomEvent } from 'livekit-client';
+import { RoomEvent } from 'livekit-client';
 import { drawPacketTrusted } from '@/lib/realtimePackets';
+import { canPublishRoomData } from '@/lib/dataPublish';
 import {
   createContext,
   useCallback,
@@ -140,7 +141,14 @@ export function ShareDrawingProvider({
         // My own points are already drawn locally (an echo could briefly cut
         // the points drawn since that batch).
         if (p.t === 'pts' && p.by === meRef.current) return;
-        setStrokesState((s) => applyPacket(s, p));
+        // Updaters run during render: a throw here would crash the classroom.
+        setStrokesState((s) => {
+          try {
+            return applyPacket(s, p);
+          } catch {
+            return s;
+          }
+        });
       } catch {
         /* ignore */
       }
@@ -156,7 +164,8 @@ export function ShareDrawingProvider({
 
   const publishPts = useCallback(
     async (packet: object) => {
-      if (!room || room.state !== ConnectionState.Connected) return false;
+      // Students have no data grant: the server relays their points.
+      if (!canPublishRoomData(room)) return false;
       try {
         const bytes = new TextEncoder().encode(JSON.stringify(packet));
         await room.localParticipant.publishData(bytes as Uint8Array<ArrayBuffer>, { reliable: true, topic: DRAW_TOPIC });

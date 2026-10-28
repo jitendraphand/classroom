@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: Web (typecheck, lint, tests, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: apps/web
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: classroom_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ci -d classroom_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/classroom_ci
+      REDIS_URL: redis://127.0.0.1:6379/1
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci --legacy-peer-deps --no-audit --no-fund
+      - run: npx prisma generate
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - name: Migrations apply on an empty database
+        run: npx prisma migrate deploy
+      - name: Schema and migrations agree (no drift)
+        run: |
+          diff=$(npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script)
+          echo "$diff"
+          echo "$diff" | grep -q "This is an empty migration" || { echo "::error::schema.prisma differs from the migrations"; exit 1; }
+      - name: Integration tests (Postgres + Redis)
+        run: npm run test:integration
+      - name: Production build
+        env:
+          DATABASE_URL: postgresql://placeholder:placeholder@127.0.0.1:5432/placeholder
+        run: npm run build
+
+  deploy-config:
+    name: Scripts and Compose
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell scripts parse and pass shellcheck
+        run: |
+          for f in scripts/*.sh scripts/lib/*.sh apps/web/docker-entrypoint.sh; do bash -n "$f"; done
+          shellcheck -S warning scripts/*.sh scripts/lib/*.sh apps/web/docker-entrypoint.sh
+      - name: Compose files are valid
+        run: |
+          cp .env.example .env
+          POSTGRES_PASSWORD=ci docker compose config --quiet
+          POSTGRES_PASSWORD=ci docker compose --profile tls config --quiet
+          MEDIA_DOMAIN=media.example.com docker compose -f docker-compose.media.yml --profile media config --quiet
+      - name: Resource sizing (dry runs)
+        run: |
+          for spec in "2048 1" "4096 2" "8192 4" "65536 32"; do
+            set -- $spec
+            RAM_MB=$1 CPUS=$2 ./scripts/configure-resources.sh --print
+          done
+
+  image:
+    name: Docker image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: apps/web
+          push: false
+          tags: classroom-web:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

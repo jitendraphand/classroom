@@ -8,6 +8,7 @@ import { CampusSelect, DivisionSelect, GradeSelect, invalidateGradeOptions, useG
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { api } from '@/lib/clientFetch';
 import { displayDivision, normalizeDivision, normalizeGrade } from '@/lib/grades';
+import { formatDateTime } from '@/lib/timeFormat';
 
 type Unrecognised = { grade: string; division: string; count: number; gradeKnown: boolean };
 
@@ -33,8 +34,11 @@ export default function AdminStudentsPage() {
 
 function StudentsPanel() {
   const [filter, setFilter] = useState({ campus: '', grade: '', division: '', q: '' });
+  const [page, setPage] = useState(0);
   const [data, setData] = useState<{
     total: number;
+    page: number;
+    pageSize: number;
     students: Student[];
     groups: { campus: string; grade: string; division: string; count: number }[];
   } | null>(null);
@@ -101,9 +105,19 @@ function StudentsPanel() {
 
   const load = useCallback(async () => {
     const p = new URLSearchParams(Object.entries(filter).filter(([, v]) => v));
+    if (page) p.set('page', String(page));
     const r = await api<NonNullable<typeof data>>(`/api/admin/students?${p}`);
     if (r.ok) setData(r.data);
-  }, [filter]);
+  }, [filter, page]);
+
+  // A new filter starts again at page 1.
+  const setFilterAndReset = (f: typeof filter) => {
+    setPage(0);
+    setFilter(f);
+  };
+  const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
+  const firstShown = data && data.total ? data.page * data.pageSize + 1 : 0;
+  const lastShown = data ? data.page * data.pageSize + data.students.length : 0;
 
   useEffect(() => {
     void load();
@@ -203,11 +217,12 @@ function StudentsPanel() {
           </ul>
         </Card>
       )}
-      <Card>
-        <CardHeader
-          title="Import roster (optional)"
-          subtitle="Students appear here automatically the first time they join from the school app. Import the roster so students who never join are counted as absent."
-        />
+      <details className="surface-panel p-5 sm:p-6" open={data?.total === 0}>
+        <summary className="cursor-pointer select-none font-display text-lg font-semibold text-white">Import roster (CSV)</summary>
+        <p className="mb-3 mt-1 text-sm text-slate-400">
+          Students appear here automatically the first time they join from the school app. Import the roster so students who never join are
+          counted as absent.
+        </p>
         <p className="mb-2 text-xs text-slate-400">
           CSV columns: <code className="text-slate-200">externalId,name,grade,division,roll,campus</code> (header row optional). The
           externalId must be the same student ID the school app sends. Rows without a campus use the campus picked below. Campus, grade
@@ -215,21 +230,23 @@ function StudentsPanel() {
           <a href="/admin/grades" className="text-brand-300 hover:underline">
             Grades &amp; divisions
           </a>{' '}
-          (case and spaces do not matter); other rows are reported and skipped.
+          (case and spaces do not matter). Other rows are listed and skipped.
         </p>
         <label className="mb-3 flex flex-wrap items-center gap-2 text-sm text-slate-300">
           Campus for rows without one
           <CampusSelect className="w-44" value={importCampus} onChange={setImportCampus} options={gradeOptions} emptyLabel="Only campus / none" />
         </label>
-        <input
-          type="file"
-          accept=".csv,text/csv"
-          className="mb-3 block text-sm text-slate-300"
-          onChange={async (e) => {
-            const f = e.target.files?.[0];
-            if (f) setCsv(await f.text());
-          }}
-        />
+        <label className="mb-3 block text-sm text-slate-300">
+          <span className="label">CSV file</span>
+          <input
+            type="file"
+            accept=".csv,text/csv"
+            onChange={async (e) => {
+              const f = e.target.files?.[0];
+              if (f) setCsv(await f.text());
+            }}
+          />
+        </label>
         <textarea
           className="input h-32 font-mono text-xs"
           placeholder={'externalId,name,grade,division,roll,campus\nS1001,Asha Patil,7,A,1,CC'}
@@ -253,18 +270,18 @@ function StudentsPanel() {
             ))}
           </ul>
         )}
-      </Card>
+      </details>
 
       <Card padding={false}>
         <div className="flex flex-wrap items-end gap-3 p-5 sm:p-6">
-          <CampusSelect className="w-40" value={filter.campus} onChange={(c) => setFilter({ ...filter, campus: c })} options={gradeOptions} emptyLabel="All campuses" />
-          <GradeSelect className="w-40" value={filter.grade} onChange={(g) => setFilter({ ...filter, grade: g, division: '' })} options={gradeOptions} emptyLabel="All grades" />
-          <DivisionSelect className="w-40" grade={filter.grade} value={filter.division} onChange={(d) => setFilter({ ...filter, division: d })} options={gradeOptions} />
+          <CampusSelect className="w-40" value={filter.campus} onChange={(c) => setFilterAndReset({ ...filter, campus: c })} options={gradeOptions} emptyLabel="All campuses" />
+          <GradeSelect className="w-40" value={filter.grade} onChange={(g) => setFilterAndReset({ ...filter, grade: g, division: '' })} options={gradeOptions} emptyLabel="All grades" />
+          <DivisionSelect className="w-40" grade={filter.grade} value={filter.division} onChange={(d) => setFilterAndReset({ ...filter, division: d })} options={gradeOptions} />
           <input
             className="input max-w-xs"
             placeholder="Name or student ID"
             value={filter.q}
-            onChange={(e) => setFilter({ ...filter, q: e.target.value })}
+            onChange={(e) => setFilterAndReset({ ...filter, q: e.target.value })}
             aria-label="Search name or student ID"
             data-testid="students-search"
           />
@@ -275,15 +292,18 @@ function StudentsPanel() {
             {data.groups.map((g) => `${g.campus} ${g.grade}-${displayDivision(g.division)}: ${g.count}`).join(' · ')}
           </p>
         )}
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Students table">
           <table className="w-full min-w-[760px] text-left text-sm">
             <thead className="text-2xs uppercase tracking-wider text-slate-500">
               <tr className="border-b border-white/5">
-                {['Student ID', 'Name', 'Campus', 'Class', 'Roll', 'Source', 'Last joined', ''].map((h) => (
+                {['Student ID', 'Name', 'Campus', 'Class', 'Roll', 'Source', 'Last joined'].map((h) => (
                   <th key={h} className="px-4 py-3 font-semibold">
                     {h}
                   </th>
                 ))}
+                <th className="px-4 py-3 font-semibold">
+                  <span className="sr-only">Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
@@ -305,9 +325,9 @@ function StudentsPanel() {
                   </td>
                   <td className="px-4 py-2">{s.rollNumber}</td>
                   <td className="px-4 py-2 text-slate-400">{s.source === 'import' ? 'Roster import' : 'School app'}</td>
-                  <td className="px-4 py-2 text-xs text-slate-400">{s.lastSeenAt ? new Date(s.lastSeenAt).toLocaleString() : 'Never'}</td>
+                  <td className="px-4 py-2 text-xs text-slate-400">{s.lastSeenAt ? formatDateTime(s.lastSeenAt) : 'Never'}</td>
                   <td className="px-4 py-2 text-right">
-                    <Button size="sm" variant="danger" onClick={() => setDeleting(s)} aria-label={`Delete ${s.name}`}>
+                    <Button size="sm" variant="dangerSoft" onClick={() => setDeleting(s)} aria-label={`Delete ${s.name}`}>
                       Delete
                     </Button>
                   </td>
@@ -316,8 +336,30 @@ function StudentsPanel() {
             </tbody>
           </table>
         </div>
-        {data && data.total > data.students.length && (
-          <p className="p-4 text-xs text-slate-500">Showing the first {data.students.length}; narrow the filter to see more.</p>
+        {data && data.total > 0 && (
+          <nav className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm" aria-label="Student pages">
+            <span className="text-slate-400">
+              Showing {firstShown}–{lastShown} of {data.total}
+            </span>
+            {pages > 1 && (
+              <span className="flex items-center gap-2">
+                <Button size="sm" variant="secondary" disabled={page === 0} onClick={() => setPage(page - 1)}>
+                  Previous
+                </Button>
+                <span className="tabular-nums text-slate-400">
+                  Page {page + 1} of {pages}
+                </span>
+                <Button size="sm" variant="secondary" disabled={page >= pages - 1} onClick={() => setPage(page + 1)}>
+                  Next
+                </Button>
+              </span>
+            )}
+          </nav>
+        )}
+        {data && data.total === 0 && (
+          <p className="p-6 text-sm text-slate-400">
+            {Object.values(filter).some(Boolean) ? 'No students match these filters.' : 'No students yet. They appear when they first join, or import the roster above.'}
+          </p>
         )}
       </Card>
     </div>

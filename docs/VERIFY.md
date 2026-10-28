@@ -31,7 +31,7 @@ curl -sI http://localhost:3000/favicon.ico | head -1
 2. Footer controls always visible; video/roster scroll internally.
 
 ## 5. LiveKit versions
-- Server image: `livekit/livekit-server:v1.12.0`
+- Server image: `livekit/livekit-server:v1.13.9`
 - Client: `livekit-client` ^2.6 (lockfile ~2.22.x)
 - Confirm no reconnect loop in browser console after connecting.
 

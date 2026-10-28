@@ -2,17 +2,27 @@
  * Attendance rules (pure). Connected time is the UNION of a student's media
  * connections: overlapping connections (a duplicate tab, a reconnect whose
  * "left" arrives after the new "joined") are not double counted.
+ *
+ * Every rule is idempotent per LiveKit participant SID, whatever the order the
+ * events arrive in: a SID that has been closed (or whose "left" arrived before
+ * its "joined") is remembered in `closedSids`, so a replayed batch or a
+ * reordered webhook can never reopen an interval or count it twice.
  */
 export type ConnState = {
   connectedMs: number;
   connectedSince: Date | null;
   openSids: string[];
+  /** Most recent closed / tombstoned SIDs (MAX_CLOSED_SIDS). */
+  closedSids: string[];
   connections: number;
   leftAt: Date | null;
 };
 
+/** How many closed SIDs a record remembers (a reconnect storm still fits). */
+export const MAX_CLOSED_SIDS = 64;
+
 export function emptyConn(): ConnState {
-  return { connectedMs: 0, connectedSince: null, openSids: [], connections: 0, leftAt: null };
+  return { connectedMs: 0, connectedSince: null, openSids: [], closedSids: [], connections: 0, leftAt: null };
 }
 
 function elapsed(from: Date | null, to: Date): number {
@@ -20,9 +30,14 @@ function elapsed(from: Date | null, to: Date): number {
   return Math.max(0, to.getTime() - from.getTime());
 }
 
-/** A LiveKit connection (participant SID) joined. Duplicate joins are ignored. */
+function remember(closed: string[], sids: string[]): string[] {
+  const next = [...closed.filter((x) => !sids.includes(x)), ...sids];
+  return next.length > MAX_CLOSED_SIDS ? next.slice(next.length - MAX_CLOSED_SIDS) : next;
+}
+
+/** A LiveKit connection (participant SID) joined. Duplicate, replayed or late (already closed) joins are ignored. */
 export function applyJoin(s: ConnState, sid: string, at: Date): ConnState {
-  if (s.openSids.includes(sid)) return s;
+  if (s.openSids.includes(sid) || s.closedSids.includes(sid)) return s;
   const wasEmpty = s.openSids.length === 0;
   return {
     ...s,
@@ -32,14 +47,22 @@ export function applyJoin(s: ConnState, sid: string, at: Date): ConnState {
   };
 }
 
-/** A connection left. Unknown SIDs (already closed, never seen) are ignored. */
+/**
+ * A connection left. A SID that is not open is remembered as closed (its
+ * "joined" may still be on its way, and must then be ignored) and changes
+ * nothing else.
+ */
 export function applyLeave(s: ConnState, sid: string, at: Date): ConnState {
-  if (!s.openSids.includes(sid)) return s;
+  if (!s.openSids.includes(sid)) {
+    return s.closedSids.includes(sid) ? s : { ...s, closedSids: remember(s.closedSids, [sid]) };
+  }
   const openSids = s.openSids.filter((x) => x !== sid);
-  if (openSids.length) return { ...s, openSids };
+  const closedSids = remember(s.closedSids, [sid]);
+  if (openSids.length) return { ...s, openSids, closedSids };
   return {
     ...s,
     openSids: [],
+    closedSids,
     connectedMs: s.connectedMs + elapsed(s.connectedSince, at),
     connectedSince: null,
     leftAt: at,
@@ -52,10 +75,22 @@ export function closeAll(s: ConnState, at: Date): ConnState {
   return {
     ...s,
     openSids: [],
+    closedSids: remember(s.closedSids, s.openSids),
     connectedMs: s.connectedMs + elapsed(s.connectedSince, at),
     connectedSince: null,
     leftAt: at,
   };
+}
+
+/**
+ * After a class has ended, a record must not stay open or without a leave
+ * time: a late-flushed join (queue drained after the end close) or a lost
+ * participant_left would otherwise leave it open forever. Closes at the end.
+ */
+export function settleAfterEnd(s: ConnState, endedAt: Date | null): ConnState {
+  if (!endedAt) return s;
+  if (s.openSids.length || s.connectedSince || !s.leftAt) return closeAll(s, endedAt);
+  return s;
 }
 
 /** Total including a still-open interval. */

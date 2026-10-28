@@ -110,18 +110,12 @@ export const ERROR_FIELDS: Record<string, string> = {
   roll: 'roll number',
 };
 
-/**
- * Per-IP fixed window for /join (no secrets needed). Generous by default
- * because a whole school can sit behind one NAT address. Fails open.
- */
-export async function joinRateLimited(
-  ip: string,
-  redis: { incr: (k: string) => Promise<number>; expire: (k: string, s: number) => Promise<unknown> },
-  limitPerMinute: number
-): Promise<boolean> {
+type CounterStore = { incr: (k: string) => Promise<number>; expire: (k: string, s: number) => Promise<unknown> };
+
+/** Fixed one-minute window on a Redis counter. Fails open (an outage never blocks joins). */
+async function overLimit(redis: CounterStore, key: string, limitPerMinute: number): Promise<boolean> {
   if (limitPerMinute <= 0) return false;
   try {
-    const key = `ratelimit:join:ip:${ip}`;
     const n = await redis.incr(key);
     if (n === 1) await redis.expire(key, 60);
     return n > limitPerMinute;
@@ -130,7 +124,62 @@ export async function joinRateLimited(
   }
 }
 
+/**
+ * Optional per-IP fixed window for /join. OFF by default: a whole school (up
+ * to ~2,000 students) can sit behind one NAT address and join within a minute,
+ * so the hardware is the only limit. Set JOIN_RATE_LIMIT_PER_MINUTE > 0 to
+ * turn it on. Fails open.
+ */
+export async function joinRateLimited(ip: string, redis: CounterStore, limitPerMinute: number): Promise<boolean> {
+  return overLimit(redis, `ratelimit:join:ip:${ip}`, limitPerMinute);
+}
+
 export function joinRateLimitFromEnv(env: Record<string, string | undefined> = process.env): number {
   const n = Number(env.JOIN_RATE_LIMIT_PER_MINUTE);
-  return Number.isFinite(n) && env.JOIN_RATE_LIMIT_PER_MINUTE?.trim() ? Math.max(0, Math.floor(n)) : 120;
+  return Number.isFinite(n) && env.JOIN_RATE_LIMIT_PER_MINUTE?.trim() ? Math.max(0, Math.floor(n)) : 0;
+}
+
+/**
+ * Per-SID window (ON by default, JOIN_SID_RATE_LIMIT_PER_MINUTE, 0 = off). A
+ * real student opens the link a handful of times a minute at most; this caps
+ * someone replaying a known SID to keep taking over that student's seat.
+ * Unaffected by a school behind one NAT address.
+ */
+export async function joinSidRateLimited(sid: string, redis: CounterStore, limitPerMinute: number): Promise<boolean> {
+  return overLimit(redis, `ratelimit:join:sid:${sid.toLowerCase()}`, limitPerMinute);
+}
+
+export function joinSidRateLimitFromEnv(env: Record<string, string | undefined> = process.env): number {
+  const raw = env.JOIN_SID_RATE_LIMIT_PER_MINUTE?.trim();
+  const n = Number(raw);
+  return raw && Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 6;
+}
+
+/**
+ * The join link has side effects (session, seat, student record), so it is
+ * only honoured as a top-level navigation. Browsers send Sec-Fetch-Dest /
+ * Sec-Fetch-Mode: an <img>, <script>, <iframe> or fetch() pointing at /join
+ * from another page is refused. Requests without these headers (native apps,
+ * older browsers) are allowed.
+ */
+export function isJoinNavigation(headers: { get(name: string): string | null }): boolean {
+  const dest = headers.get('sec-fetch-dest');
+  const mode = headers.get('sec-fetch-mode');
+  if (dest != null && dest !== 'document') return false;
+  if (mode != null && mode !== 'navigate') return false;
+  return true;
+}
+
+/**
+ * Startup check (logged once per worker): signed mode without an issuer and
+ * key/secret would refuse every student. Never includes secret values.
+ */
+export function signedModeProblem(mode: SchoolJoinMode, cfg: SchoolJwtConfig): string | null {
+  if (mode !== 'signed') return null;
+  if (!cfg.issuer) return 'SCHOOL_JOIN_MODE=signed but SCHOOL_APP_JWT_ISSUER is empty: every join link will be refused.';
+  if (!cfg.publicKeyPem && !cfg.secret) {
+    return 'SCHOOL_JOIN_MODE=signed but neither SCHOOL_APP_JWT_PUBLIC_KEY(_FILE) nor SCHOOL_APP_JWT_SECRET is set: every join link will be refused.';
+  }
+  if (!cfg.publicKeyPem && cfg.secret && cfg.secret.length < 32) return 'SCHOOL_APP_JWT_SECRET is shorter than 32 characters; use a longer random secret.';
+  return null;
 }

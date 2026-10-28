@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppHeader } from '@/components/layout/AppHeader';
+import { SwitchViewButton } from '@/components/layout/SwitchViewButton';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader } from '@/components/ui/Card';
@@ -14,8 +15,10 @@ import { api } from '@/lib/clientFetch';
 import { loginHref } from '@/lib/sessionClient';
 import { adhocProblem } from '@/lib/adhocForm';
 import { TeacherInsights } from '@/components/teacher/TeacherInsights';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { formatDate, formatTime } from '@/lib/timeFormat';
 
-type Me = { role: string; name?: string; email?: string; permanentCode?: string; mustChangePassword?: boolean };
+type Me = { role: string; name?: string; email?: string; permanentCode?: string; mustChangePassword?: boolean; adminAvailable?: boolean };
 type ClassItem = {
   key: string;
   date: string;
@@ -44,17 +47,18 @@ type Schedule = {
   gradesConfigured: boolean;
 };
 
-function fmtDate(date: string) {
-  return new Date(`${date}T00:00:00Z`).toLocaleDateString(undefined, {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'short',
-    timeZone: 'UTC',
-  });
-}
-
-function fmtTime(iso: string) {
-  return new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+/**
+ * The one class the teacher most likely wants now: live, else open to start,
+ * else the next one today. Shown first, above everything else.
+ */
+function focusClass(today: ClassItem[]): ClassItem | null {
+  const mine = today.filter((c) => c.mine);
+  return (
+    mine.find((c) => c.session?.live) ??
+    mine.find((c) => c.phase === 'open' && !c.session?.endedAt) ??
+    mine.find((c) => c.phase === 'upcoming') ??
+    null
+  );
 }
 
 export default function TeacherDashboard() {
@@ -68,6 +72,7 @@ export default function TeacherDashboard() {
   const [copied, setCopied] = useState(false);
   const [adhoc, setAdhoc] = useState({ campus: '', grade: '', divisions: [] as string[], all: false, extra: '', subject: '' });
   const [year, setYear] = useState('');
+  useDocumentTitle('Dashboard');
 
   useEffect(() => {
     fetch('/api/auth/act-as', {
@@ -123,7 +128,8 @@ export default function TeacherDashboard() {
     const first = gradeDivs[0]?.name;
     if (first && !adhoc.all && adhoc.divisions.length === 0 && !adhoc.extra)
       setAdhoc((a) => (a.divisions.length || a.all ? a : { ...a, divisions: [first] }));
-    // Only when the grade (and so its divisions) changes.
+    // Only when the grade (and so its divisions) changes, not on every tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adhoc.campus, adhoc.grade, gradeDivs.length]);
   const [adhocError, setAdhocError] = useState('');
 
@@ -179,6 +185,8 @@ export default function TeacherDashboard() {
   if (!me) return <PageLoading label="Loading dashboard…" />;
 
   const today = (schedule?.classes ?? []).filter((c) => c.date === schedule?.today);
+  const focus = schedule?.active ? null : focusClass(today);
+  const tz = schedule?.timezone;
   const later = (schedule?.classes ?? []).filter((c) => c.date !== schedule?.today && c.mine);
   const laterByDate = later.reduce<Record<string, ClassItem[]>>((acc, c) => {
     (acc[c.date] ||= []).push(c);
@@ -189,9 +197,11 @@ export default function TeacherDashboard() {
     <main className="page-shell max-w-6xl">
       <AppHeader
         compact
+        homeHref="/teacher/dashboard#today"
         subtitle="Teacher dashboard"
         right={
           <>
+            {me.adminAvailable && <SwitchViewButton to="admin" />}
             <Link href="/teacher/attendance" className="btn-ghost px-3 py-1.5 text-xs">
               Attendance
             </Link>
@@ -205,13 +215,14 @@ export default function TeacherDashboard() {
         }
       />
 
-      <div className="mb-6">
-        <p className="text-sm text-slate-400">Signed in as</p>
+      <div className="mb-5">
         <h1 className="font-display text-2xl font-semibold tracking-tight">{me.name}</h1>
-        <p className="text-sm text-slate-400">{me.email}</p>
+        <p className="text-sm text-slate-400">
+          {schedule ? formatDate(schedule.today, { long: true }) : ''}
+          {schedule ? ' · ' : ''}
+          {me.email}
+        </p>
       </div>
-
-      <TeacherInsights year={year} onYear={setYear} />
 
       {error && (
         <p className="mb-4 rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-2 text-sm text-danger-fg" role="alert">
@@ -239,21 +250,44 @@ export default function TeacherDashboard() {
         </div>
       )}
 
-      <Card className="mb-6">
+      {focus && (
+        <section
+          aria-label={focus.phase === 'upcoming' ? 'Next class' : 'Class now'}
+          className="mb-6 flex flex-col gap-4 rounded-2xl border border-brand-400/30 bg-brand-500/10 p-5 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-wider text-brand-200">{focus.phase === 'upcoming' ? 'Next class' : 'Now'}</p>
+            <p className="mt-1 font-display text-xl font-semibold text-white">
+              {focus.subject} <span className="font-normal text-slate-300">· {focus.audience}</span>
+            </p>
+            <p className="mt-0.5 text-sm text-slate-300">
+              {formatTime(focus.startLabel)}–{formatTime(focus.endLabel)}
+              {focus.phase === 'upcoming' ? ` · waiting room opens at ${formatTime(focus.opensAt, tz)}` : ''}
+              {focus.substituteFor ? ` · substituting for ${focus.substituteFor}` : ''}
+            </p>
+          </div>
+          <Button
+            size="lg"
+            onClick={() => void start({ kind: 'scheduled', key: focus.key }, focus.key)}
+            disabled={!focus.canStart || busy === focus.key}
+            className="sm:min-w-[11rem]"
+          >
+            {busy === focus.key ? 'Opening…' : focus.session?.live || (focus.session?.startedAt && !focus.session.endedAt) ? 'Re-enter class' : focus.canStart ? 'Start class' : `Opens at ${formatTime(focus.opensAt, tz)}`}
+          </Button>
+        </section>
+      )}
+
+      <Card className="mb-6 scroll-mt-4" id="today">
         <CardHeader
           title="Today"
-          subtitle={
-            schedule
-              ? `${fmtDate(schedule.today)} · the waiting room opens ${schedule.earlyMinutes} min before each class`
-              : 'Loading…'
-          }
+          subtitle={schedule ? `The waiting room opens ${schedule.earlyMinutes} min before each class. Times are school time.` : 'Loading…'}
         />
         {!schedule ? null : today.length === 0 ? (
-          <p className="text-sm text-slate-400">No timetabled classes today. You can start an ad-hoc class below.</p>
+          <p className="text-sm text-slate-400">No timetabled classes today. You can start an extra class below.</p>
         ) : (
           <ul className="divide-y divide-white/5">
             {today.map((c) => (
-              <ClassRow key={c.key} c={c} busy={busy === c.key} onStart={() => void start({ kind: 'scheduled', key: c.key }, c.key)} />
+              <ClassRow key={c.key} c={c} tz={tz} busy={busy === c.key} onStart={() => void start({ kind: 'scheduled', key: c.key }, c.key)} />
             ))}
           </ul>
         )}
@@ -265,12 +299,12 @@ export default function TeacherDashboard() {
           <div className="space-y-4">
             {Object.entries(laterByDate).map(([date, items]) => (
               <div key={date}>
-                <p className="mb-1 text-2xs font-semibold uppercase tracking-wider text-slate-500">{fmtDate(date)}</p>
+                <p className="mb-1 text-2xs font-semibold uppercase tracking-wider text-slate-400">{formatDate(date, { long: true })}</p>
                 <ul className="space-y-1 text-sm">
                   {items.map((c) => (
                     <li key={c.key} className="flex flex-wrap gap-x-3 text-slate-300">
                       <span className="font-mono text-brand-300">
-                        {c.startLabel}–{c.endLabel}
+                        {formatTime(c.startLabel)}–{formatTime(c.endLabel)}
                       </span>
                       <span className="font-medium text-white">{c.subject}</span>
                       <span>{c.audience}</span>
@@ -285,11 +319,11 @@ export default function TeacherDashboard() {
         </Card>
       )}
 
-      <Card className="mb-6">
-        <CardHeader
-          title="Ad-hoc class"
-          subtitle="Outside the timetable, for your assigned grades and divisions only. Students of those divisions are routed here from the school app."
-        />
+      <details className="surface-panel mb-6 p-5 sm:p-6" open={!!schedule && today.length === 0}>
+        <summary className="cursor-pointer select-none font-display text-lg font-semibold text-white">Start an extra class</summary>
+        <p className="mb-4 mt-1 text-sm text-slate-400">
+          Outside the timetable, for your assigned grades and divisions. Their students are sent here from the school app.
+        </p>
         {!schedule ? null : allChoices.length === 0 ? (
           <p className="text-sm text-slate-400">No grades are assigned to you yet. Ask the school administrator.</p>
         ) : (
@@ -373,27 +407,33 @@ export default function TeacherDashboard() {
                 />
               )}
             </fieldset>
-            <Input
-              label="Max visible student videos"
-              type="number"
-              name="maxVisible"
-              min={1}
-              max={6}
-              value={maxVisible}
-              onChange={(e) => setMaxVisible(Number(e.target.value))}
-              hint="Only this many student camera streams reach you. Others stay local-only on their devices."
-            />
+            <label className="block max-w-xs">
+              <span className="label">Student cameras on your screen</span>
+              <select className="input" name="maxVisible" value={maxVisible} onChange={(e) => setMaxVisible(Number(e.target.value))}>
+                {[1, 2, 3, 4, 5, 6].map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+              <span className="mt-1.5 block text-xs text-slate-400">
+                You see this many student cameras at a time; the class rotates through the rest. Fewer uses less internet.
+              </span>
+            </label>
             {(adhocError || (busy !== 'adhoc' && error && lastStart === 'adhoc')) && (
               <p className="rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-2 text-sm text-danger-fg" role="alert">
                 {adhocError || error}
               </p>
             )}
             <Button type="submit" disabled={busy === 'adhoc'}>
-              {busy === 'adhoc' ? 'Starting…' : 'Start ad-hoc class'}
+              {busy === 'adhoc' ? 'Starting…' : 'Start extra class'}
             </Button>
           </form>
         )}
-      </Card>
+      </details>
+
+      <h2 className="mb-3 mt-10 font-display text-lg font-semibold">Your classes this year</h2>
+      <TeacherInsights year={year} onYear={setYear} />
 
       {me.permanentCode && (
         <Card>
@@ -407,8 +447,9 @@ export default function TeacherDashboard() {
               {copied ? 'Copied!' : 'Copy code'}
             </Button>
           </div>
-          <p className="mt-3 text-xs text-slate-500">
-            {schedule ? `Times shown in your device’s time zone; the school timetable uses ${schedule.timezone}.` : ''}
+          <p className="mt-3 text-xs text-slate-400">
+            {schedule ? `Times are school time (${schedule.timezone}). ` : ''}
+            School administrators may observe live classes, listen-only, for quality and safety.
           </p>
         </Card>
       )}
@@ -416,20 +457,20 @@ export default function TeacherDashboard() {
   );
 }
 
-function ClassRow({ c, busy, onStart }: { c: ClassItem; busy: boolean; onStart: () => void }) {
+function ClassRow({ c, tz, busy, onStart }: { c: ClassItem; tz?: string; busy: boolean; onStart: () => void }) {
   let status: React.ReactNode;
   if (!c.mine) status = <Badge tone="neutral">Covered by {c.coveredBy}</Badge>;
   else if (c.session?.live) status = <Badge tone="success" pulse>Live</Badge>;
   else if (c.session?.endedAt && c.phase !== 'past') status = <Badge tone="neutral">Ended · can reopen</Badge>;
   else if (c.phase === 'open') status = <Badge tone="success">Open now</Badge>;
-  else if (c.phase === 'upcoming') status = <Badge tone="sky">Opens {fmtTime(c.opensAt)}</Badge>;
+  else if (c.phase === 'upcoming') status = <Badge tone="sky">Opens {formatTime(c.opensAt, tz)}</Badge>;
   else status = <Badge tone="neutral">{c.session?.startedAt ? 'Held' : 'Not held'}</Badge>;
 
   return (
     <li className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
         <p className="font-mono text-sm text-brand-300">
-          {c.startLabel}–{c.endLabel}
+          {formatTime(c.startLabel)}–{formatTime(c.endLabel)}
         </p>
         <p className="font-semibold text-white">
           {c.subject} <span className="font-normal text-slate-400">· {c.audience}</span>

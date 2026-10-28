@@ -1,10 +1,10 @@
 /**
- * LiveKit data-channel topics and trust rules. High-frequency classroom
- * traffic (strokes, chat, hand, draw request) fans out through the SFU.
- * The web server still persists what late joiners need (chat history,
- * whiteboard snapshot, draw strokes) and still enforces mute-all on the
- * LiveKit server API. Clients never take a mute/hand/chat packet from an
- * identity that is not allowed to send it.
+ * LiveKit data-channel topics and trust rules. Only the teacher (and the web
+ * server) publish data: students have no data grant (lib/livekit
+ * classroomGrant), so everything a student sends — strokes, whiteboard ops,
+ * chat, hands, draw requests — goes through an API route that checks the
+ * permission and relays it as a server-originated packet. Receivers therefore
+ * never accept a packet whose sender is a student identity.
  */
 
 export const CHAT_TOPIC = 'chat';
@@ -21,10 +21,10 @@ export function senderKind(identity: string | null | undefined): SenderKind {
 }
 
 /**
- * Chat packets. Server-originated (no identity) are always trusted. A teacher
- * may send any stored message with senderRole TEACHER. A student may only send
- * a TEACHER-scope (student → teacher) message as themselves — never a
- * broadcast or a classmate's DM.
+ * Chat packets. Server-originated (no identity) are always trusted. The
+ * teacher may send a stored message with senderRole TEACHER. Students cannot
+ * publish data, so nothing from a student identity is accepted (their
+ * messages arrive as the server's push).
  */
 export function chatPacketTrusted(opts: {
   senderIdentity: string | null | undefined;
@@ -34,24 +34,15 @@ export function chatPacketTrusted(opts: {
 }): boolean {
   const kind = senderKind(opts.senderIdentity);
   if (kind === 'server') return true;
-  if (kind === 'other') return false;
-  const role = String(opts.message.senderRole || '');
-  const scope = String(opts.message.scope || '');
-  if (kind === 'teacher') return role === 'TEACHER';
-  if (role !== 'STUDENT' || scope !== 'TEACHER') return false;
-  if (
-    opts.identityParticipantId &&
-    opts.message.senderParticipantId &&
-    opts.identityParticipantId !== opts.message.senderParticipantId
-  ) {
-    return false;
-  }
-  return true;
+  if (kind === 'teacher') return String(opts.message.senderRole || '') === 'TEACHER';
+  return false;
 }
 
 export type SignalPacket =
   | { v: 1; type: 'hand'; raised: boolean; participantId: string }
-  | { v: 1; type: 'draw-req'; on: boolean; participantId: string };
+  | { v: 1; type: 'draw-req'; on: boolean; participantId: string }
+  /** Draw permission granted/ended (server only): applied locally, no /state refetch. */
+  | { v: 1; type: 'draw-allow'; on: boolean; participantId: string; identity: string; name: string; until: number };
 
 export function decodeSignalPacket(raw: unknown): SignalPacket | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -75,22 +66,58 @@ export function decodeSignalPacket(raw: unknown): SignalPacket | null {
   ) {
     return { v: 1, type: 'draw-req', on: o.on, participantId: o.participantId };
   }
+  if (
+    o.type === 'draw-allow' &&
+    typeof o.on === 'boolean' &&
+    typeof o.participantId === 'string' &&
+    o.participantId.length >= 1 &&
+    o.participantId.length <= 64 &&
+    typeof o.identity === 'string' &&
+    o.identity.length <= 128 &&
+    typeof o.name === 'string' &&
+    o.name.length <= 200 &&
+    typeof o.until === 'number' &&
+    Number.isFinite(o.until)
+  ) {
+    return { v: 1, type: 'draw-allow', on: o.on, participantId: o.participantId, identity: o.identity, name: o.name, until: o.until };
+  }
   return null;
 }
 
 /**
- * Hand / draw-request: server or teacher may name anyone; a student may only
- * name themselves (`selfParticipantId`). Mute is not on this topic.
+ * Hand / draw-request: from the server or the teacher only (students raise a
+ * hand through POST /hand; the server pushes it). Mute is not on this topic.
  */
 export function signalPacketTrusted(
   packet: SignalPacket,
   senderIdentity: string | null | undefined,
-  selfParticipantId?: string | null
+  _selfParticipantId?: string | null
 ): boolean {
   const kind = senderKind(senderIdentity);
-  if (kind === 'server' || kind === 'teacher') return true;
-  if (kind === 'student') return !!selfParticipantId && packet.participantId === selfParticipantId;
-  return false;
+  // A draw permission only ever comes from the server (never self-granted).
+  if (packet.type === 'draw-allow') return kind === 'server';
+  return kind === 'server' || kind === 'teacher';
+}
+
+type Holder = { participantId: string; identity: string; name: string; until: number };
+
+/** Apply a draw-allow push: holder list, `me.canDraw`, and the single-holder back-compat field. */
+export function applyDrawAllowPush<
+  T extends {
+    me: { id: string; canDraw?: boolean } | null;
+    drawHolders?: Holder[];
+    drawHolder?: Holder | null;
+  },
+>(state: T, push: { on: boolean; participantId: string; identity: string; name: string; until: number }): T {
+  const others = (state.drawHolders ?? (state.drawHolder ? [state.drawHolder] : [])).filter(
+    (h) => h.participantId !== push.participantId
+  );
+  const holders = push.on
+    ? [...others, { participantId: push.participantId, identity: push.identity, name: push.name, until: push.until }]
+    : others;
+  const me = state.me?.id === push.participantId ? { ...state.me, canDraw: push.on } : state.me;
+  const mine = state.me ? holders.find((h) => h.participantId === state.me!.id) : undefined;
+  return { ...state, me, drawHolders: holders, drawHolder: mine ?? holders[0] ?? null };
 }
 
 export function applyHandPush<
@@ -120,22 +147,16 @@ export function applyDrawReqPush<
   return { ...state, me, admitted, drawRequestCount: admitted.filter((p) => p.drawRequested).length };
 }
 
-/** Whiteboard packets from a student identity: ops only (never end / snap / req). */
-export function wbStudentPacketAllowed(t: string): boolean {
-  return t === 'ops';
-}
-
 /**
- * Screen-draw overlay. Server/teacher: any packet. Student: `pts` only, and
- * `by` must equal their LiveKit identity (they cannot wipe or erase others
- * over the data channel; del/clear stay server-relayed).
+ * Screen-draw overlay: server or teacher packets only. A student's points are
+ * relayed by the server after it checked the draw permission and that the
+ * stroke is theirs (lib/drawServer appendPoints), with `by` and `name` set by
+ * the server.
  */
 export function drawPacketTrusted(opts: {
   senderIdentity: string | null | undefined;
   packet: { t: string; by?: string };
 }): boolean {
   const kind = senderKind(opts.senderIdentity);
-  if (kind === 'server' || kind === 'teacher') return true;
-  if (kind !== 'student') return false;
-  return opts.packet.t === 'pts' && opts.packet.by === opts.senderIdentity;
+  return kind === 'server' || kind === 'teacher';
 }

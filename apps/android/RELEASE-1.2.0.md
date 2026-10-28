@@ -16,7 +16,8 @@ The release APK for teachers is the signed one: add the release key (the one tha
 SHA-256 `7cfe1e01…cad982`) as repository secrets (see `COMPATIBILITY.md`, "Building and releasing") and
 re-run the workflow (Actions → Android teacher app → Run workflow, branch `android`): the run then has
 `app-release.apk`, and its "Release certificate" step shows the key. That APK installs over 1.1.0 and
-keeps the teacher signed in; put it in the Drive folder. About 25 MB, down from
+keeps the teacher signed in; put it in the Drive folder. Its version code will be higher than 207: the code counts
+the branch's commits at build time, and `main` has been merged in since. Any higher code installs over 1.1.0. About 25 MB, down from
 61 MB for 1.1.0.
 
 ## What changed

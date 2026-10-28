@@ -2,6 +2,7 @@ import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/adminGuard';
 import { audienceIncludes, formatAudience, normalizeCampus, normalizeDivision, normalizeGrade } from '@/lib/grades';
 import { jsonOk } from '@/lib/response';
+import { modifyLabel } from '@/lib/overrideRules';
 import { addDays, dateOnly, dateValue, formatHHMM, localDateOf } from '@/lib/schedule';
 import { appTimeZone } from '@/lib/schoolConfig';
 
@@ -75,7 +76,11 @@ export async function GET(req: Request) {
           o.slot.allDivisions
         )} · ${names.get(o.slot.teacherId) ?? ''}`
       : null,
+    teacherId: o.teacherId,
     teacherName: o.teacherId ? names.get(o.teacherId) ?? '—' : null,
+    originalTeacherId: o.slot?.teacherId ?? null,
+    originalTeacherName: o.slot ? names.get(o.slot.teacherId) ?? null : null,
+    label: o.kind === 'MODIFY' ? modifyLabel({ teacherId: o.teacherId, originalTeacherId: o.slot?.teacherId, startMinute: o.startMinute, endMinute: o.endMinute }) : null,
     audience: o.grade ? formatAudience(o.campus ?? o.slot?.campus ?? '', o.grade, o.divisions, o.allDivisions) : null,
     subject: o.subject,
     start: o.startMinute != null ? formatHHMM(o.startMinute) : null,

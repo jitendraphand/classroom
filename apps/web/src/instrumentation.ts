@@ -10,5 +10,17 @@ export async function register() {
     startRankScheduler();
     const { startAbsenceSweeper } = await import('./lib/teacherPresence');
     startAbsenceSweeper();
+    const { startAttendanceFlusher } = await import('./lib/attendanceQueue');
+    startAttendanceFlusher();
+    const { startRetentionJob } = await import('./lib/retention');
+    startRetentionJob();
+    try {
+      const { schoolJoinModeFromEnv, signedModeProblem } = await import('./lib/schoolJoin');
+      const { schoolJwtConfigFromEnv } = await import('./lib/schoolJwt');
+      const problem = signedModeProblem(schoolJoinModeFromEnv(), schoolJwtConfigFromEnv());
+      if (problem) console.error(`[school-join] ${problem}`);
+    } catch (e) {
+      console.error('[school-join] could not read the signed-link config:', e instanceof Error ? e.message : e);
+    }
   }
 }

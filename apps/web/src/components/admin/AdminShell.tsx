@@ -2,54 +2,50 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { AppHeader } from '@/components/layout/AppHeader';
+import { SwitchViewButton } from '@/components/layout/SwitchViewButton';
 import { Button } from '@/components/ui/Button';
 import { PageLoading } from '@/components/ui/Skeleton';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { ADMIN_SECTIONS, pageAccess, sectionForPath, visibleAdminSections, type AdminSectionId } from '@/lib/adminSections';
 import { api } from '@/lib/clientFetch';
 import { cn } from '@/lib/cn';
+import { allPrivileges, type PrivilegeSet } from '@/lib/privileges';
 import { loginHref } from '@/lib/sessionClient';
-import { visibleAdminTabs, type PrivilegeSet } from '@/lib/privileges';
 
-const TABS = [
-  { id: 'today' as const, href: '/admin', label: "Today's classes" },
-  { id: 'live' as const, href: '/admin/live', label: 'Live dashboard' },
-  { id: 'performance' as const, href: '/admin/performance', label: 'Teacher performance' },
-  { id: 'system' as const, href: '/admin/system', label: 'System Control' },
-];
+export type AdminMe = { email: string; kind: string; privileges: PrivilegeSet; linkedTeacher: boolean; sections: AdminSectionId[] };
 
-const SYSTEM_PREFIXES = ['/admin/system', '/admin/teachers', '/admin/timetable', '/admin/students', '/admin/grades', '/admin/reports'];
+const AdminContext = createContext<AdminMe | null>(null);
 
-function tabForPath(pathname: string) {
-  if (pathname.startsWith('/admin/live')) return 'live' as const;
-  if (pathname.startsWith('/admin/performance')) return 'performance' as const;
-  if (SYSTEM_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + '/'))) return 'system' as const;
-  if (pathname === '/admin') return 'today' as const;
-  return 'system' as const;
+/** The signed-in admin (inside AdminShell): pages hide what this admin may not do. */
+export function useAdminMe(): AdminMe | null {
+  return useContext(AdminContext);
 }
 
-/** Admin page frame: checks the admin session, renders header + the four tabs. */
+/** Admin page frame: checks the admin session, renders the header and the section tabs. */
 export function AdminShell({ children, title }: { children: ReactNode; title: string }) {
   const router = useRouter();
   const pathname = usePathname() || '/admin';
-  const [me, setMe] = useState<{ email: string; tabs: Array<(typeof TABS)[number]['id']> } | null>(null);
+  const [me, setMe] = useState<AdminMe | null>(null);
+  useDocumentTitle(title);
 
   useEffect(() => {
-    api<{ role: string; email: string; mustChangePassword?: boolean; kind?: string; privileges?: PrivilegeSet }>('/api/auth/me').then(({ data }) => {
+    api<{ role: string; email: string; mustChangePassword?: boolean; kind?: string; privileges?: PrivilegeSet; linkedTeacherId?: string | null }>('/api/auth/me').then(({ data }) => {
       if (data.role !== 'admin') router.replace(loginHref((data as { reason?: unknown }).reason, window.location.pathname));
       else if (data.mustChangePassword) router.replace('/account/password');
       else {
-        const tabs = data.privileges && data.kind ? visibleAdminTabs(data.privileges, data.kind) : (['today', 'live', 'performance', 'system'] as const);
-        setMe({ email: data.email, tabs: [...tabs] });
+        const kind = data.kind || 'SYSTEM';
+        const privileges = data.privileges ?? allPrivileges(true);
+        setMe({ email: data.email, kind, privileges, linkedTeacher: !!data.linkedTeacherId, sections: visibleAdminSections(privileges, kind) });
       }
     });
   }, [router]);
 
+  // Landing on /admin without access to Today (e.g. a students-only sub-admin): go to the first section they have.
   useEffect(() => {
-    if (!me) return;
-    const here = tabForPath(pathname);
-    if (me.tabs.includes(here)) return;
-    const first = TABS.find((t) => me.tabs.includes(t.id));
+    if (!me || pathname !== '/admin' || me.sections.includes('today')) return;
+    const first = ADMIN_SECTIONS.find((s) => me.sections.includes(s.id));
     if (first) router.replace(first.href);
   }, [me, pathname, router]);
 
@@ -59,17 +55,23 @@ export function AdminShell({ children, title }: { children: ReactNode; title: st
   }
 
   if (!me) return <PageLoading label="Loading admin…" />;
+  const access = pageAccess(pathname, me.privileges, me.kind);
+  const active = sectionForPath(pathname).id;
 
   return (
     <main className="page-shell">
       <AppHeader
         compact
+        homeHref="/admin"
         subtitle="School administration"
         right={
           <>
-            <Link href="/account/password" className="btn-ghost px-3 py-1.5 text-xs">
-              Change password
-            </Link>
+            {me.linkedTeacher && <SwitchViewButton to="teacher" />}
+            {!me.linkedTeacher && (
+              <Link href="/account/password" className="btn-ghost px-3 py-1.5 text-xs">
+                Change password
+              </Link>
+            )}
             <Button variant="secondary" size="sm" onClick={logout}>
               Log out
             </Button>
@@ -77,24 +79,31 @@ export function AdminShell({ children, title }: { children: ReactNode; title: st
         }
       />
       <nav className="mb-6 flex gap-1 overflow-x-auto border-b border-white/10 pb-px" aria-label="Admin sections">
-        {TABS.filter((n) => me.tabs.includes(n.id)).map((n) => {
-          const active = tabForPath(pathname) === n.id;
-          return (
-            <Link
-              key={n.href}
-              href={n.href}
-              className={cn(
-                '-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium transition',
-                active ? 'border-brand-400 text-white' : 'border-transparent text-slate-400 hover:text-white'
-              )}
-            >
-              {n.label}
-            </Link>
-          );
-        })}
+        {ADMIN_SECTIONS.filter((s) => me.sections.includes(s.id)).map((s) => (
+          <Link
+            key={s.id}
+            href={s.href}
+            aria-current={active === s.id ? 'page' : undefined}
+            className={cn(
+              '-mb-px whitespace-nowrap border-b-2 px-3 py-2.5 text-sm font-medium transition',
+              active === s.id ? 'border-brand-400 text-white' : 'border-transparent text-slate-400 hover:text-white'
+            )}
+          >
+            {s.label}
+          </Link>
+        ))}
       </nav>
       <h1 className="mb-5 font-display text-2xl font-semibold tracking-tight">{title}</h1>
-      {children}
+      {access.ok ? (
+        <AdminContext.Provider value={me}>{children}</AdminContext.Provider>
+      ) : (
+        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6" role="status">
+          <p className="font-semibold text-white">You don’t have access to this page</p>
+          <p className="mt-1 text-sm text-slate-400">
+            It needs the “{access.needs}” permission. Ask the system administrator if you need it.
+          </p>
+        </div>
+      )}
       <p className="mt-10 text-xs text-slate-500">Signed in as {me.email}</p>
     </main>
   );

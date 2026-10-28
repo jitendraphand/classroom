@@ -111,6 +111,11 @@ const noted = new Map<string, number>();
 export function noteClassEnded(code: string, now = Date.now()) {
   if (!code) return;
   noted.set(code.toUpperCase(), now);
+  // Bounded: notes older than the longest TTL callers use are useless.
+  if (noted.size > 500) {
+    for (const [k, at] of noted) if (now - at > 10 * 60_000) noted.delete(k);
+    while (noted.size > 2000) noted.delete(noted.keys().next().value as string);
+  }
 }
 
 export function classEndedNoted(code: string, now = Date.now(), ttlMs = 120_000): boolean {

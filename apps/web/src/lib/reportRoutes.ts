@@ -6,8 +6,8 @@ import {
   ReportError,
   sessionSummary,
   sessionSummaryCsv,
+  studentSummary,
   studentSummaryCsv,
-  summariseByStudent,
 } from './reports';
 import { jsonError, jsonOk } from './response';
 
@@ -24,11 +24,11 @@ export async function reportResponse(kind: ReportKind, req: Request, scope: { te
       const rows = await sessionSummary(f);
       return csv ? csvResponse(`sessions_${stamp}.csv`, sessionSummaryCsv(rows)) : jsonOk({ filter: f, rows });
     }
-    const detail = await attendanceDetail(f);
     if (kind === 'detail') {
+      const detail = await attendanceDetail(f);
       return csv ? csvResponse(`attendance_${stamp}.csv`, attendanceDetailCsv(detail)) : jsonOk({ filter: f, rows: detail.slice(0, 5000), total: detail.length });
     }
-    const rows = summariseByStudent(detail);
+    const rows = await studentSummary(f);
     return csv ? csvResponse(`students_${stamp}.csv`, studentSummaryCsv(rows)) : jsonOk({ filter: f, rows });
   } catch (e) {
     if (e instanceof ReportError) return jsonError(e.message);

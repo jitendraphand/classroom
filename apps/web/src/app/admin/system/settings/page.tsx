@@ -19,10 +19,16 @@ function Settings() {
   const [seats, setSeats] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  // Item 11: 'loading' | 'ready' | an error message. Never the form and an error together.
+  const [loadState, setLoadState] = useState<string>('loading');
 
   useEffect(() => {
     api<{ maxOpenStudentMics: number; maxStudentsPerClass: number | null }>('/api/admin/settings').then(({ ok, data }) => {
-      if (!ok) return;
+      if (!ok) {
+        setLoadState(data.error || 'Could not load settings');
+        return;
+      }
+      setLoadState('ready');
       setMics(String(data.maxOpenStudentMics ?? 0));
       setSeats(data.maxStudentsPerClass ? String(data.maxStudentsPerClass) : '');
     });
@@ -37,6 +43,15 @@ function Settings() {
     const { ok, data } = await api('/api/admin/settings', { method: 'PUT', body: { maxOpenStudentMics, maxStudentsPerClass } });
     if (!ok) setError(data.error || 'Could not save');
     else setNotice('Saved. 0 or empty means no limit.');
+  }
+
+  if (loadState === 'loading') return <p className="text-sm text-slate-400">Loading…</p>;
+  if (loadState !== 'ready') {
+    return (
+      <p className="rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-2 text-sm text-danger-fg" role="alert">
+        {loadState}
+      </p>
+    );
   }
 
   return (
