@@ -453,6 +453,13 @@ function DrawSurface({ w, h }: { w: number; h: number }) {
     const id = window.setInterval(() => tick((n) => n + 1), 1000);
     return () => window.clearInterval(id);
   }, []);
+  // CSS hook for "the drawing toolbar is up" (moves the mute pill off it).
+  // A class, not html:has(), which Firefox < 121 and Safari < 15.4 drop.
+  useEffect(() => {
+    const html = document.documentElement;
+    html.classList.add('has-draw-toolbar');
+    return () => html.classList.remove('has-draw-toolbar');
+  }, []);
 
   return (
     <>

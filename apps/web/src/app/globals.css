@@ -100,6 +100,7 @@ input[type='time'].input {
 
 @layer components {
   .glass {
+    background: rgba(22, 28, 42, 0.88); /* iOS < 16.2: no color-mix() */
     background: color-mix(in srgb, var(--surface-2) 88%, transparent);
     border: 1px solid var(--border);
     backdrop-filter: blur(18px) saturate(1.2);
@@ -108,6 +109,7 @@ input[type='time'].input {
   .surface-panel {
     @apply rounded-2xl border shadow-soft;
     border-color: var(--border);
+    background: rgba(22, 28, 42, 0.92); /* iOS < 16.2: no color-mix() */
     background: color-mix(in srgb, var(--surface-2) 92%, transparent);
   }
 
@@ -244,6 +246,7 @@ input[type='time'].input {
   .control-dock {
     @apply flex flex-wrap items-center justify-center gap-2 rounded-2xl px-3 py-2.5 shadow-dock backdrop-blur-xl;
     border: 1px solid var(--border);
+    background: rgba(22, 28, 42, 0.95); /* iOS < 16.2: no color-mix() */
     background: color-mix(in srgb, var(--surface-2) 95%, transparent);
   }
 
@@ -260,11 +263,15 @@ input[type='time'].input {
   .control-float {
     @apply flex flex-wrap items-center justify-center gap-1.5 rounded-2xl px-2.5 py-2 shadow-dock backdrop-blur-xl;
     border: 1px solid var(--border);
+    background: rgba(22, 28, 42, 0.92); /* iOS < 16.2: no color-mix() */
     background: color-mix(in srgb, var(--surface-2) 92%, transparent);
     padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0px));
   }
 
   .stage-fullscreen {
+    /* 100vh first: browsers without dvh (iOS < 15.4, Chrome < 108) keep it. */
+    height: 100vh;
+    max-height: 100vh;
     @apply relative flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden bg-black;
   }
 
@@ -321,6 +328,7 @@ input[type='time'].input {
   .control-rail {
     @apply flex flex-col items-center rounded-2xl p-1 shadow-dock backdrop-blur-xl;
     border: 1px solid var(--border);
+    background: rgba(22, 28, 42, 0.88); /* iOS < 16.2: no color-mix() */
     background: color-mix(in srgb, var(--surface-2) 88%, transparent);
   }
   .control-status-pill {
@@ -680,6 +688,7 @@ input[type='time'].input {
   z-index: 55;
   width: max-content;
   max-width: min(960px, calc(100vw - 16px));
+  max-height: min(70vh, calc(100vh - 8rem));
   max-height: min(70vh, calc(100dvh - 8rem));
   overflow: auto;
   border-radius: 12px;
@@ -930,7 +939,19 @@ html.pseudo-fullscreen body {
 html.pseudo-fullscreen .stage-fullscreen {
   position: fixed;
   inset: 0;
+  height: 100vh;
+  max-height: 100vh;
   height: 100dvh;
+  max-height: 100dvh;
+}
+
+/* Full-height screens: 100vh where dvh is unknown (iOS < 15.4, Chrome < 108). */
+.h-dvh-safe {
+  height: 100vh;
+  height: 100dvh;
+}
+.max-h-dvh-safe {
+  max-height: 100vh;
   max-height: 100dvh;
 }
 
@@ -941,20 +962,20 @@ html {
 }
 
 /* Mute pill: keep off the top-centre drawing toolbar while the student annotates. */
-html:has(.draw-toolbar) .control-status-pill {
+html.has-draw-toolbar .control-status-pill {
   top: auto;
   bottom: max(5.5rem, env(safe-area-inset-bottom, 0px) + 4.5rem);
   z-index: 30;
 }
 @media (orientation: portrait) and (max-width: 700px) {
-  html:has(.draw-toolbar) .control-status-pill {
+  html.has-draw-toolbar .control-status-pill {
     top: 2.75rem;
     bottom: auto;
     left: auto;
     right: 8px;
     transform: none;
   }
-  html:has(.draw-toolbar) .control-status-pill.is-second {
+  html.has-draw-toolbar .control-status-pill.is-second {
     top: 4.75rem;
   }
 }
