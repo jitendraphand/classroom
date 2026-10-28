@@ -32,7 +32,8 @@ class ClassPanel(context: Context, private val listener: Listener) : LinearLayou
 
     interface Listener {
         fun onClosePanel()
-        fun onSendChat(text: String)
+        /** [to] = a student's participant id for a private message, null = everyone. */
+        fun onSendChat(text: String, to: String?)
         fun onAdmit(participantId: String)
         fun onAdmitAll()
         fun onMuteStudent(participantId: String, muted: Boolean)
@@ -55,6 +56,13 @@ class ClassPanel(context: Context, private val listener: Listener) : LinearLayou
     private val chatScroll = ScrollView(context)
     private val chatLog = TextView(context)
     private val chatInput = EditText(context)
+    private val replyBar = LinearLayout(context)
+    private val replyText = TextView(context)
+    private val replyButton: MaterialButton = textButton("Reply privately", Palette.SURFACE_2, Palette.TEXT) { toggleReply() }
+    /** Who the next message goes to privately (participant id, name); null = everyone. */
+    private var replyTo: Pair<String, String>? = null
+    /** The newest message is a student's private question: offer a private reply. */
+    private var suggestion: Pair<String, String>? = null
     private val rosterScroll = ScrollView(context)
     private val rosterList = LinearLayout(context)
     private val search = EditText(context)
@@ -93,6 +101,20 @@ class ClassPanel(context: Context, private val listener: Listener) : LinearLayou
         }
         chatScroll.addView(chatLog)
         chatBox.addView(chatScroll, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        // Private reply: "Ana asked you privately [Reply privately]" / "Private to Ana [Everyone]".
+        replyBar.apply {
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(context.dpx(16), context.dpx(2), context.dpx(8), 0)
+            visibility = View.GONE
+        }
+        replyText.apply {
+            setTextColor(0xFFFBBF24.toInt())
+            textSize = 13f
+        }
+        replyBar.addView(replyText, LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        replyBar.addView(replyButton, LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        chatBox.addView(replyBar)
         val inputRow = LinearLayout(context).apply {
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -157,11 +179,52 @@ class ClassPanel(context: Context, private val listener: Listener) : LinearLayou
     private fun send() {
         val text = chatInput.text.toString().trim()
         if (text.isEmpty()) return
-        listener.onSendChat(text)
+        listener.onSendChat(text, replyTo?.first)
         chatInput.setText("")
+        // One private reply at a time: the next message goes to everyone again.
+        if (replyTo != null) {
+            replyTo = null
+            renderReply()
+        }
     }
 
-    fun renderChat(lines: String) {
+    private fun toggleReply() {
+        replyTo = if (replyTo != null) null else suggestion
+        renderReply()
+        if (replyTo != null) chatInput.requestFocus()
+    }
+
+    private fun renderReply() {
+        val target = replyTo
+        val offer = suggestion
+        when {
+            target != null -> {
+                replyBar.visibility = View.VISIBLE
+                replyText.text = "Private to ${target.second}"
+                replyButton.text = "Everyone"
+                replyButton.contentDescription = "Send to everyone instead"
+                chatInput.hint = "Message ${target.second} privately"
+            }
+            offer != null -> {
+                replyBar.visibility = View.VISIBLE
+                replyText.text = "${offer.second} asked you privately"
+                replyButton.text = "Reply privately"
+                replyButton.contentDescription = "Reply privately to ${offer.second}"
+                chatInput.hint = "Message everyone"
+            }
+            else -> {
+                replyBar.visibility = View.GONE
+                chatInput.hint = "Message everyone"
+            }
+        }
+    }
+
+    /** [privateQuestion] = (participant id, name) when the newest message is a student's private question. */
+    fun renderChat(lines: String, privateQuestion: Pair<String, String>? = null) {
+        if (privateQuestion != suggestion) {
+            suggestion = privateQuestion
+            renderReply()
+        }
         val atBottom = !chatScroll.canScrollVertically(1)
         val next = lines.ifBlank { "No messages yet." }
         if (chatLog.text.toString() == next) return

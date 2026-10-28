@@ -101,11 +101,15 @@ object Realtime {
         }
     }
 
-    /** Trust rule for `draw`: server/teacher anything; a student only its own `pts`. */
+    /**
+     * Trust rule for `draw` (web realtimePackets drawPacketTrusted): server or
+     * teacher only. Students hold no LiveKit data grant; their points reach us
+     * as the server's relay, after it checked the draw permission and set `by`.
+     */
+    @Suppress("UNUSED_PARAMETER")
     fun inkTrusted(p: Ink, senderIdentity: String?): Boolean = when (senderKind(senderIdentity)) {
         Sender.SERVER, Sender.TEACHER -> true
-        Sender.STUDENT -> p is Ink.Pts && p.by == senderIdentity
-        Sender.OTHER -> false
+        Sender.STUDENT, Sender.OTHER -> false
     }
 
     /** Apply an ink packet in place (web applyPacket; idempotent append at `from`). */
@@ -155,11 +159,15 @@ object Realtime {
     /** Class-full wording from the Windows app (admit → 409). */
     fun classFullMessage(err: String?): String = "${err?.takeIf { it.isNotBlank() } ?: "This class is full."} Remove a student or raise the class size limit to admit more."
 
-    /** Poll cadence: fast while someone waits, normal live, slow (30 s) while the app is in the background. */
+    /**
+     * Poll cadence (web pollPolicy statePollMs, teacher): while LiveKit is
+     * connected every change is pushed, so the poll is a 60 s safety net;
+     * without pushes ([fast]) 2 s, or 30 s while the app is in the background.
+     */
     fun pollMs(visible: Boolean, fast: Boolean): Long = when {
-        !visible -> 30_000L
-        fast -> 2_000L
-        else -> 5_000L
+        !fast -> 60_000L
+        visible -> 2_000L
+        else -> 30_000L
     }
 
     /** Chat `?since` cursor: newest createdAt (ISO) we hold; the server applies a 5 s overlap, so merge by id. */
@@ -225,3 +233,30 @@ class ErrorReporter(private val clock: () -> Long = System::currentTimeMillis) {
     }
 }
 
+/**
+ * The server's media profile (MEDIA_PROFILE, sent with the LiveKit token) and
+ * the publish settings that follow from it, matching the web app
+ * (apps/web/src/lib/videoQuality.ts). 'low' is for a small server or a shared
+ * school uplink: the SFU forwards the teacher's streams to every student.
+ */
+object Media {
+    enum class Profile { STANDARD, LOW }
+
+    fun parseProfile(v: Any?): Profile = if ((v as? String)?.trim()?.lowercase() == "low") Profile.LOW else Profile.STANDARD
+
+    data class Layer(val width: Int, val height: Int, val fps: Int, val maxBitrate: Int)
+    data class Camera(val width: Int, val height: Int, val fps: Int, val maxBitrate: Int, val layers: List<Layer>)
+    data class Share(val fps: Int, val maxBitrate: Int, val lowLayerBitrate: Int, val lowLayerFps: Int)
+
+    /** Web TEACHER_CAMERA: 360p / 15 fps / 300 kbps + a 180p 90 kbps layer; low: one 180p layer, 120 kbps. */
+    fun camera(p: Profile): Camera = when (p) {
+        Profile.STANDARD -> Camera(640, 360, 15, 300_000, listOf(Layer(320, 180, 12, 90_000)))
+        Profile.LOW -> Camera(320, 180, 12, 120_000, emptyList())
+    }
+
+    /** Screen share: 2 Mbps / 15 fps + a 720p 1 Mbps layer; low (web LOW_SCREEN_SHARE): 1 Mbps / 10 fps, 720p 600 kbps. */
+    fun share(p: Profile): Share = when (p) {
+        Profile.STANDARD -> Share(15, 2_000_000, 1_000_000, 15)
+        Profile.LOW -> Share(10, 1_000_000, 600_000, 10)
+    }
+}

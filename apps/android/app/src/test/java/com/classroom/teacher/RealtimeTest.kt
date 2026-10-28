@@ -30,8 +30,9 @@ class RealtimeTest {
 
     @Test fun inkPacketsAndTrust() {
         val p = Realtime.decodeInk(JSONObject("""{"v":1,"t":"pts","id":"abcd","by":"student_a","name":"A","c":"red","from":0,"pts":[0.1,0.2,0.3,0.4]}"""))!!
-        assertTrue(Realtime.inkTrusted(p, "student_a"))
-        assertFalse(Realtime.inkTrusted(p, "student_b"))
+        // Students hold no data grant: their points arrive as the server's relay (no identity).
+        assertTrue(Realtime.inkTrusted(p, null))
+        assertFalse(Realtime.inkTrusted(p, "student_a"))
         assertFalse(Realtime.inkTrusted(Realtime.Ink.Clear, "student_a"))
         assertNull(Realtime.decodeInk(JSONObject("""{"v":1,"t":"pts","id":"abcd","by":"s","name":"A","c":"green","pts":[0.1,0.2]}""")))
         assertNull(Realtime.decodeInk(JSONObject("""{"v":1,"t":"pts","id":"abcd","by":"s","name":"A","c":"red","pts":[0.1,5]}""")))
@@ -55,7 +56,9 @@ class RealtimeTest {
     @Test fun polling() {
         assertEquals(30_000L, Realtime.pollMs(visible = false, fast = true))
         assertEquals(2_000L, Realtime.pollMs(visible = true, fast = true))
-        assertEquals(5_000L, Realtime.pollMs(visible = true, fast = false))
+        // Pushes live: a 60 s safety net, as the web teacher (pollPolicy statePollMs).
+        assertEquals(60_000L, Realtime.pollMs(visible = true, fast = false))
+        assertEquals(60_000L, Realtime.pollMs(visible = false, fast = false))
     }
 
     @Test fun chatMerge() {

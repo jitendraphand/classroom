@@ -7,7 +7,8 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-// Every build gets a fresh version: code = 100 + commit count, name = 1.1.0-<date>.
+// Every build gets a fresh version: code = 100 + commit count, name = 1.2.0-<date>.
+// (CI checks out the full history so the count matches a local build.)
 val gitCommits: Int = try {
     val p = ProcessBuilder("git", "rev-list", "--count", "HEAD").directory(rootDir).redirectErrorStream(true).start()
     p.inputStream.bufferedReader().readText().trim().toInt().also { p.waitFor() }
@@ -15,6 +16,13 @@ val gitCommits: Int = try {
     0
 }
 val buildDate: String = SimpleDateFormat("yyyyMMdd").format(Date())
+
+// Pre-filled server address on the sign-in screen. A school build sets
+// CLASSROOM_DEFAULT_SERVER (same variable as the Windows app).
+val defaultServer: String = (System.getenv("CLASSROOM_DEFAULT_SERVER")?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }
+    ?: "https://13-201-89-150.sslip.io").also {
+    require(Regex("^https?://[A-Za-z0-9.:\\[\\]_-]+(/[A-Za-z0-9._~/-]*)?$").matches(it)) { "CLASSROOM_DEFAULT_SERVER is not a server address: $it" }
+}
 
 // Release signing: a properties file outside the repo (storeFile / storePassword /
 // keyAlias / keyPassword), path in CLASSROOM_SIGNING. Without it, release is unsigned.
@@ -32,7 +40,8 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 100 + gitCommits
-        versionName = "1.1.0-$buildDate"
+        versionName = "1.2.0-$buildDate"
+        buildConfigField("String", "DEFAULT_SERVER", "\"$defaultServer\"")
     }
 
     signingConfigs {
@@ -49,7 +58,12 @@ android {
     buildTypes {
         release {
             if (signingProps != null) signingConfig = signingConfigs.getByName("release")
-            isMinifyEnabled = false
+            // Phones and tablets are ARM: leaving out the x86 WebRTC libraries
+            // and shrinking the code roughly halves the download. Debug builds
+            // keep every ABI (emulators) and are not shrunk.
+            ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

@@ -39,7 +39,14 @@ data class ClassChoice(
     val live: Boolean,
 )
 
-data class GradeChoice(val grade: String, val label: String, val divisions: List<Pair<String, String>>, val allowAll: Boolean)
+/** A grade on one campus the teacher may start an ad-hoc class for (the server needs the campus too). */
+data class GradeChoice(
+    val campus: String,
+    val grade: String,
+    val label: String,
+    val divisions: List<Pair<String, String>>,
+    val allowAll: Boolean,
+)
 
 data class Schedule(
     val activeCode: String?,
@@ -88,6 +95,22 @@ class ClassroomApi(rawBase: String) {
         return res
     }
 
+    /**
+     * Who is signed in. The server ends teacher sessions after 24 h without
+     * use and renews the cookie on this call, so the app calls it while open.
+     */
+    fun me(): JSONObject {
+        val res = call("GET", "/api/auth/me", null)
+        // A captive portal or proxy page is not an answer: only the server's own "role" counts.
+        if (!res.has("role")) throw ApiException("The server did not answer as expected.")
+        if (res.optString("role") != "teacher") {
+            val reason = res.optString("reason").takeIf { it.isNotBlank() && it != "null" }
+            teacherCookie = null
+            throw SessionEndedException(reason)
+        }
+        return res
+    }
+
     fun logout() {
         try {
             call("POST", "/api/auth/logout", JSONObject(), sessionCall = false)
@@ -131,7 +154,7 @@ class ClassroomApi(rawBase: String) {
                 }
             }
             val name = g.optString("grade", g.optString("name"))
-            grades.add(GradeChoice(name, g.optString("label", name), list, g.optBoolean("whole", false)))
+            grades.add(GradeChoice(g.optString("campus"), name, g.optString("label", name), list, g.optBoolean("whole", false)))
         }
         val activeCode = active?.optString("code")?.takeIf { it.isNotBlank() }
         val activeLabel = active?.let {
@@ -143,8 +166,8 @@ class ClassroomApi(rawBase: String) {
     fun startScheduled(key: String): JSONObject =
         call("POST", "/api/teacher/sessions/start", JSONObject().put("kind", "scheduled").put("key", key))
 
-    fun startAdHoc(grade: String, division: String?, subject: String): JSONObject {
-        val body = JSONObject().put("kind", "adhoc").put("grade", grade)
+    fun startAdHoc(campus: String, grade: String, division: String?, subject: String): JSONObject {
+        val body = JSONObject().put("kind", "adhoc").put("campus", campus).put("grade", grade)
         if (division == null) body.put("allDivisions", true).put("divisions", JSONArray())
         else body.put("allDivisions", false).put("divisions", JSONArray().put(division))
         if (subject.isNotBlank()) body.put("subject", subject)
@@ -201,8 +224,9 @@ class ClassroomApi(rawBase: String) {
     /** Crash report (no auth, best effort, never throws). */
     fun clientError(report: JSONObject) {
         try {
+            if (ServerAddress.problem(base) != null) return
             val text = report.toString()
-            if (text.length > 15_000) return
+            if (text.length > CLIENT_ERROR_MAX) return
             val req = Request.Builder().url("$base/api/client-error").post(text.toRequestBody(jsonType)).build()
             client.newCall(req).execute().close()
         } catch (_: Exception) {
@@ -243,8 +267,9 @@ class ClassroomApi(rawBase: String) {
         return call("GET", "/api/rooms/${code.uppercase()}/messages$q", null)
     }
 
-    fun sendBroadcast(code: String, text: String) {
-        call("POST", "/api/rooms/${code.uppercase()}/messages", JSONObject().put("text", text).put("to", "all"))
+    /** Chat to everyone ([to] null) or privately to one student (participant id). */
+    fun sendMessage(code: String, text: String, to: String? = null) {
+        call("POST", "/api/rooms/${code.uppercase()}/messages", JSONObject().put("text", text).put("to", to ?: "all"))
     }
 
     fun end(code: String) {
@@ -276,6 +301,8 @@ class ClassroomApi(rawBase: String) {
     }
 
     private fun rawCall(method: String, path: String, body: JSONObject?): Pair<Int, JSONObject> {
+        // The password and session cookie never go over plain http to a public address.
+        ServerAddress.problem(base)?.let { throw ApiException(it) }
         val builder = Request.Builder().url(base + path)
         teacherCookie?.let { builder.header("Cookie", it) }
         when {
@@ -300,6 +327,10 @@ class ClassroomApi(rawBase: String) {
     }
 
     companion object {
-        const val DEFAULT_SERVER = "https://13-201-89-150.sslip.io"
+        /** Pre-filled server address (set at build time: CLASSROOM_DEFAULT_SERVER). */
+        val DEFAULT_SERVER: String = BuildConfig.DEFAULT_SERVER
+
+        /** The server rejects reports over 8 KB (413). */
+        const val CLIENT_ERROR_MAX = 7_500
     }
 }

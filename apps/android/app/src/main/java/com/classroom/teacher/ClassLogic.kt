@@ -133,3 +133,66 @@ object ClassLogic {
     private fun JSONObject.optLongOrNull(key: String): Long? =
         if (!has(key) || isNull(key)) null else optLong(key).takeIf { it > 0 }
 }
+
+/** Chat rules shared with the web teacher (apps/web/src/lib/chatReply.ts). Pure, JVM-tested. */
+object ChatLogic {
+    /** One line of the chat log. Private messages are marked, so a teacher never answers one in public by mistake. */
+    fun line(m: JSONObject): String {
+        val name = m.optString("senderName").ifBlank { "Someone" }
+        val body = m.optString("body")
+        return when (m.optString("scope")) {
+            "TEACHER" -> "$name (private, to you): $body"
+            "DIRECT" -> "You \u2192 ${m.optString("recipientName").ifBlank { "a student" }} (private): $body"
+            else -> "$name: $body"
+        }
+    }
+
+    /** The newest message is a student's private question: (participantId, name) to offer "Reply privately". */
+    fun pendingPrivateQuestion(messages: List<JSONObject>): Pair<String, String>? {
+        val last = messages.lastOrNull() ?: return null
+        if (last.optString("scope") != "TEACHER" || last.optString("senderRole") != "STUDENT") return null
+        val id = last.optString("senderParticipantId").takeIf { it.isNotBlank() } ?: return null
+        return id to last.optString("senderName").ifBlank { "the student" }
+    }
+}
+
+/**
+ * Server address rules. Plain http:// sends the password and the session
+ * cookie unencrypted, so it is only allowed to a server on this network
+ * (private / loopback / link-local addresses, *.local); anything on the
+ * internet must be https://.
+ */
+object ServerAddress {
+    const val EXAMPLE = "https://classes.example.org"
+
+    /** Why this address cannot be used, or null when it is fine. */
+    fun problem(raw: String): String? {
+        val uri = try {
+            java.net.URI(raw.trim())
+        } catch (_: Exception) {
+            return "Enter a server address like $EXAMPLE"
+        }
+        val scheme = uri.scheme?.lowercase()
+        if (scheme != "https" && scheme != "http") return "The server address must start with https://"
+        val host = uri.host?.lowercase()?.removePrefix("[")?.removeSuffix("]")
+        if (host.isNullOrBlank()) return "Enter a server address like $EXAMPLE"
+        if (uri.rawUserInfo != null) return "Leave the user name and password out of the server address"
+        if (scheme == "http" && !onThisNetwork(host)) {
+            return "Use https:// for a server on the internet. Plain http:// only works for a server on the school network (for example http://192.168.1.10)."
+        }
+        return null
+    }
+
+    fun onThisNetwork(host: String): Boolean {
+        val h = host.lowercase().removePrefix("[").removeSuffix("]")
+        if (h == "localhost" || h.endsWith(".local") || h.endsWith(".lan") || h.endsWith(".home.arpa")) return true
+        val v4 = h.split('.').takeIf { it.size == 4 }?.map { it.toIntOrNull() ?: return false }
+        if (v4 != null) {
+            if (v4.any { it !in 0..255 }) return false
+            val (a, b) = v4[0] to v4[1]
+            return a == 10 || a == 127 || (a == 172 && b in 16..31) || (a == 192 && b == 168) || (a == 169 && b == 254)
+        }
+        if (h.contains(':')) return h == "::1" || h.startsWith("fc") || h.startsWith("fd") || h.startsWith("fe8") || h.startsWith("fe9") || h.startsWith("fea") || h.startsWith("feb")
+        return false
+    }
+}

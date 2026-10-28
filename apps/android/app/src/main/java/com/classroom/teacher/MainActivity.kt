@@ -165,6 +165,12 @@ class MainActivity : AppCompatActivity() {
     private var inkOverlay: InkOverlay? = null
     private var chatMessages: List<JSONObject> = emptyList()
     private var chatSince: String? = null
+    /** (participant id, name) when the newest chat message is a student's private question. */
+    private var chatQuestion: Pair<String, String>? = null
+    /** The server's MEDIA_PROFILE (sent with the LiveKit token): camera / share bitrates. */
+    private var mediaProfile = Media.Profile.STANDARD
+    /** Last /api/auth/me (renews the sliding 24 h session). */
+    private var lastRenew = 0L
     private var videoPanelSent: Boolean? = null
     private val errorReporter = ErrorReporter()
 
@@ -270,9 +276,10 @@ class MainActivity : AppCompatActivity() {
         if (intent?.getBooleanExtra(EXTRA_STOP_SHARE, false) == true) intent.removeExtra(EXTRA_STOP_SHARE)
 
         // Resume a saved session (the server may have replaced it meanwhile).
-        val savedCookie = prefs.getString(KEY_COOKIE, null)
+        val savedCookie = CookieVault.open(prefs.getString(KEY_COOKIE, null))
         val savedServer = prefs.getString(KEY_SERVER, null)
-        if (savedCookie != null && savedServer != null) {
+        val serverProblem = savedServer?.let { ServerAddress.problem(it) }
+        if (savedCookie != null && savedServer != null && serverProblem == null) {
             api = ClassroomApi(savedServer).also {
                 it.teacherCookie = savedCookie
                 it.onCookieChange = ::persistCookie
@@ -280,7 +287,40 @@ class MainActivity : AppCompatActivity() {
             binding.helloText.text = prefs.getString(KEY_NAME, null)?.let { "Signed in as $it" } ?: ""
             loadHome()
         } else {
+            if (savedCookie != null) forgetSession()
             showOnly(binding.loginGroup)
+            serverProblem?.let { showError(it) }
+        }
+        // Keep the sliding session alive while the app is open (also in the background while sharing).
+        lifecycleScope.launch {
+            while (isActive) {
+                delay(RENEW_MS)
+                renewSession()
+            }
+        }
+    }
+
+    /**
+     * The server signs teachers out after 24 h without use; /api/auth/me
+     * renews the session. Called every 30 minutes and when the app comes back.
+     */
+    private fun renewSession() {
+        val client = api ?: return
+        if (client.teacherCookie == null) return
+        val now = System.currentTimeMillis()
+        if (now - lastRenew < RENEW_MS) return
+        lastRenew = now
+        lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) { client.me() }
+            } catch (e: SessionEndedException) {
+                if (api === client) sessionEnded(e)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                lastRenew = 0L // offline: try again next time
+                android.util.Log.w(TAG, "session renewal", e)
+            }
         }
     }
 
@@ -310,6 +350,7 @@ class MainActivity : AppCompatActivity() {
         renderVideos() // resubscribe the shown cameras
         syncVideoPanel()
         pollWake.trySend(Unit) // back to the visible poll cadence now
+        renewSession()
     }
 
     override fun onStop() {
@@ -377,8 +418,8 @@ class MainActivity : AppCompatActivity() {
         val server = binding.serverInput.text.toString().trim()
         val email = binding.emailInput.text.toString().trim()
         val password = binding.passwordInput.text.toString()
-        if (!server.startsWith("http://") && !server.startsWith("https://")) {
-            showError("Server must start with http:// or https://")
+        ServerAddress.problem(server)?.let {
+            showError(it)
             return
         }
         if (email.isBlank() || password.isBlank()) {
@@ -398,8 +439,9 @@ class MainActivity : AppCompatActivity() {
                     .putString(KEY_SERVER, client.base)
                     .putString(KEY_EMAIL, email)
                     .putString(KEY_NAME, name)
-                    .putString(KEY_COOKIE, client.teacherCookie)
+                    .putString(KEY_COOKIE, client.teacherCookie?.let(CookieVault::seal))
                     .apply()
+                lastRenew = System.currentTimeMillis()
                 binding.passwordInput.setText("")
                 binding.helloText.text = "Signed in as $name"
                 loadHome()
@@ -426,7 +468,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun persistCookie(cookie: String?) {
         val e = getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-        if (cookie == null) e.remove(KEY_COOKIE) else e.putString(KEY_COOKIE, cookie)
+        if (cookie == null) e.remove(KEY_COOKIE) else e.putString(KEY_COOKIE, CookieVault.seal(cookie))
         e.apply()
     }
 
@@ -495,7 +537,11 @@ class MainActivity : AppCompatActivity() {
         val hasGrades = grades.isNotEmpty()
         binding.adhocCard.visibility = if (hasGrades) View.VISIBLE else View.GONE
         binding.noGradesText.visibility = if (hasGrades) View.GONE else View.VISIBLE
-        binding.gradeSpinner.adapter = spinnerAdapter(grades.map { "Grade ${it.label}" })
+        // Teachers on more than one campus pick the campus with the grade.
+        val severalCampuses = grades.map { it.campus }.distinct().size > 1
+        binding.gradeSpinner.adapter = spinnerAdapter(
+            grades.map { if (severalCampuses) "${it.campus} · Grade ${it.label}" else "Grade ${it.label}" },
+        )
         renderDivisions()
     }
 
@@ -540,7 +586,7 @@ class MainActivity : AppCompatActivity() {
         clearError()
         lifecycleScope.launch {
             try {
-                val res = withContext(Dispatchers.IO) { client.startAdHoc(g.grade, division, subject) }
+                val res = withContext(Dispatchers.IO) { client.startAdHoc(g.campus, g.grade, division, subject) }
                 enterClass(res.optString("code"), res.optString("name"))
             } catch (e: SessionEndedException) {
                 sessionEnded(e)
@@ -569,6 +615,7 @@ class MainActivity : AppCompatActivity() {
         speakingId = null
         chatMessages = emptyList()
         chatSince = null
+        chatQuestion = null
         videoPanelSent = null
         spotlightId = null
         spotlightName = null
@@ -584,6 +631,7 @@ class MainActivity : AppCompatActivity() {
                 val url = info.optString("url")
                 val token = info.optString("token")
                 if (url.isBlank() || token.isBlank()) throw ApiException("The server did not return a media address.")
+                mediaProfile = Media.parseProfile(info.opt("mediaProfile"))
                 val connected = LiveKit.create(applicationContext)
                 room = connected
                 leaving = false
@@ -812,27 +860,33 @@ class MainActivity : AppCompatActivity() {
             updateDisplaySize()
             val (dw, dh) = maskProcessor.displaySize
             val (cw, ch) = MaskMath.captureSize(dw, dh)
+            val preset = Media.share(mediaProfile)
             track = connected.localParticipant.createScreencastTrack(
                 "screen",
                 data,
-                LocalVideoTrackOptions(true, null, CameraPosition.FRONT, VideoCaptureParameter(cw, ch, 15, true)),
+                LocalVideoTrackOptions(true, null, CameraPosition.FRONT, VideoCaptureParameter(cw, ch, preset.fps, true)),
                 maskProcessor,
             ) { lifecycleScope.launch { onShareStoppedBySystem() } }
             track.startForegroundService(Notifications.SHARE_ID, Notifications.screenShare(this))
             maskProcessor.paused = false
             track.startCapture()
-            // Top layer ~2 Mbps at 15 fps; plus a 720p layer (~1 Mbps) so
-            // phones / weak links get a readable share (web screenShareSimulcastFor).
+            // Top layer 2 Mbps / 15 fps (low profile: 1 Mbps / 10 fps), plus a
+            // 720p layer so phones / weak links get a readable share (web screenShareSimulcastFor).
             val low = Realtime.shareLowLayer(cw, ch)
             val ok = connected.localParticipant.publishVideoTrack(
                 track,
                 VideoTrackPublishOptions(
                     name = "screen",
-                    videoEncoding = VideoEncoding(2_000_000, 15),
+                    videoEncoding = VideoEncoding(preset.maxBitrate, preset.fps),
                     simulcast = low != null,
                     source = Track.Source.SCREEN_SHARE,
                     simulcastLayers = if (low != null) {
-                        listOf(CustomVideoPreset(VideoCaptureParameter(low.first, low.second, 15, true), VideoEncoding(1_000_000, 15)))
+                        listOf(
+                            CustomVideoPreset(
+                                VideoCaptureParameter(low.first, low.second, preset.lowLayerFps, true),
+                                VideoEncoding(preset.lowLayerBitrate, preset.lowLayerFps),
+                            ),
+                        )
                     } else {
                         emptyList()
                     },
@@ -976,8 +1030,9 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * Teacher camera, published like the web teacher's (source CAMERA, name
-     * "camera"): 720p capture, top layer 1.2 Mbps / 24 fps, simulcast layers
-     * 180p (140 kbps, 15 fps) and 360p (500 kbps, 24 fps) as in TEACHER_CAMERA.
+     * "camera", TEACHER_CAMERA): 360p / 15 fps / 300 kbps plus a 180p 90 kbps
+     * layer; with the server's low media profile one 180p layer at 120 kbps.
+     * Every student receives this stream, so it stays small.
      */
     private suspend fun startCamera() {
         val connected = room ?: return
@@ -985,9 +1040,10 @@ class MainActivity : AppCompatActivity() {
         railCamera.isEnabled = false
         var track: LocalVideoTrack? = null
         try {
+            val preset = Media.camera(mediaProfile)
             track = connected.localParticipant.createVideoTrack(
                 "camera",
-                LocalVideoTrackOptions(false, null, cameraPosition, VideoCaptureParameter(1280, 720, 24, true)),
+                LocalVideoTrackOptions(false, null, cameraPosition, VideoCaptureParameter(preset.width, preset.height, preset.fps, true)),
                 null,
             )
             track.startCapture()
@@ -995,13 +1051,12 @@ class MainActivity : AppCompatActivity() {
                 track,
                 VideoTrackPublishOptions(
                     name = "camera",
-                    videoEncoding = VideoEncoding(1_200_000, 24),
-                    simulcast = true,
+                    videoEncoding = VideoEncoding(preset.maxBitrate, preset.fps),
+                    simulcast = preset.layers.isNotEmpty(),
                     source = Track.Source.CAMERA,
-                    simulcastLayers = listOf(
-                        CustomVideoPreset(VideoCaptureParameter(320, 180, 15, true), VideoEncoding(140_000, 15)),
-                        CustomVideoPreset(VideoCaptureParameter(640, 360, 24, true), VideoEncoding(500_000, 24)),
-                    ),
+                    simulcastLayers = preset.layers.map {
+                        CustomVideoPreset(VideoCaptureParameter(it.width, it.height, it.fps, true), VideoEncoding(it.maxBitrate, it.fps))
+                    },
                 ),
             )
             if (!ok) throw ApiException("The camera did not start (state: ${connected.state.name.lowercase()})")
@@ -1164,7 +1219,7 @@ class MainActivity : AppCompatActivity() {
         panelKind = kind
         placePanel()
         if (kind == ClassPanel.Kind.CHAT) {
-            p.renderChat(chatText)
+            p.renderChat(chatText, chatQuestion)
             markChatSeen()
         } else {
             renderRosterPanel()
@@ -1207,7 +1262,7 @@ class MainActivity : AppCompatActivity() {
 
     private val panelListener = object : ClassPanel.Listener {
         override fun onClosePanel() = closePanel()
-        override fun onSendChat(text: String) = sendChat(text)
+        override fun onSendChat(text: String, to: String?) = sendChat(text, to)
         override fun onAdmit(participantId: String) = admitOne(participantId)
         override fun onAdmitAll() = admitAll()
         override fun onMuteStudent(participantId: String, muted: Boolean) = studentAction("Could not change the microphone") {
@@ -1611,10 +1666,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun sendChat(text: String) {
+    /** [to] = a student's participant id (private reply), null = everyone. */
+    private fun sendChat(text: String, to: String? = null) {
         lifecycleScope.launch {
             try {
-                withContext(Dispatchers.IO) { api?.sendBroadcast(code, text) }
+                withContext(Dispatchers.IO) { api?.sendMessage(code, text, to) }
                 refreshChat()
                 markChatSeen()
             } catch (e: SessionEndedException) {
@@ -1687,6 +1743,7 @@ class MainActivity : AppCompatActivity() {
         chatIds = emptyList()
         chatMessages = emptyList()
         chatSince = null
+        chatQuestion = null
         lastSeenChatId = null
         unreadChat = 0
     }
@@ -1721,8 +1778,8 @@ class MainActivity : AppCompatActivity() {
                     binding.classStatus.text = "Reconnecting to the server…"
                 }
                 tick++
-                // 2 s while pushes cannot arrive, 5 s safety net while they can,
-                // 30 s in the background (pushes still wake it at once).
+                // 2 s while pushes cannot arrive (30 s in the background), a 60 s
+                // safety net while they can (pushes wake it at once).
                 withTimeoutOrNull(Realtime.pollMs(appVisible, fast = !live)) { pollWake.receive() }
             }
         }
@@ -1795,22 +1852,15 @@ class MainActivity : AppCompatActivity() {
         chatMessages = Realtime.mergeById(chatMessages, fresh, { m -> m.optString("id").ifBlank { "${m.optString("createdAt")}:${m.optString("body").hashCode()}" } })
         chatMessages.lastOrNull()?.optString("createdAt")?.takeIf { it.isNotBlank() }?.let { chatSince = it }
         if (fresh.isEmpty() && chatIds.isNotEmpty()) return
-        val messages = JSONArray(chatMessages)
-        val lines = buildString {
-            for (i in 0 until messages.length()) {
-                val m = messages.getJSONObject(i)
-                append(m.optString("senderName", "Someone")).append(": ").append(m.optString("body")).append('\n')
-            }
-        }
-        chatText = lines.trimEnd()
-        panel?.renderChat(chatText)
+        // Private messages are marked ("private, to you" / "You → Ana (private)").
+        chatText = chatMessages.joinToString("\n") { ChatLogic.line(it) }
+        chatQuestion = ChatLogic.pendingPrivateQuestion(chatMessages)
+        panel?.renderChat(chatText, chatQuestion)
         val ids = ArrayList<String>()
-        val recent = ArrayList<String>()
-        for (i in 0 until messages.length()) {
-            val m = messages.getJSONObject(i)
+        chatMessages.forEachIndexed { i, m ->
             ids.add(m.optString("id").ifBlank { "$i:${m.optString("createdAt")}:${m.optString("body").hashCode()}" })
-            if (i >= messages.length() - 4) recent.add("${m.optString("senderName", "Someone")}: ${m.optString("body")}")
         }
+        val recent = chatMessages.takeLast(4).map { ChatLogic.line(it) }
         chatIds = ids
         recentChat = recent
         if (appVisible && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && panelKind == ClassPanel.Kind.CHAT) {
@@ -2254,9 +2304,8 @@ class MainActivity : AppCompatActivity() {
         /** LiveKit data topics sent by the web server (see apps/web lib/pollPolicy.ts, Chat.tsx). */
         private const val STATE_TOPIC = "cls-state"
         private const val CHAT_TOPIC = "chat"
-        /** Safety-net poll while pushes can arrive / fast poll while they cannot. */
-        private const val LIVE_POLL_MS = 5000L
-        private const val FAST_POLL_MS = 2000L
+        /** Session renewal interval (the server's idle limit is 24 h). */
+        private const val RENEW_MS = 30 * 60_000L
         private const val PREFS = "classroom_teacher"
         private const val KEY_SERVER = "server"
         private const val KEY_EMAIL = "email"

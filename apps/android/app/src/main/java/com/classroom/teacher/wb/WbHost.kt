@@ -80,30 +80,28 @@ class WbHost(
 
     /**
      * One packet from the room. [sender] = participant identity (null = server
-     * relay, which already checked permission and sets `by`). [holders] =
-     * identities allowed to draw now. Returns true when the board changed.
+     * relay, which already checked permission and sets `by`). Students hold no
+     * LiveKit data grant, so only the server's relay is accepted (web
+     * Whiteboard host rule); other teachers / screen identities never drive
+     * our board. [holders] is kept for callers. Returns true when the board changed.
      */
+    @Suppress("UNUSED_PARAMETER")
     fun receive(bytes: ByteArray, sender: String?, holders: Set<String>, now: Long = System.currentTimeMillis()): Boolean {
+        if (sender != null) return false
         var p = WbCodec.decode(bytes) ?: return false
-        if (sender != null) {
-            if (!sender.startsWith("student_")) return false // other teachers / screen identities never drive our board
-            if (p.optString("t") !in setOf("ops", "chunk", "req")) return false
-        }
         if (p.optString("t") == "chunk") {
-            if (sender != null && p.optInt("n") > 8) return false // students only send small ink
             p = chunks.add(p, now) ?: return false
             if (p.optInt("v") != 1) return false
         }
         return when (p.optString("t")) {
             "req" -> {
-                val to = p.optString("to").takeIf { it.isNotBlank() && it.length <= 128 } ?: sender
+                val to = p.optString("to").takeIf { it.isNotBlank() && it.length <= 128 }
                 if (to != null) sendSnapshot(listOf(to))
                 false
             }
             "ops" -> {
-                val by = sender ?: p.optString("by").takeIf { it.startsWith("student_") } ?: return false
-                if (sender != null && by !in holders) return false
-                if (sender != null && p.optString("by", by) != by) return false
+                // The relay names the student it checked; studentAllowed limits them to their own ink.
+                val by = p.optString("by").takeIf { it.startsWith("student_") } ?: return false
                 val arr = p.optJSONArray("ops") ?: return false
                 var changed = false
                 for (i in 0 until minOf(arr.length(), 200)) {

@@ -25,18 +25,19 @@ class WbHostTest {
         assertEquals(1, pg.items.size)
     }
 
-    @Test fun studentNeedsDrawPermission() {
-        val b = opsBytes(listOf(WbOps.add(pg.id, stroke("student_a"))))
-        assertFalse(host.receive(b, "student_a", emptySet()))
-        assertTrue(host.receive(b, "student_a", setOf("student_a")))
+    @Test fun packetsFromStudentIdentitiesAreIgnored() {
+        // Students hold no LiveKit data grant; the server relays their ops (sender null, `by` set).
+        val b = opsBytes(listOf(WbOps.add(pg.id, stroke("student_a"))), by = "student_a")
+        assertFalse(host.receive(b, "student_a", setOf("student_a")))
+        assertTrue(host.receive(b, null, emptySet()))
     }
 
-    @Test fun studentCannotDrawAsSomeoneElseOrDelete() {
+    @Test fun relayedStudentCannotDrawAsSomeoneElseOrDelete() {
         host.local(listOf(WbOps.add(pg.id, stroke("teacher"))))
-        val forged = opsBytes(listOf(WbOps.add(pg.id, stroke("student_b"))))
-        assertFalse(host.receive(forged, "student_a", setOf("student_a")))
-        val del = opsBytes(listOf(WbOps.clear(pg.id)))
-        assertFalse(host.receive(del, "student_a", setOf("student_a")))
+        val forged = opsBytes(listOf(WbOps.add(pg.id, stroke("student_b"))), by = "student_a")
+        assertFalse(host.receive(forged, null, emptySet()))
+        val del = opsBytes(listOf(WbOps.clear(pg.id)), by = "student_a")
+        assertFalse(host.receive(del, null, emptySet()))
         assertEquals(1, pg.items.size)
     }
 
@@ -54,7 +55,7 @@ class WbHostTest {
 
     @Test fun reqSendsSnapshotToRequester() {
         val req = JSONObject().put("v", 1).put("t", "req").put("to", "student_a").toString().toByteArray()
-        host.receive(req, "student_a", emptySet())
+        host.receive(req, null, emptySet()) // the server relays a student's request
         assertEquals(listOf("student_a"), sent.last().second)
         assertEquals("snap", WbCodec.decode(sent.last().first[0])!!.optString("t"))
     }
