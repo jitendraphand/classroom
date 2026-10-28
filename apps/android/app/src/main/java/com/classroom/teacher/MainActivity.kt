@@ -38,7 +38,10 @@ import io.livekit.android.room.track.RemoteTrackPublication
 import io.livekit.android.room.track.VideoQuality
 import io.livekit.android.room.track.VideoTrack
 import com.classroom.teacher.databinding.ActivityMainBinding
+import io.livekit.android.AudioOptions
 import io.livekit.android.LiveKit
+import io.livekit.android.LiveKitOverrides
+import io.livekit.android.audio.AudioProcessorOptions
 import io.livekit.android.events.DisconnectReason
 import io.livekit.android.events.RoomEvent
 import io.livekit.android.events.collect
@@ -114,6 +117,8 @@ class MainActivity : AppCompatActivity() {
     // Screen share (published by hand so frames pass through the mask processor)
     private var screenTrack: LocalScreencastVideoTrack? = null
     private val maskProcessor = ScreenMaskProcessor()
+    /** Teacher mic: voice focus after the phone's own processing (docs/AUDIO.md). Long-press the mic to toggle. */
+    private val voiceFocus = VoiceFocusProcessor()
 
     // Floating toolbar
     private var toolbar: FloatingToolbar? = null
@@ -264,6 +269,7 @@ class MainActivity : AppCompatActivity() {
         applyResponsiveLayout()
 
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        voiceFocus.on = prefs.getBoolean(KEY_VOICE_FOCUS, true)
         binding.serverInput.setText(prefs.getString(KEY_SERVER, null) ?: ClassroomApi.DEFAULT_SERVER)
         binding.emailInput.setText(prefs.getString(KEY_EMAIL, "") ?: "")
 
@@ -644,7 +650,12 @@ class MainActivity : AppCompatActivity() {
                 val token = info.optString("token")
                 if (url.isBlank() || token.isBlank()) throw ApiException("The server did not return a media address.")
                 mediaProfile = Media.parseProfile(info.opt("mediaProfile"))
-                val connected = LiveKit.create(applicationContext)
+                val connected = LiveKit.create(
+                    applicationContext,
+                    overrides = LiveKitOverrides(
+                        audioOptions = AudioOptions(audioProcessorOptions = AudioProcessorOptions(capturePostProcessor = voiceFocus)),
+                    ),
+                )
                 room = connected
                 leaving = false
                 listen(connected)
@@ -1002,6 +1013,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Long-press on the mic: voice focus on or off for this phone (saved). */
+    private fun toggleVoiceFocus() {
+        voiceFocus.on = !voiceFocus.on
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_VOICE_FOCUS, voiceFocus.on).apply()
+        showToast(
+            if (voiceFocus.on) "Voice focus on: voices and sounds well below yours are turned down between your sentences."
+            else "Voice focus off: the phone's own noise suppression only.",
+        )
+        renderRail()
+    }
+
     private fun setMic(on: Boolean) {
         micOn = on
         updateMediaService()
@@ -1158,6 +1180,10 @@ class MainActivity : AppCompatActivity() {
         railShare = add(R.drawable.ic_screen_share, "Share screen", 0) { onShareButton() }
         railBoard = add(R.drawable.ic_board, "Whiteboard") { if (wbHost != null) showWhiteboardView() else openWhiteboard() }
         railMic = add(R.drawable.ic_mic_off, "Turn microphone on") { ensureMicThenToggle() }
+        railMic.setOnLongClickListener {
+            toggleVoiceFocus()
+            true
+        }
         railCamera = add(R.drawable.ic_videocam_off, "Turn camera on") { ensureCameraThenToggle() }
         railSwitch = add(R.drawable.ic_cameraswitch, "Switch camera") { switchCamera() }
         railChat = add(R.drawable.ic_chat, "Chat", 14) { togglePanel(ClassPanel.Kind.CHAT) }
@@ -1384,7 +1410,8 @@ class MainActivity : AppCompatActivity() {
         railBoard.label = if (wbHost != null) "Whiteboard open. Tap to show it" else "Open the whiteboard"
         railBoard.isEnabled = connected || wbHost != null
         railMic.setIcon(if (micOn) R.drawable.ic_mic else R.drawable.ic_mic_off)
-        railMic.label = if (micOn) "Microphone on. Tap to mute" else "Microphone off. Tap to speak"
+        railMic.label = (if (micOn) "Microphone on. Tap to mute" else "Microphone off. Tap to speak") +
+            if (voiceFocus.on) ". Voice focus on (long-press to turn off)" else ". Long-press for voice focus"
         railMic.setStyle(if (micOn) RailButton.Style.ON else RailButton.Style.OFF_WARN)
         railMic.isEnabled = connected
         railCamera.setIcon(if (cameraOn) R.drawable.ic_videocam else R.drawable.ic_videocam_off)
@@ -2357,6 +2384,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_EMAIL = "email"
         private const val KEY_NAME = "name"
         private const val KEY_COOKIE = "session"
+        private const val KEY_VOICE_FOCUS = "voice_focus"
         const val EXTRA_STOP_SHARE = "stop_share"
     }
 }
