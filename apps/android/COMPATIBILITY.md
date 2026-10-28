@@ -1,6 +1,7 @@
 # Android teacher app: supported versions and OS limits
 
-Version 1.2.0. Supported: Android 8.0 (API 26, minSdk) to Android 15 (API 35, targetSdk). Phones from 360dp wide,
+Version 1.2.0 (release notes and download: `RELEASE-1.2.0.md`; all releases:
+[Google Drive](https://drive.google.com/drive/folders/1ZdOjIaa3R44BRH-GjokVSoDL1cvygfgX)). Supported: Android 8.0 (API 26, minSdk) to Android 15 (API 35, targetSdk). Phones from 360dp wide,
 large phones, tablets and foldables, portrait and landscape (window size classes: compact < 600dp,
 medium < 840dp, expanded ≥ 840dp). Display cutouts are handled by insets; text uses sp, so system
 font scaling applies.
@@ -86,13 +87,16 @@ with their SHA-256 in the log.
 - Release APK: ARM only (`arm64-v8a`, `armeabi-v7a`; every Android phone and tablet a school would use),
   code shrunk with R8 (class names kept, so crash reports stay readable). About half the size of the
   debug APK.
-- Release signing: add four repository secrets and every release APK is signed with the same key, so
-  teachers can install updates over the old version:
-  `ANDROID_KEYSTORE_BASE64` (the `.jks` file, `base64 -w0 release.jks`), `ANDROID_KEYSTORE_PASSWORD`,
-  `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`. Make the key once with
-  `keytool -genkeypair -v -keystore release.jks -keyalg RSA -keysize 4096 -validity 10000 -alias classroom`
-  and keep a copy somewhere safe: an app signed with a lost key can never be updated, only reinstalled.
+- Release signing: every release must be signed with the same key, or teachers have to uninstall
+  the app (losing its saved sign-in) before installing the update. Release 1.1.0-20261024 was signed
+  with the existing release key, certificate SHA-256 `7cfe1e01…cad982`: keep using that key. Give it to
+  CI as four repository secrets: `ANDROID_KEYSTORE_BASE64` (the keystore file, `base64 -w0 release.jks`),
+  `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`. The "Release certificate"
+  step of the run prints the certificate digest; check it starts with `7cfe1e01`.
   Without the secrets the release APK is unsigned and cannot be installed.
+  Only if that key is lost: make a new one with
+  `keytool -genkeypair -v -keystore release.jks -keyalg RSA -keysize 4096 -validity 10000 -alias classroom`
+  (teachers then uninstall once), and keep a copy somewhere safe.
   Locally: `CLASSROOM_SIGNING=/path/to/signing.properties ./gradlew assembleRelease`
   (`storeFile`, `storePassword`, `keyAlias`, `keyPassword`).
 - Pre-filled server address: repository variable (or environment variable) `CLASSROOM_DEFAULT_SERVER`,

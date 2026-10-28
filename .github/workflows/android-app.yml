@@ -5,10 +5,12 @@ on:
     branches: [android]
     paths:
       - 'apps/android/**'
+      - '!apps/android/**/*.md'
       - '.github/workflows/android-app.yml'
   pull_request:
     paths:
       - 'apps/android/**'
+      - '!apps/android/**/*.md'
       - '.github/workflows/android-app.yml'
   workflow_dispatch:
 
@@ -74,6 +76,14 @@ jobs:
         run: |
           find app/build/outputs/apk -name '*.apk' -exec ls -l {} \;
           find app/build/outputs/apk -name '*.apk' -exec sha256sum {} \;
+
+      # Updates install over the old app only with the same key (1.1.0: SHA-256 7cfe1e01…cad982).
+      - name: Release certificate
+        run: |
+          apk=app/build/outputs/apk/release/app-release.apk
+          if [ ! -f "$apk" ]; then echo "Release APK is unsigned."; exit 0; fi
+          apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n1)
+          "$apksigner" verify --print-certs "$apk" | grep -E 'SHA-256|DN'
 
       - uses: actions/upload-artifact@v4
         with:
