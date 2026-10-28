@@ -1,19 +1,22 @@
 # Classroom Teacher 1.2.0 (Android)
 
-Built 2026-10-28 by CI from the `android` branch (commit 214eff8): run
-https://github.com/jitendraphand/classroom/actions/runs/40705622672 (artifact `classroom-teacher-android`,
-kept 30 days).
+Version 1.2.0-20261028, version code 207 (1.1.0 was 205). Built 2026-10-28 by CI from the `android`
+branch (commit bf43157): run https://github.com/jitendraphand/classroom/actions/runs/40706826010,
+artifact `classroom-teacher-android` (download it from the run page while signed in to GitHub; kept until
+2026-11-27).
 
 Download: [Google Drive, 1.2.0 folder](https://drive.google.com/drive/folders/1jMSCm_FjJs2xVsq85CCFDU352dY0MTvv)
 
 | File | Size | SHA-256 | Use |
 | --- | --- | --- | --- |
-| `app-debug.apk` | 63,011,181 bytes | `93b3f99a86a3afebfe3ebe1af3e6de76852df11277f9ecb187f15a85114dc016` | Testing. Installs anywhere (all ABIs, debug key); uninstall the old app first |
-| `app-release-unsigned.apk` | 25,262,119 bytes | `bf857f17e2e899f184c15214abae22fc83794c420b32d4772d74e9913dce56fe` | Not installable until signed |
+| `app-debug.apk` | 63,011,181 bytes | `83d5c210ddf10df2884f7837af18fabcac71edb431977c9cc61b17420d017e13` | Testing. Installs anywhere (all ABIs, debug key); uninstall the old app first |
+| `app-release-unsigned.apk` | 25,262,119 bytes | `4f5594408d8f2627923675c7710c2fa4a50c81290bfad47d8c94f2493844725a` | Not installable until signed |
 
 The release APK for teachers is the signed one: add the release key (the one that signed 1.1.0, certificate
 SHA-256 `7cfe1e01…cad982`) as repository secrets (see `COMPATIBILITY.md`, "Building and releasing") and
-re-run the workflow. It then installs over 1.1.0 and keeps the teacher signed in. About 25 MB, down from
+re-run the workflow (Actions → Android teacher app → Run workflow, branch `android`): the run then has
+`app-release.apk`, and its "Release certificate" step shows the key. That APK installs over 1.1.0 and
+keeps the teacher signed in; put it in the Drive folder. About 25 MB, down from
 61 MB for 1.1.0.
 
 ## What changed
