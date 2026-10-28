@@ -1,4 +1,4 @@
-import { clearAdminCookie, clearTeacherCookie, staffSessionCheck } from '@/lib/auth';
+import { clearAdminCookie, clearTeacherCookie, refreshStaffCookies, staffSessionCheck } from '@/lib/auth';
 import { jsonOk } from '@/lib/response';
 
 export const dynamic = 'force-dynamic';
@@ -12,7 +12,12 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   const { role, status } = await staffSessionCheck();
   if (!role || !status) return jsonOk({ role: null, reason: null });
-  if (status === 'ok') return jsonOk({ role, reason: null });
+  if (status === 'ok') {
+    // Sliding session (lib/sessionTokens), as /api/auth/me: clients that only
+    // poll this check (the Windows teacher app, a long-open page) stay signed in.
+    await refreshStaffCookies().catch(() => undefined);
+    return jsonOk({ role, reason: null });
+  }
   if (role === 'admin') await clearAdminCookie();
   else await clearTeacherCookie();
   return jsonOk({ role, reason: status === 'missing' ? 'signed_out' : status });
