@@ -65,4 +65,19 @@ for (const file of fs.readdirSync(srcDir)) {
     fs.copyFileSync(path.join(srcDir, file), path.join('dist/renderer', file));
   }
 }
+// Voice chain (src/shared/web/audio/voiceProcessor.ts loads these from /audio/):
+// the voice-focus worklet synced from the web app, and the noise-removal
+// worklets + models from @sapphi-red/web-noise-suppressor (as the web app's
+// scripts/copy-voice-assets.mjs does).
+const audioOut = 'dist/renderer/audio/vendor';
+fs.mkdirSync(audioOut, { recursive: true });
+for (const file of fs.readdirSync('src/renderer/audio')) fs.copyFileSync(path.join('src/renderer/audio', file), path.join('dist/renderer/audio', file));
+const ns = 'node_modules/@sapphi-red/web-noise-suppressor/dist';
+for (const [from, to] of [
+  ['rnnoise/workletProcessor.js', 'rnnoise-worklet.js'],
+  ['rnnoise.wasm', 'rnnoise.wasm'],
+  ['rnnoise_simd.wasm', 'rnnoise_simd.wasm'],
+  ['gtcrn/workletProcessor.js', 'gtcrn-worklet.js'],
+  ['gtcrn.wasm', 'gtcrn.wasm'],
+]) fs.copyFileSync(path.join(ns, from), path.join(audioOut, to));
 console.log('bundled dist/');

@@ -35,6 +35,8 @@ h1 { font-size: 22px; margin: 0 0 6px; }
 h2 { font-size: 16px; margin: 0; }
 .sub { color: var(--muted); margin: 0 0 16px; }
 label { display: block; margin: 10px 0 4px; color: var(--muted); font-size: 12px; }
+label.check { display: flex; align-items: flex-start; gap: 8px; color: var(--text); font-size: 13px; }
+label.check input { margin-top: 2px; }
 input, select, textarea {
   width: 100%;
   background: #0b1220;

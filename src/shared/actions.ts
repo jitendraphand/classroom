@@ -62,7 +62,11 @@ export type PanelSnapshot = {
   camId: string;
   spotlight?: SpotlightInfo | null;
   micQueue?: MicQueueEntry[];
+  /** Mic clean-up: the choice (saved on this PC) and what is running now. */
+  voice?: { noise: VoiceNoise; focus: boolean; label: string; note?: string };
 };
+
+export type VoiceNoise = 'standard' | 'enhanced' | 'strong';
 
 export type TeacherAction =
   | { type: 'toggle-mic' }
@@ -91,6 +95,7 @@ export type TeacherAction =
   | { type: 'mark-chat-read' }
   | { type: 'set-mic'; deviceId: string }
   | { type: 'set-cam'; deviceId: string }
+  | { type: 'set-voice'; noise: VoiceNoise; focus: boolean }
   | { type: 'leave' }
   | { type: 'end' }
   | { type: 'show-main' }
@@ -131,6 +136,8 @@ export function isTeacherAction(v: unknown): v is TeacherAction {
     case 'set-mic':
     case 'set-cam':
       return typeof a.deviceId === 'string';
+    case 'set-voice':
+      return (a.noise === 'standard' || a.noise === 'enhanced' || a.noise === 'strong') && typeof a.focus === 'boolean';
     case 'waiting-room':
       return typeof a.on === 'boolean';
     case 'mute-all':

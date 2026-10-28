@@ -2,7 +2,8 @@ import { installErrorReporter } from './errorReporter';
 installErrorReporter('panel');
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import type { PanelSnapshot, TeacherAction } from '../shared/actions';
+import type { PanelSnapshot, TeacherAction, VoiceNoise } from '../shared/actions';
+import { NOISE_MODES } from '../shared/web/audio/voiceSettings';
 import { desktop } from './bridge';
 import { ChatView, RosterView } from './teacherViews';
 import { DEFAULT_HOTKEYS } from '../shared/apiModel';
@@ -39,6 +40,27 @@ function Devices({ snap }: { snap: PanelSnapshot }) {
         <option value="">System default</option>
         {cams.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
       </select>
+      <label htmlFor="noise-mode">Noise removal</label>
+      <select
+        id="noise-mode"
+        value={snap.voice?.noise ?? 'enhanced'}
+        onChange={(e) => send({ type: 'set-voice', noise: e.target.value as VoiceNoise, focus: snap.voice?.focus ?? true })}
+      >
+        {NOISE_MODES.map((m) => <option key={m.id} value={m.id}>{m.label}: {m.hint}</option>)}
+      </select>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={snap.voice?.focus ?? true}
+          onChange={(e) => send({ type: 'set-voice', noise: snap.voice?.noise ?? 'enhanced', focus: e.target.checked })}
+        />
+        Voice focus: turn down voices and sounds well below your own speaking level, between your sentences
+      </label>
+      {snap.voice && (
+        <p className="hint" data-testid="voice-status">
+          Now: {snap.voice.label}.{snap.voice.note ? ` ${snap.voice.note}` : ''}
+        </p>
+      )}
       <p className="hint">
         Shortcuts while a class is open, from any app: {keyLabel(DEFAULT_HOTKEYS.mic)} microphone,{' '}
         {keyLabel(DEFAULT_HOTKEYS.camera)} camera, {keyLabel(DEFAULT_HOTKEYS.stopShare)} stop sharing.

@@ -71,7 +71,12 @@ test('item 7: one audio element per remote track across share / whiteboard / rec
   assert.match(cs, /this\.audioEls\.attach\(/);
   assert.match(cs, /this\.audioEls\.detach\(/);
   assert.match(cs, /this\.audioEls\.clear\(\)/);
-  assert.match(cs, /createLocalAudioTrack\(\{ \.\.\.MIC_CAPTURE/);
+  // The web voice chain: AEC and AGC always, the browser's NS whenever no AI
+  // noise remover runs (and in every fallback).
+  assert.match(cs, /createVoiceTrack\(true/);
+  const voice = src('shared/web/audio/voiceProcessor.ts');
+  assert.match(voice, /createLocalAudioTrack\(\{ \.\.\.MIC_CAPTURE, \.\.\.pick \}\)/);
+  assert.match(voice, /restartTrack\(\{ \.\.\.MIC_CAPTURE, \.\.\.pick \}\)/);
   // Simulated session: per participant count stays 1 per published audio track.
   const dom: string[] = [];
   const reg = new AudioRegistry<string>((sid) => (dom.push(sid), sid), (sid) => dom.splice(dom.indexOf(sid), 1));

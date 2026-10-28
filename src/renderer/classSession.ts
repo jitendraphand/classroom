@@ -25,7 +25,6 @@ import {
   RoomEvent,
   Track,
   VideoPreset,
-  createLocalAudioTrack,
   type Participant,
   type RemoteTrack,
 } from 'livekit-client';
@@ -58,7 +57,8 @@ import {
   type ShareKind,
 } from '../shared/capture';
 import { VIDEO_MODE_OFF, type VideoModeState } from '../shared/videoMode';
-import { AudioRegistry, MIC_CAPTURE } from '../shared/web/audioPolicy';
+import { AudioRegistry } from '../shared/web/audioPolicy';
+import { createVoiceTrack, onVoiceStatus, saveVoiceSettings, voiceSettings, voiceStatus } from '../shared/web/audio/voiceProcessor';
 import { DUCK_IDLE, HEADPHONES_HINT, MicDuckProcessor, duckStep, trackLevelMeter, type DuckState } from '../shared/web/micDuck';
 import { SHARE_AUDIO_ECHO_WARNING, desktopLoopbackConstraints, toggleShareAudio, wantShareAudio, type ShareAudioChoice } from '../shared/shareAudio';
 import { DRAW_TOPIC, applyPacket, decodePacket, isDrawColor, validStrokeId, type Stroke } from '../shared/web/drawLogic';
@@ -334,6 +334,14 @@ export class ClassController {
   private unsubWgcEnded: (() => void) | null = null;
   private unsubWgcStatus: (() => void) | null = null;
   private unsubInkEdit: (() => void) | null = null;
+  private unsubVoice: (() => void) | null = null;
+
+  /** Devices panel: the saved noise-removal choice and what the mic runs now. */
+  private voiceSnapshot(): NonNullable<PanelSnapshot['voice']> {
+    const s = voiceSettings(true);
+    const st = voiceStatus();
+    return { noise: s.noise, focus: s.focus, label: st?.label ?? 'Applies when your microphone is on', note: st?.note };
+  }
 
   constructor(
     private readonly opts: { layout: SlotCount; micId: string; camId: string; plan: CapturePlan },
@@ -346,6 +354,7 @@ export class ClassController {
       if (data.channel === 'region-cancel') this.regionWait?.(null);
     };
     window.addEventListener('message', this.onMessage);
+    this.unsubVoice = onVoiceStatus(() => this.emit());
     this.unsubBounds = desktop().onChromeBounds((bounds) => {
       this.bounds = bounds;
     });
@@ -635,6 +644,19 @@ export class ClassController {
       case 'set-mic':
         this.opts.micId = typeof action.deviceId === 'string' ? action.deviceId : '';
         void desktop().saveDevices(this.opts.micId, this.opts.camId);
+        if (this.micOn) {
+          void this.enqueue(async () => {
+            await this.dropMic();
+            await this.syncMic();
+          });
+        }
+        this.emit();
+        return;
+      case 'set-voice':
+        // Saved on this PC (localStorage, shared with the other app windows);
+        // the mic is republished with the new chain.
+        if ((action.noise !== 'standard' && action.noise !== 'enhanced' && action.noise !== 'strong') || typeof action.focus !== 'boolean') return;
+        saveVoiceSettings({ noise: action.noise, focus: action.focus });
         if (this.micOn) {
           void this.enqueue(async () => {
             await this.dropMic();
@@ -1132,6 +1154,8 @@ export class ClassController {
     this.unsubSidecarLevel?.();
     this.unsubInkEdit?.();
     this.unsubInkEdit = null;
+    this.unsubVoice?.();
+    this.unsubVoice = null;
     this.unsubPanels?.();
     this.unsubPanels = null;
     desktop().setClassActive(false);
@@ -1882,10 +1906,12 @@ export class ClassController {
     if (!this.room || !this.micOn || this.micTrack) return;
     let track: LocalAudioTrack;
     try {
+      // The web app's voice chain (noise removal + voice focus, falling back
+      // to the browser-processed mic): src/shared/web/audio/voiceProcessor.ts.
       try {
-        track = await createLocalAudioTrack({ ...MIC_CAPTURE, ...(this.opts.micId ? { deviceId: { exact: this.opts.micId } } : {}) });
+        track = await createVoiceTrack(true, this.opts.micId ? { deviceId: { exact: this.opts.micId } } : undefined);
       } catch {
-        track = await createLocalAudioTrack({ ...MIC_CAPTURE });
+        track = await createVoiceTrack(true);
       }
     } catch {
       this.micOn = false;
@@ -2473,6 +2499,7 @@ export class ClassController {
       camId: this.opts.camId,
       spotlight: this.snap?.spotlight ?? null,
       micQueue: this.snap && this.snap.micLimit > 0 ? this.snap.micQueue : [],
+      voice: this.voiceSnapshot(),
     };
   }
 
