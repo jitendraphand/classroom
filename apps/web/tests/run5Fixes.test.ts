@@ -87,9 +87,9 @@ test('web teacher mic uses explicit echo cancellation / NS / AGC; share audio go
   // no AI noise remover runs (including every fallback).
   assert.match(room, /createVoiceTrack\(isTeacher\)/);
   const voice = src('lib/audio/voiceProcessor.ts');
-  assert.match(voice, /createLocalAudioTrack\(\{ \.\.\.MIC_CAPTURE \}\)/);
-  assert.match(voice, /createLocalAudioTrack\(\{ \.\.\.MIC_CAPTURE, noiseSuppression: plan\.browserNs \}\)/);
-  assert.match(voice, /restartTrack\(\{ \.\.\.MIC_CAPTURE \}\)/);
+  assert.match(voice, /createLocalAudioTrack\(\{ \.\.\.MIC_CAPTURE, \.\.\.pick \}\)/);
+  assert.match(voice, /createLocalAudioTrack\(\{ \.\.\.MIC_CAPTURE, noiseSuppression: plan\.browserNs, \.\.\.pick \}\)/);
+  assert.match(voice, /restartTrack\(\{ \.\.\.MIC_CAPTURE, \.\.\.pick \}\)/);
   assert.match(room, /keepShareAudio\(audioSurface/);
   // RoomAudioRenderer exactly once per path (student, teacher): no duplicate playback.
   assert.equal((room.match(/<RoomAudioRenderer \/>/g) ?? []).length, 2);

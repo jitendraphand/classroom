@@ -19,7 +19,7 @@
  *   it falls back the same way mid-class.
  */
 import { createLocalAudioTrack, type AudioProcessorOptions, type LocalAudioTrack, type Track, type TrackProcessor } from 'livekit-client';
-import { MIC_CAPTURE } from '@/lib/audioPolicy';
+import { MIC_CAPTURE } from '../audioPolicy';
 import {
   VOICE_SETTINGS_KEY,
   needsGraph,
@@ -75,7 +75,18 @@ export function voiceSettings(isTeacher: boolean): VoiceSettings {
   return memSettings ?? loadVoiceSettings(isTeacher);
 }
 
+let storageHooked = false;
 export function onVoiceSettings(fn: () => void): () => void {
+  // Another tab or window of the same app changed them (the Windows app's
+  // Devices panel is its own window).
+  if (!storageHooked && typeof window !== 'undefined') {
+    storageHooked = true;
+    window.addEventListener('storage', (e) => {
+      if (e.key !== VOICE_SETTINGS_KEY) return;
+      memSettings = null;
+      settingsListeners.forEach((l) => l());
+    });
+  }
   settingsListeners.add(fn);
   return () => settingsListeners.delete(fn);
 }
@@ -396,11 +407,12 @@ export class VoiceProcessor implements TrackProcessor<Track.Kind.Audio, AudioPro
  * this device can, else the plain browser-processed microphone. Never
  * throws for clean-up reasons (only when the microphone itself cannot open).
  */
-export async function createVoiceTrack(isTeacher: boolean): Promise<LocalAudioTrack> {
+export async function createVoiceTrack(isTeacher: boolean, device?: { deviceId?: ConstrainDOMString }): Promise<LocalAudioTrack> {
   const plan = currentVoicePlan(isTeacher);
+  const pick = device?.deviceId ? { deviceId: device.deviceId } : {};
   const plain = (note?: string) => {
     setStatus({ label: 'Browser noise suppression', active: false, note });
-    return createLocalAudioTrack({ ...MIC_CAPTURE });
+    return createLocalAudioTrack({ ...MIC_CAPTURE, ...pick });
   };
   if (!needsGraph(plan)) return plain(detectVoiceEnv().worklet ? undefined : 'This browser cannot run enhanced noise removal.');
   const c = audioCtx();
@@ -417,7 +429,7 @@ export async function createVoiceTrack(isTeacher: boolean): Promise<LocalAudioTr
     return plain('Enhanced noise removal could not load.');
   }
 
-  const track = await createLocalAudioTrack({ ...MIC_CAPTURE, noiseSuppression: plan.browserNs });
+  const track = await createLocalAudioTrack({ ...MIC_CAPTURE, noiseSuppression: plan.browserNs, ...pick });
   let fellBack = false;
   const fallBack = async (why: string) => {
     if (fellBack) return;
@@ -426,7 +438,7 @@ export async function createVoiceTrack(isTeacher: boolean): Promise<LocalAudioTr
     try {
       if (track.getProcessor()) await track.stopProcessor();
       // Captured without the browser's suppression: ask for it again.
-      if (!plan.browserNs) await track.restartTrack({ ...MIC_CAPTURE });
+      if (!plan.browserNs) await track.restartTrack({ ...MIC_CAPTURE, ...pick });
     } catch {
       /* the plain track is still published */
     }
