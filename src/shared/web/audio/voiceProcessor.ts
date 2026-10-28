@@ -37,7 +37,7 @@ const RNNOISE = '@sapphi-red/web-noise-suppressor/rnnoise';
 const GTCRN = '@sapphi-red/web-noise-suppressor/gtcrn';
 const FOCUS = 'voice-focus';
 /** Voice focus: turn down sound more than this many dB under the teacher's speaking level. */
-export const FOCUS_RANGE_DB = 18;
+export const FOCUS_RANGE_DB = 15;
 
 let assetBase = '/audio/';
 /** The Windows app serves the same files from its own origin. */
