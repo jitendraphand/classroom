@@ -170,7 +170,7 @@ class ScreenMaskProcessor : VideoProcessor {
         if (!enabled) return null
         val rect = synchronized(this) { if (trail != null && System.nanoTime() <= trailUntilNs) null else current } ?: return null
         val (dw, dh) = displaySize
-        val b = MaskMath.bufferRect(rect, dw, dh, frame.buffer.width, frame.buffer.height, frame.rotation, 0)
+        val b = MaskMath.bufferRect(rect, dw, dh, frame.buffer.width, frame.buffer.height, frame.rotation, 0) ?: return null
         val qx = b.width / 4
         val qy = b.height / 4
         return IntRect(b.left + qx, b.top + qy, b.right - qx, b.bottom - qy).takeIf { !it.isEmpty }
