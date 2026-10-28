@@ -9,7 +9,6 @@ import { useLocalParticipant, useRoomContext } from '@livekit/components-react';
 import {
   Track,
   LocalVideoTrack,
-  createLocalAudioTrack,
   LocalAudioTrack,
   RoomEvent,
   AudioPresets,
@@ -17,7 +16,7 @@ import {
   type Participant,
 } from 'livekit-client';
 import { useEffect, useRef, useState } from 'react';
-import { MIC_CAPTURE } from '@/lib/audioPolicy';
+import { createVoiceTrack, onVoiceSettings, voiceKey as currentVoiceKey } from '@/lib/audio/voiceProcessor';
 import { cameraProfile, studentCamera, teacherCamera } from '@/lib/videoQuality';
 import { withNegotiationRetry } from '@/lib/joinPacingLogic';
 import { enqueueLocalPublish, safeStop, unpublishThenStop } from './localPublish';
@@ -238,6 +237,11 @@ export function SelectivePublisher({
     };
   }, []);
 
+  // Noise-removal settings: a change republishes the mic with the new chain.
+  const [voiceKey, setVoiceKey] = useState(() => currentVoiceKey(isTeacher));
+  useEffect(() => onVoiceSettings(() => setVoiceKey(currentVoiceKey(isTeacher))), [isTeacher]);
+  const micKeyRef = useRef<string | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     const participant = localParticipant;
@@ -246,6 +250,12 @@ export function SelectivePublisher({
       if (cancelled) return;
       // Teacher mute is authoritative — never publish audio while mutedByTeacher
       const want = micDesired && !mutedByTeacher;
+      if (want && micTrackRef.current && micKeyRef.current !== voiceKey) {
+        const old = micTrackRef.current;
+        micTrackRef.current = null;
+        await unpublishThenStop(participant, old);
+        if (cancelled) return;
+      }
       if (!want) {
         const track = micTrackRef.current;
         micTrackRef.current = null;
@@ -262,7 +272,9 @@ export function SelectivePublisher({
       }
       try {
         if (!micTrackRef.current) {
-          const track = await createLocalAudioTrack({ ...MIC_CAPTURE });
+          // Cleaned up (noise removal, teacher voice focus) where the device
+          // can; otherwise the browser-processed mic. Never fails for that.
+          const track = await createVoiceTrack(isTeacher);
           if (cancelled || mutedByTeacher) {
             safeStop(track);
             return;
@@ -296,6 +308,7 @@ export function SelectivePublisher({
             return;
           }
           micTrackRef.current = track;
+          micKeyRef.current = voiceKey;
         }
         if (cancelled) return;
         if (mutedByTeacher) {
@@ -310,7 +323,7 @@ export function SelectivePublisher({
     return () => {
       cancelled = true;
     };
-  }, [micDesired, mutedByTeacher, localParticipant, isTeacher]);
+  }, [micDesired, mutedByTeacher, localParticipant, isTeacher, voiceKey]);
 
   return null;
 }

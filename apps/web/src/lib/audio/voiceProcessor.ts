@@ -1,0 +1,455 @@
+/**
+ * Microphone clean-up graph, as a LiveKit audio TrackProcessor:
+ *
+ *   mic -> high-pass 70 Hz -> [RNNoise | GTCRN] -> [voice focus] -> published track
+ *
+ * Settings and the per-device plan are lib/audio/voiceSettings.ts. The
+ * worklets and models are loaded on demand from /audio/ the first time a
+ * microphone is turned on (students who never speak download nothing).
+ *
+ * The microphone must never go silent because of this, so every step falls
+ * back to the plain browser-processed microphone (echo cancellation, noise
+ * suppression, AGC: lib/audioPolicy MIC_CAPTURE):
+ * - unsupported browser, audio context that will not start (Safari outside a
+ *   tap), worklet or model that fails to load: publish the plain mic;
+ * - processor that fails to start: stop it and restart the mic with the
+ *   browser's suppression;
+ * - a watchdog compares input and output: if the graph outputs digital
+ *   silence while the mic hears sound, or the audio context stops running,
+ *   it falls back the same way mid-class.
+ */
+import { createLocalAudioTrack, type AudioProcessorOptions, type LocalAudioTrack, type Track, type TrackProcessor } from 'livekit-client';
+import { MIC_CAPTURE } from '../audioPolicy';
+import {
+  VOICE_SETTINGS_KEY,
+  needsGraph,
+  parseVoiceSettings,
+  planLabel,
+  planVoice,
+  type VoiceEnv,
+  type VoicePlan,
+  type VoiceSettings,
+} from './voiceSettings';
+
+/** Processor names registered by the vendored worklets (scripts/copy-voice-assets.mjs). */
+const RNNOISE = '@sapphi-red/web-noise-suppressor/rnnoise';
+const GTCRN = '@sapphi-red/web-noise-suppressor/gtcrn';
+const FOCUS = 'voice-focus';
+/** Voice focus: turn down sound more than this many dB under the teacher's speaking level. */
+export const FOCUS_RANGE_DB = 15;
+
+let assetBase = '/audio/';
+/** The Windows app serves the same files from its own origin. */
+export function setVoiceAssetBase(base: string): void {
+  assetBase = base.endsWith('/') ? base : `${base}/`;
+}
+
+// ---------------------------------------------------------------- settings
+
+const settingsListeners = new Set<() => void>();
+/** This page's choice when storage is blocked. */
+let memSettings: VoiceSettings | null = null;
+
+export function loadVoiceSettings(isTeacher: boolean): VoiceSettings {
+  let raw: string | null = null;
+  try {
+    raw = typeof localStorage !== 'undefined' ? localStorage.getItem(VOICE_SETTINGS_KEY) : null;
+  } catch {
+    /* storage blocked: defaults */
+  }
+  return parseVoiceSettings(raw, isTeacher);
+}
+
+export function saveVoiceSettings(s: VoiceSettings): void {
+  try {
+    localStorage.setItem(VOICE_SETTINGS_KEY, JSON.stringify(s));
+  } catch {
+    /* storage blocked: applies to this page only */
+  }
+  memSettings = s;
+  settingsListeners.forEach((fn) => fn());
+}
+
+/** Current settings (saved, or this page's choice when storage is blocked). */
+export function voiceSettings(isTeacher: boolean): VoiceSettings {
+  return memSettings ?? loadVoiceSettings(isTeacher);
+}
+
+let storageHooked = false;
+export function onVoiceSettings(fn: () => void): () => void {
+  // Another tab or window of the same app changed them (the Windows app's
+  // Devices panel is its own window).
+  if (!storageHooked && typeof window !== 'undefined') {
+    storageHooked = true;
+    window.addEventListener('storage', (e) => {
+      if (e.key !== VOICE_SETTINGS_KEY) return;
+      memSettings = null;
+      settingsListeners.forEach((l) => l());
+    });
+  }
+  settingsListeners.add(fn);
+  return () => settingsListeners.delete(fn);
+}
+
+let env: VoiceEnv | null = null;
+export function detectVoiceEnv(): VoiceEnv {
+  if (env) return env;
+  if (typeof window === 'undefined') return { worklet: false, wasm: false, cores: 2, phone: false };
+  const AC = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  let phone = false;
+  try {
+    phone = !!window.matchMedia?.('(pointer: coarse)').matches && Math.min(window.screen?.width || 0, window.screen?.height || 0) < 600;
+  } catch {
+    /* no matchMedia */
+  }
+  env = {
+    worklet: !!AC && typeof AudioWorkletNode !== 'undefined' && 'audioWorklet' in AC.prototype,
+    wasm: typeof WebAssembly === 'object' && typeof WebAssembly.instantiate === 'function',
+    cores: navigator.hardwareConcurrency || 2,
+    phone,
+  };
+  return env;
+}
+
+export function currentVoicePlan(isTeacher: boolean): VoicePlan {
+  return planVoice(voiceSettings(isTeacher), detectVoiceEnv(), isTeacher);
+}
+
+// ---------------------------------------------------------------- status (for the mic menu)
+
+export type VoiceStatus = { label: string; active: boolean; note?: string };
+let status: VoiceStatus | null = null;
+const statusListeners = new Set<() => void>();
+function setStatus(s: VoiceStatus): void {
+  status = s;
+  statusListeners.forEach((fn) => fn());
+}
+export function voiceStatus(): VoiceStatus | null {
+  return status;
+}
+export function onVoiceStatus(fn: () => void): () => void {
+  statusListeners.add(fn);
+  return () => statusListeners.delete(fn);
+}
+
+// ---------------------------------------------------------------- shared audio context
+
+let ctx: AudioContext | null = null;
+let users = 0;
+let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+function audioCtx(): AudioContext | null {
+  if (ctx && ctx.state !== 'closed') return ctx;
+  const AC = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AC) return null;
+  try {
+    ctx = new AC({ sampleRate: 48000, latencyHint: 'interactive' });
+  } catch {
+    return null;
+  }
+  return ctx;
+}
+
+/**
+ * Call synchronously from a click or tap (mic button, first tap in class):
+ * creates or wakes the shared audio context while the browser treats it as
+ * user-initiated, which Safari requires.
+ */
+export function primeVoiceAudio(isTeacher: boolean): void {
+  if (typeof window === 'undefined' || !needsGraph(currentVoicePlan(isTeacher))) return;
+  const c = audioCtx();
+  if (!c || c.state === 'running') return;
+  void c
+    .resume()
+    .then(() => {
+      // A mic published plain because the context would not start (no tap
+      // yet): republish it with the clean-up now that it runs.
+      if (upgradePending && (c.state as string) === 'running') {
+        upgradePending = false;
+        generation++;
+        settingsListeners.forEach((fn) => fn());
+      }
+    })
+    .catch(() => undefined);
+}
+
+let upgradePending = false;
+let generation = 0;
+/** Changes when the mic should be republished (settings changed, or clean-up became possible). */
+export function voiceKey(isTeacher: boolean): string {
+  return `${JSON.stringify(voiceSettings(isTeacher))}#${generation}`;
+}
+
+async function running(c: AudioContext, ms = 800): Promise<boolean> {
+  if (c.state === 'running') return true;
+  try {
+    await Promise.race([c.resume(), new Promise((r) => setTimeout(r, ms))]);
+  } catch {
+    /* not allowed without a gesture */
+  }
+  return (c.state as string) === 'running';
+}
+
+function retain(): void {
+  users++;
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = null;
+}
+
+/** No microphone uses the graph for a minute: suspend the audio thread. */
+function release(): void {
+  users = Math.max(0, users - 1);
+  if (users > 0 || !ctx) return;
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    if (users === 0 && ctx?.state === 'running') void ctx.suspend().catch(() => undefined);
+  }, 60_000);
+}
+
+// ---------------------------------------------------------------- assets
+
+const modules = new WeakMap<AudioContext, Map<string, Promise<void>>>();
+function addModule(c: AudioContext, file: string): Promise<void> {
+  let m = modules.get(c);
+  if (!m) modules.set(c, (m = new Map()));
+  let p = m.get(file);
+  if (!p) {
+    p = c.audioWorklet.addModule(assetBase + file);
+    m.set(file, p);
+    p.catch(() => m?.delete(file));
+  }
+  return p;
+}
+
+const binaries = new Map<string, Promise<ArrayBuffer>>();
+function fetchBinary(file: string): Promise<ArrayBuffer> {
+  let p = binaries.get(file);
+  if (!p) {
+    p = fetch(assetBase + file).then((r) => {
+      if (!r.ok) throw new Error(`${file}: HTTP ${r.status}`);
+      return r.arrayBuffer();
+    });
+    binaries.set(file, p);
+    p.catch(() => binaries.delete(file));
+  }
+  return p;
+}
+
+/** WebAssembly SIMD (validates a module with one v128 instruction). */
+function simd(): boolean {
+  try {
+    return WebAssembly.validate(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11]));
+  } catch {
+    return false;
+  }
+}
+
+/** Loads the worklets the plan needs; resolves to the denoiser's model. */
+async function loadPlan(c: AudioContext, plan: VoicePlan): Promise<ArrayBuffer | null> {
+  const jobs: Promise<unknown>[] = [];
+  let model: Promise<ArrayBuffer> | null = null;
+  if (plan.denoiser === 'rnnoise') {
+    jobs.push(addModule(c, 'vendor/rnnoise-worklet.js'));
+    model = fetchBinary(simd() ? 'vendor/rnnoise_simd.wasm' : 'vendor/rnnoise.wasm');
+  } else if (plan.denoiser === 'gtcrn') {
+    jobs.push(addModule(c, 'vendor/gtcrn-worklet.js'));
+    model = fetchBinary('vendor/gtcrn.wasm');
+  }
+  if (plan.focus) jobs.push(addModule(c, 'voice-focus-worklet.js'));
+  await Promise.all(jobs);
+  if (!model) return null;
+  const bin = await model;
+  // A model that will not compile would leave the worklet silent: refuse it
+  // here (once per file) so the plain mic is published instead.
+  await validated(bin);
+  return bin;
+}
+
+const checked = new WeakMap<ArrayBuffer, Promise<void>>();
+function validated(bin: ArrayBuffer): Promise<void> {
+  let p = checked.get(bin);
+  if (!p) {
+    p = WebAssembly.compile(bin.slice(0)).then(() => undefined);
+    checked.set(bin, p);
+  }
+  return p;
+}
+
+// ---------------------------------------------------------------- processor
+
+/** dBFS of an analyser's current window; -Infinity for digital silence. */
+function analyserDb(a: AnalyserNode, buf: Float32Array<ArrayBuffer>): number {
+  a.getFloatTimeDomainData(buf);
+  let e = 0;
+  for (let i = 0; i < buf.length; i++) e += buf[i] * buf[i];
+  return e === 0 ? -Infinity : 10 * Math.log10(e / buf.length);
+}
+
+export class VoiceProcessor implements TrackProcessor<Track.Kind.Audio, AudioProcessorOptions> {
+  readonly name = 'classroom-voice';
+  processedTrack?: MediaStreamTrack;
+  private nodes: AudioNode[] = [];
+  private denoise: AudioWorkletNode | null = null;
+  private watch: ReturnType<typeof setTimeout> | null = null;
+  private retained = false;
+
+  constructor(
+    private readonly plan: VoicePlan,
+    private readonly model: ArrayBuffer | null,
+    private readonly onFailure: (why: string) => void
+  ) {}
+
+  async init(opts: AudioProcessorOptions): Promise<void> {
+    const c = opts.audioContext;
+    if (this.plan.denoiser && c.sampleRate !== 48000) throw new Error(`noise removal needs 48 kHz audio (have ${c.sampleRate})`);
+    const mono = { channelCount: 1, channelCountMode: 'explicit' as const, channelInterpretation: 'speakers' as const };
+    const src = c.createMediaStreamSource(new MediaStream([opts.track]));
+    const hp = new BiquadFilterNode(c, { type: 'highpass', frequency: 70, Q: Math.SQRT1_2 });
+    const inMeter = new AnalyserNode(c, { fftSize: 2048 });
+    const outMeter = new AnalyserNode(c, { fftSize: 2048 });
+    const chain: AudioNode[] = [src, hp];
+    if (this.plan.denoiser) {
+      if (!this.model) throw new Error('noise model missing');
+      this.denoise = new AudioWorkletNode(c, this.plan.denoiser === 'gtcrn' ? GTCRN : RNNOISE, {
+        ...mono,
+        outputChannelCount: [1],
+        processorOptions: { maxChannels: 1, wasmBinary: this.model.slice(0) },
+      });
+      chain.push(this.denoise);
+    }
+    if (this.plan.focus) {
+      chain.push(new AudioWorkletNode(c, FOCUS, { ...mono, outputChannelCount: [1], processorOptions: { range: FOCUS_RANGE_DB } }));
+    }
+    const dest = c.createMediaStreamDestination();
+    dest.channelCount = 1;
+    for (let i = 1; i < chain.length; i++) chain[i - 1].connect(chain[i]);
+    chain[chain.length - 1].connect(dest);
+    hp.connect(inMeter);
+    chain[chain.length - 1].connect(outMeter);
+    for (const n of chain) if (n instanceof AudioWorkletNode) n.onprocessorerror = () => this.fail('audio processor crashed');
+    this.nodes = [...chain, inMeter, outMeter, dest];
+    const track = dest.stream.getAudioTracks()[0];
+    try {
+      track.contentHint = 'speech';
+    } catch {
+      /* read-only in some browsers */
+    }
+    this.processedTrack = track;
+    if (!this.retained) retain();
+    this.retained = true;
+    this.startWatch(c, inMeter, outMeter);
+  }
+
+  /**
+   * Fails over when the graph outputs digital silence while the mic hears
+   * sound (a model that never loaded) or the context stops running. Every
+   * 0.5 s for the first 10 s, then every 3 s; two analyser reads per tick.
+   */
+  private startWatch(c: AudioContext, inMeter: AnalyserNode, outMeter: AnalyserNode): void {
+    const buf = new Float32Array(new ArrayBuffer(2048 * 4));
+    const t0 = Date.now();
+    let silentTicks = 0;
+    let stoppedTicks = 0;
+    const tick = () => {
+      this.watch = null;
+      if (!this.processedTrack) return;
+      if (c.state !== 'running') {
+        void c.resume().catch(() => undefined);
+        if (++stoppedTicks >= 2) return this.fail('audio stopped running');
+      } else {
+        stoppedTicks = 0;
+        const heard = analyserDb(inMeter, buf) > -55;
+        const out = analyserDb(outMeter, buf);
+        silentTicks = heard && out === -Infinity ? silentTicks + 1 : 0;
+        if (silentTicks >= 4) return this.fail('noise removal produced no sound');
+      }
+      this.watch = setTimeout(tick, Date.now() - t0 < 10_000 ? 500 : 3000);
+    };
+    this.watch = setTimeout(tick, 1000);
+  }
+
+  private fail(why: string): void {
+    if (!this.processedTrack) return;
+    if (this.watch) clearTimeout(this.watch);
+    this.watch = null;
+    this.onFailure(why);
+  }
+
+  async restart(opts: AudioProcessorOptions): Promise<void> {
+    await this.destroy();
+    await this.init(opts);
+  }
+
+  async destroy(): Promise<void> {
+    if (this.watch) clearTimeout(this.watch);
+    this.watch = null;
+    for (const n of this.nodes) {
+      try {
+        n.disconnect();
+      } catch {
+        /* already disconnected */
+      }
+    }
+    this.nodes = [];
+    this.denoise?.port.postMessage('destroy');
+    this.denoise = null;
+    this.processedTrack?.stop();
+    this.processedTrack = undefined;
+    if (this.retained) release();
+    this.retained = false;
+  }
+}
+
+// ---------------------------------------------------------------- the microphone
+
+/**
+ * The microphone track to publish, cleaned up per the user's settings when
+ * this device can, else the plain browser-processed microphone. Never
+ * throws for clean-up reasons (only when the microphone itself cannot open).
+ */
+export async function createVoiceTrack(isTeacher: boolean, device?: { deviceId?: ConstrainDOMString }): Promise<LocalAudioTrack> {
+  const plan = currentVoicePlan(isTeacher);
+  const pick = device?.deviceId ? { deviceId: device.deviceId } : {};
+  const plain = (note?: string) => {
+    setStatus({ label: 'Browser noise suppression', active: false, note });
+    return createLocalAudioTrack({ ...MIC_CAPTURE, ...pick });
+  };
+  if (!needsGraph(plan)) return plain(detectVoiceEnv().worklet ? undefined : 'This browser cannot run enhanced noise removal.');
+  const c = audioCtx();
+  if (!c) return plain('This browser cannot run enhanced noise removal.');
+  if (plan.denoiser && c.sampleRate !== 48000) return plain('Enhanced noise removal needs 48 kHz audio on this device.');
+  if (!(await running(c))) {
+    upgradePending = true;
+    return plain('Enhanced noise removal starts after your next tap or click.');
+  }
+  let model: ArrayBuffer | null;
+  try {
+    model = await loadPlan(c, plan);
+  } catch {
+    return plain('Enhanced noise removal could not load.');
+  }
+
+  const track = await createLocalAudioTrack({ ...MIC_CAPTURE, noiseSuppression: plan.browserNs, ...pick });
+  let fellBack = false;
+  const fallBack = async (why: string) => {
+    if (fellBack) return;
+    fellBack = true;
+    console.warn('voice processing off:', why);
+    try {
+      if (track.getProcessor()) await track.stopProcessor();
+      // Captured without the browser's suppression: ask for it again.
+      if (!plan.browserNs) await track.restartTrack({ ...MIC_CAPTURE, ...pick });
+    } catch {
+      /* the plain track is still published */
+    }
+    setStatus({ label: 'Browser noise suppression', active: false, note: `Enhanced noise removal stopped (${why}).` });
+  };
+  try {
+    track.setAudioContext(c);
+    await track.setProcessor(new VoiceProcessor(plan, model, (why) => void fallBack(why)));
+    setStatus({ label: planLabel(plan), active: true });
+  } catch (e) {
+    await fallBack(e instanceof Error ? e.message : 'could not start');
+  }
+  return track;
+}

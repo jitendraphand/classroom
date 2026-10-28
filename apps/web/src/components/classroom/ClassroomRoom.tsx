@@ -139,6 +139,7 @@ import {
 } from '@/lib/classroomClient';
 import { forwardActivityFrom, setLiveSession } from '@/lib/liveSession';
 import { filterPeople } from '@/lib/peopleSearch';
+import { ROSTER_PAGE, rosterWindow } from '@/lib/rosterWindow';
 import { peerWindowOuterSize } from '@/lib/peerWindow';
 import {
   parseMediaProfile,
@@ -181,6 +182,7 @@ import { StudentMediaPrivacy } from './StudentMediaPrivacy';
 import { TeacherCameraFloat, TeacherStageCamera } from './TeacherCameraFloat';
 import { TeacherPeersFloat } from './TeacherPeersFloat';
 import { enqueueLocalPublish, safeStop } from './localPublish';
+import { primeVoiceAudio } from '@/lib/audio/voiceProcessor';
 import { isTeacherParticipant, useHasTeacherScreen, useTeacherLive } from './participantRoles';
 
 function sleepConnectDelay(body: unknown): Promise<void> {
@@ -942,6 +944,13 @@ function RoomInner({
   const videoModeRef = useRef(videoMode);
   /** Teacher roster search (name / SID). */
   const [rosterQuery, setRosterQuery] = useState('');
+  // Large classes: render the roster / waiting list a page at a time (lib/rosterWindow).
+  const [rosterLimit, setRosterLimit] = useState(ROSTER_PAGE);
+  const [waitingLimit, setWaitingLimit] = useState(ROSTER_PAGE);
+  useEffect(() => {
+    setRosterLimit(ROSTER_PAGE);
+    setWaitingLimit(ROSTER_PAGE);
+  }, [rosterQuery]);
   /** True while we intentionally change presentation stage (avoids teardown races). */
   const stageSwitchRef = useRef(false);
   /** Teacher still wants the screen shared across a LiveKit reconnect. */
@@ -1082,6 +1091,21 @@ function RoomInner({
   useEffect(() => {
     if (effectiveMuted) setMicOn(false);
   }, [effectiveMuted]);
+
+  // Teacher: the mic usually goes live without a click on it (on at join), so
+  // the first tap or key press anywhere starts the noise-removal audio, and a
+  // mic published plain until then is republished cleaned up.
+  useEffect(() => {
+    if (!isTeacher) return;
+    const prime = () => primeVoiceAudio(true);
+    const opts = { capture: true, passive: true } as const;
+    document.addEventListener('pointerdown', prime, opts);
+    document.addEventListener('keydown', prime, opts);
+    return () => {
+      document.removeEventListener('pointerdown', prime, opts);
+      document.removeEventListener('keydown', prime, opts);
+    };
+  }, [isTeacher]);
 
   // Teacher away → mic off. It stays off when the teacher returns: the student
   // unmutes themselves (never auto-unmute the class).
@@ -2221,8 +2245,10 @@ function RoomInner({
     }))
   );
   const studentCount = rosterStudents.length;
-  const shownRoster = filterPeople(rosterStudents, rosterQuery);
-  const shownWaiting = filterPeople(state?.waiting ?? [], rosterQuery);
+  const rosterWin = rosterWindow(filterPeople(rosterStudents, rosterQuery), rosterLimit);
+  const waitingWin = rosterWindow(filterPeople(state?.waiting ?? [], rosterQuery), waitingLimit);
+  const shownRoster = rosterWin.shown;
+  const shownWaiting = waitingWin.shown;
   /** Raised hands, earliest first: shown in the chat panel so they stay in
    * sight while the roster is closed. */
   const raisedHands = rosterStudents
@@ -2494,6 +2520,8 @@ function RoomInner({
     onToggleMic: () => {
       if ((effectiveMuted || micLockedNoTeacher) && !isTeacher) return;
       const turningOff = micOn;
+      // In the click itself: Safari starts audio processing only from a tap.
+      if (!turningOff) primeVoiceAudio(isTeacher);
       setMicOn((v) => !v);
       if (!isTeacher && micLimitOn && !effectiveMuted && turningOff) {
         void roomFetch(code, '/mic', {
@@ -2841,7 +2869,10 @@ function RoomInner({
             waitingRoomOn={waitingRoomOn}
             onWaitingRoom={(on) => void setWaitingRoom(on)}
             teacherMicOn={micOn && !effectiveMuted}
-            onToggleTeacherMic={() => setMicOn((v) => !v)}
+            onToggleTeacherMic={() => {
+              if (!micOn) primeVoiceAudio(true);
+              setMicOn((v) => !v);
+            }}
             teacherCamOn={camOn}
             onToggleTeacherCam={() => setCamOn((v) => !v)}
             sideWindowsAllowed={sideWindowsAllowed}
@@ -3177,6 +3208,13 @@ function RoomInner({
                       </span>
                     </li>
                   ))}
+                  {waitingWin.hidden > 0 && (
+                    <li>
+                      <button type="button" className="roster-more" onClick={() => setWaitingLimit((n) => n + ROSTER_PAGE)}>
+                        Show {waitingWin.next} more ({waitingWin.hidden} not shown; search finds anyone)
+                      </button>
+                    </li>
+                  )}
                 </ul>
               </div>
             )}
@@ -3340,6 +3378,13 @@ function RoomInner({
                   </li>
                 );
               })}
+              {rosterWin.hidden > 0 && (
+                <li>
+                  <button type="button" className="roster-more" data-testid="roster-more" onClick={() => setRosterLimit((n) => n + ROSTER_PAGE)}>
+                    Show {rosterWin.next} more ({rosterWin.hidden} not shown; search finds anyone)
+                  </button>
+                </li>
+              )}
             </ul>
           </div>
         </FloatingPanel>
@@ -3468,7 +3513,10 @@ function RoomInner({
       {isTeacher && wbOpen && (
         <WhiteboardMeetingBar
           micOn={micOn && !effectiveMuted}
-          onToggleMic={() => setMicOn((v) => !v)}
+          onToggleMic={() => {
+            if (!micOn) primeVoiceAudio(isTeacher);
+            setMicOn((v) => !v);
+          }}
           camOn={camOn}
           onToggleCam={() => setCamOn((v) => !v)}
           chatUnread={chatUnread}

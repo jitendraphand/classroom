@@ -19,6 +19,7 @@ import {
   IconVideo,
 } from '@/components/ui/Icons';
 import { cn } from '@/lib/cn';
+import { MicOptions } from './MicOptions';
 import type { ReactNode } from 'react';
 
 /** A toolbar button with a short visible caption under it (dock and phone bar; not the narrow rail). */
@@ -180,6 +181,7 @@ export function Controls({
         )}
       >
         <Tool caption={micLocked ? 'Muted' : 'Mic'} show={captions} wide={wide}>
+        <span className="relative inline-flex">
         <IconButton
           size={btn}
           label={
@@ -201,6 +203,8 @@ export function Controls({
         >
           {micOn && !micLocked ? <IconMic /> : <IconMicOff />}
         </IconButton>
+        {!micLocked && <MicOptions isTeacher={!!isTeacher} small={rail} />}
+        </span>
         </Tool>
 
         <Tool caption="Camera" show={captions} wide={wide}>

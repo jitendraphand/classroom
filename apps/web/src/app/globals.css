@@ -521,6 +521,10 @@ input[type='time'].input {
   .roster-chip-warn {
     @apply bg-amber-500/20 text-amber-200;
   }
+  /* Large classes: the roster shows a page at a time (lib/rosterWindow). */
+  .roster-more {
+    @apply mt-1 w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-2xs font-semibold text-slate-200 hover:bg-white/10;
+  }
   .roster-chip-red {
     @apply bg-red-500/15 text-red-200;
   }
