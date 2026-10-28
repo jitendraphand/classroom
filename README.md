@@ -6,7 +6,10 @@ Windows 10 version 2004 (build 19041) and Windows 11. The panels float on the te
 
 ## Releases
 
-- 1.1.0 (2026-10-28): see [docs/RELEASE-1.1.0.md](docs/RELEASE-1.1.0.md) for changes, checksums and what was tested.
+Installers are kept on Google Drive (they are too large for git), one folder per version:
+[Classroom Teacher (Windows) releases](https://drive.google.com/drive/folders/1KKhaMfjzuIMMgZ0L92uVd9pnOlcF4M_F).
+
+- 1.1.0 (2026-10-28): [download folder](https://drive.google.com/drive/folders/1ZswNbO4COxPLH1-fV9sr_awfyOyC5dIm) (`ClassroomTeacher-setup.exe`, `ClassroomTeacher-portable.exe`); changes, checksums and what was tested in [docs/RELEASE-1.1.0.md](docs/RELEASE-1.1.0.md).
 
 ## Layout
 

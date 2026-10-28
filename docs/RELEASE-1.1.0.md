@@ -2,6 +2,8 @@
 
 Built 2026-10-28 from the `windows` branch. Unsigned (no code-signing certificate), like earlier builds.
 
+Download: [Google Drive, 1.1.0 folder](https://drive.google.com/drive/folders/1ZswNbO4COxPLH1-fV9sr_awfyOyC5dIm). Point the school server's `WINDOWS_APP_URL` at this folder so the app's "update available" notice opens it.
+
 | File | Size | SHA-256 |
 | --- | --- | --- |
 | `ClassroomTeacher-setup.exe` (installer) | 109,348,453 bytes | `7cf72780b476a3f24056c2f70be61cb0f49ef7d08fe06295182c48ef33be9ebb` |
