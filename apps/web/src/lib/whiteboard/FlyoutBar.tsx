@@ -170,6 +170,14 @@ export function FlyoutBar({
   const active = groups.find((g) => g.id === f.open && g.content);
   const btnRefs = useRef(new Map<string, HTMLButtonElement>());
   const anchor = active ? btnRefs.current.get(active.id) : null;
+  // The group list scrolls when the bar is longer than the screen (a phone in
+  // landscape); the flyout lines up with the button where it is on screen.
+  const rootEl = f.rootProps.ref.current;
+  const anchorOffset = (() => {
+    if (!anchor || !rootEl) return 0;
+    const a = anchor.getBoundingClientRect(), r = rootEl.getBoundingClientRect();
+    return vertical ? a.top - r.top : a.left - r.left;
+  })();
   // Second line: absolutely placed next to the bar, lined up with its group button.
   const flyStyle: CSSProperties = {
     position: 'absolute',
@@ -187,8 +195,8 @@ export function FlyoutBar({
     maxWidth: vertical ? undefined : 'calc(100vw - 16px)',
     overflow: 'auto',
     ...(vertical
-      ? { top: Math.max(4, (anchor?.offsetTop ?? 0) - 8), [side === 'after' ? 'left' : 'right']: '100%', [side === 'after' ? 'marginLeft' : 'marginRight']: 6 }
-      : { left: Math.max(4, (anchor?.offsetLeft ?? 0) - 8), [side === 'after' ? 'top' : 'bottom']: '100%', [side === 'after' ? 'marginTop' : 'marginBottom']: 6 }),
+      ? { top: Math.max(4, anchorOffset - 8), [side === 'after' ? 'left' : 'right']: '100%', [side === 'after' ? 'marginLeft' : 'marginRight']: 6 }
+      : { left: Math.max(4, anchorOffset - 8), [side === 'after' ? 'top' : 'bottom']: '100%', [side === 'after' ? 'marginTop' : 'marginBottom']: 6 }),
   };
   return (
     <div
@@ -208,6 +216,25 @@ export function FlyoutBar({
       }}
     >
       {head}
+      <div
+        data-flyout-list
+        onScroll={() => f.open && f.close()}
+        style={{
+          display: 'flex',
+          flexDirection: vertical ? 'column' : 'row',
+          alignItems: 'center',
+          gap: 6,
+          minHeight: 0,
+          minWidth: 0,
+          flex: '0 1 auto',
+          [vertical ? 'overflowY' : 'overflowX']: 'auto',
+          [vertical ? 'overflowX' : 'overflowY']: 'hidden',
+          scrollbarWidth: 'none',
+          // Room for the badges (top/right -5px) without widening the bar.
+          margin: -6,
+          padding: 6,
+        }}
+      >
       {groups.map((g) => (
         <button
           key={g.id}
@@ -236,6 +263,7 @@ export function FlyoutBar({
           <Badge n={g.badge} />
         </button>
       ))}
+      </div>
       {tail}
       {active && (
         <div role="group" aria-label={active.label} data-flyout-open={active.id} style={flyStyle} {...f.optionProps} onClick={() => f.pick()}>

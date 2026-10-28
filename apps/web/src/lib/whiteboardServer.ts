@@ -10,7 +10,7 @@
 import { ensureRedis } from './redis';
 import { livekitRoomNameForCode, sendRoomData } from './livekit';
 import { nudgeRoomState } from './roomNudge';
-import { WB_TOPIC, cleanItem, type Op, type Packet } from './whiteboard/model';
+import { WB_TOPIC, cleanItem, cleanPr, type Op, type Packet } from './whiteboard/model';
 import { prisma } from './db';
 
 const TTL_S = 6 * 60 * 60;
@@ -90,7 +90,12 @@ export function sanitizeStudentOps(raw: unknown, identity: string): Op[] {
       const item = cleanItem({ ...(o.item as object), by: identity });
       if (item && item.k === 'stroke' && item.tool === 'pen' && item.id.startsWith('s')) out.push({ k: 'add', p, item });
     } else if (o.k === 'pts' && typeof o.id === 'string' && o.id.startsWith('s') && Array.isArray(o.pts)) {
-      out.push({ k: 'pts', p, id: o.id.slice(0, 40), pts: (o.pts as unknown[]).slice(0, 2000).map((n) => Math.round(Number(n)) || 0) });
+      const pts = (o.pts as unknown[]).slice(0, 2000).map((n) => Math.round(Number(n)) || 0);
+      const op: Op = { k: 'pts', p, id: o.id.slice(0, 40), pts };
+      // Stylus pressure (iPad Pencil, Android stylus): one value per point.
+      const pr = cleanPr(o.pr, pts.length / 2);
+      if (pr) op.pr = pr;
+      out.push(op);
     } else if (o.k === 'del' && Array.isArray(o.ids)) {
       const ids = (o.ids as unknown[]).map(String).filter((id) => id.startsWith('s')).slice(0, 200);
       if (ids.length) out.push({ k: 'del', p, ids });
