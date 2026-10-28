@@ -389,11 +389,11 @@ class WhiteboardScreen(context: Context, private val listener: Listener) : Frame
         set("draw", when (t) { WhiteboardView.Tool.HIGHLIGHT -> "highlighter"; WhiteboardView.Tool.TEXT -> "text"; else -> "pen" },
             t == WhiteboardView.Tool.PEN || t == WhiteboardView.Tool.HIGHLIGHT || t == WhiteboardView.Tool.TEXT)
         set("laser", "laser", t == WhiteboardView.Tool.LASER)
-        val shape = when (t) {
+        val shapeIcon = when (t) {
             WhiteboardView.Tool.LINE -> "line"; WhiteboardView.Tool.ARROW -> "arrow"; WhiteboardView.Tool.RECT -> "rect"
             WhiteboardView.Tool.ELLIPSE -> "ellipse"; WhiteboardView.Tool.TRI -> "tri"; else -> null
         }
-        set("shapes", shape ?: "shapes", shape != null)
+        set("shapes", shapeIcon ?: "shapes", shapeIcon != null)
         set("erase", if (t == WhiteboardView.Tool.AREA) "area_eraser" else "eraser", t == WhiteboardView.Tool.ERASER || t == WhiteboardView.Tool.AREA)
         set("undo", "undo", false, h?.canUndo == true)
         set("redo", "redo", false, h?.canRedo == true)

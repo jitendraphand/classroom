@@ -67,6 +67,12 @@ class ClassPanel(context: Context, private val listener: Listener) : LinearLayou
     private val rosterList = LinearLayout(context)
     private val search = EditText(context)
 
+    // Declared before init: init draws the roster (show(Kind.ROSTER)), and
+    // Kotlin initialises properties in source order.
+    private var roster = Roster()
+    // Large classes: a page of rows at a time (search finds anyone).
+    private var rosterLimit = ClassLogic.ROSTER_PAGE
+    private var waitLimit = ClassLogic.ROSTER_PAGE
     init {
         orientation = VERTICAL
         background = GradientDrawable().apply {
@@ -155,7 +161,11 @@ class ClassPanel(context: Context, private val listener: Listener) : LinearLayou
             addTextChangedListener(object : android.text.TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
                 override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
-                override fun afterTextChanged(e: android.text.Editable?) { if (kind == Kind.ROSTER) drawRoster() }
+                override fun afterTextChanged(e: android.text.Editable?) {
+                    rosterLimit = ClassLogic.ROSTER_PAGE
+                    waitLimit = ClassLogic.ROSTER_PAGE
+                    if (kind == Kind.ROSTER) drawRoster()
+                }
             })
         }
         addView(search, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -245,8 +255,6 @@ class ClassPanel(context: Context, private val listener: Listener) : LinearLayou
         val canAllowDraw: Boolean = false,
     )
 
-    private var roster = Roster()
-
     fun renderRoster(r: Roster) {
         if (r == roster && rosterList.childCount > 0) return
         roster = r
@@ -317,11 +325,18 @@ class ClassPanel(context: Context, private val listener: Listener) : LinearLayou
             head.addView(sectionLabel("Waiting (${r.waiting.size})", Palette.AMBER), LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             if (r.waiting.size > 1) head.addView(textButton("Admit all", Palette.AMBER, Color.BLACK) { listener.onAdmitAll() })
             rosterList.addView(head)
-            for ((id, name) in r.waiting) {
+            val (waitShown, waitHidden, waitNext) = ClassLogic.rosterWindow(r.waiting, waitLimit)
+            for ((id, name) in waitShown) {
                 val row = row()
                 row.addView(nameBlock(name, "Waiting to join", null), LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                 row.addView(textButton("Admit", Palette.AMBER, Color.BLACK) { listener.onAdmit(id) })
                 rosterList.addView(row)
+            }
+            if (waitHidden > 0) {
+                rosterList.addView(textButton("Show $waitNext more ($waitHidden not shown)", Palette.SURFACE_2, Palette.TEXT) {
+                    waitLimit += ClassLogic.ROSTER_PAGE
+                    drawRoster()
+                })
             }
         }
 
@@ -342,7 +357,14 @@ class ClassPanel(context: Context, private val listener: Listener) : LinearLayou
                 setPadding(0, context.dpx(8), 0, context.dpx(8))
             })
         }
-        for (s in shown) rosterList.addView(studentRow(s, r))
+        val (page, hidden, next) = ClassLogic.rosterWindow(shown, rosterLimit)
+        for (s in page) rosterList.addView(studentRow(s, r))
+        if (hidden > 0) {
+            rosterList.addView(textButton("Show $next more ($hidden not shown; search finds anyone)", Palette.SURFACE_2, Palette.TEXT) {
+                rosterLimit += ClassLogic.ROSTER_PAGE
+                drawRoster()
+            })
+        }
     }
 
     private fun studentRow(s: StudentInfo, r: Roster): View {

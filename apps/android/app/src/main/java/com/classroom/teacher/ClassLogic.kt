@@ -34,6 +34,17 @@ data class StudentInfo(
  * they are JVM unit-tested (ClassLogicTest).
  */
 object ClassLogic {
+    /** Large classes: rows rendered per page in the roster / waiting list (web lib/rosterWindow ROSTER_PAGE). */
+    const val ROSTER_PAGE = 150
+
+    /** First [limit] rows (at least a page), how many are hidden, and how many "Show more" adds (web rosterWindow). */
+    fun <T> rosterWindow(rows: List<T>, limit: Int): Triple<List<T>, Int, Int> {
+        val n = maxOf(ROSTER_PAGE, limit)
+        val shown = if (rows.size > n) rows.subList(0, n) else rows
+        val hidden = rows.size - shown.size
+        return Triple(shown, hidden, minOf(hidden, ROSTER_PAGE))
+    }
+
     /** Student tiles in the video column next to the teacher's own. */
     const val STUDENT_TILES = 3
 

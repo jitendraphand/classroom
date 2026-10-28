@@ -67,6 +67,25 @@ class ScreenMaskProcessor : VideoProcessor {
     @Volatile
     var marginPx: Int = 24
 
+    /**
+     * The toolbar window is FLAG_SECURE, so the system already paints it
+     * black in the capture. Once real frames show that (the toolbar's middle
+     * is black), frames pass straight through as GPU textures: no I420
+     * conversion, no copy, no masking, which is what made sharing stutter.
+     * Re-checked on one frame every [RECHECK_NS]; any frame that shows the
+     * toolbar switches CPU masking back on, so it is never leaked.
+     */
+    @Volatile
+    var secureOk: Boolean = false
+        private set
+    private var lastCheckNs = 0L
+
+    /** New share session: verify again. */
+    fun resetSecureCheck() {
+        secureOk = false
+        lastCheckNs = 0L
+    }
+
     @Volatile
     private var sink: VideoSink? = null
 
@@ -85,6 +104,15 @@ class ScreenMaskProcessor : VideoProcessor {
      */
     override fun onFrameCaptured(frame: VideoFrame, parameters: VideoProcessor.FrameAdaptationParameters) {
         if (parameters.drop || paused) return
+        if (passThrough(frame)) {
+            val adapted = VideoProcessor.applyFrameAdaptationParameters(frame, parameters) ?: return
+            try {
+                sink?.onFrame(adapted)
+            } finally {
+                adapted.release()
+            }
+            return
+        }
         val masked = maskedOrNull(frame) ?: run {
             if (needsMask(frame)) return // conversion failed: never leak the unmasked frame
             frame.retain()
@@ -105,6 +133,10 @@ class ScreenMaskProcessor : VideoProcessor {
     override fun onFrameCaptured(frame: VideoFrame) {
         if (paused) return
         val out = sink ?: return
+        if (passThrough(frame)) {
+            out.onFrame(frame)
+            return
+        }
         val masked = maskedOrNull(frame)
         if (masked == null) {
             if (!needsMask(frame)) out.onFrame(frame)
@@ -127,6 +159,51 @@ class ScreenMaskProcessor : VideoProcessor {
 
     private fun needsMask(frame: VideoFrame) = target(frame) != null
 
+    /** The toolbar is on screen but verified black already, and no re-check is due. */
+    private fun passThrough(frame: VideoFrame): Boolean {
+        if (!secureOk || target(frame) == null) return false
+        return System.nanoTime() - lastCheckNs < RECHECK_NS
+    }
+
+    /** The toolbar's own rectangle (no margin) in buffer pixels, shrunk to its middle half. */
+    private fun innerRect(frame: VideoFrame): IntRect? {
+        if (!enabled) return null
+        val rect = synchronized(this) { if (trail != null && System.nanoTime() <= trailUntilNs) null else current } ?: return null
+        val (dw, dh) = displaySize
+        val b = MaskMath.bufferRect(rect, dw, dh, frame.buffer.width, frame.buffer.height, frame.rotation, 0)
+        val qx = b.width / 4
+        val qy = b.height / 4
+        return IntRect(b.left + qx, b.top + qy, b.right - qx, b.bottom - qy).takeIf { !it.isEmpty }
+    }
+
+    /**
+     * True when [r] is a flat black fill (the system's FLAG_SECURE paint):
+     * every sampled luma pixel dark and all of them within a few levels of
+     * each other. The toolbar's own dark panel always carries brighter icons
+     * and outlines, so it never reads as flat.
+     */
+    private fun isBlack(b: VideoFrame.I420Buffer, r: IntRect): Boolean {
+        val y = b.dataY
+        val step = 3
+        var lo = 255
+        var hi = 0
+        var row = maxOf(0, r.top)
+        val bottom = minOf(b.height, r.bottom)
+        val right = minOf(b.width, r.right)
+        while (row < bottom) {
+            var col = maxOf(0, r.left)
+            while (col < right) {
+                val v = y.get(row * b.strideY + col).toInt() and 0xFF
+                if (v > BLACK_MAX_LUMA) return false
+                if (v < lo) lo = v
+                if (v > hi) hi = v
+                col += step
+            }
+            row += step
+        }
+        return hi - lo <= BLACK_FLAT
+    }
+
     /** A new (caller-released) frame with the toolbar painted black, or null when nothing needs masking or conversion failed. */
     private fun maskedOrNull(frame: VideoFrame): VideoFrame? {
         val target = target(frame) ?: return null
@@ -135,6 +212,12 @@ class ScreenMaskProcessor : VideoProcessor {
         } catch (e: Exception) {
             null
         } ?: return null
+        // Is the system already blacking the toolbar out (FLAG_SECURE)? Decided
+        // only while the toolbar is still (a moving window can lag a frame).
+        innerRect(frame)?.let { inner ->
+            secureOk = isBlack(i420, inner)
+            lastCheckNs = System.nanoTime()
+        }
         paintBlack(i420, target)
         return VideoFrame(i420, frame.rotation, frame.timestampNs)
     }
@@ -185,5 +268,11 @@ class ScreenMaskProcessor : VideoProcessor {
 
     companion object {
         private const val TRAIL_MS = 300L
+        /** Re-check the secure fill on one frame this often (one conversion, not one per frame). */
+        private const val RECHECK_NS = 5_000_000_000L
+        /** Limited-range black is 16, full-range 0; the toolbar's slate panel is above this either way. */
+        private const val BLACK_MAX_LUMA = 20
+        /** A system fill is flat: sampled luma may vary this much at most. */
+        private const val BLACK_FLAT = 4
     }
 }

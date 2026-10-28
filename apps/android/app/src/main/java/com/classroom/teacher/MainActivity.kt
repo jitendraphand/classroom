@@ -881,6 +881,7 @@ class MainActivity : AppCompatActivity() {
             ) { lifecycleScope.launch { onShareStoppedBySystem() } }
             track.startForegroundService(Notifications.SHARE_ID, Notifications.screenShare(this))
             maskProcessor.paused = false
+            maskProcessor.resetSecureCheck()
             track.startCapture()
             // Top layer 2 Mbps / 15 fps (low profile: 1 Mbps / 10 fps), plus a
             // 720p layer so phones / weak links get a readable share (web screenShareSimulcastFor).

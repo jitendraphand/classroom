@@ -103,9 +103,14 @@ class FloatingToolbar(private val context: Context, private val listener: Listen
                 @Suppress("DEPRECATION")
                 WindowManager.LayoutParams.TYPE_PHONE
             },
+            // FLAG_SECURE: the system blacks this window out of every screen
+            // capture itself, so shared frames go to the encoder untouched
+            // (no per-frame CPU masking). ScreenMaskProcessor verifies it on
+            // real frames and masks by hand where a device ignores it.
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_SECURE,
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START

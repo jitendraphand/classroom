@@ -67,4 +67,18 @@ class ClassLogicTest {
         assertEquals(1, ClassLogic.windowClass(839))
         assertEquals(2, ClassLogic.windowClass(840))
     }
+
+    @Test
+    fun rosterWindowShowsAPageAtATime() {
+        val rows = (1..400).toList()
+        val (shown, hidden, next) = ClassLogic.rosterWindow(rows, ClassLogic.ROSTER_PAGE)
+        assertEquals(150, shown.size)
+        assertEquals(250, hidden)
+        assertEquals(150, next)
+        val (all, none, _) = ClassLogic.rosterWindow(rows, 450)
+        assertEquals(400, all.size)
+        assertEquals(0, none)
+        assertEquals(Triple(listOf(1, 2), 0, 0), ClassLogic.rosterWindow(listOf(1, 2), 0))
+        assertEquals(100, ClassLogic.rosterWindow(rows, 300).third)
+    }
 }
