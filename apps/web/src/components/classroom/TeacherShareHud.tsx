@@ -8,6 +8,7 @@ import { toolbarInnerSize } from '@/lib/sideWindowGeometry';
 import { closeSideWindow, openSideWindow, sideWindow, SideWindowPortal, useSideWindows } from './shareSideWindows';
 import { sortRoster } from '@/lib/classSlots';
 import { filterPeople } from '@/lib/peopleSearch';
+import { ROSTER_PAGE, rosterWindow } from '@/lib/rosterWindow';
 import { floatInsets, useFloatDrag, type FloatPos } from './FloatingPanel';
 import { whiteboardShareDockPos } from '@/lib/floatGeometry';
 import { focusLabel } from '@/lib/focusStatus';
@@ -314,6 +315,7 @@ background:${BADGE_AMBER};color:${BADGE_TEXT};font-size:9px;font-weight:800;disp
 .tsh-panel-title{font-weight:650;font-size:11px;flex:1}
 .tsh-scroll{flex:1 1 auto;min-height:0;overflow:auto;padding:6px 8px}
 .tsh-empty{color:var(--dim);font-size:11px;text-align:center;padding:12px 8px;margin:0}
+.tsh-more{display:block;width:100%;margin-top:6px;white-space:normal;text-align:center}
 .tsh-person{display:flex;align-items:center;gap:4px;padding:3px 5px;border-radius:8px;background:rgba(255,255,255,.04);margin-bottom:4px}
 .tsh-person-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;font-size:11px}
 .tsh-person-sub{font-size:10px;color:var(--dim);font-weight:500}
@@ -512,8 +514,15 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
   const students = useMemo(() => sortRoster(admitted.filter((a) => a.role === 'STUDENT')), [admitted]);
   const hands = useMemo(() => students.filter((s) => s.handRaised), [students]);
   const [rosterQuery, setRosterQuery] = useState('');
-  const shownStudents = useMemo(() => filterPeople(students, rosterQuery), [students, rosterQuery]);
-  const shownWaiting = useMemo(() => filterPeople(waiting, rosterQuery), [waiting, rosterQuery]);
+  // Large classes: a page of rows at a time, like the main roster (lib/rosterWindow).
+  const [rosterLimit, setRosterLimit] = useState(ROSTER_PAGE);
+  const [waitingLimit, setWaitingLimit] = useState(ROSTER_PAGE);
+  const [handsLimit, setHandsLimit] = useState(ROSTER_PAGE);
+  const studentsPage = useMemo(() => rosterWindow(filterPeople(students, rosterQuery), rosterLimit), [students, rosterQuery, rosterLimit]);
+  const waitingPage = useMemo(() => rosterWindow(filterPeople(waiting, rosterQuery), waitingLimit), [waiting, rosterQuery, waitingLimit]);
+  const handsPage = useMemo(() => rosterWindow(hands, handsLimit), [hands, handsLimit]);
+  const shownStudents = studentsPage.shown;
+  const shownWaiting = waitingPage.shown;
 
   const togglePanel = (next: Exclude<Panel, null>) => {
     setPanel((cur) => (cur === next ? null : next));
@@ -595,6 +604,11 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                     </button>
                   </div>
                 ))}
+                {waitingPage.hidden > 0 && (
+                  <button type="button" className="tsh-btn tsh-more" onClick={() => setWaitingLimit((n) => n + ROSTER_PAGE)}>
+                    Show {waitingPage.next} more ({waitingPage.hidden} not shown; search finds anyone)
+                  </button>
+                )}
               </div>
             )}
             <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
@@ -698,6 +712,11 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                   </div>
                 );
               })
+            )}
+            {studentsPage.hidden > 0 && (
+              <button type="button" className="tsh-btn tsh-more" data-testid="hud-roster-more" onClick={() => setRosterLimit((n) => n + ROSTER_PAGE)}>
+                Show {studentsPage.next} more ({studentsPage.hidden} not shown; search finds anyone)
+              </button>
             )}
           </div>
   );
@@ -930,7 +949,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
             {hands.length === 0 ? (
               <p className="tsh-empty">No raised hands.</p>
             ) : (
-              hands.map((s) => (
+              handsPage.shown.map((s) => (
                 <div className="tsh-person" key={s.id}>
                   <Avatar name={s.displayName} size="sm" />
                   <span className="tsh-person-name">{s.displayName}</span>
@@ -939,6 +958,11 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                   </button>
                 </div>
               ))
+            )}
+            {handsPage.hidden > 0 && (
+              <button type="button" className="tsh-btn tsh-more" onClick={() => setHandsLimit((n) => n + ROSTER_PAGE)}>
+                Show {handsPage.next} more ({handsPage.hidden} not shown)
+              </button>
             )}
           </div>
         </div>

@@ -40,6 +40,9 @@ function scopeBadge(scope: string) {
 
 export type RaisedHand = { id: string; displayName: string };
 
+/** Raised-hand chips above the chat (earliest first); the roster lists every hand. */
+const CHAT_HAND_CHIPS = 40;
+
 export function ChatView({
   thread,
   isTeacher,
@@ -157,7 +160,7 @@ export function ChatView({
             {hands.length}
           </span>
           <div className="chat-hands-list">
-            {hands.map((h) => (
+            {hands.slice(0, CHAT_HAND_CHIPS).map((h) => (
               <span key={h.id} className="chat-hand-chip">
                 <button
                   type="button"
@@ -181,6 +184,11 @@ export function ChatView({
                 )}
               </span>
             ))}
+            {hands.length > CHAT_HAND_CHIPS && (
+              <span className="chat-hand-chip px-1.5" title="Every raised hand is in the roster">
+                +{hands.length - CHAT_HAND_CHIPS} more
+              </span>
+            )}
           </div>
         </div>
       )}
