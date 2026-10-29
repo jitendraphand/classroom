@@ -239,6 +239,10 @@ function Tools() {
           <Opt on={!hud.camOn} label={hud.camOn ? 'Turn camera off' : 'Turn camera on'} onClick={() => send({ type: 'toggle-cam' })}>
             {ic(hud.camOn ? 'cam' : 'camOff')}
           </Opt>
+          <Opt label="Microphone, camera and noise removal" onClick={() => desktop().togglePanel('devices')} testId="atb-devices">
+            {ic('mic')}
+            {'⚙'}
+          </Opt>
           <Opt label={hud.unread ? `Chat (${hud.unread} unread)` : 'Chat'} onClick={() => desktop().togglePanel('chat')}>
             {ic('chat')}
             {hud.unread ? hud.unread : null}

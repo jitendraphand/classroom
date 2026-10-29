@@ -42,8 +42,10 @@ export async function decodeSnapshot(p: Extract<Packet, { t: 'snap' }>): Promise
   try {
     if (!p.z) return cleanDoc(JSON.parse(p.doc));
     const DS = (globalThis as unknown as { DecompressionStream?: new (f: string) => { readable: ReadableStream<Uint8Array>; writable: WritableStream<Uint8Array> } }).DecompressionStream;
-    if (!DS) return null;
-    const raw = await pipe(fromB64(p.doc), new DS('deflate-raw'));
+    // No DecompressionStream (Safari before 16.4, i.e. iOS/iPadOS 15-16.3;
+    // Firefox before 113): inflate in JavaScript (fflate, loaded only here),
+    // or a late joiner would see an empty board.
+    const raw = DS ? await pipe(fromB64(p.doc), new DS('deflate-raw')) : (await import('fflate')).inflateSync(fromB64(p.doc));
     return cleanDoc(JSON.parse(new TextDecoder().decode(raw)));
   } catch {
     return null;

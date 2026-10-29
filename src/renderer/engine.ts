@@ -773,6 +773,7 @@ function buildClass(): void {
         <div class="meet-bar" id="controls">
           ${sym('btn-mic', 'mic', 'Mute microphone', '', 'Mic')}
           ${sym('btn-cam', 'cam', 'Turn camera off', '', 'Camera')}
+          ${sym('btn-devices', 'mic', 'Microphone, camera and noise removal', '', 'Devices')}
           ${sym('btn-share', 'share', 'Share screen', '', 'Share')}
           ${sym('btn-stop', 'stop', 'Stop sharing screen', 'danger', 'Stop share')}
           ${sym('btn-board', 'board', 'Share a whiteboard (students see it live)', '', 'Whiteboard')}
@@ -805,6 +806,7 @@ function buildClass(): void {
   const act = (type: TeacherAction['type']) => () => controller?.handle({ type } as TeacherAction);
   document.getElementById('btn-mic')?.addEventListener('click', act('toggle-mic'));
   document.getElementById('btn-cam')?.addEventListener('click', act('toggle-cam'));
+  document.getElementById('btn-devices')?.addEventListener('click', () => desktop().togglePanel('devices'));
   document.getElementById('btn-leave')?.addEventListener('click', act('leave'));
   document.getElementById('btn-end')?.addEventListener('click', act('end'));
   document.getElementById('btn-mute')?.addEventListener('click', () => controller?.handle({ type: 'mute-all', muted: true }));

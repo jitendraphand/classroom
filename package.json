@@ -22,6 +22,7 @@
     "electron": "44.10.0",
     "electron-builder": "26.18.0",
     "esbuild": "0.25.10",
+    "fflate": "0.8.3",
     "livekit-client": "2.22.3",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
