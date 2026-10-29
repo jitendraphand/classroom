@@ -346,8 +346,12 @@ See `.env.example`. Important:
 ├── docs/DEPLOY-VPS.md          # bare public-IP VPS guide
 ├── docs/DEPLOY-CADDY.md        # domain + Caddy Let's Encrypt
 ├── docs/CONSTRAINED-DEPLOY.md  # small VPS / limited bandwidth
+├── docs/PROTOCOL.md            # contract between the server and the web, Windows, Android and AI teachers
+├── docs/AUDIO.md               # noise removal and voice focus
+├── docs/AI_TEACHER.md          # an AI teaching a class (apps/ai-teacher)
 ├── .github/workflows/ci.yml    # typecheck, lint, unit + integration tests, build, image
 ├── README.md
+├── apps/ai-teacher             # MCP server + orchestrator: an AI as the class's teacher
 └── apps/web                    # Next.js app
     ├── Dockerfile
     ├── prisma/
