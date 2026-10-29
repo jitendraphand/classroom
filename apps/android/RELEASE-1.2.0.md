@@ -1,26 +1,43 @@
 # Classroom Teacher 1.2.0 (Android)
 
-Version 1.2.0-20261028, version code 207 (1.1.0 was 205). Built 2026-10-28 by CI from the `android`
-branch (commit bf43157): run https://github.com/jitendraphand/classroom/actions/runs/40706826010,
-artifact `classroom-teacher-android` (download it from the run page while signed in to GitHub; kept until
-2026-11-27).
+Version 1.2.0-20261029, version code 280 (1.1.0 was 205). Built 2026-10-29 by CI from the `android`
+branch (commit ba4c0f4): run https://github.com/jitendraphand/classroom/actions/runs/40840541473,
+pre-release https://github.com/jitendraphand/classroom/releases/tag/android-1.2.0-20261029-r10.
 
 Download: [Google Drive, 1.2.0 folder](https://drive.google.com/drive/folders/1jMSCm_FjJs2xVsq85CCFDU352dY0MTvv)
 
 | File | Size | SHA-256 | Use |
 | --- | --- | --- | --- |
-| `app-debug.apk` | 63,011,181 bytes | `83d5c210ddf10df2884f7837af18fabcac71edb431977c9cc61b17420d017e13` | Testing. Installs anywhere (all ABIs, debug key); uninstall the old app first |
-| `app-release-unsigned.apk` | 25,262,119 bytes | `4f5594408d8f2627923675c7710c2fa4a50c81290bfad47d8c94f2493844725a` | Not installable until signed |
+| `classroom-teacher-debug.apk` | 63,080,222 bytes | `eb33e0009fc6522719d2ccc5e16386ac1f2f642b8c109c8f1f0781e691779d5c` | Testing. Installs anywhere (all ABIs, debug key); uninstall the old app first |
+| `classroom-teacher-release.apk` | not built yet | | For teachers, once the release key is in CI (below) |
 
 The release APK for teachers is the signed one: add the release key (the one that signed 1.1.0, certificate
 SHA-256 `7cfe1e01…cad982`) as repository secrets (see `COMPATIBILITY.md`, "Building and releasing") and
-re-run the workflow (Actions → Android teacher app → Run workflow, branch `android`): the run then has
-`app-release.apk`, and its "Release certificate" step shows the key. That APK installs over 1.1.0 and
-keeps the teacher signed in; put it in the Drive folder. Its version code will be higher than 207: the code counts
-the branch's commits at build time, and `main` has been merged in since. Any higher code installs over 1.1.0. About 25 MB, down from
-61 MB for 1.1.0.
+run the workflow by hand (Actions → Android teacher app → Run workflow, branch `android`). The run then
+publishes `classroom-teacher-release.apk` as a pre-release; its "Release certificate" step shows the key.
+That APK installs over 1.1.0 and keeps the teacher signed in; put it in the Drive folder. About 25 MB
+(ARM only), down from 61 MB for 1.1.0.
 
 ## What changed
+
+Whiteboard (same board as the web and Windows apps)
+- Same tools, icons and groups: pen pressure, select / move, shape snapping, laser, triangle, dots and
+  graph backgrounds; strokes drawn as smooth curves, the board cached in layers, pinch zoom.
+
+Screen share and audio
+- Smoother screen share: the floating toolbar is hidden from the capture by Android itself
+  (FLAG_SECURE), so frames go straight to the encoder; the app checks this on real frames and falls
+  back to masking the toolbar on phones that ignore the flag.
+- Voice focus on the teacher's microphone, after the phone's own echo and noise cancellation: sound
+  quieter than the teacher's voice is turned down. On by default; long-press the mic button to switch.
+
+Big classes
+- Waiting list and student list show 150 rows at a time with "Show more"; search finds anyone.
+
+Updates
+- The home screen shows "version x.y.z is available" or, below the school's minimum, "update required"
+  with the school's download link (server settings `ANDROID_APP_LATEST`, `ANDROID_APP_MINIMUM`,
+  `ANDROID_APP_URL`).
 
 Works with the current server (`main`)
 - Ad-hoc classes start again: the app sends the campus the server now requires (1.1.0 got "Required").
@@ -48,7 +65,9 @@ Smaller download
 ## How it was checked
 
 - CI: unit tests (shared logic: chat lines, server address rules, media presets, ink and whiteboard trust,
-  poll timing), debug and release builds with R8.
+  poll timing; the whiteboard model checked against the web app's, voice focus against the web
+  worklet's constants, roster paging, the update notice), debug and release builds with R8.
+- The APK: built from ba4c0f4 and carries the voice focus and share-mask processors and the update check.
 - The requests the app makes, replayed against the current server: ad-hoc start with the campus (200;
   without it 400), the token's `mediaProfile`, a crash report over 8 KB (413).
 
