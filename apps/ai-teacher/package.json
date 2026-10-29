@@ -1,0 +1,28 @@
+{
+  "name": "classroom-ai-teacher",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI teacher for the classroom: an MCP server exposing the teacher's capabilities, a fast rule layer, and a Claude orchestrator.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "mcp": "NODE_ENV=production tsx src/mcp.ts",
+    "teach": "NODE_ENV=production tsx src/teach.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "1.3.0",
+    "@livekit/rtc-node": "1.2.1",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "fflate": "0.8.3",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3"
+  }
+}
