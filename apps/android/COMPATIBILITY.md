@@ -96,6 +96,9 @@ with their SHA-256 in the log.
   `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`. The "Release certificate"
   step of the run prints the certificate digest; check it starts with `7cfe1e01`.
   Without the secrets the release APK is unsigned and cannot be installed.
+- Manual runs (Actions -> Android teacher app -> Run workflow, branch `android`) also publish the debug
+  APK, the signed release APK (when the secrets are set) and `SHA256SUMS.txt` as a GitHub pre-release
+  `android-<version>-r<run>`, so the files stay downloadable after the run's artifact expires.
   Only if that key is lost: make a new one with
   `keytool -genkeypair -v -keystore release.jks -keyalg RSA -keysize 4096 -validity 10000 -alias classroom`
   (teachers then uninstall once), and keep a copy somewhere safe.

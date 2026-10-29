@@ -25,6 +25,9 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
+    outputs:
+      version: ${{ steps.version.outputs.name }}
+      code: ${{ steps.version.outputs.code }}
     defaults:
       run:
         working-directory: apps/android
@@ -72,6 +75,13 @@ jobs:
           CLASSROOM_DEFAULT_SERVER: ${{ vars.CLASSROOM_DEFAULT_SERVER }}
         run: ./gradlew --no-daemon assembleDebug assembleRelease
 
+      - name: Version
+        id: version
+        run: |
+          meta=app/build/outputs/apk/debug/output-metadata.json
+          echo "name=$(jq -r '.elements[0].versionName' "$meta")" >> "$GITHUB_OUTPUT"
+          echo "code=$(jq -r '.elements[0].versionCode' "$meta")" >> "$GITHUB_OUTPUT"
+
       - name: APK sizes
         run: |
           find app/build/outputs/apk -name '*.apk' -exec ls -l {} \;
@@ -94,3 +104,45 @@ jobs:
       - name: Remove signing material
         if: always()
         run: rm -f "$RUNNER_TEMP/release.jks" "$RUNNER_TEMP/signing.properties"
+
+  # Manual runs (Actions -> Android teacher app -> Run workflow) also publish
+  # the APKs as a GitHub pre-release: a download link that does not expire
+  # with the run's artifact. The unsigned release APK is left out (it does
+  # not install).
+  publish:
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: classroom-teacher-android
+          path: apk
+
+      - name: Pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          CODE: ${{ needs.build.outputs.code }}
+        run: |
+          set -eu
+          mkdir out
+          cp apk/debug/app-debug.apk out/classroom-teacher-debug.apk
+          if [ -f apk/release/app-release.apk ]; then
+            cp apk/release/app-release.apk out/classroom-teacher-release.apk
+            release="- classroom-teacher-release.apk: for teachers. Signed with the release key; installs over earlier releases and keeps the sign-in."
+          else
+            release="- No release APK: the ANDROID_KEYSTORE_* secrets are not set, so the release build is unsigned and was left out."
+          fi
+          (cd out && sha256sum ./*.apk | sed 's# \./# #' > SHA256SUMS.txt)
+          short=$(echo "$GITHUB_SHA" | cut -c1-7)
+          notes=$(printf '%s\n\n%s\n%s\n\n%s' \
+            "Android teacher app $VERSION (version code $CODE), branch $GITHUB_REF_NAME @ $short." \
+            "- classroom-teacher-debug.apk: testing only. Debug key, so uninstall other builds first." \
+            "$release" \
+            "SHA-256 in SHA256SUMS.txt. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID")
+          gh release create "android-$VERSION-r$GITHUB_RUN_NUMBER" out/* \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+            --title "Android teacher $VERSION (pre-release)" --notes "$notes"
