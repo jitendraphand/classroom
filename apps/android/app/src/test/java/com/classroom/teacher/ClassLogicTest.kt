@@ -81,4 +81,16 @@ class ClassLogicTest {
         assertEquals(Triple(listOf(1, 2), 0, 0), ClassLogic.rosterWindow(listOf(1, 2), 0))
         assertEquals(100, ClassLogic.rosterWindow(rows, 300).third)
     }
+
+    @Test
+    fun updateNoticeFollowsTheServerVersions() {
+        val url = "https://example.com/apk"
+        assertEquals(null, ClassLogic.updateNotice("1.2.0-20261028", null, null, url))
+        assertEquals(null, ClassLogic.updateNotice("1.2.0-20261028", "1.2.0", "1.1.0", url))
+        assertEquals(ClassLogic.UpdateNotice(false, "1.3.0", url), ClassLogic.updateNotice("1.2.0-20261028", "1.3.0", "1.1.0", url))
+        assertEquals(ClassLogic.UpdateNotice(true, "1.3.0", null), ClassLogic.updateNotice("1.2.0", "1.3.0", "1.2.5", null))
+        assertEquals(ClassLogic.UpdateNotice(true, "1.2.5", url), ClassLogic.updateNotice("1.2.0", null, "1.2.5", url))
+        assertEquals(null, ClassLogic.updateNotice("dev-build", "9.9.9", "9.9.9", url))
+        assertEquals(true, ClassLogic.versionLess(listOf(1, 9, 9), listOf(1, 10, 0)))
+    }
 }

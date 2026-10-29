@@ -119,6 +119,13 @@ class ClassroomApi(rawBase: String) {
         }
     }
 
+    /** The server's advertised Android app versions (no auth needed): latest, minimum, download url. */
+    fun appUpdate(): Triple<String?, String?, String?> {
+        val res = call("GET", "/api/desktop/android", null, sessionCall = false)
+        fun s(k: String) = res.optString(k).takeIf { it.isNotBlank() && it != "null" }
+        return Triple(s("latest"), s("minimum"), s("url"))
+    }
+
     /** Today's classes (plus the running one) and the grades this teacher may start ad-hoc classes for. */
     fun schedule(): Schedule {
         val res = call("GET", "/api/teacher/schedule", null)

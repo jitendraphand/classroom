@@ -34,6 +34,33 @@ data class StudentInfo(
  * they are JVM unit-tested (ClassLogicTest).
  */
 object ClassLogic {
+    /** What the server says about app updates (GET /api/desktop/android), as a banner for the home screen. */
+    data class UpdateNotice(val required: Boolean, val latest: String, val url: String?)
+
+    /** "1.2.0-20261028" -> [1, 2, 0]; null when there is no x.y.z at the start. */
+    fun versionParts(v: String?): List<Int>? {
+        val m = Regex("""^(\d+)\.(\d+)\.(\d+)""").find(v?.trim() ?: return null) ?: return null
+        return m.groupValues.drop(1).map { it.toInt() }
+    }
+
+    fun versionLess(a: List<Int>, b: List<Int>): Boolean {
+        for (i in 0 until 3) if (a[i] != b[i]) return a[i] < b[i]
+        return false
+    }
+
+    /**
+     * Below `minimum`: an update is required; below `latest`: one is available;
+     * otherwise nothing. Same rules as the Windows app (web lib/desktopApp).
+     */
+    fun updateNotice(current: String, latest: String?, minimum: String?, url: String?): UpdateNotice? {
+        val cur = versionParts(current) ?: return null
+        val min = versionParts(minimum)
+        val lat = versionParts(latest)
+        if (min != null && versionLess(cur, min)) return UpdateNotice(true, (lat?.takeIf { !versionLess(it, min) } ?: min).joinToString("."), url)
+        if (lat != null && versionLess(cur, lat)) return UpdateNotice(false, lat.joinToString("."), url)
+        return null
+    }
+
     /** Large classes: rows rendered per page in the roster / waiting list (web lib/rosterWindow ROSTER_PAGE). */
     const val ROSTER_PAGE = 150
 

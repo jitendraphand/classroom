@@ -7,7 +7,9 @@ import android.content.ComponentCallbacks
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.graphics.Color
 import android.graphics.Point
+import android.graphics.drawable.GradientDrawable
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
@@ -33,6 +35,7 @@ import androidx.core.view.updatePadding
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.appcompat.widget.PopupMenu
+import com.google.android.material.button.MaterialButton
 import io.livekit.android.room.participant.Participant
 import io.livekit.android.room.track.RemoteTrackPublication
 import io.livekit.android.room.track.VideoQuality
@@ -516,6 +519,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 val s = withContext(Dispatchers.IO) { client.schedule() }
                 renderHome(s)
+                checkForUpdate(client)
             } catch (e: SessionEndedException) {
                 sessionEnded(e)
             } catch (e: Exception) {
@@ -523,6 +527,65 @@ class MainActivity : AppCompatActivity() {
                 showError(e.message ?: "Could not load your classes")
             }
         }
+    }
+
+    private var updateBanner: View? = null
+    private var updateCheckedAt = 0L
+    private var updateCheckedFor: String? = null
+
+    /** On the home screen, at most every 6 h per server: "update available / required" from the school's server. */
+    private fun checkForUpdate(client: ClassroomApi) {
+        val now = System.currentTimeMillis()
+        if (client.base == updateCheckedFor && now - updateCheckedAt < 6 * 60 * 60 * 1000L) return
+        updateCheckedAt = now
+        updateCheckedFor = client.base
+        lifecycleScope.launch {
+            val notice = try {
+                val (latest, minimum, url) = withContext(Dispatchers.IO) { client.appUpdate() }
+                ClassLogic.updateNotice(BuildConfig.VERSION_NAME, latest, minimum, url)
+            } catch (_: Exception) {
+                null // an older server without the endpoint, or offline: say nothing
+            }
+            showUpdate(notice)
+        }
+    }
+
+    private fun showUpdate(notice: ClassLogic.UpdateNotice?) {
+        updateBanner?.let { binding.homeGroup.removeView(it) }
+        updateBanner = null
+        if (notice == null) return
+        val text = if (notice.required) {
+            "This app is too old for your school's classroom server. Install version ${notice.latest} to keep teaching."
+        } else {
+            "Version ${notice.latest} of the teacher app is available."
+        }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(if (notice.required) 0xFF7F1D1D.toInt() else 0xFF1E3A5F.toInt())
+            }
+            addView(TextView(this@MainActivity).apply {
+                this.text = text
+                setTextColor(Color.WHITE)
+                textSize = 15f
+            })
+            notice.url?.let { url ->
+                addView(MaterialButton(this@MainActivity).apply {
+                    this.text = if (notice.required) "Download the update" else "Download"
+                    setOnClickListener {
+                        try {
+                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                        } catch (_: Exception) {
+                            showError("Open $url in a browser to download the update.")
+                        }
+                    }
+                })
+            }
+        }
+        binding.homeGroup.addView(card, 1, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(12) })
+        updateBanner = card
     }
 
     private fun renderHome(s: Schedule) {
