@@ -22,6 +22,7 @@
     "@livekit/components-styles": "^1.1.4",
     "@prisma/client": "^5.22.0",
     "bcryptjs": "^2.4.3",
+    "fflate": "0.8.3",
     "ioredis": "^5.4.1",
     "jose": "^5.9.6",
     "livekit-client": "^2.6.0",

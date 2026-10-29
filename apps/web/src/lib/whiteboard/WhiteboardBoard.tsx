@@ -422,7 +422,12 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
     const item: Item = { ...shape, id: newId('t'), by: identity, c: it.c, w: it.w, ...(fill && FILLABLE.has(shape.k) ? { fl: 1 as const } : {}) };
     const ops: Op[] = [{ k: 'del', p: pg.id, ids: [it.id] }, { k: 'add', p: pg.id, item }];
     send(ops);
-    undoRef.current.push({ redo: [{ k: 'add', p: pg.id, item }], undo: [{ k: 'del', p: pg.id, ids: [item.id] }] });
+    // Same as the Android app: one undo goes back to the free-hand stroke,
+    // a second removes it (the stroke's own entry is not pushed on pen-up
+    // once snapped).
+    const drawn = JSON.parse(JSON.stringify(it)) as Item;
+    undoRef.current.push({ redo: [{ k: 'add', p: pg.id, item: drawn }], undo: [{ k: 'del', p: pg.id, ids: [drawn.id] }] });
+    undoRef.current.push({ redo: ops, undo: [{ k: 'del', p: pg.id, ids: [item.id] }, { k: 'add', p: pg.id, item: drawn }] });
     redoRef.current = [];
     setStackTick((n) => n + 1);
   };

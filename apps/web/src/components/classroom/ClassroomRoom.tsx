@@ -2913,7 +2913,7 @@ function RoomInner({
   );
 
   return withDrawing(
-    <div className="flex h-[100dvh] max-h-[100dvh] flex-col overflow-hidden bg-surface-0/40">
+    <div className="h-dvh-safe max-h-dvh-safe flex flex-col overflow-hidden bg-surface-0/40">
       <SelectivePublisher
         isTeacher
         canPublishVideo={effectiveCanPublish}
@@ -4208,7 +4208,7 @@ export function ClassroomRoom({ code }: { code: string }) {
       // the teacher's tracks and classmates' microphones only, never to other
       // students' cameras. The teacher keeps auto-subscribe (sampled cameras).
       connectOptions={{ peerConnectionTimeout: 20_000, autoSubscribe: isTeacher }}
-      className="h-[100dvh] overflow-hidden"
+      className="h-dvh-safe overflow-hidden"
       onConnected={() => {
         everConnectedRef.current = true;
         connectFailuresRef.current = 0;

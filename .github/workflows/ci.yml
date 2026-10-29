@@ -64,6 +64,24 @@ jobs:
           DATABASE_URL: postgresql://placeholder:placeholder@127.0.0.1:5432/placeholder
         run: npm run build
 
+  ai-teacher:
+    name: AI teacher (typecheck, tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/ai-teacher
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/ai-teacher/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
+
   deploy-config:
     name: Scripts and Compose
     runs-on: ubuntu-latest

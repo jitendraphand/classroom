@@ -23,6 +23,10 @@ mic (browser: echo cancellation, AGC; its noise suppression only in Standard)
 | **Strong** | everyone; desktops/tablets with 4+ cores | GTCRN (MIT, 2024): a stronger network. Removes much more of fans and typing, but thins your own voice by 2-5 dB when other people talk in the room, so it is opt-in. On phones and 2-core machines it runs Enhanced instead. |
 | **Voice focus** (default on) | teachers | Learns the teacher's own speaking level (the loudest 10% of what they said over the last ~20 s, so a cough or a door slam does not move it) and turns down sound more than 15 dB under it between sentences: people talking further away, a TV next door, what the noise remover lets through. Never touches sound at the teacher's level and turns nothing down until the teacher has been heard; opens 8 ms before a word starts (look-ahead) and holds 120 ms after it ends. |
 
+The Windows teacher app runs the same chain (synced from the web app) and
+has the same choices in its Devices panel. The Android teacher app keeps the
+phone's own processing and adds voice focus (see below).
+
 Settings are saved per device (`localStorage` key `classroom.voice.v1`). A
 change republishes the microphone (a ~0.5 s gap for listeners). Students
 download the models only the first time they turn their mic on (RNNoise
@@ -106,8 +110,11 @@ What exists today:
     Windows Studio Effects **Voice focus** (on supported PCs).
   - NVIDIA Broadcast or Krisp desktop: pick their virtual microphone as the
     default input.
-  - Android: the teacher app uses the phone's voice-communication input
-    (hardware echo cancellation and noise suppression where the phone has them).
+  - Android: the teacher app records with the phone's voice-communication
+    input (hardware echo cancellation and noise suppression on Android 10+),
+    WebRTC's own suppression, AGC and high-pass, then the same voice focus
+    as the web (Kotlin port, `apps/android/.../VoiceFocus.kt` on the android
+    branch; long-press the mic button to turn it off or on).
 
 If a teacher uses one of these, set the classroom to **Standard** to avoid
 stacking two noise removers.

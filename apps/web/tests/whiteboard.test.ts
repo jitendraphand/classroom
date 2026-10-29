@@ -111,6 +111,22 @@ test('snapshot: compressed round trip, smaller than JSON', async () => {
   assert.deepEqual(back, d);
 });
 
+test('snapshot: browsers without DecompressionStream (Safari < 16.4) still read compressed boards', async () => {
+  const d = emptyDoc();
+  const p = d.pages[0]!.id;
+  for (let i = 0; i < 40; i++) applyOp(d, { k: 'add', p, item: stroke(`s${i}`, 'teacher_1', [i, i, i + 50, i + 80, i + 90, i + 10]) });
+  const snap = await encodeSnapshot(d);
+  assert.ok(snap.t === 'snap' && snap.z === 1);
+  const g = globalThis as { DecompressionStream?: unknown };
+  const saved = g.DecompressionStream;
+  try {
+    g.DecompressionStream = undefined;
+    assert.deepEqual(await decodeSnapshot(snap as Extract<Packet, { t: 'snap' }>), d);
+  } finally {
+    g.DecompressionStream = saved;
+  }
+});
+
 test('session: late joiner gets the same board from a snapshot + live ops', async () => {
   const host = new WhiteboardSession(undefined, true);
   const p = host.doc.pages[0]!.id;
