@@ -1,7 +1,7 @@
 {
   "name": "classroom-teacher",
   "productName": "Classroom Teacher",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "description": "Windows teacher desktop app for Classroom",
   "author": "Classroom",
