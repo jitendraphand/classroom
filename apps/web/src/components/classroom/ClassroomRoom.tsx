@@ -65,7 +65,7 @@ import { shortName } from '@/lib/displayNames';
 import { Controls } from './Controls';
 import { LocalPreview } from './LocalPreview';
 import { DrawOverlay, ShareDrawingProvider, useDrawingActions, useShareDrawing } from './ShareDrawing';
-import { TeacherInkOverlay, TeacherInkProvider } from './TeacherInk';
+import { TeacherInkOverlay, TeacherInkProvider, useTeacherInk } from './TeacherInk';
 import { WhiteboardMeetingBar } from './MeetingBar';
 import { SHARE_POSITION_NOTICE_KEY, inlineShareDockHint, sharePositionNoticeOpen } from '@/lib/shareChrome';
 import { ZoomPanSurface } from './ZoomPanSurface';
@@ -391,17 +391,30 @@ export type EntireShareInfo = {
  */
 function EntireShareDrawingPreview() {
   const d = useShareDrawing();
-  if (!d || (!d.strokes.length && !d.holder)) return null;
-  const aspect = typeof window !== 'undefined' && window.screen?.height ? window.screen.width / window.screen.height : 16 / 9;
+  const ink = useTeacherInk();
+  const { localParticipant } = useLocalParticipant();
+  const capture = localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track?.mediaStreamTrack.getSettings();
+  const aspect = capture?.width && capture?.height ? capture.width / capture.height : 16 / 9;
+  if (!d || !ink) return null;
+  const showSurface = ink.annotating || ink.strokes.length > 0 || d.strokes.length > 0 || !!d.holder;
   return (
     <div className="mt-3 text-left">
+      <Button size="sm" variant="secondary" onClick={() => ink.setAnnotating(!ink.annotating)} aria-pressed={ink.annotating}>
+        <IconPen size={12} /> {ink.annotating ? 'Stop annotating' : 'Annotate entire-screen share'}
+      </Button>
+      {showSurface && <>
+      <p className="mb-1 mt-2 text-2xs text-slate-300">
+        Draw here to place marks over the shared screen. Use the same annotation tools in Share controls. This pad does not preview your desktop.
+      </p>
       <p className="mb-1 inline-flex items-center gap-1 text-2xs font-semibold text-slate-300">
         <IconPen size={12} />
         {d.holder ? `${d.holder.name} ${d.holder.name.includes(', ') ? 'are' : 'is'} drawing` : 'Student drawing'} (what students see over your screen)
       </p>
       <div className="draw-preview" style={{ aspectRatio: String(aspect) }}>
         <DrawOverlay aspect={aspect} interactive={false} />
+        <TeacherInkOverlay interactive />
       </div>
+      </>}
       <div className="relative z-10 mt-2 flex flex-wrap justify-center gap-2" data-testid="share-draw-actions">
         {d.strokes.length > 0 && (
           <button
@@ -434,7 +447,7 @@ function EntireScreenShareCard({ onStop, info }: { onStop?: () => void; info?: E
       className="video-tile relative flex h-full min-h-0 w-full items-center justify-center overflow-hidden bg-ink-950 p-4"
       style={controlsInTab ? { paddingTop: '5.5rem', paddingBottom: '6.5rem' } : undefined}
     >
-      <div className="max-w-md rounded-2xl border border-white/10 bg-surface-1/90 p-5 text-center shadow-lift">
+      <div className="max-h-full w-full max-w-2xl overflow-y-auto rounded-2xl border border-white/10 bg-surface-1/90 p-5 text-center shadow-lift">
         <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-brand-500/20 text-brand-300">
           <IconScreen size={20} />
         </div>
