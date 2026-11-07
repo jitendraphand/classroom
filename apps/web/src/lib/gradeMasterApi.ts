@@ -90,14 +90,15 @@ export async function handleCreateGrade(body: unknown, deps: Deps) {
   const b = obj(body);
   const input = gradeInput(b.label ?? b.name);
   if (!input) return err('Enter a grade, e.g. 7 or KG (letters, digits, spaces, "." and "-").');
+  const parsed = validateDivisions(b.divisions);
+  if ('error' in parsed) return err(parsed.error);
   const master = await deps.store.list();
   if (master.some((x) => x.name === input.name)) return err(`Grade ${input.name} already exists.`, 409);
   const sortOrder = master.reduce((m, x) => Math.max(m, x.sortOrder), 0) + 10;
   const grade = await deps.store.createGrade({ ...input, sortOrder });
   const divisions: DivisionRow[] = [];
-  for (const raw of parseList(b.divisions)) {
-    const d = divisionInput(raw);
-    if (d && !divisions.some((x) => x.name === d.name)) divisions.push(await deps.store.createDivision(grade.id, d));
+  for (const d of parsed.divisions) {
+    if (!divisions.some((x) => x.name === d.name)) divisions.push(await deps.store.createDivision(grade.id, d));
   }
   return json({ grade, divisions }, 201);
 }
@@ -154,15 +155,15 @@ export async function handleCreateDivision(gradeId: string, body: unknown, deps:
   if (g.res) return g.res;
   const grade = await deps.store.getGrade(gradeId);
   if (!grade) return err('Grade not found', 404);
-  const items = parseList(obj(body).name ?? obj(body).label);
+  const parsed = validateDivisions(obj(body).name ?? obj(body).label);
+  if ('error' in parsed) return err(parsed.error);
+  const items = parsed.divisions;
   if (!items.length) return err('Enter a division, e.g. A or Mahaveer.');
   const master = await deps.store.list();
   const existing = new Set(master.find((x) => x.id === gradeId)?.divisions.map((d) => d.name) ?? []);
   const created: DivisionRow[] = [];
   const skipped: string[] = [];
-  for (const raw of items) {
-    const d = divisionInput(raw);
-    if (!d) return err(`"${raw}" is not a valid division (letters/digits; "ALL" is reserved).`);
+  for (const d of items) {
     if (existing.has(d.name)) {
       skipped.push(d.label);
       continue;
@@ -306,10 +307,25 @@ export async function handleGradeOptions(deps: {
 }
 
 function parseList(raw: unknown): string[] {
-  if (Array.isArray(raw)) return raw.map(String).map((s) => s.trim()).filter(Boolean).slice(0, 100);
+  if (Array.isArray(raw)) return raw.map(String).map((s) => s.trim()).filter(Boolean);
   return String(raw ?? '')
     .split(/[,;\n]+/)
     .map((s) => s.trim())
-    .filter(Boolean)
-    .slice(0, 100);
+    .filter(Boolean);
+}
+
+/** Validate the entire batch before creating any grade/division rows. */
+function validateDivisions(raw: unknown): { divisions: { name: string; label: string }[] } | { error: string } {
+  if (raw != null && typeof raw !== 'string' && !(Array.isArray(raw) && raw.every((x) => typeof x === 'string'))) {
+    return { error: 'Divisions must be a comma-separated list or an array of names.' };
+  }
+  const items = parseList(raw);
+  if (items.length > 100) return { error: 'Enter at most 100 divisions at a time.' };
+  const divisions: { name: string; label: string }[] = [];
+  for (const item of items) {
+    const d = divisionInput(item);
+    if (!d) return { error: `"${item}" is not a valid division (letters/digits; "ALL" is reserved). Nothing was added.` };
+    divisions.push(d);
+  }
+  return { divisions };
 }

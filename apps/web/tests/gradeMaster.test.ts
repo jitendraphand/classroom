@@ -149,7 +149,7 @@ test('every admin grade/division endpoint returns 401 without an admin session a
 test('admin: create grade (canonical name, label kept, appended order) with divisions; duplicates rejected', async () => {
   const { store, grades } = fakeStore([seven()]);
   const deps = { guard: asAdmin, store };
-  const r = await handleCreateGrade({ label: ' kg ', divisions: 'Mahaveer, rani  laxmi, ALL, A' }, deps);
+  const r = await handleCreateGrade({ label: ' kg ', divisions: 'Mahaveer, rani  laxmi, A' }, deps);
   assert.equal(r.status, 201);
   const kg = grades.find((g) => g.name === 'KG')!;
   assert.equal(kg.label, 'kg');
@@ -385,4 +385,21 @@ test('unrecognised list ignores known (incl. inactive) entries', () => {
     [seven()]
   );
   assert.deepEqual(out, [{ grade: '7', division: 'E', count: 2, gradeKnown: true }]);
+});
+
+test('invalid divisions reject the whole grade before any writes', async () => {
+  for (const divisions of ['A, ALL, B', 'A, @invalid', ['A', 'bad!'], { name: 'A' }, Array.from({ length: 101 }, (_, i) => `D${i}`)]) {
+    const { store, grades, calls } = fakeStore();
+    const response = await handleCreateGrade({ label: 'GROK-TEST-Grade', divisions }, { guard: asAdmin, store });
+    assert.equal(response.status, 400);
+    assert.ok((await response.json()).error);
+    assert.deepEqual(calls, []);
+    assert.deepEqual(grades, []);
+  }
+});
+test('batch division add validates every value before inserting the first', async () => {
+  const { store, calls } = fakeStore([seven()]);
+  const response = await handleCreateDivision('g7', { name: 'D, bad!' }, { guard: asAdmin, store });
+  assert.equal(response.status, 400);
+  assert.deepEqual(calls, []);
 });
