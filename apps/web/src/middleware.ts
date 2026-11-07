@@ -16,6 +16,11 @@ export function middleware(req: NextRequest) {
   if (pathname === '/join' || pathname === '/join/') {
     if (searchParams.has('t') || hasUnsignedJoinParams(searchParams)) {
       const url = req.nextUrl.clone();
+      // TLS ends at the reverse proxy; the local Next server speaks HTTP.
+      // Never inherit the public HTTPS protocol for this internal rewrite.
+      url.protocol = 'http:';
+      url.hostname = '127.0.0.1';
+      url.port = process.env.PORT || '3000';
       url.pathname = '/api/student/join';
       return NextResponse.rewrite(url);
     }
