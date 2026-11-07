@@ -63,6 +63,12 @@ else
   upsert COOKIE_SECURE "false"
 fi
 
+# Keep generated server configuration in sync on every setup path, including
+# configure-sslip-tls.sh (which delegates to the domain setup). No services
+# are started here. Secrets were ensured above; do not rotate them twice.
+chmod 600 "$ENV_FILE"
+ROTATE_SECRETS=0 "$ROOT/scripts/sync-livekit-keys.sh"
+
 echo "Updated .env for public IP ${PUBLIC_IP}:"
 echo "  APP_URL=${APP_URL_VAL}"
 echo "  NEXT_PUBLIC_LIVEKIT_URL=${LK_URL}"
@@ -70,5 +76,4 @@ echo "  LIVEKIT_USE_EXTERNAL_IP=true"
 echo "  LIVEKIT_NODE_IP=${PUBLIC_IP}"
 echo
 echo "Next:"
-echo "  ./scripts/sync-livekit-keys.sh"
 echo "  docker compose up --build -d"

@@ -156,6 +156,12 @@ ${LIVEKIT_HOST} {
 }
 CADDY
 
+# Keep generated server configuration in sync on every setup path, including
+# configure-sslip-tls.sh (which delegates to the domain setup). No services
+# are started here. Secrets were ensured above; do not rotate them twice.
+chmod 600 "$ENV_FILE"
+ROTATE_SECRETS=0 "$ROOT/scripts/sync-livekit-keys.sh"
+
 echo "Updated .env and infra/Caddyfile for HTTPS domain ${DOMAIN}:"
 echo "  APP_URL=${APP_URL_VAL}"
 echo "  NEXT_PUBLIC_LIVEKIT_URL=${LK_URL}"
@@ -169,7 +175,6 @@ echo "  ${DOMAIN}         → ${PUBLIC_IP}  (A or AAAA)"
 echo "  ${LIVEKIT_HOST}   → ${PUBLIC_IP}  (A or AAAA)"
 echo
 echo "Next:"
-echo "  ./scripts/sync-livekit-keys.sh"
 echo "  docker compose --profile tls up --build -d"
 echo
 echo "Firewall reminder (with Caddy):"
