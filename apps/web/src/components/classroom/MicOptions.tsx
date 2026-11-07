@@ -54,7 +54,7 @@ export function MicOptions({ isTeacher, small }: { isTeacher: boolean; small?: b
   };
 
   return (
-    <div ref={box} className="absolute -bottom-0.5 -right-1 z-[5]">
+    <div ref={box} className="relative z-[5] inline-flex shrink-0">
       <button
         type="button"
         data-testid="mic-options"
@@ -64,7 +64,7 @@ export function MicOptions({ isTeacher, small }: { isTeacher: boolean; small?: b
         onClick={() => setOpen((v) => !v)}
         className={cn(
           'flex items-center justify-center rounded-full border border-white/25 bg-surface-1 text-slate-100 shadow-lift hover:bg-surface-2',
-          small ? 'h-4 w-4' : 'h-5 w-5'
+          small ? 'h-6 w-6' : 'h-9 w-9'
         )}
       >
         <svg viewBox="0 0 12 12" width={small ? 8 : 10} height={small ? 8 : 10} aria-hidden>

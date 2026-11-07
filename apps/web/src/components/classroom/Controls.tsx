@@ -181,7 +181,7 @@ export function Controls({
         )}
       >
         <Tool caption={micLocked ? 'Muted' : 'Mic'} show={captions} wide={wide}>
-        <span className="relative inline-flex">
+        <span className="relative inline-flex items-center gap-1">
         <IconButton
           size={btn}
           label={
@@ -312,7 +312,7 @@ export function Controls({
             active={drawState !== 'off'}
             onClick={onToggleDraw}
           >
-            <span className="relative inline-flex">
+            <span className="relative inline-flex items-center gap-1">
               <IconPen />
               {drawState === 'requested' && (
                 <span className="absolute -right-1.5 -top-1.5 h-2.5 w-2.5 animate-pulse rounded-full bg-amber-400" aria-hidden />
@@ -345,7 +345,7 @@ export function Controls({
             active={chatOpen}
             onClick={onToggleChat}
           >
-            <span className="relative inline-flex">
+            <span className="relative inline-flex items-center gap-1">
               <IconChat />
               {!chatOpen && chatUnread > 0 && (
                 <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand-500 px-0.5 text-[9px] font-bold text-white">
@@ -370,7 +370,7 @@ export function Controls({
             active={rosterOpen}
             onClick={onToggleRoster}
           >
-            <span className="relative inline-flex">
+            <span className="relative inline-flex items-center gap-1">
               <IconUsers />
               {!rosterOpen && handsCount > 0 && (
                 <span
