@@ -2060,11 +2060,21 @@ function RoomInner({
   }
 
   async function admitStudents(ids?: string[], all?: boolean) {
-    await roomFetch(code, '/admit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(all ? { all: true } : { participantIds: ids }),
-    });
+    try {
+      const res = await roomFetch(code, '/admit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(all ? { all: true } : { participantIds: ids }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setHudNotice(data.error || (res.status === 409 ? 'This class is full. Students remain in the waiting room.' : 'Could not admit students. Please retry.'));
+      } else {
+        setHudNotice(`${data.admitted ?? 0} student(s) admitted. Any remaining students are still waiting.`);
+      }
+    } catch {
+      setHudNotice('Could not reach the server. Students remain in the waiting room; please retry.');
+    }
     refresh();
   }
 
@@ -2144,7 +2154,8 @@ function RoomInner({
     }).catch(() => null);
     if (!res?.ok) {
       setWaitingRoomOverride(null);
-      setHudNotice('Could not change the waiting room.');
+      const data = await res?.json().catch(() => ({}));
+      setHudNotice(data?.error || 'Could not change the waiting room.');
     } else {
       setHudNotice(on ? 'Waiting room on: you admit each student.' : 'Waiting room off: students enter directly (muted).');
     }

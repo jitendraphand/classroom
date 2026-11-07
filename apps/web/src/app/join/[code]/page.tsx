@@ -254,8 +254,9 @@ export default function JoinRoomPage() {
             lobby for <strong className="text-white">{roomInfo?.name || code}</strong>.
           </p>
           <p className="mt-2 text-sm text-slate-400">
-            Your teacher will admit you shortly. Keep this tab open.
+            {roomInfo?.classFull ? 'You are still in the waiting room. Your teacher can admit you when a seat becomes available.' : 'Your teacher will admit you shortly. Keep this tab open.'}
           </p>
+          {error && <p className="mt-3 text-sm text-red-300" role="alert">{error}</p>}
           {roomInfo?.classFull && (
             <p className="mt-3 text-sm font-semibold text-amber-200" role="status">
               This class is full.
