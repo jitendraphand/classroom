@@ -20,7 +20,7 @@ for (const mode of ['public-ip', 'domain-tls', 'sslip-tls']) {
       writeFileSync(join(dir, 'bin/getent'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
       writeFileSync(join(dir, 'bin/docker'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
       const result = spawnSync('bash', [join(dir, `scripts/configure-${mode}.sh`)], {
-        env: { PATH: `${join(dir, 'bin')}:${process.env.PATH}`, PUBLIC_IP: '203.0.113.10', DOMAIN: 'classroom.example' },
+        env: { NODE_ENV: 'test', PATH: `${join(dir, 'bin')}:${process.env.PATH}`, PUBLIC_IP: '203.0.113.10', DOMAIN: 'classroom.example' },
         encoding: 'utf8', timeout: 10_000,
       });
       assert.equal(result.status, 0, 'configuration should succeed');
