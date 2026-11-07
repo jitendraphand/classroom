@@ -2976,8 +2976,8 @@ function RoomInner({
       {/* Top bar */}
       {/* Above every floating panel (z-60 > floats 34–55) and marked as the top
           bound, so panels are clamped below it and never cover Admit. */}
+      <div data-whiteboard-chrome data-float-bound="top" className="relative z-[60] shrink-0">
       <header
-        data-float-bound="top"
         className="relative z-[60] flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-b border-white/[0.06] bg-surface-1/95 px-3 py-2 backdrop-blur-xl sm:px-4 sm:py-2.5"
       >
         {isTeacher && waitingCount > 0 && (
@@ -3120,6 +3120,7 @@ function RoomInner({
         <CameraErrorBanner message={camError} onDismiss={() => setCamError(null)} />
       )}
 
+      </div>
       {/* Main stage — screen share fills the middle when active */}
       <div
         ref={stageWrapRef}

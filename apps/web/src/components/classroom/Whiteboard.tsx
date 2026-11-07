@@ -12,7 +12,7 @@
  *   after every reconnect; students allowed to draw publish ops on `wb`
  *   (HTTP `/whiteboard` ops remains a fallback).
  */
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useRoomContext } from '@livekit/components-react';
 import { ConnectionState, RoomEvent, type RemoteParticipant } from 'livekit-client';
 import { MEETING_BAR_PX } from '@/lib/shareChrome';
@@ -53,6 +53,19 @@ export function WhiteboardHost({
   stopRef?: { current: (() => void) | null };
 }) {
   const room = useRoomContext();
+  const [chromeBottom, setChromeBottom] = useState(0);
+  useLayoutEffect(() => {
+    const chrome = document.querySelector<HTMLElement>('[data-whiteboard-chrome]');
+    if (!chrome) return;
+    // Header, admit/hands bars and error notices can wrap or appear at any
+    // time. Reserve their actual height instead of covering the board tools.
+    const measure = () => setChromeBottom(Math.max(0, Math.ceil(chrome.getBoundingClientRect().bottom)));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(chrome);
+    window.addEventListener('resize', measure);
+    return () => { observer.disconnect(); window.removeEventListener('resize', measure); };
+  }, []);
   const session = useMemo(() => {
     // Survive a reload / rejoin of the teacher tab (the board lives here).
     try {
@@ -194,7 +207,7 @@ export function WhiteboardHost({
   // Full-height board. The meeting bar owns the right 54px (Stop, End, mic).
   // The teacher footer is hidden while this is open.
   return (
-    <div className="fixed bottom-0 left-0 top-0 z-40 flex bg-[#0b0f14]" style={{ right: MEETING_BAR_PX }} data-testid="wb-host">
+    <div className="fixed bottom-0 left-0 top-0 z-40 flex bg-[#0b0f14]" style={{ right: MEETING_BAR_PX, top: chromeBottom }} data-testid="wb-host">
       <div className="relative min-w-0 flex-1">
         <WhiteboardBoard session={session} mode="edit" identity={identity} onSend={(ops) => void publish(opsPackets(ops))} onLaser={publishLaser} onClose={stop} hideStop />
       </div>
