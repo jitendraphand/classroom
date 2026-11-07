@@ -318,7 +318,7 @@ background:${BADGE_AMBER};color:${BADGE_TEXT};font-size:9px;font-weight:800;disp
 .tsh-empty{color:var(--dim);font-size:11px;text-align:center;padding:12px 8px;margin:0}
 .tsh-more{display:block;width:100%;margin-top:6px;white-space:normal;text-align:center}
 .tsh-person{display:flex;align-items:center;gap:4px;padding:3px 5px;border-radius:8px;background:rgba(255,255,255,.04);margin-bottom:4px}
-.tsh-person-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;font-size:11px}
+.tsh-person-name{flex:1;min-width:70px;overflow-wrap:anywhere;white-space:normal;font-weight:600;font-size:11px}
 .tsh-person-sub{font-size:10px;color:var(--dim);font-weight:500}
 .tsh-chip{font-size:9px;font-weight:700;padding:1px 4px;border-radius:999px;border:1px solid var(--line);color:var(--dim)}
 .tsh-chip-muted{color:#fcd34d;border-color:rgba(245,158,11,.4)}
@@ -594,7 +594,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                 {shownWaiting.map((w) => (
                   <div className="tsh-person" key={w.id} title={w.displayName}>
                     <Avatar name={w.displayName} size="xs" />
-                    <span className="tsh-person-name">{w.displayName}</span>
+                    <span className="tsh-person-name" title={w.displayName}>{w.displayName}{w.gradeDivision && <span className="tsh-person-sub" style={{ display: 'block' }}>{w.gradeDivision}</span>}</span>
                     {onRemove && <button type="button" className="tsh-btn" onClick={() => onRemove(w.id, true)} aria-label={`Deny ${w.displayName}`}>Deny</button>}
                     <button
                       type="button"
@@ -659,9 +659,8 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                       </span>
                     )}
                     <Avatar name={s.displayName} size="xs" />
-                    <span className="tsh-person-name">{s.displayName}</span>
+                    <span className="tsh-person-name" title={s.displayName}>{s.displayName}{s.gradeDivision && <span className="tsh-person-sub" style={{ display: 'block' }}>{s.gradeDivision}</span>}</span>
                     {onRemove && <button type="button" className="tsh-btn" onClick={() => onRemove(s.id)} aria-label={`Remove ${s.displayName}`}>Remove</button>}
-                    {s.gradeDivision ? <span className="tsh-person-sub">{s.gradeDivision}</span> : null}
                     {focus ? <span className="tsh-chip tsh-chip-muted" title={focus}>{focus}</span> : null}
                     {s.reconnecting ? <span className="tsh-chip" title="Reconnecting">Reconnecting</span> : null}
                     <button
@@ -956,7 +955,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
               handsPage.shown.map((s) => (
                 <div className="tsh-person" key={s.id}>
                   <Avatar name={s.displayName} size="sm" />
-                  <span className="tsh-person-name">{s.displayName}</span>
+                  <span className="tsh-person-name" title={s.displayName}>{s.displayName}{s.gradeDivision && <span className="tsh-person-sub" style={{ display: 'block' }}>{s.gradeDivision}</span>}</span>
                   <button type="button" className="tsh-btn" onClick={() => onLowerHand(s.id)}>
                     Lower
                   </button>

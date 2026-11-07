@@ -61,7 +61,7 @@ import {
 import { SESSION_CHECK_EVENT, SESSION_ENDED_EVENT, isEndedReason, loginHref } from '@/lib/sessionClient';
 import { useRoomState, type RosterInfo } from '@/hooks/useRoomState';
 import { compactViewport, studentChatBox, usePseudoFullscreen, useViewport } from '@/hooks/useStudentLayout';
-import { shortName } from '@/lib/displayNames';
+import { compactPersonLabel } from '@/lib/displayNames';
 import { Controls } from './Controls';
 import { LocalPreview } from './LocalPreview';
 import { DrawOverlay, ShareDrawingProvider, useDrawingActions, useShareDrawing } from './ShareDrawing';
@@ -2293,7 +2293,7 @@ function RoomInner({
    * sight while the roster is closed. */
   const raisedHands = rosterStudents
     .filter((p) => p.handRaised)
-    .map((p) => ({ id: p.id, displayName: p.displayName }));
+    .map((p) => ({ id: p.id, displayName: p.displayName, gradeDivision: p.gradeDivision, rollNumber: p.rollNumber }));
   // Teacher: raised hands and unread chat in the tab title, so they show in
   // the tab strip / taskbar while the teacher looks at the shared display.
   const handsN = isTeacher ? raisedHands.length : 0;
@@ -2899,7 +2899,8 @@ function RoomInner({
             }))}
             waiting={(state?.waiting ?? []).map((w) => ({
               id: w.id,
-              displayName: rosterLabel(w),
+              displayName: w.displayName,
+              gradeDivision: w.gradeDivision,
               role: 'STUDENT',
               sid: w.sid ?? null,
             }))}
@@ -3236,8 +3237,9 @@ function RoomInner({
                   {shownWaiting.map((p) => (
                     <li key={p.id} className="roster-row" title={rosterLabel(p)}>
                       <Avatar name={p.displayName} size="xs" />
-                      <span className="roster-name" title={p.displayName}>{p.displayName}</span>
-                      {p.gradeDivision && <span className="roster-meta">{p.gradeDivision}</span>}
+                      <span className="roster-name" title={rosterLabel(p)}>{p.displayName}
+                        {p.gradeDivision && <span className="block text-[10px] font-normal text-slate-400">{p.gradeDivision}</span>}
+                      </span>
                       {p.late && <span className="roster-chip roster-chip-red">Late</span>}
                       <span className="roster-actions">
                         <button type="button" className="text-xs text-red-300" onClick={() => void removeStudent(p.id, true)} aria-label={`Deny ${p.displayName}`}>Deny</button>
@@ -3358,8 +3360,9 @@ function RoomInner({
                       </span>
                     )}
                     <Avatar name={p.displayName} size="xs" />
-                    <span className="roster-name" title={p.displayName}>{p.displayName}</span>
-                    {p.gradeDivision && <span className="roster-meta">{p.gradeDivision}</span>}
+                    <span className="roster-name" title={rosterLabel(p)}>{p.displayName}
+                      {p.gradeDivision && <span className="block text-[10px] font-normal text-slate-400">{p.gradeDivision}</span>}
+                    </span>
                     {focus && (
                       <span
                         className={cn('roster-chip', isFocusAlert(p.focus) ? 'roster-chip-warn' : '')}
@@ -3690,7 +3693,7 @@ function WaitingAdmitBar({
         {n === 1 ? `${first.displayName} is waiting` : `${n} students waiting`}
       </span>
       <Button variant="warning" size="sm" onClick={() => onAdmit(first.id)} title={`Admit ${rosterLabel(first)}`}>
-        {n === 1 ? 'Admit' : `Admit ${shortName(first.displayName)}`}
+        {n === 1 ? 'Admit' : `Admit ${compactPersonLabel(first, waiting)}`}
       </Button>
       {n > 1 && (
         <Button variant="warning" size="sm" onClick={onAdmitAll}>
@@ -3714,7 +3717,7 @@ function RaisedHandsBar({
   onLower,
   onOpenRoster,
 }: {
-  hands: Array<{ id: string; displayName: string }>;
+  hands: Array<{ id: string; displayName: string } & RosterInfo>;
   mutedIds: Set<string>;
   onLetSpeak: (id: string) => void;
   onLower: (id: string) => void;
@@ -3727,11 +3730,11 @@ function RaisedHandsBar({
     <div className="raised-hands-toast order-first" role="status" aria-live="polite" data-testid="raised-hands-toast" aria-label="Raised hands">
       <IconHand size={14} className="shrink-0 text-violet-200" />
       <span className="min-w-0 flex-1 truncate font-semibold">
-        {n === 1 ? `${first.displayName} raised a hand` : `${n} hands raised · ${shortName(first.displayName)} first`}
+        {n === 1 ? `${first.displayName} raised a hand` : `${n} hands raised · ${compactPersonLabel(first, hands)} first`}
       </span>
       {mutedIds.has(first.id) && (
         <Button variant="secondary" size="sm" onClick={() => onLetSpeak(first.id)} title={`Unmute ${first.displayName} and lower the hand`}>
-          Let {shortName(first.displayName)} speak
+          Let {compactPersonLabel(first, hands)} speak
         </Button>
       )}
       <Button variant="ghost" size="sm" onClick={() => onLower(first.id)} aria-label={`Lower hand for ${first.displayName}`}>
