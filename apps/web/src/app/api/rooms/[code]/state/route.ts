@@ -98,7 +98,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       teacherSessionName: access.teacher?.name ?? null,
       manualJoinAllowed: manualStudentJoinAllowed(),
       ...(replaced ? { replaced: true } : {}),
-      ...(meLeft ? { meLeft: true } : {}),
+      ...(meLeft ? { meLeft: true, me: { status: 'LEFT', role: 'STUDENT', displayName: access.student!.displayName, viaSchoolApp: !!access.student!.studentId } } : {}),
     });
   }
 

@@ -137,15 +137,17 @@ export async function ensureStudentParticipant(student: Student, room: Room, cs:
     where: { roomId: room.id, studentId: student.id, classSessionId: cs.id, status: { not: 'LEFT' } },
     orderBy: { createdAt: 'desc' },
   });
+  let firstArrival = false;
   if (!participant) {
     const id = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
     // A student re-joining the same class on another device keeps the
     // teacher's pin on their video.
     const previous = await prisma.participant.findFirst({
-      where: { roomId: room.id, studentId: student.id, classSessionId: cs.id, pinnedAt: { not: null } },
+      where: { roomId: room.id, studentId: student.id, classSessionId: cs.id },
       orderBy: { createdAt: 'desc' },
-      select: { pinnedAt: true },
+      select: { pinnedAt: true, id: true },
     });
+    firstArrival = !previous;
     participant = await prisma.participant.create({
       data: {
         roomId: room.id,
@@ -175,7 +177,9 @@ export async function ensureStudentParticipant(student: Student, room: Room, cs:
   }
   // Waiting room switched off by the teacher: admit on arrival (still muted,
   // still only this class).
-  if (shouldAutoAdmit(room, participant)) {
+  // Re-entry (including a previously denied/removed seat) always waits for
+  // the teacher, even if first-time arrivals use direct entry.
+  if (firstArrival && shouldAutoAdmit(room, participant)) {
     try {
       await admitWaiting(room, { ids: [participant.id] });
       participant = { ...participant, status: 'ADMITTED' };

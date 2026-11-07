@@ -84,6 +84,7 @@ export type TeacherShareHudProps = {
   waitingCount?: number;
   onAdmit?: (participantId: string) => void;
   onAdmitAll?: () => void;
+  onRemove?: (participantId: string, waiting?: boolean) => void;
   /** Waiting room switch (same setting as the roster and the Windows app). */
   waitingRoomOn?: boolean;
   onWaitingRoom?: (on: boolean) => void;
@@ -367,6 +368,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     waitingCount = 0,
     onAdmit,
     onAdmitAll,
+    onRemove,
     waitingRoomOn,
     onWaitingRoom,
     teacherMicOn,
@@ -593,6 +595,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                   <div className="tsh-person" key={w.id} title={w.displayName}>
                     <Avatar name={w.displayName} size="xs" />
                     <span className="tsh-person-name">{w.displayName}</span>
+                    {onRemove && <button type="button" className="tsh-btn" onClick={() => onRemove(w.id, true)} aria-label={`Deny ${w.displayName}`}>Deny</button>}
                     <button
                       type="button"
                       className="tsh-btn tsh-icon is-warn"
@@ -657,6 +660,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                     )}
                     <Avatar name={s.displayName} size="xs" />
                     <span className="tsh-person-name">{s.displayName}</span>
+                    {onRemove && <button type="button" className="tsh-btn" onClick={() => onRemove(s.id)} aria-label={`Remove ${s.displayName}`}>Remove</button>}
                     {s.gradeDivision ? <span className="tsh-person-sub">{s.gradeDivision}</span> : null}
                     {focus ? <span className="tsh-chip tsh-chip-muted" title={focus}>{focus}</span> : null}
                     {s.reconnecting ? <span className="tsh-chip" title="Reconnecting">Reconnecting</span> : null}

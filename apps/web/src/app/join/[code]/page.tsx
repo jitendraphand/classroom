@@ -214,6 +214,18 @@ export default function JoinRoomPage() {
 
   // Until the first poll says who this is (or while an admitted student is
   // being sent into the class), show a neutral state, not a nameless lobby.
+  if (waiting && roomInfo?.meLeft) {
+    return (
+      <main className="mx-auto flex min-h-screen max-w-lg flex-col items-center justify-center px-5 text-center">
+        <Card className="w-full p-10">
+          <h1 className="text-2xl font-semibold">Your waiting request was closed</h1>
+          <p className="mt-3 text-slate-300">Your teacher denied your request or removed you. You are no longer in the class.</p>
+          <Button className="mt-6" onClick={() => { window.location.href = roomInfo.me?.viaSchoolApp ? '/student' : `/join/${code}`; }}>Rejoin through the waiting room</Button>
+        </Card>
+      </main>
+    );
+  }
+
   if (waiting && lobbyEnded) {
     return (
       <main className="mx-auto flex min-h-screen max-w-lg flex-col items-center justify-center px-5 py-10 text-center sm:px-6">

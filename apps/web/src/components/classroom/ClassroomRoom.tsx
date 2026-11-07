@@ -2078,6 +2078,22 @@ function RoomInner({
     refresh();
   }
 
+  async function removeStudent(participantId: string, waiting = false) {
+    try {
+      const res = await roomFetch(code, '/leave', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ participantId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      setHudNotice(res.ok
+        ? (waiting ? 'Waiting request denied.' : 'Student removed. They must rejoin through the waiting room.')
+        : data.error || 'Could not remove student. Please retry.');
+    } catch {
+      setHudNotice('Could not reach the server. Please retry.');
+    }
+    refresh();
+  }
+
   // Separate chat / roster / student-video windows beside the share toolbar:
   // only while the toolbar floats, and only when they are either not captured
   // (window / tab share) or painted black by the running whole-screen mask.
@@ -2877,6 +2893,7 @@ function RoomInner({
             waitingCount={waitingCount}
             onAdmit={(id) => void admitStudents([id])}
             onAdmitAll={() => void admitStudents(undefined, true)}
+            onRemove={(id, waiting) => void removeStudent(id, waiting)}
             waitingRoomOn={waitingRoomOn}
             onWaitingRoom={(on) => void setWaitingRoom(on)}
             teacherMicOn={micOn && !effectiveMuted}
@@ -3209,6 +3226,7 @@ function RoomInner({
                       {p.gradeDivision && <span className="roster-meta">{p.gradeDivision}</span>}
                       {p.late && <span className="roster-chip roster-chip-red">Late</span>}
                       <span className="roster-actions">
+                        <button type="button" className="text-xs text-red-300" onClick={() => void removeStudent(p.id, true)} aria-label={`Deny ${p.displayName}`}>Deny</button>
                         <RosterIconButton
                           label={`Admit ${p.displayName}`}
                           tone="warn"
@@ -3343,6 +3361,7 @@ function RoomInner({
                     )}
                     {p.late && <span className="roster-chip roster-chip-red">Late</span>}
                     <span className="roster-actions">
+                      <button type="button" className="text-xs text-red-300" onClick={() => void removeStudent(p.id)} aria-label={`Remove ${p.displayName}`}>Remove</button>
                       <RosterIconButton
                         label={p.mutedByTeacher ? `Unmute ${p.displayName}` : `Mute ${p.displayName}`}
                         tone={p.mutedByTeacher ? 'warn' : 'plain'}
