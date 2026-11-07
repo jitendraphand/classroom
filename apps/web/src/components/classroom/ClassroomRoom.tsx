@@ -2948,7 +2948,7 @@ function RoomInner({
                 onLowerHand={(id) => void lowerHand(id)}
               />
             }
-            notice={shareMount ? hudNotice || undefined : undefined}
+            notice={hudNotice || undefined}
             toolbarTitle={maskFallback === 'position' ? MONITOR_POSITION_HINT : undefined}
             {...over}
           />

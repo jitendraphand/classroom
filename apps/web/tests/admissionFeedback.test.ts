@@ -10,6 +10,7 @@ test('teacher admission reports failures, capacity conflicts and partial admits'
   assert.match(admit, /res.status === 409/);
   assert.match(admit, /remaining students are still waiting/);
   assert.match(admit, /catch \{/);
+  assert.match(src, /notice=\{hudNotice \|\| undefined\}/, 'inline and floating share controls both show admission feedback');
 });
 test('waiting students get capacity guidance and inline fetch errors', () => {
   const src = readFileSync('src/app/join/[code]/page.tsx', 'utf8');
