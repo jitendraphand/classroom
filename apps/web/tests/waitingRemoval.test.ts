@@ -19,6 +19,8 @@ test('school reentry cannot auto-admit a previously denied or removed student', 
   assert.match(src, /firstArrival = !previous/);
   assert.match(src, /firstArrival && shouldAutoAdmit/);
   assert.match(src, /status: 'WAITING'/);
+  const manual = readFileSync('src/app/api/rooms/[code]/join/route.ts', 'utf8');
+  assert.match(manual, /!previous && shouldAutoAdmit/);
   const lobby = readFileSync('src/app/join/[code]/page.tsx', 'utf8');
   assert.ok(lobby.indexOf('waiting && roomInfo?.meLeft') < lobby.indexOf('waiting && lobbyEnded'));
 });

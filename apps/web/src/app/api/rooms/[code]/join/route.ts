@@ -48,6 +48,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     }
 
     if (!body.displayName) return jsonError('Enter your name');
+    // Manual/test joins have no school SID. A repeat of the same room/name
+    // must not bypass readmission just because direct entry is enabled.
+    const previous = await prisma.participant.findFirst({
+      where: { roomId: room.id, role: 'STUDENT', displayName: body.displayName },
+      select: { id: true },
+    });
     const sessionToken = generateSessionToken();
     const id = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
 
@@ -68,7 +74,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     await redis.sadd(keys.waiting(code), participant.id);
     // Waiting room switched off by the teacher: straight into the class.
     let status: string = participant.status;
-    if (shouldAutoAdmit(room, participant)) {
+    if (!previous && shouldAutoAdmit(room, participant)) {
       try {
         await admitWaiting(room, { ids: [participant.id] });
         status = 'ADMITTED';
