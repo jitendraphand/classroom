@@ -105,12 +105,48 @@ object ClassLogic {
     fun pinOrder(students: List<StudentInfo>): List<String> =
         students.filter { it.pinned }.sortedWith(compareBy({ it.pinnedAt ?: Long.MAX_VALUE }, { it.identity })).map { it.identity }
 
-    /** Raised hands first (earliest raise first, unknown times last), then by name. */
+    /** Raised hands first (earliest raise first, unknown times last), then by name (natural order). */
     fun sortRoster(students: List<StudentInfo>): List<StudentInfo> =
         students.sortedWith(
             compareBy<StudentInfo>({ !it.handRaised }, { if (it.handRaised) it.handRaisedAt ?: Long.MAX_VALUE else 0L }, { !it.drawRequested })
-                .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name },
+                .thenBy(NATURAL_ORDER) { it.name },
         )
+
+    /**
+     * Natural, case-insensitive name order: "Student 2" before "Student 10"
+     * (same rule as the web app's naturalCompare). Equal-looking names fall
+     * back to plain string order so the result is deterministic.
+     */
+    val NATURAL_ORDER: Comparator<String> = Comparator { a, b -> naturalCompare(a, b) }
+
+    fun naturalCompare(a: String, b: String): Int {
+        var i = 0
+        var j = 0
+        while (i < a.length && j < b.length) {
+            val ca = a[i]
+            val cb = b[j]
+            if (ca in '0'..'9' && cb in '0'..'9') {
+                var ie = i
+                while (ie < a.length && a[ie] in '0'..'9') ie++
+                var je = j
+                while (je < b.length && b[je] in '0'..'9') je++
+                val na = a.substring(i, ie).trimStart('0')
+                val nb = b.substring(j, je).trimStart('0')
+                if (na.length != nb.length) return na.length - nb.length
+                val c = na.compareTo(nb)
+                if (c != 0) return c
+                i = ie
+                j = je
+            } else {
+                val c = Character.toLowerCase(Character.toUpperCase(ca)) - Character.toLowerCase(Character.toUpperCase(cb))
+                if (c != 0) return c
+                i++
+                j++
+            }
+        }
+        val rest = (a.length - i) - (b.length - j)
+        return if (rest != 0) rest else a.compareTo(b)
+    }
 
     /** Rotate the order by one (the next student moves to the front). */
     fun rotate(order: List<String>): List<String> = if (order.size > 1) order.drop(1) + order.first() else order

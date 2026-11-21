@@ -60,6 +60,23 @@ class ClassLogicTest {
     }
 
     @Test
+    fun roster_namesSortNaturally_student2BeforeStudent10() {
+        val sorted = ClassLogic.sortRoster(
+            listOf("Student 10", "Student 2", "student 1", "Student 21", "Student 3").mapIndexed { i, n -> StudentInfo("$i", "i$i", n) },
+        )
+        assertEquals(listOf("student 1", "Student 2", "Student 3", "Student 10", "Student 21"), sorted.map { it.name })
+    }
+
+    @Test
+    fun naturalCompare_numbersByValue_caseInsensitive_deterministic() {
+        assertEquals(true, ClassLogic.naturalCompare("Roll 9", "Roll 10") < 0)
+        assertEquals(true, ClassLogic.naturalCompare("a007", "a7") != 0)
+        assertEquals(true, ClassLogic.naturalCompare("abe", "Zed") < 0)
+        assertEquals(true, ClassLogic.naturalCompare("Ana", "ana") != 0)
+        assertEquals(0, ClassLogic.naturalCompare("Same 1", "Same 1"))
+    }
+
+    @Test
     fun windowClassBreakpoints() {
         assertEquals(0, ClassLogic.windowClass(360))
         assertEquals(0, ClassLogic.windowClass(599))
