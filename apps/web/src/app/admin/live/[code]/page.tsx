@@ -165,9 +165,13 @@ function Observer({ code }: { code: string }) {
           ) : (
             <ul className="max-h-[50vh] space-y-1 overflow-y-auto text-sm">
               {info.students.map((s) => (
-                <li key={s.id} className="flex justify-between gap-2 text-slate-300">
-                  <span className="truncate">{s.name}</span>
-                  <span className="shrink-0 text-xs text-slate-500">
+                // Name on its own line: a long "campus · grade-division" used to
+                // take the whole row (shrink-0) and truncate the name to nothing.
+                <li key={s.id} className="min-w-0 text-slate-300" data-testid="observer-student">
+                  <span className="block truncate font-medium text-slate-100" title={s.name}>
+                    {s.name}
+                  </span>
+                  <span className="block truncate text-xs text-slate-500">
                     {s.gradeDivision}
                     {s.rollNumber ? ` · ${s.rollNumber}` : ''}
                   </span>

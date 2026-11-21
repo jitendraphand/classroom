@@ -212,3 +212,16 @@ test('observer mode parsing is strict', () => {
   assert.equal(parseObserverMode('TEACHER'), null);
   assert.equal(parseObserverMode(undefined), null);
 });
+
+test('observer page: student names get their own line, not squeezed out by the grade-division label (Nov 7 trial)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const page = readFileSync('src/app/admin/live/[code]/page.tsx', 'utf8');
+  const item = page.slice(page.indexOf('info.students.map('), page.indexOf('</ul>', page.indexOf('info.students.map(')));
+  assert.match(item, /data-testid="observer-student"/);
+  assert.match(item, /className="block truncate font-medium[^"]*"[^>]*>\s*\{s\.name\}/);
+  // The old row kept the label shrink-0 beside a truncating name: a long label hid the name.
+  assert.doesNotMatch(item, /className="[^"]*shrink-0/);
+  assert.doesNotMatch(item, /flex justify-between/);
+  const lib = readFileSync('src/lib/liveClasses.ts', 'utf8');
+  assert.match(lib, /name: st\.name\.trim\(\) \|\| row\?\.displayName\?\.trim\(\) \|\| 'Student'/);
+});

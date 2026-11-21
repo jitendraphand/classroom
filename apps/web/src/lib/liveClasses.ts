@@ -148,7 +148,7 @@ export async function getLiveClass(
       if (st) {
         students.push({
           id: st.id,
-          name: st.name,
+          name: st.name.trim() || row?.displayName?.trim() || 'Student',
           gradeDivision: `${st.campus} · ${st.grade}-${st.division}`,
           rollNumber: st.rollNumber,
         });
@@ -175,7 +175,7 @@ export async function getLiveClass(
       return s
         ? {
             id: s.id,
-            name: s.name,
+            name: s.name.trim() || 'Student',
             gradeDivision: `${s.campus} · ${s.grade}-${s.division}`,
             rollNumber: s.rollNumber,
           }
