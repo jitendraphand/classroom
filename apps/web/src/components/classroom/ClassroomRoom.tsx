@@ -19,6 +19,7 @@ import {
 } from '@/lib/classEnded';
 import { distinctConnectedStudents } from '@/lib/connectedStudents';
 import { freshTakeovers, takeoverToastText } from '@/lib/deviceTakeover';
+import { drawPadLabel } from '@/lib/drawLogic';
 import { useMicDuck } from './useMicDuck';
 import { CLASS_FINISHED_EVENT } from '@/lib/classFinishEvent';
 import dynamic from 'next/dynamic';
@@ -408,7 +409,7 @@ function EntireShareDrawingPreview() {
       </p>
       <p className="mb-1 inline-flex items-center gap-1 text-2xs font-semibold text-slate-300">
         <IconPen size={12} />
-        {d.holder ? `${d.holder.name} ${d.holder.name.includes(', ') ? 'are' : 'is'} drawing` : 'Student drawing'} (what students see over your screen)
+        {drawPadLabel(d.holder?.name)} (what students see over your screen)
       </p>
       <div className="draw-preview" style={{ aspectRatio: String(aspect) }}>
         <DrawOverlay aspect={aspect} interactive={false} />
