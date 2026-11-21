@@ -319,7 +319,7 @@ export async function decideStudentRoute(student: Student) {
   const decision = decideRoute({
     occurrences,
     sessions: states,
-    liveAdHoc: adHoc.map((s) => ({ id: s.id, subject: s.subject, startedAt: s.startedAt })),
+    liveAdHoc: adHoc.map((s) => ({ id: s.id, subject: s.subject, startedAt: s.startedAt, divisions: s.divisions, allDivisions: s.allDivisions })),
     now,
     earlyMinutes: early,
     today,

@@ -13,7 +13,25 @@ export type SessionState = {
   endedAt: Date | null;
 };
 
-export type AdHocLive = { id: string; subject: string; startedAt: Date | null };
+export type AdHocLive = {
+  id: string;
+  subject: string;
+  startedAt: Date | null;
+  /** Audience of the ad-hoc class (omitted = treated as a whole-grade class). */
+  divisions?: string[];
+  allDivisions?: boolean;
+};
+
+/**
+ * How specific a live class's audience is for the student it already matched:
+ * a class for the student's own division(s) beats a whole-grade
+ * ("all divisions") class, and a single-division class beats a combined one.
+ * Higher is more specific.
+ */
+export function audienceSpecificity(a: { divisions?: string[]; allDivisions?: boolean }): number {
+  if (a.allDivisions || !a.divisions?.length) return 0;
+  return 1000 - Math.min(a.divisions.length, 999);
+}
 
 export type RouteDecision =
   | { kind: 'adhoc'; session: AdHocLive }
@@ -24,7 +42,10 @@ export type RouteDecision =
 
 /**
  * Priority:
- *  1. a class the teacher is running now (ad-hoc, or a timetabled one, even past its end);
+ *  1. a class the teacher is running now (ad-hoc, or a timetabled one, even past its end).
+ *     When several are live, the most specific audience wins: the student's own
+ *     division (ad-hoc or timetabled) before an all-divisions class. Ties keep
+ *     timetabled before ad-hoc, then the earlier one;
  *  2. a timetabled class whose waiting room is open (start − early … end) and not ended;
  *  3. later today → countdown;
  *  4. a class that ended early today → "ended" (+ next);
@@ -42,9 +63,20 @@ export function decideRoute(input: {
 }): RouteDecision {
   const { occurrences, sessions, liveAdHoc, now, earlyMinutes, today } = input;
 
-  const liveScheduled = occurrences.find((o) => sessions.get(o.key)?.live);
-  if (liveScheduled) return { kind: 'scheduled', occurrence: liveScheduled, session: sessions.get(liveScheduled.key)! };
-  if (liveAdHoc.length) return { kind: 'adhoc', session: liveAdHoc[0]! };
+  // Every live candidate in its old priority order (timetabled first, then
+  // ad-hoc by start); a stable pick of the most specific keeps that order on ties.
+  type Live = { rank: number; decision: RouteDecision };
+  const live: Live[] = [];
+  for (const o of occurrences) {
+    const s = sessions.get(o.key);
+    if (s?.live) live.push({ rank: audienceSpecificity(o), decision: { kind: 'scheduled', occurrence: o, session: s } });
+  }
+  for (const a of liveAdHoc) live.push({ rank: audienceSpecificity(a), decision: { kind: 'adhoc', session: a } });
+  if (live.length) {
+    let best = live[0]!;
+    for (const c of live) if (c.rank > best.rank) best = c;
+    return best.decision;
+  }
 
   let endedToday: Occurrence | null = null;
   for (const o of occurrences) {
