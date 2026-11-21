@@ -111,10 +111,12 @@ test('video panel rail uses a short label; full sentence stays in title/aria', (
   assert.match(controls, /aria-description/);
 });
 
-test('division display keeps two-letter codes as entered', () => {
+test('division display keeps the stored name exactly (no "Groktesta" re-casing)', () => {
   assert.equal(displayDivision('GA'), 'GA');
   assert.equal(displayDivision('A'), 'A');
-  assert.equal(displayDivision('MAHAVEER'), 'Mahaveer');
+  assert.equal(displayDivision('MAHAVEER'), 'MAHAVEER');
+  assert.equal(displayDivision('GROKTESTA'), 'GROKTESTA');
+  assert.equal(displayDivision('*'), 'ALL');
 });
 
 test('Live tab; Settings hidden when the sub-admin has none of its cards', () => {

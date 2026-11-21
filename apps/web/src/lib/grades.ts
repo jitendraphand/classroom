@@ -38,7 +38,7 @@ export const MAX_DIVISION_LENGTH = 32;
  * Canonical division: trimmed, upper-cased, inner spaces removed.
  * " b " → "B"; "Mahaveer" / "MAHAVEER" → "MAHAVEER"; "Div A" / "Section-B" → "A" / "B";
  * "all" / "*" → "*". Comparisons everywhere go through this, so matching is
- * case-insensitive; `displayDivision` gives the friendly form back.
+ * case-insensitive; `displayDivision` shows the stored form unchanged.
  * The prefix is only stripped when followed by a separator, so words that
  * merely start with it ("Divya", "Second") are kept intact.
  */
@@ -51,11 +51,14 @@ export function normalizeDivision(raw: unknown): string {
     .slice(0, MAX_DIVISION_LENGTH);
 }
 
-/** Friendly form of a canonical division: "A" → "A", "GA" → "GA", "MAHAVEER" → "Mahaveer", "*" → "ALL". */
+/**
+ * Display form of a canonical division: exactly as stored ("A", "GA",
+ * "GROKTESTA", "MAHAVEER"); "*" → "ALL". No re-casing: the old "friendly"
+ * form turned the admin's "GROKTESTA" into "Groktesta" (Nov 7 trial).
+ * Where the master list's own label is at hand, show that label instead.
+ */
 export function displayDivision(d: string): string {
   if (d === ALL_DIVISIONS) return 'ALL';
-  // Two-letter codes stay as entered ("GA", not "Ga"). Longer words get a friendly form.
-  if (d.length > 2 && /^[A-Z]+$/.test(d)) return d.charAt(0) + d.slice(1).toLowerCase();
   return d;
 }
 

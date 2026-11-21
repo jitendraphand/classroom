@@ -10,6 +10,7 @@
  *   3. everyone else in rotation.
  * Pins count toward the cap; the cap is never exceeded.
  */
+import { naturalCompare } from './naturalSort';
 
 export type PinnedStudent = { identity: string; pinnedAt: number };
 
@@ -121,7 +122,7 @@ export function sortRoster<T extends RosterPerson>(people: T[]): T[] {
       if (at !== bt) return at < bt ? -1 : 1;
     }
     if (a.role !== b.role) return a.role === 'TEACHER' ? -1 : 1;
-    return a.displayName.localeCompare(b.displayName);
+    return naturalCompare(a.displayName, b.displayName);
   });
 }
 

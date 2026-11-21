@@ -104,7 +104,7 @@ export function divisionInput(raw: unknown): { name: string; label: string } | n
   const typed = String(raw ?? '').trim().replace(/\s+/g, ' ');
   const name = normalizeDivision(typed);
   if (!name || name === ALL_DIVISIONS || name === 'ALL' || !/^[A-Z0-9]+$/.test(name)) return null;
-  // Keep the admin's casing when it is the same word; otherwise the friendly default.
+  // Keep the admin's casing when it is the same word; otherwise the stored name as is.
   const label = typed.replace(/\s+/g, '').toUpperCase() === name ? typed : displayDivision(name);
   return { name, label: label.slice(0, 32) };
 }

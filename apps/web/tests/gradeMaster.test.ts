@@ -249,7 +249,8 @@ test('recognise: one-click add creates the grade/division (or re-activates)', as
   const g11 = grades.find((g) => g.name === '11')!;
   assert.deepEqual(g11.divisions.map((d) => d.name), ['B']);
   await handleRecognise({ campus: 'CC', grade: '7', division: 'mahaveer' }, deps);
-  assert.ok(grades[0]!.divisions.some((d) => d.name === 'MAHAVEER' && d.label === 'Mahaveer'));
+  // Label = the stored name as is (no re-casing to "Mahaveer"); the admin can rename it.
+  assert.ok(grades[0]!.divisions.some((d) => d.name === 'MAHAVEER' && d.label === 'MAHAVEER'));
   await handleRecognise({ campus: 'CC', grade: '8', division: 'A' }, deps); // inactive grade → activated
   assert.equal(grades[1]!.active, true);
   await handleRecognise({ campus: 'CC', grade: '7', division: 'C' }, deps); // inactive division → activated
@@ -294,7 +295,7 @@ test('sync adds only what is missing and is idempotent', async () => {
   const r1 = await (await handleSync(deps)).json();
   assert.deepEqual(r1.added, { grades: 1, divisions: 2 });
   assert.deepEqual(grades[0]!.divisions.map((d) => d.name), ['A', 'B', 'C', 'D']);
-  assert.deepEqual(grades[1]!.divisions.map((d) => [d.name, d.label]), [['MAHAVEER', 'Mahaveer']]);
+  assert.deepEqual(grades[1]!.divisions.map((d) => [d.name, d.label]), [['MAHAVEER', 'MAHAVEER']]);
   const r2 = await (await handleSync(deps)).json();
   assert.deepEqual(r2.added, { grades: 0, divisions: 0 });
 });

@@ -99,7 +99,7 @@ export function parseHolders(raw: Record<string, string>, now = Date.now()): { a
     if (h && holderActive(h, now)) active.push(h);
     else expired.push(id);
   }
-  active.sort((a, b) => a.until - b.until || a.name.localeCompare(b.name));
+  active.sort((a, b) => a.until - b.until || a.name.localeCompare(b.name, 'en', { numeric: true, sensitivity: 'base' }));
   return { active, expired };
 }
 

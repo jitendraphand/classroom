@@ -1,4 +1,5 @@
 import type { ClassSession, Room } from '@prisma/client';
+import { naturalCompare } from './naturalSort';
 import { prisma } from './db';
 import { formatAudience } from './grades';
 import { livekitRoomName } from './livekit';
@@ -182,7 +183,7 @@ export async function getLiveClass(
         : { id, name: 'Student', gradeDivision: 'Guest', rollNumber: null };
     });
   }
-  students.sort((a, b) => a.name.localeCompare(b.name));
+  students.sort((a, b) => naturalCompare(a.name, b.name));
   // The heading on the class page is students.length. Keep it equal to the card.
   const liveClass = { ...toLiveClass(room, cs, p), studentCount: students.length };
   return {

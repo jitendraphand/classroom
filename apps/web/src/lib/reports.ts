@@ -1,4 +1,5 @@
 import type { AttendanceRecord, ClassSession, Prisma, Student } from '@prisma/client';
+import { naturalCompare } from './naturalSort';
 import { prisma } from './db';
 import { attendanceStatus, STATUS_LABEL, tallyAttendance, totalConnectedMs, type AttendanceStatus } from './attendance';
 import { toCsv, type Cell } from './csv';
@@ -391,9 +392,9 @@ function sortDetail(rows: DetailRow[]): DetailRow[] {
     (a, b) =>
       a.date.localeCompare(b.date) ||
       a.subject.localeCompare(b.subject) ||
-      a.gradeDivision.localeCompare(b.gradeDivision) ||
-      a.rollNumber.localeCompare(b.rollNumber, undefined, { numeric: true }) ||
-      a.name.localeCompare(b.name)
+      naturalCompare(a.gradeDivision, b.gradeDivision) ||
+      naturalCompare(a.rollNumber, b.rollNumber) ||
+      naturalCompare(a.name, b.name)
   );
 }
 
@@ -466,9 +467,9 @@ function studentAccumulator() {
     for (const s of m.values()) s.attendancePct = s.classes ? Math.round(((s.present + s.late) / s.classes) * 1000) / 10 : null;
     return [...m.values()].sort(
       (a, b) =>
-        a.gradeDivision.localeCompare(b.gradeDivision) ||
-        a.rollNumber.localeCompare(b.rollNumber, undefined, { numeric: true }) ||
-        a.name.localeCompare(b.name)
+        naturalCompare(a.gradeDivision, b.gradeDivision) ||
+        naturalCompare(a.rollNumber, b.rollNumber) ||
+        naturalCompare(a.name, b.name)
     );
   };
   return { add, result };
