@@ -18,8 +18,8 @@ test('reports: paged sessions and indexed students give the same counts as befor
   await prisma.student.updateMany({ data: { createdAt: new Date('2026-01-01T00:00:00Z') } });
   const at = new Date();
   // Two admitted (one late), one waited only, one never came (record removed).
-  await prisma.attendanceRecord.update({ where: { classSessionId_studentId: { classSessionId: cs.id, studentId: students[0]!.student.id } }, data: { admittedAt: at } });
-  await prisma.attendanceRecord.update({ where: { classSessionId_studentId: { classSessionId: cs.id, studentId: students[1]!.student.id } }, data: { admittedAt: at, late: true } });
+  await prisma.attendanceRecord.update({ where: { classSessionId_studentId: { classSessionId: cs.id, studentId: students[0]!.student.id } }, data: { admittedAt: at, connections: 1, connectedMs: 60_000 } });
+  await prisma.attendanceRecord.update({ where: { classSessionId_studentId: { classSessionId: cs.id, studentId: students[1]!.student.id } }, data: { admittedAt: at, late: true, connections: 1, connectedMs: 60_000 } });
   await prisma.attendanceRecord.delete({ where: { classSessionId_studentId: { classSessionId: cs.id, studentId: students[3]!.student.id } } });
 
   const f = { from: '2026-10-27', to: '2026-10-27' };

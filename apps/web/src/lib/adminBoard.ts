@@ -91,7 +91,7 @@ export async function adminPerformance(url: URL) {
   });
   const sessions = await prisma.classSession.findMany({
     where: { academicYear: year, teacherId: { in: teachers.map((t) => t.id) }, startedAt: { not: null } },
-    include: { attendance: { select: { studentId: true, admittedAt: true } } },
+    include: { attendance: { select: { studentId: true, admittedAt: true, connections: true } } },
   });
   const feedback = sessions.length
     ? await prisma.classFeedback.findMany({

@@ -126,12 +126,38 @@ export function isLate(
 
 export type AttendanceStatus = 'present' | 'late' | 'not_admitted' | 'absent';
 
-/** present / late = admitted into the class; not_admitted = waited only; absent = never came. */
+/** The connection fields that prove a student actually reached the class. */
+export type ConnectionEvidence = {
+  connections?: number | null;
+  connectedMs?: number | null;
+  connectedSince?: Date | null;
+};
+
+/**
+ * Did this student really join the class media (LiveKit) at least once?
+ * Being admitted is not enough: a student admitted from the waiting room
+ * whose page never connected (closed tab, blocked network) was counted as
+ * present before (Nov 7 trial).
+ */
+export function connectedOnce(r: ConnectionEvidence): boolean {
+  return (r.connections ?? 0) > 0 || (r.connectedMs ?? 0) > 0 || !!r.connectedSince;
+}
+
+/** Counted as attending: admitted by the teacher AND connected to the room at least once. */
+export function attended(r: { admittedAt: Date | null } & ConnectionEvidence): boolean {
+  return !!r.admittedAt && connectedOnce(r);
+}
+
+/**
+ * present / late = admitted into the class and connected; not_admitted =
+ * waited only; absent = never came, or admitted but never connected.
+ */
 export function attendanceStatus(
-  r: { admittedAt: Date | null; late: boolean; connectedMs?: number } | null | undefined
+  r: ({ admittedAt: Date | null; late: boolean } & ConnectionEvidence) | null | undefined
 ): AttendanceStatus {
   if (!r) return 'absent';
   if (!r.admittedAt) return 'not_admitted';
+  if (!connectedOnce(r)) return 'absent';
   return r.late ? 'late' : 'present';
 }
 

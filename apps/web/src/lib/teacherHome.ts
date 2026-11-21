@@ -46,7 +46,7 @@ type SessionRow = {
   endedAt: Date | null;
   adHoc: boolean;
   academicYear: string;
-  attendance: { studentId: string; admittedAt: Date | null }[];
+  attendance: { studentId: string; admittedAt: Date | null; connections: number }[];
 };
 
 function dateKey(d: Date) {
@@ -72,7 +72,7 @@ export async function buildTeacherHome(teacherId: string, url: URL) {
     occurrencesForRange(monthFrom, monthTo, tz, year).then((rows) => rows.filter((o) => o.teacherId === teacherId)),
     prisma.classSession.findMany({
       where: { teacherId, academicYear: year },
-      include: { attendance: { select: { studentId: true, admittedAt: true } } },
+      include: { attendance: { select: { studentId: true, admittedAt: true, connections: true } } },
     }),
     latestRank(teacherId, year),
   ]);

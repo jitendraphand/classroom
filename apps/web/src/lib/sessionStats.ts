@@ -1,3 +1,4 @@
+import { attended, type ConnectionEvidence } from './attendance';
 import { audienceIncludes } from './grades';
 
 type Person = {
@@ -52,10 +53,11 @@ export function averageAttendance(ratios: Array<number | null>): number | null {
  * dashboard's average attendance came out blank.
  */
 export function sessionAttendance<T extends Person & { id: string }>(
-  cs: SessionBits & { attendance: Array<{ studentId: string; admittedAt: Date | null }> },
+  cs: SessionBits & { attendance: Array<{ studentId: string; admittedAt: Date | null } & ConnectionEvidence> },
   students: T[]
 ): { present: number; enrolled: number; ratio: number | null } {
-  const presentIds = new Set(cs.attendance.filter((a) => a.admittedAt).map((a) => a.studentId));
+  // Present = admitted and actually connected (same rule as attendance reports).
+  const presentIds = new Set(cs.attendance.filter(attended).map((a) => a.studentId));
   const enrolledIds = new Set(enrolledStudents(cs, students).map((s) => s.id));
   for (const id of presentIds) enrolledIds.add(id);
   return { present: presentIds.size, enrolled: enrolledIds.size, ratio: attendanceRatio(presentIds.size, enrolledIds.size) };

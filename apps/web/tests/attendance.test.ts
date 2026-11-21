@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyJoin, applyLeave, attendanceStatus, closeAll, emptyConn, isLate, lateThreshold, totalConnectedMs } from '../src/lib/attendance';
+import { applyJoin, applyLeave, attendanceStatus, attended, closeAll, emptyConn, isLate, lateThreshold, tallyAttendance, totalConnectedMs } from '../src/lib/attendance';
 
 const t = (min: number) => new Date(Date.UTC(2026, 9, 1, 3, 30) + min * 60_000);
 
@@ -64,6 +64,31 @@ test('attendance: late threshold uses later of scheduled and actual start plus g
 test('attendance: status', () => {
   assert.equal(attendanceStatus(null), 'absent');
   assert.equal(attendanceStatus({ admittedAt: null, late: false }), 'not_admitted');
-  assert.equal(attendanceStatus({ admittedAt: t(1), late: false }), 'present');
-  assert.equal(attendanceStatus({ admittedAt: t(1), late: true }), 'late');
+  assert.equal(attendanceStatus({ admittedAt: t(1), late: false, connections: 1 }), 'present');
+  assert.equal(attendanceStatus({ admittedAt: t(1), late: true, connections: 1 }), 'late');
+});
+
+test('attendance: admitted but never connected is absent, not present (Nov 7 trial)', () => {
+  // Admitted from the waiting room, but the page never joined the media room.
+  assert.equal(attendanceStatus({ admittedAt: t(1), late: false, connections: 0, connectedMs: 0, connectedSince: null }), 'absent');
+  assert.equal(attendanceStatus({ admittedAt: t(1), late: true }), 'absent');
+  // Any evidence of a real connection counts: a join (connections), closed time, or an open interval.
+  assert.equal(attendanceStatus({ admittedAt: t(1), late: false, connections: 0, connectedMs: 5_000 }), 'present');
+  assert.equal(attendanceStatus({ admittedAt: t(1), late: false, connectedSince: t(2) }), 'present');
+  // Connected but never admitted (should not happen) is still "waited".
+  assert.equal(attendanceStatus({ admittedAt: null, late: false, connections: 1 }), 'not_admitted');
+  // The pure join rule bumps `connections`.
+  const joined = applyJoin(emptyConn(), 'PA_1', t(3));
+  assert.equal(joined.connections, 1);
+  assert.equal(attended({ admittedAt: t(1), ...joined }), true);
+  assert.equal(attended({ admittedAt: t(1), ...emptyConn() }), false);
+});
+
+test('attendance: tally ignores admitted-never-connected students', () => {
+  const rows = [
+    { studentId: 'a', status: attendanceStatus({ admittedAt: t(1), late: false, connections: 2 }) },
+    { studentId: 'b', status: attendanceStatus({ admittedAt: t(1), late: false, connections: 0 }) },
+    { studentId: 'c', status: attendanceStatus({ admittedAt: null, late: false }) },
+  ];
+  assert.deepEqual(tallyAttendance(rows), { present: 1, late: 0, notAdmitted: 1 });
 });

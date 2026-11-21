@@ -57,11 +57,12 @@ const ATTENDANCE_FIELDS = {
   leftAt: true,
   connectedMs: true,
   connectedSince: true,
+  connections: true,
   late: true,
 } as const;
 type ReportAttendance = Pick<
   AttendanceRecord,
-  'studentId' | 'firstJoinedAt' | 'admittedAt' | 'leftAt' | 'connectedMs' | 'connectedSince' | 'late'
+  'studentId' | 'firstJoinedAt' | 'admittedAt' | 'leftAt' | 'connectedMs' | 'connectedSince' | 'connections' | 'late'
 >;
 type SessionWith = ClassSession & { attendance: ReportAttendance[]; teacher: { name: string } };
 
@@ -214,11 +215,13 @@ function sessionRow(cs: SessionWith, students: Map<string, ReportStudent[]>, f: 
   const known = knownStudents(cs, students, f.division);
   const knownIds = new Set(known.map((s) => s.id));
   const recs = cs.attendance.filter((r) => !f.division || knownIds.has(r.studentId));
+  const statuses = recs.map((r) => ({ studentId: r.studentId, status: attendanceStatus(r) }));
+  // Admitted but never connected counts as absent, like having no record.
   const seen = new Set<string>();
-  for (const r of recs) {
-    if (r.studentId) seen.add(r.studentId);
+  for (const r of statuses) {
+    if (r.studentId && r.status !== 'absent') seen.add(r.studentId);
   }
-  const counts = tallyAttendance(recs.map((r) => ({ studentId: r.studentId, status: attendanceStatus(r) })));
+  const counts = tallyAttendance(statuses);
   const absent = cs.startedAt ? known.filter((s) => !seen.has(s.id)).length : 0;
   return {
     sessionId: cs.id,
