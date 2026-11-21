@@ -10,9 +10,12 @@ export default function HomePage() {
       <Card className="mt-6">
         <h2 className="font-display text-lg font-semibold">Students</h2>
         <p className="mt-1 text-sm text-slate-400">
-          Open your class from your school app. It signs you in and takes you straight to the class; there is
-          nothing to type here.
+          Open your class from your school app, or tap Join the class and type your name.
         </p>
+        {/* TEMPORARY until the school app is integrated: remove with src/app/join-class. */}
+        <Link href="/join-class" className="btn-primary mt-4 inline-flex w-full justify-center py-3 text-base">
+          Join the class
+        </Link>
       </Card>
       <Card className="mt-4">
         <h2 className="font-display text-lg font-semibold">Teachers and school staff</h2>
