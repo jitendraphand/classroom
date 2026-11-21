@@ -8,6 +8,7 @@ import {
   liveStudentPool,
   selectStudentTiles,
   sortRoster,
+  naturalNameCompare,
   studentCapForLayout,
   tileCells,
   videoGrid,
@@ -167,4 +168,19 @@ test('roster: raised hands first by raise time, then teacher, then names', () =>
     sorted.map((p) => p.displayName),
     ['Bob', 'Amy', 'Cat', 'Teacher', 'Abe', 'Zed']
   );
+});
+
+test('roster: names sort naturally (Student 2 before Student 10), like the web app', () => {
+  const sorted = sortRoster(
+    ['Student 10', 'Student 2', 'student 1', 'Student 21', 'Student 3'].map((displayName, i) => ({ id: String(i), displayName, role: 'STUDENT' }))
+  );
+  assert.deepEqual(sorted.map((p) => p.displayName), ['student 1', 'Student 2', 'Student 3', 'Student 10', 'Student 21']);
+  assert.ok(naturalNameCompare('Roll 9', 'Roll 10') < 0);
+  assert.notEqual(naturalNameCompare('Ana', 'ana'), 0);
+});
+
+test('synced drawLogic: the teacher drawing pad label is never "Student drawing"', async () => {
+  const { drawPadLabel } = await import('../src/shared/web/drawLogic');
+  assert.equal(drawPadLabel(null), 'Your drawing pad');
+  assert.equal(drawPadLabel('A, B'), 'Your drawing pad · A, B are drawing too');
 });

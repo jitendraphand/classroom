@@ -100,8 +100,19 @@ export function parseHolders(raw: Record<string, string>, now = Date.now()): { a
     if (h && holderActive(h, now)) active.push(h);
     else expired.push(id);
   }
-  active.sort((a, b) => a.until - b.until || a.name.localeCompare(b.name));
+  active.sort((a, b) => a.until - b.until || a.name.localeCompare(b.name, 'en', { numeric: true, sensitivity: 'base' }));
   return { active, expired };
+}
+
+/**
+ * Heading of the teacher's own drawing pad (entire-screen share). It is the
+ * teacher's pad, so it is never called "Student drawing" (Nov 7 trial);
+ * students allowed to draw are mentioned as drawing too. `holder` is the
+ * display text of who draws now ("A" or "A, B"), or null.
+ */
+export function drawPadLabel(holder: string | null | undefined): string {
+  if (!holder) return 'Your drawing pad';
+  return `Your drawing pad · ${holder} ${holder.includes(', ') ? 'are' : 'is'} drawing too`;
 }
 
 /** "A is drawing" / "A and B are drawing" / "A, B and 2 more are drawing". */

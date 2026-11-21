@@ -140,8 +140,17 @@ export function sortRoster<T extends RosterPerson>(people: T[]): T[] {
       if (at !== bt) return at < bt ? -1 : 1;
     }
     if (a.role !== b.role) return a.role === 'TEACHER' ? -1 : 1;
-    return a.displayName.localeCompare(b.displayName);
+    return naturalNameCompare(a.displayName, b.displayName);
   });
+}
+
+/**
+ * Natural, case-insensitive name order: "Student 2" before "Student 10"
+ * (same rule as the web app's naturalCompare), with a deterministic tie-break.
+ */
+const NAME_COLLATOR = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
+export function naturalNameCompare(a: string, b: string): number {
+  return NAME_COLLATOR.compare(a, b) || (a < b ? -1 : a > b ? 1 : 0);
 }
 
 /** Student camera cap sent as maxVisibleVideos. 2/4/6 tiles include the teacher. */
