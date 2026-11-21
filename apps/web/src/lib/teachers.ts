@@ -53,6 +53,11 @@ function toRow(t: {
   };
 }
 
+/** The only teacher fields a report-only sub-admin receives. */
+export function teacherNamesOnly(rows: { id: string; name: string; disabled: boolean }[]): { id: string; name: string; disabled: boolean }[] {
+  return rows.map((t) => ({ id: t.id, name: t.name, disabled: t.disabled }));
+}
+
 export async function listTeachers(): Promise<TeacherRow[]> {
   const rows = await prisma.teacher.findMany({
     where: { deletedAt: null },

@@ -1,9 +1,11 @@
 import { z } from 'zod';
 import { requireAdminApi } from '@/lib/adminGuard';
+import { TEACHER_LIST_VIEW, TEACHER_NAMES_VIEW } from '@/lib/adminSections';
+import { hasAnyPrivilege } from '@/lib/privileges';
 import { parseAssignments } from '@/lib/grades';
 import { soleCampus } from '@/lib/campusMaster';
 import { jsonError, jsonOk } from '@/lib/response';
-import { createTeacher, listTeachers, TeacherError } from '@/lib/teachers';
+import { createTeacher, listTeachers, teacherNamesOnly, TeacherError } from '@/lib/teachers';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,9 +18,15 @@ const createSchema = z.object({
 });
 
 export async function GET() {
-  const { res } = await requireAdminApi(['manageTeachers', 'schedule', 'viewReports']);
+  const { admin, res } = await requireAdminApi(TEACHER_NAMES_VIEW);
   if (res) return res;
-  return jsonOk({ teachers: await listTeachers() });
+  const teachers = await listTeachers();
+  // Report-only sub-admins need names for the report filters, nothing else
+  // (no emails, join codes or assignments), and never see the Teachers page.
+  if (!hasAnyPrivilege(admin.privileges, admin.kind, TEACHER_LIST_VIEW)) {
+    return jsonOk({ teachers: teacherNamesOnly(teachers) });
+  }
+  return jsonOk({ teachers });
 }
 
 export async function POST(req: Request) {

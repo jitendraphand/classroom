@@ -11,13 +11,20 @@ export type AdminSectionId = 'today' | 'live' | 'timetable' | 'teachers' | 'stud
 /** Privileges any one of which grants access; 'SYSTEM' = system administrator only. */
 type Need = Privilege[] | 'SYSTEM';
 
+/** Who may see the full teacher list (emails, codes, assignments): the Teachers page and its read API. */
+export const TEACHER_LIST_VIEW: Privilege[] = ['manageTeachers', 'schedule'];
+/** Who may read teacher names only (filters on Attendance / Performance). */
+export const TEACHER_NAMES_VIEW: Privilege[] = [...TEACHER_LIST_VIEW, 'viewReports'];
+
 export type AdminSection = { id: AdminSectionId; href: string; label: string; prefixes: string[]; view: Need };
 
 export const ADMIN_SECTIONS: AdminSection[] = [
   { id: 'today', href: '/admin', label: 'Today', prefixes: [], view: ['viewReports', 'monitorLive', 'schedule'] },
   { id: 'live', href: '/admin/live', label: 'Live', prefixes: ['/admin/live'], view: ['monitorLive'] },
   { id: 'timetable', href: '/admin/timetable', label: 'Timetable', prefixes: ['/admin/timetable'], view: ['schedule'] },
-  { id: 'teachers', href: '/admin/teachers', label: 'Teachers', prefixes: ['/admin/teachers'], view: ['manageTeachers', 'schedule', 'viewReports'] },
+  // Not for report-only sub-admins: they get teacher names for report filters
+  // (GET /api/admin/teachers returns id + name only), never the Teachers page.
+  { id: 'teachers', href: '/admin/teachers', label: 'Teachers', prefixes: ['/admin/teachers'], view: TEACHER_LIST_VIEW },
   { id: 'students', href: '/admin/students', label: 'Students', prefixes: ['/admin/students'], view: ['manageSchool'] },
   { id: 'attendance', href: '/admin/reports', label: 'Attendance', prefixes: ['/admin/reports'], view: ['viewReports'] },
   { id: 'performance', href: '/admin/performance', label: 'Performance', prefixes: ['/admin/performance'], view: ['viewReports'] },
