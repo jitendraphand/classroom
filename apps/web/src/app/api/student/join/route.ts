@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { clearStudentCookie, getPupil, setActAsStudent, setPupilCookie } from '@/lib/auth';
+import { getPupil } from '@/lib/auth';
 import { clientIp } from '@/lib/rateLimit';
 import { ensureRedis } from '@/lib/redis';
 import {
@@ -7,15 +7,11 @@ import {
   isJoinNavigation,
   joinRateLimited,
   joinRateLimitFromEnv,
-  joinSidRateLimited,
-  joinSidRateLimitFromEnv,
   resolveSchoolJoin,
   schoolJoinModeFromEnv,
 } from '@/lib/schoolJoin';
 import { JoinTokenError, schoolJwtConfigFromEnv } from '@/lib/schoolJwt';
-import { assertKnownStudent, unsignedUpdatesFromEnv, upsertStudentFromClaims } from '@/lib/studentService';
-import { resolveJoinCampus } from '@/lib/campusLogic';
-import { loadCampuses } from '@/lib/campusMaster';
+import { finishStudentJoin } from '@/lib/studentJoinFinish';
 import { resolveAppUrl } from '@/lib/url';
 
 export const dynamic = 'force-dynamic';
@@ -72,26 +68,7 @@ export async function GET(req: Request) {
       jwt: schoolJwtConfigFromEnv(),
       claimJti,
     });
-    try {
-      if (await joinSidRateLimited(claims.studentId, await ensureRedis(), joinSidRateLimitFromEnv())) {
-        throw new JoinTokenError('rate_limited', 'sid');
-      }
-    } catch (e) {
-      if (e instanceof JoinTokenError) throw e;
-      /* Redis down: fail open */
-    }
-    // No Campus in the link: the school's only campus (several → refused).
-    const campus = resolveJoinCampus(claims.campus, await loadCampuses());
-    if (!campus) throw new JoinTokenError('campus_required', 'campus');
-    await assertKnownStudent(claims.studentId);
-    const student = await upsertStudentFromClaims({ ...claims, campus }, undefined, {
-      signed,
-      allowUnsignedUpdates: unsignedUpdatesFromEnv(),
-    });
-    // Shared devices: drop any previous student's class seat on this browser.
-    await clearStudentCookie();
-    await setPupilCookie(student);
-    await setActAsStudent();
+    await finishStudentJoin(claims, signed);
     return redirect(req, '/student');
   } catch (e) {
     const code = e instanceof JoinTokenError ? e.code : 'unavailable';
