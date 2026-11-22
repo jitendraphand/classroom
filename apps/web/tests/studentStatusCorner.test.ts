@@ -30,3 +30,8 @@ test('an open student chat stays above the lower-left status row', () => {
     assert.ok(b.y + b.height <= h - chatBottomReserve(w, h) + 0.5 || b.y === 8, `${w}x${h}: chat bottom clears the row`);
   }
 });
+
+test("class info 'up' anchors to the corner row, not the 'i'", () => {
+  const info = read('components/classroom/ClassInfoButton.tsx');
+  assert.match(info, /placement === 'up' \? undefined : 'relative'/);
+});

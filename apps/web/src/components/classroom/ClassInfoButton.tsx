@@ -31,8 +31,11 @@ export function ClassInfoButton({ teacherName, subject, audience, scheduledStart
     when ? { k: 'Scheduled', v: when } : null,
   ].filter((row): row is { k: string; v: string } => !!row);
 
+  // 'up': no positioned wrapper, so the details anchor to the corner row
+  // (.stage-bottom-left) and line up with its left edge; anchored to the "i"
+  // they ran off the right edge of a portrait phone.
   return (
-    <div className="relative">
+    <div className={placement === 'up' ? undefined : 'relative'}>
       <button
         type="button"
         className="flex h-8 w-8 items-center justify-center rounded-full border border-white/20 bg-black/60 text-sm font-semibold italic text-white shadow-lift hover:bg-black/80"
