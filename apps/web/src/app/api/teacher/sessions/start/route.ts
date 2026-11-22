@@ -3,24 +3,10 @@ import { getTeacherSession } from '@/lib/auth';
 import { SessionError, startAdHocClass, startScheduledClass } from '@/lib/classSessions';
 import { jsonError, jsonOk } from '@/lib/response';
 import { clampMaxVisible, sampleConfig } from '@/lib/sample';
+import { startClassSchema } from '@/lib/teacherStartSchema';
 import { resolveAppUrl } from '@/lib/url';
 
-const schema = z.discriminatedUnion('kind', [
-  z.object({
-    kind: z.literal('scheduled'),
-    key: z.string().min(1).max(200),
-    maxVisibleVideos: z.number().int().min(1).max(6).optional(),
-  }),
-  z.object({
-    kind: z.literal('adhoc'),
-    campus: z.string().min(1).max(40),
-    grade: z.string().min(1).max(16),
-    divisions: z.array(z.string().max(16)).max(40).default([]),
-    allDivisions: z.boolean().optional(),
-    subject: z.string().max(80).optional(),
-    maxVisibleVideos: z.number().int().min(1).max(6).optional(),
-  }),
-]);
+const schema = startClassSchema;
 
 /** Start a timetabled class occurrence or an ad-hoc class (assigned grades only). */
 export async function POST(req: Request) {

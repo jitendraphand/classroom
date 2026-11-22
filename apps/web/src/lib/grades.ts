@@ -8,11 +8,25 @@
 /** Division value meaning "every division of the grade". */
 export const ALL_DIVISIONS = '*';
 
+/** Longest canonical grade ("7", "XII", "NURSERY"). */
+export const MAX_GRADE_LENGTH = 16;
+
+/**
+ * Longest raw campus / grade / division text an API accepts before it is
+ * normalised. Raw input may carry a prefix or spaces ("Grade 7",
+ * "Division Science Foundation", "Airport Campus"); the normalisers then cut
+ * the canonical code to MAX_CAMPUS_LENGTH / MAX_GRADE_LENGTH /
+ * MAX_DIVISION_LENGTH, the same limits the admin master list uses. Keep API
+ * validators on this constant rather than a smaller literal: a max(16) on the
+ * extra-class divisions rejected the 17-letter "SCIENCEFOUNDATION" (Nov 22).
+ */
+export const MAX_AUDIENCE_INPUT_LENGTH = 64;
+
 /** "Grade 7", " 7 ", "class 7" → "7"; "xii" → "XII". */
 export function normalizeGrade(raw: unknown): string {
   let s = String(raw ?? '').trim().replace(/\s+/g, ' ');
   s = s.replace(/^(grade|class|std\.?|standard)\s*/i, '');
-  return s.toUpperCase().slice(0, 16);
+  return s.toUpperCase().slice(0, MAX_GRADE_LENGTH);
 }
 
 /** Longest campus name accepted. */

@@ -1,7 +1,7 @@
 import { academicYearForDate, isAcademicYearLabel } from './academicYear';
 import { z } from 'zod';
 import { prisma } from './db';
-import { formatAudience, normalizeCampus, normalizeGrade, parseDivisionList } from './grades';
+import { formatAudience, MAX_AUDIENCE_INPUT_LENGTH, normalizeCampus, normalizeGrade, parseDivisionList } from './grades';
 import { campusUnknownMessage } from './campusMaster';
 import {
   WEEKDAYS,
@@ -42,9 +42,9 @@ const optDate = z
 
 export const slotBody = z.object({
   teacherId: z.string().min(1),
-  campus: z.string().min(1).max(40),
-  grade: z.string().min(1).max(16),
-  divisions: z.union([z.string().max(200), z.array(z.string().max(32)).max(40)]),
+  campus: z.string().min(1).max(MAX_AUDIENCE_INPUT_LENGTH),
+  grade: z.string().min(1).max(MAX_AUDIENCE_INPUT_LENGTH),
+  divisions: z.union([z.string().max(200), z.array(z.string().max(MAX_AUDIENCE_INPUT_LENGTH)).max(40)]),
   subject: z.string().trim().min(1).max(80),
   weekday: z.number().int().min(0).max(6),
   /** Create only: several days at once (one weekly slot per day). */
@@ -197,9 +197,9 @@ export const overrideBody = z.object({
   date: z.string().refine(isLocalDate, 'Use a YYYY-MM-DD date'),
   slotId: z.string().optional().nullable(),
   teacherId: z.string().optional().nullable(),
-  campus: z.string().max(40).optional().nullable(),
-  grade: z.string().max(16).optional().nullable(),
-  divisions: z.union([z.string().max(200), z.array(z.string().max(32)).max(40)]).optional().nullable(),
+  campus: z.string().max(MAX_AUDIENCE_INPUT_LENGTH).optional().nullable(),
+  grade: z.string().max(MAX_AUDIENCE_INPUT_LENGTH).optional().nullable(),
+  divisions: z.union([z.string().max(200), z.array(z.string().max(MAX_AUDIENCE_INPUT_LENGTH)).max(40)]).optional().nullable(),
   subject: z.string().max(80).optional().nullable(),
   start: z.string().optional().nullable(),
   end: z.string().optional().nullable(),

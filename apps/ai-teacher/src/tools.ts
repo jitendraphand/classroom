@@ -197,9 +197,10 @@ export function registerTools(server: McpServer, t: TeacherSession): void {
     'Start a class and join it as its teacher: a timetabled one by key (from list_classes), or an ad-hoc one for a grade.',
     {
       key: z.string().max(200).optional().describe('Timetable key from list_classes'),
-      campus: z.string().max(40).optional(),
-      grade: z.string().max(16).optional(),
-      divisions: z.array(z.string().max(16)).max(40).optional(),
+      // Same raw-input limit as the web API (MAX_AUDIENCE_INPUT_LENGTH): codes such as SCIENCEFOUNDATION exceed 16.
+      campus: z.string().max(64).optional(),
+      grade: z.string().max(64).optional(),
+      divisions: z.array(z.string().max(64)).max(40).optional(),
       subject: z.string().max(80).optional(),
     },
     async (a) => {

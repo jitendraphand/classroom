@@ -13,7 +13,7 @@
  * SCHOOL_JOIN_MODE=signed:
  *   only /join?t=<JWT> (lib/schoolJwt.ts); plain parameters are refused.
  */
-import { ALL_DIVISIONS, MAX_CAMPUS_LENGTH, MAX_DIVISION_LENGTH, normalizeCampus, normalizeDivision, normalizeGrade } from './grades';
+import { ALL_DIVISIONS, MAX_CAMPUS_LENGTH, MAX_DIVISION_LENGTH, MAX_GRADE_LENGTH, normalizeCampus, normalizeDivision, normalizeGrade } from './grades';
 import { hasUnsignedJoinParams, readUnsignedFields, type UnsignedFields } from './joinParams';
 import { JoinTokenError, verifySchoolJoinToken, type JoinClaims, type SchoolJwtConfig } from './schoolJwt';
 
@@ -25,7 +25,7 @@ export function schoolJoinModeFromEnv(env: Record<string, string | undefined> = 
   return env.SCHOOL_JOIN_MODE?.trim().toLowerCase() === 'signed' ? 'signed' : 'unsigned';
 }
 
-export const UNSIGNED_LIMITS = { sid: 64, firstName: 50, lastName: 50, grade: 16, division: MAX_DIVISION_LENGTH, campus: MAX_CAMPUS_LENGTH, roll: 20 };
+export const UNSIGNED_LIMITS = { sid: 64, firstName: 50, lastName: 50, grade: MAX_GRADE_LENGTH, division: MAX_DIVISION_LENGTH, campus: MAX_CAMPUS_LENGTH, roll: 20 };
 const SID_RE = /^[A-Za-z0-9._:@/-]+$/;
 const NAME_RE = /^[\p{L}\p{M}\p{N} .'’-]+$/u;
 const GRADE_RE = /^[A-Za-z0-9 .-]+$/;
