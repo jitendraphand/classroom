@@ -102,9 +102,6 @@ type Props = {
   /** Rail: short word (Both / Teacher / Hidden). Full sentence stays in title. */
   videoPanelShortLabel?: string;
   onCycleVideoPanel?: () => void;
-  /** Student mic queue. Label is "Ask to speak" or "Waiting (#n)". */
-  askToSpeakLabel?: string;
-  onAskToSpeak?: () => void;
   /** Shown near the buttons while this student is in the speaking queue. */
   micWaitNote?: string | null;
 };
@@ -147,8 +144,6 @@ export function Controls({
   videoPanelLabel,
   videoPanelShortLabel,
   onCycleVideoPanel,
-  askToSpeakLabel,
-  onAskToSpeak,
   micWaitNote,
 }: Props) {
   void _canPublishVideo;
@@ -242,20 +237,6 @@ export function Controls({
             <span className="sr-only">{videoPanelLabel || 'Video panel'}</span>
           </button>
           </Tool>
-        )}
-
-        {onAskToSpeak && (
-          <button
-            type="button"
-            data-testid="ask-to-speak"
-            onClick={onAskToSpeak}
-            className={cn(
-              'inline-flex items-center justify-center rounded-full border border-amber-400/40 bg-amber-500/20 font-semibold leading-tight text-amber-100 hover:bg-amber-500/30',
-              rail ? 'w-full px-1 py-1 text-[9px]' : 'h-9 px-2.5 text-[11px]'
-            )}
-          >
-            {askToSpeakLabel || 'Ask to speak'}
-          </button>
         )}
 
         {showScreenShare && (

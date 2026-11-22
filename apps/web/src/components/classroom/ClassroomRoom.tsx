@@ -2550,8 +2550,8 @@ function RoomInner({
 
   const micLimitOn = (state?.micLimit ?? 0) > 0;
   const micWaiting = !!state?.me?.micWaiting;
-  const showAskToSpeak = !isTeacher && micLimitOn && effectiveMuted && !state?.me?.micGranted;
-  // No mic cap: asking to speak raises the hand, and the teacher's raised-hands
+  // Students ask to speak with Raise hand (the separate "Ask to speak" button
+  // was removed on Nov 22: it duplicated the hand). The teacher's raised-hands
   // bar has "Let … speak" (unmutes and lowers it).
   const askByHand = !isTeacher && !micLimitOn && effectiveMuted;
   const controlsProps = {
@@ -2618,22 +2618,6 @@ function RoomInner({
     videoPanelLabel: isTeacher ? undefined : studentVideoModeLabel(studentVideoMode),
     videoPanelShortLabel: isTeacher ? undefined : studentVideoModeShortLabel(studentVideoMode),
     onCycleVideoPanel: isTeacher ? undefined : () => setStudentVideoMode((m) => nextStudentVideoMode(m)),
-    askToSpeakLabel: micWaiting
-      ? state?.me?.micPosition
-        ? `Waiting (#${state.me.micPosition})`
-        : 'Waiting'
-      : 'Ask to speak',
-    onAskToSpeak: showAskToSpeak
-      ? () => {
-          void roomFetch(code, '/mic', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ want: !micWaiting }),
-          }).then(() => refresh());
-        }
-      : askByHand && !handRaised
-        ? () => void toggleHand()
-        : undefined,
     micWaitNote:
       !isTeacher && micWaiting
         ? `Waiting to speak${state?.me?.micPosition ? ` (#${state.me.micPosition})` : ''}`
