@@ -71,6 +71,8 @@ export const keys = {
   takeovers: (code: string) => `room:${code}:takeovers`,
   /** JSON MicBook: open student mics and the speak queue. */
   micBook: (code: string) => `room:${code}:mic-book`,
+  /** SET of room codes whose mic book has a granted-but-unused slot (idle sweep). */
+  micPendingRooms: () => `mic-pending:rooms`,
   /** Participant id the teacher is spotlighting, or absent. */
   spotlight: (code: string) => `room:${code}:spotlight`,
   /** Redis pub/sub channel for chat SSE (not a stored key). */

@@ -374,28 +374,61 @@ export function tracksToMute(
   return out;
 }
 
-async function pushOne(ctx: PermissionContext, req: StudentPublishRequest): Promise<void> {
+/** Delays before the 2nd and 3rd attempt of a LiveKit permission call. */
+export const PERMISSION_RETRY_DELAYS_MS = [250, 750];
+
+const isNotFound = (msg: string) => /not.?found|does not exist/i.test(msg);
+
+/**
+ * Run a LiveKit call, retrying briefly on a transient failure. "Not found"
+ * (participant not connected) is final, not an error: the token grant and the
+ * DB/Redis flags apply when they connect. Returns the result, 'gone', or
+ * throws the last error.
+ */
+export async function withPermissionRetry<T>(
+  fn: () => Promise<T>,
+  delays: number[] = PERMISSION_RETRY_DELAYS_MS,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))
+): Promise<T | 'gone'> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (isNotFound(msg)) return 'gone';
+      if (attempt >= delays.length) throw e;
+      await sleep(delays[attempt]!);
+    }
+  }
+}
+
+/** Push one student's permissions; true when LiveKit applied them (or the student is not connected). */
+async function pushOne(ctx: PermissionContext, req: StudentPublishRequest): Promise<boolean> {
   const eff = effectiveStudentSources(req, ctx);
-  let info: { tracks?: { sid?: string; type?: TrackType; source?: TrackSource; muted?: boolean }[] };
+  let info: { tracks?: { sid?: string; type?: TrackType; source?: TrackSource; muted?: boolean }[] } | 'gone';
   try {
     // The response is the participant's current info (tracks included), so no
     // extra listParticipants call is needed to find tracks to mute.
-    info = await ctx.svc.updateParticipant(ctx.roomName, req.identity, {
-      permission: { ...publishPermission(eff.sources), canSubscribe: true, canPublishData: false },
-    });
+    info = await withPermissionRetry(() =>
+      ctx.svc.updateParticipant(ctx.roomName, req.identity, {
+        permission: { ...publishPermission(eff.sources), canSubscribe: true, canPublishData: false },
+      })
+    );
   } catch (e) {
-    // Not connected (yet): the token grant and the DB/Redis flags apply when they connect.
-    const msg = e instanceof Error ? e.message : String(e);
-    if (!/not.?found|does not exist/i.test(msg)) console.warn('LiveKit updateParticipant', req.identity, msg);
-    return;
+    console.error('LiveKit updateParticipant failed after retries', req.identity, e instanceof Error ? e.message : e);
+    return false;
   }
+  if (info === 'gone') return true;
+  let ok = true;
   for (const sid of tracksToMute(info.tracks, eff)) {
     try {
-      await ctx.svc.mutePublishedTrack(ctx.roomName, req.identity, sid, true);
+      await withPermissionRetry(() => ctx.svc.mutePublishedTrack(ctx.roomName, req.identity, sid, true));
     } catch (err) {
-      console.warn('LiveKit mutePublishedTrack', req.identity, sid, err instanceof Error ? err.message : err);
+      ok = false;
+      console.error('LiveKit mutePublishedTrack failed after retries', req.identity, sid, err instanceof Error ? err.message : err);
     }
   }
+  return ok;
 }
 
 /** Parallel LiveKit API calls per batch (PERMISSION_PUSH_CONCURRENCY, default 8). */
@@ -433,12 +466,16 @@ export async function pushStudentPermissions(
   code: string,
   requests: StudentPublishRequest[],
   opts: { teacherPresent?: boolean; room?: { code: string; sessionId: string } | null; ctx?: PermissionContext } = {}
-): Promise<void> {
+): Promise<{ failed: string[] }> {
   const students = requests.filter((r) => r.identity.startsWith('student_'));
-  if (!students.length) return;
+  if (!students.length) return { failed: [] };
   const ctx = opts.ctx ?? (await permissionContext(code, opts));
-  if (!ctx) return;
-  await runBounded(students, permissionPushConcurrency(), (r) => pushOne(ctx, r));
+  if (!ctx) return { failed: [] };
+  const failed: string[] = [];
+  await runBounded(students, permissionPushConcurrency(), async (r) => {
+    if (!(await pushOne(ctx, r))) failed.push(r.identity);
+  });
+  return { failed };
 }
 
 export async function setParticipantPublishPermissions(
@@ -446,8 +483,8 @@ export async function setParticipantPublishPermissions(
   identity: string,
   requested: PublishPermissions,
   opts: { teacherPresent?: boolean } = {}
-): Promise<void> {
-  await pushStudentPermissions(code, [{ identity, ...requested }], opts);
+): Promise<{ failed: string[] }> {
+  return pushStudentPermissions(code, [{ identity, ...requested }], opts);
 }
 
 /**
@@ -460,8 +497,8 @@ export async function setParticipantMicAllowed(
   identity: string,
   allowed: boolean,
   allowCamera = true
-): Promise<void> {
-  await setParticipantPublishPermissions(code, identity, { allowCamera, allowMic: allowed });
+): Promise<{ failed: string[] }> {
+  return setParticipantPublishPermissions(code, identity, { allowCamera, allowMic: allowed });
 }
 
 /** Force camera on/off for one identity (rotation in/out of the visible sample). */
@@ -480,9 +517,9 @@ export async function setManyParticipantMics(
   identities: string[],
   allowed: boolean | ((identity: string) => boolean),
   inSample: (identity: string) => boolean = () => true
-): Promise<void> {
+): Promise<{ failed: string[] }> {
   const mic = typeof allowed === 'function' ? allowed : () => allowed;
-  await pushStudentPermissions(
+  return pushStudentPermissions(
     code,
     identities.map((identity) => ({ identity, allowMic: mic(identity), allowCamera: inSample(identity) }))
   );

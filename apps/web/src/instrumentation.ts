@@ -10,6 +10,8 @@ export async function register() {
     startRankScheduler();
     const { startAbsenceSweeper } = await import('./lib/teacherPresence');
     startAbsenceSweeper();
+    const { startMicIdleSweeper } = await import('./lib/micSlotService');
+    startMicIdleSweeper();
     const { startAttendanceFlusher } = await import('./lib/attendanceQueue');
     startAttendanceFlusher();
     const { startRetentionJob } = await import('./lib/retention');

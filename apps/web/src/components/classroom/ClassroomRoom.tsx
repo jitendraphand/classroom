@@ -2569,7 +2569,8 @@ function RoomInner({
   // Students ask to speak with Raise hand (the separate "Ask to speak" button
   // was removed on Nov 22: it duplicated the hand). The teacher's raised-hands
   // bar has "Let … speak" (unmutes and lowers it).
-  const askByHand = !isTeacher && !micLimitOn && effectiveMuted;
+  // Shown with or without a mic limit (Nov 22).
+  const askByHand = !isTeacher && effectiveMuted;
   const controlsProps = {
     micOn: micOn && !effectiveMuted,
     camOn,
@@ -3272,7 +3273,7 @@ function RoomInner({
                 Mute all
               </Button>
               <Button size="sm" variant="secondary" onClick={() => muteAllStudents(false)}>
-                Unmute all
+                Allow all to unmute
               </Button>
               <button
                 type="button"

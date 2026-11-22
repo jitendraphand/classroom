@@ -1,6 +1,7 @@
 import { requireAdminApi } from '@/lib/adminGuard';
-import { getSchoolSettings, updateSchoolSettings } from '@/lib/schoolSettings';
+import { clearSchoolSettingsCache, getSchoolSettings, updateSchoolSettings } from '@/lib/schoolSettings';
 import { jsonError, jsonOk } from '@/lib/response';
+import { reconcileMicLimit } from '@/lib/micSlotService';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,5 +32,16 @@ export async function PUT(req: Request) {
       return jsonError('maxStudentsPerClass must be a number or null (empty = no cap)');
     } else patch.maxStudentsPerClass = body.maxStudentsPerClass;
   }
-  return jsonOk(await updateSchoolSettings(patch));
+  clearSchoolSettingsCache();
+  const before = await getSchoolSettings();
+  const saved = await updateSchoolSettings(patch);
+  // Mic limit changed: recount every live class from who is unmuted right now.
+  if (saved.maxOpenStudentMics !== before.maxOpenStudentMics) {
+    const r = await reconcileMicLimit(saved.maxOpenStudentMics).catch((e) => {
+      console.error('mic limit reconcile', e);
+      return null;
+    });
+    return jsonOk({ ...saved, micRecount: r });
+  }
+  return jsonOk(saved);
 }

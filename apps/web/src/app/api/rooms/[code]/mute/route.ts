@@ -59,7 +59,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
           });
           const ids = students.map((s) => s.id);
           await replaceMutedSet(redis, code, ids);
-          void setManyParticipantMics(code, students.map((s) => s.livekitIdentity), false, (identity) => inSample.has(identity));
+          await setManyParticipantMics(code, students.map((s) => s.livekitIdentity), false, (identity) => inSample.has(identity));
           await clearPinnedSpeakers(code);
           pushMuteState(room.code, room.sessionId, students.map((s) => s.livekitIdentity), true);
           nudgeRoomState(room.code, 'all');
@@ -85,7 +85,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
         await replaceMutedSet(redis, code, waiting);
         const openSet = new Set(openIds);
         const openIdentities = new Set(students.filter((s) => openSet.has(s.id)).map((s) => s.livekitIdentity));
-        void setManyParticipantMics(
+        await setManyParticipantMics(
           code,
           students.map((s) => s.livekitIdentity),
           (identity) => openIdentities.has(identity),
@@ -111,7 +111,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
       // re-grant camera to students outside the visible sample.
       const { visible } = await getVisibleSample(code);
       const inSample = new Set(visible);
-      void setManyParticipantMics(
+      await setManyParticipantMics(
         code,
         identities,
         !body.muted,
@@ -140,7 +140,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
       if (muted) await redis.sadd(keys.muted(code), participant.id);
       else await redis.srem(keys.muted(code), participant.id);
       const { visible } = await getVisibleSample(code);
-      void setParticipantMicAllowed(code, participant.livekitIdentity, !muted, visible.includes(participant.livekitIdentity));
+      await setParticipantMicAllowed(code, participant.livekitIdentity, !muted, visible.includes(participant.livekitIdentity));
       if (muted) await unpinSpeaker(code, participant.livekitIdentity);
       pushMuteState(room.code, room.sessionId, [participant.livekitIdentity], muted);
       const promoted = 'promoted' in next ? (next as { promoted?: string | null }).promoted : null;
@@ -149,7 +149,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
         if (nextStudent) {
           await prisma.participant.update({ where: { id: nextStudent.id }, data: { mutedByTeacher: false } });
           await redis.srem(keys.muted(code), nextStudent.id);
-          void setParticipantMicAllowed(code, nextStudent.livekitIdentity, true, visible.includes(nextStudent.livekitIdentity));
+          await setParticipantMicAllowed(code, nextStudent.livekitIdentity, true, visible.includes(nextStudent.livekitIdentity));
           pushMuteState(room.code, room.sessionId, [nextStudent.livekitIdentity], false);
         }
       }
@@ -167,7 +167,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     else await redis.srem(keys.muted(code), participant.id);
 
     const { visible } = await getVisibleSample(code);
-    void setParticipantMicAllowed(
+    await setParticipantMicAllowed(
       code,
       participant.livekitIdentity,
       !body.muted,

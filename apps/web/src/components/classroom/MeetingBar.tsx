@@ -147,7 +147,7 @@ export function WhiteboardMeetingBar({
     },
     {
       id: 'muteall',
-      label: allMuted ? 'Unmute all' : 'Mute all',
+      label: allMuted ? 'Allow all to unmute' : 'Mute all',
       icon: ic(allMuted ? <IconSpeakerOff size={18} /> : <IconSpeaker size={18} />),
       active: allMuted,
       onClick: onToggleMuteAll,

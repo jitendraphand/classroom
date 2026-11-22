@@ -619,7 +619,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                 Mute all
               </button>
               <button type="button" className="tsh-btn" onClick={() => onMuteAll(false)}>
-                Unmute all
+                Allow all to unmute
               </button>
               {onWaitingRoom && (
                 <button

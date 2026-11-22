@@ -15,6 +15,7 @@ import { handlePresenceEvent, parseLivekitRoomName } from '@/lib/teacherPresence
 import { recordStudentConnection } from '@/lib/studentPresence';
 import { enqueueConnectionEvent } from '@/lib/attendanceQueue';
 import { HANDLED_WEBHOOK_EVENTS, KeyedWorkQueue, TtlCache } from '@/lib/webhookQueue';
+import { scheduleDisconnectRelease } from '@/lib/micSlotService';
 
 /** Event time from the webhook (seconds, int64), falling back to now if absent/odd. */
 function eventTime(createdAt: unknown): Date {
@@ -49,6 +50,8 @@ function studentConnection(event: {
 async function recordPresence(c: ConnEvent) {
   try {
     const room = parseLivekitRoomName(c.roomName);
+    // Mic limit: a student who stays disconnected loses their slot (after a short grace).
+    if (room && c.kind === 'left') scheduleDisconnectRelease(room.code, room.sessionId, c.identity);
     if (room) await recordStudentConnection(room.code, c.identity, c.kind, c.sid);
   } catch (e) {
     console.error('student presence webhook', c.kind, e instanceof Error ? e.message : e);

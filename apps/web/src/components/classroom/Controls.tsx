@@ -391,7 +391,7 @@ export function Controls({
         )}
         {isTeacher && onUnmuteAll && !isFloat && (
           <Button variant="secondary" size="sm" onClick={onUnmuteAll}>
-            Unmute all
+            Allow all to unmute
           </Button>
         )}
 
