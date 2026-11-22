@@ -789,7 +789,7 @@ function buildClass(): void {
             <span class="tool-cap" aria-hidden="true">Videos</span>
           </span>
           <button class="btn sm warn" id="btn-mute" type="button">Mute all</button>
-          <button class="btn sm" id="btn-allow" type="button">Unmute all</button>
+          <button class="btn sm" id="btn-allow" type="button">Allow all to unmute</button>
           <span class="bar-div"></span>
           ${sym('btn-leave', 'leave', 'Leave class (it keeps running for the students)', '', 'Leave')}
           <span class="bar-div wide"></span>

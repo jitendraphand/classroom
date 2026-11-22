@@ -95,7 +95,7 @@ function snap(over: Partial<PanelSnapshot['hud']> = {}): PanelSnapshot {
 
 test('roster renders the website labels, rows and draw controls', () => {
   const html = renderToStaticMarkup(createElement(RosterView, { snap: snap(), send: () => {} }));
-  for (const text of ['Waiting (2)', 'All', 'Mute all', 'Unmute all', 'Waiting room', 'Search name or SID…', 'Meera is drawing', 'Clear drawing', 'Revoke', 'Allow', 'Left fullscreen', 'Late', 'CC · 7-A']) {
+  for (const text of ['Waiting (2)', 'All', 'Mute all', 'Allow all to unmute', 'Waiting room', 'Search name or SID…', 'Meera is drawing', 'Clear drawing', 'Revoke', 'Allow', 'Left fullscreen', 'Late', 'CC · 7-A']) {
     assert.ok(html.includes(text), `missing ${text}`);
   }
   assert.ok(html.includes('aria-label="Unmute Asha Rao"'));

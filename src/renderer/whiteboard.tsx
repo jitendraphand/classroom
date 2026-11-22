@@ -84,7 +84,7 @@ export function MeetingBar({ meeting, onStop }: { meeting: WbMeeting; onStop: ()
     },
     {
       id: 'muteall',
-      label: allMuted ? 'Let students unmute' : 'Mute all students',
+      label: allMuted ? 'Allow all to unmute' : 'Mute all students',
       icon: ic(allMuted ? 'speakerOff' : 'speaker'),
       active: allMuted,
       onClick: () => {
