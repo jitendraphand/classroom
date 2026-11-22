@@ -275,11 +275,23 @@ input[type='time'].input {
     @apply relative flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden bg-black;
   }
 
-  .stage-top-left {
-    @apply pointer-events-none absolute left-3 top-3 z-40 flex max-w-[calc(100vw-1.5rem)] items-center gap-2;
+  /* Student "Teacher is in the room" + class info "i": lower-left corner.
+     The controls are on the right edge, so the row stops short of them; on a
+     portrait phone (controls in a bottom row) it sits just above that row. */
+  .stage-bottom-left {
+    @apply pointer-events-none absolute z-40 flex items-center gap-2;
+    left: max(0.75rem, env(safe-area-inset-left, 0px));
+    bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
+    max-width: calc(100vw - 6rem);
   }
-  .stage-top-left > * {
+  .stage-bottom-left > * {
     pointer-events: auto;
+  }
+  @media (orientation: portrait) and (max-width: 700px) {
+    .stage-bottom-left {
+      bottom: calc(var(--student-controls-h, 112px) + 0.5rem);
+      max-width: calc(100vw - 1.5rem);
+    }
   }
   .stage-fullscreen-badge {
     @apply pointer-events-none min-w-0 rounded-full border border-white/15 bg-black/55 px-3 py-1.5 text-2xs font-semibold tracking-wide text-white backdrop-blur-md;
@@ -334,7 +346,8 @@ input[type='time'].input {
   .control-status-pill {
     @apply pointer-events-none fixed left-1/2 top-2 z-40 -translate-x-1/2 whitespace-nowrap rounded-full border border-amber-400/30 bg-black/70 px-2.5 py-1 text-[10px] font-semibold text-amber-200 backdrop-blur;
   }
-  /* Phone: "Teacher is in the room" and "Muted by teacher" stack, they do not overlap. */
+  /* Phone: "Muted by teacher" and the second status pill stack at the top
+     left ("Teacher is in the room" now sits in the lower-left corner). */
   @media (max-width: 700px) {
     .stage-fullscreen-badge {
       max-width: calc(100vw - 1.5rem);
@@ -343,14 +356,14 @@ input[type='time'].input {
     .control-status-pill {
       left: 0.75rem;
       right: auto;
-      top: 2.75rem;
+      top: 0.75rem;
       transform: none;
       white-space: normal;
       max-width: calc(100vw - 1.5rem);
       text-align: left;
     }
     .control-status-pill.is-second {
-      top: 4.75rem;
+      top: 2.75rem;
     }
   }
 

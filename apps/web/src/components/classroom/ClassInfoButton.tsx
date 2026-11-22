@@ -9,6 +9,8 @@ type Props = {
   audience?: string | null;
   scheduledStart?: string | null;
   scheduledEnd?: string | null;
+  /** Where the details open: below the button (default) or above it (lower-corner placement). */
+  placement?: 'down' | 'up';
 };
 
 /** "Wed 28 Oct, 09:40–10:25" (one format app-wide, lib/timeFormat). */
@@ -19,7 +21,7 @@ function scheduledLabel(start?: string | null, end?: string | null): string | nu
 }
 
 /** Small "i" that opens the class details (teacher, subject, audience, time). */
-export function ClassInfoButton({ teacherName, subject, audience, scheduledStart, scheduledEnd }: Props) {
+export function ClassInfoButton({ teacherName, subject, audience, scheduledStart, scheduledEnd, placement = 'down' }: Props) {
   const [open, setOpen] = useState(false);
   const when = scheduledLabel(scheduledStart, scheduledEnd);
   const rows = [
@@ -44,7 +46,10 @@ export function ClassInfoButton({ teacherName, subject, audience, scheduledStart
         <div
           role="dialog"
           aria-label="Class info"
-          className="absolute left-0 top-10 z-[80] w-64 rounded-xl border border-white/15 bg-black/90 p-3 text-left text-xs text-slate-100 shadow-lift"
+          data-placement={placement}
+          className={`absolute left-0 z-[80] w-64 max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-xl border border-white/15 bg-black/90 p-3 text-left text-xs text-slate-100 shadow-lift ${
+            placement === 'up' ? 'bottom-10 max-h-[calc(100dvh-6rem)]' : 'top-10'
+          }`}
         >
           {rows.length === 0 ? (
             <p className="text-slate-400">Class info is not available yet.</p>

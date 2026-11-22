@@ -15,7 +15,7 @@ import { nameInitials } from '../src/lib/initials';
 import { blankTileKind, TILE_CONNECT_MS } from '../src/lib/peerWindow';
 import { connectedStudentCount, distinctConnectedStudents } from '../src/lib/connectedStudents';
 import { tallyAttendance } from '../src/lib/attendance';
-import { chatBottomReserve, chatPlaceholder, PHONE_CONTROL_RESERVE_PX } from '../src/hooks/useStudentLayout';
+import { chatBottomReserve, chatPlaceholder, PHONE_CONTROL_RESERVE_PX, STATUS_ROW_RESERVE_PX } from '../src/hooks/useStudentLayout';
 import { summarizeRoomParticipants } from '../src/lib/liveClassesLogic';
 import { classroomViewSource } from './helpers/classroomSource';
 
@@ -183,10 +183,10 @@ test('phone chat placeholder and bottom reserve', () => {
   assert.equal(chatPlaceholder(false, true).includes('Message your'), false);
   assert.equal(chatPlaceholder(false, false), 'Write a message…');
   assert.equal(chatPlaceholder(true, true, 'Ada'), 'Private message to Ada…');
-  assert.equal(chatBottomReserve(390, 844), PHONE_CONTROL_RESERVE_PX);
+  assert.equal(chatBottomReserve(390, 844), PHONE_CONTROL_RESERVE_PX + STATUS_ROW_RESERVE_PX);
   assert.ok(PHONE_CONTROL_RESERVE_PX >= 44);
-  assert.equal(chatBottomReserve(844, 390), 8);
-  assert.equal(chatBottomReserve(1280, 800), 8);
+  assert.equal(chatBottomReserve(844, 390), 8 + STATUS_ROW_RESERVE_PX);
+  assert.equal(chatBottomReserve(1280, 800), 8 + STATUS_ROW_RESERVE_PX);
 });
 
 test('part B is wired: signal before delete, in-page end, hands, 44px targets', () => {

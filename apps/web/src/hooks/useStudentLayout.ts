@@ -27,8 +27,14 @@ export function compactViewport(vw: number, vh: number): boolean {
 /** Room under the student chat on a portrait phone, so it clears the bottom control bar. */
 export const PHONE_CONTROL_RESERVE_PX = 112;
 
+/**
+ * Height kept free under the chat for the lower-left "Teacher is in the room"
+ * + class-info row (.stage-bottom-left), so an open chat never covers it.
+ */
+export const STATUS_ROW_RESERVE_PX = 44;
+
 export function chatBottomReserve(vw: number, vh: number): number {
-  return vw <= 700 && vh > vw ? PHONE_CONTROL_RESERVE_PX : 8;
+  return (vw <= 700 && vh > vw ? PHONE_CONTROL_RESERVE_PX : 8) + STATUS_ROW_RESERVE_PX;
 }
 
 /** Short on a phone so the placeholder is not clipped to "Message your". */

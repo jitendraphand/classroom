@@ -2548,6 +2548,22 @@ function RoomInner({
     return () => window.clearTimeout(t);
   }, [drawToast]);
 
+  // Student: the measured height of the controls box, as --student-controls-h
+  // on the stage. On a portrait phone the controls are a row at the bottom and
+  // the status + class-info corner (.stage-bottom-left) sits just above them.
+  const studentControlsObs = useRef<ResizeObserver | null>(null);
+  const studentControlsRef = useCallback((el: HTMLDivElement | null) => {
+    studentControlsObs.current?.disconnect();
+    studentControlsObs.current = null;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const stage = el.parentElement;
+    const apply = () => stage?.style.setProperty('--student-controls-h', `${Math.ceil(el.getBoundingClientRect().height)}px`);
+    apply();
+    const obs = new ResizeObserver(apply);
+    obs.observe(el);
+    studentControlsObs.current = obs;
+  }, []);
+
   const micLimitOn = (state?.micLimit ?? 0) > 0;
   const micWaiting = !!state?.me?.micWaiting;
   // Students ask to speak with Raise hand (the separate "Ask to speak" button
@@ -2700,13 +2716,15 @@ function RoomInner({
         />
         <RoomAudioRenderer />
 
-        {/* Status and class details share one row, so the phone's "Muted by
-            teacher" pill (below it) never covers the info button. Class
+        {/* Status and class details: one row in the lower-left corner (Nov 22).
+            The controls are on the right edge (or a bottom row on a portrait
+            phone, which this row clears via --student-controls-h). Class
             details hide under the fullscreen cover, same as the video float. */}
-        <div className="stage-top-left">
+        <div className="stage-bottom-left" data-testid="student-status-corner">
           <div className="stage-fullscreen-badge">{badge}</div>
           {!covered && (
             <ClassInfoButton
+              placement="up"
               teacherName={state?.classInfo?.teacherName || state?.teacherName || null}
               subject={state?.classInfo ? state.classInfo.subject : state?.name || null}
               audience={state?.classInfo?.audience || null}
@@ -2819,6 +2837,7 @@ function RoomInner({
 
         {/* Student controls: a vertical panel on the right edge, on every device. */}
         <div
+          ref={studentControlsRef}
           className="stage-float-chrome is-rail"
           data-float-bound={viewport.w <= 700 && viewport.h > viewport.w ? 'bottom' : 'right'}
         >
