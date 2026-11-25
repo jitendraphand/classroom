@@ -363,6 +363,9 @@ test('feature stays self-contained: no toggle, homepage button, form page, endpo
   const form = readFileSync(new URL('components/joinClass/JoinClassForm.tsx', root), 'utf8');
   assert.match(form, /localStorage/);
   assert.match(form, /<select/);
+  // Client form may type-import the lib, but must not import values (node:crypto breaks the webpack build).
+  assert.match(form, /import type \{[^}]*\} from '@\/lib\/joinClassForm'/);
+  assert.doesNotMatch(form, /import \{[^}]*\} from '@\/lib\/joinClassForm'/);
   assert.match(form, /Foundation/);
   assert.match(form, /join-grade/);
   assert.match(form, /join-campus/);

@@ -6,8 +6,8 @@ import { BackLink } from '@/components/layout/AppHeader';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import type { JoinFormOptions, JoinFormPrefill } from '@/lib/joinClassForm';
-import { NAME_MAX } from '@/lib/joinClassForm';
 
+const NAME_MAX = 60;
 const STORE_KEY = 'joinClass.name';
 const STORE_CLASS = 'joinClass.class';
 const NOT_AVAILABLE = 'Joining is not available right now. Please ask your teacher.';
