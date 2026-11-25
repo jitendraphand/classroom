@@ -12,10 +12,23 @@ import { finishFromState, type FinishReason } from './classFinish';
 
 export const CLASS_ENDED_TYPE = 'class-ended';
 
+/** Who closed the class. Absent on older packets (treated as the teacher). */
+export type ClassEndedBy = 'teacher' | 'admin';
+
 export function isClassEndedPacket(msg: unknown): boolean {
   if (!msg || typeof msg !== 'object') return false;
   const o = msg as { v?: unknown; type?: unknown };
   return o.v === 1 && o.type === CLASS_ENDED_TYPE;
+}
+
+export function endedByFromPacket(msg: unknown): ClassEndedBy | undefined {
+  if (!isClassEndedPacket(msg)) return undefined;
+  const by = (msg as { by?: unknown }).by;
+  return by === 'admin' || by === 'teacher' ? by : undefined;
+}
+
+export function endedByFromUnknown(value: unknown): ClassEndedBy | undefined {
+  return value === 'admin' || value === 'teacher' ? value : undefined;
 }
 
 export type ProbeBody = {

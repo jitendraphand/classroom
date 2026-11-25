@@ -30,7 +30,16 @@ export function finishCopy(r: FinishReason): { title: string; body: string } {
 }
 
 /** The "class ended" screen (teacher: finished screen after End class, instead of jumping to the dashboard). */
-export function classEndedCopy(isTeacher: boolean): { title: string; body: string } {
+export function classEndedCopy(
+  isTeacher: boolean,
+  endedBy?: 'teacher' | 'admin' | null
+): { title: string; body: string } {
+  if (isTeacher && endedBy === 'admin') {
+    return {
+      title: 'Class ended by admin',
+      body: 'An administrator ended this class for everyone and attendance is saved. You can go back to your dashboard.',
+    };
+  }
   return isTeacher
     ? { title: 'Class finished', body: 'The class has ended for everyone and attendance is saved. You can go back to your dashboard.' }
     : { title: 'Class ended', body: 'Your teacher has ended this class. You can leave this page.' };

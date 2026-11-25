@@ -110,6 +110,42 @@ export async function handleObserverHeartbeat(
   return json({ ok: true, active: true, activeCount: res.activeCount });
 }
 
+export type EndableRoom = {
+  id: string;
+  code: string;
+  sessionId: string;
+  classSessionId?: string | null;
+  status: string;
+};
+
+export type EndRoomFn = (
+  room: EndableRoom,
+  actor: { endedBy: 'admin'; admin: Admin }
+) => Promise<void>;
+
+/**
+ * Admin ends a live class: same `endRoom` path the teacher uses (session close,
+ * attendance finalization, LiveKit room deleted). Privilege: monitorLive / SYSTEM.
+ */
+export async function handleAdminEndClass(
+  code: string,
+  deps: {
+    guard: AdminGuard;
+    load: (code: string) => Promise<EndableRoom | null>;
+    end: EndRoomFn;
+  }
+) {
+  const g = await deps.guard();
+  if (g.res) return g.res;
+  const norm = normalizeCode(code);
+  const room = await deps.load(norm);
+  if (!room || room.status === 'ENDED') {
+    return json({ error: 'This class is not live.' }, 404);
+  }
+  await deps.end(room, { endedBy: 'admin', admin: g.admin });
+  return json({ ok: true, ended: true, code: room.code, classSessionId: room.classSessionId ?? null });
+}
+
 function normalizeCode(code: string) {
   return String(code || '').trim().toUpperCase().slice(0, 32);
 }

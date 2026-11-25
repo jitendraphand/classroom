@@ -5,6 +5,7 @@ import { studentCameraAllowed } from '@/lib/speakingRules';
 import { prisma } from '@/lib/db';
 import { endedSessionReason, getStudentSessionToken, resolveRoomAccess } from '@/lib/auth';
 import { recentTakeovers, wasReplaced } from '@/lib/deviceTakeoverServer';
+import { readClassEndedBy } from '@/lib/auditLog';
 import { jsonError, jsonOk } from '@/lib/response';
 import { clampMaxVisible, ensureSampleFresh, getVisibleSample } from '@/lib/sample';
 import { ensureRedis, keys } from '@/lib/redis';
@@ -66,11 +67,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
 
   // Always surface ENDED quickly so clients can kick to ended UI without auth edge-cases
   if (room.status === 'ENDED') {
+    const endedBy = await readClassEndedBy(room.code, room.sessionId);
     return jsonOk({
       code: room.code,
       name: room.name,
       status: 'ENDED',
       ended: true,
+      ...(endedBy ? { endedBy } : {}),
       teacherName: room.teacher.name,
       teacherGender: teacherGenderOf(room.teacher.gender),
       public: true,

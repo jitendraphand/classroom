@@ -4,7 +4,10 @@ import { readFileSync } from 'node:fs';
 import { adminApiDenied } from '../src/lib/adminGuard';
 import { pageAccess, sectionForPath } from '../src/lib/adminSections';
 import { isObserverIdentityForAdmin, partitionObserverLeases } from '../src/lib/adminObservers';
-import { handleObserverHeartbeat } from '../src/lib/adminLiveApi';
+import { handleAdminEndClass, handleObserverHeartbeat } from '../src/lib/adminLiveApi';
+import { endedByFromPacket, isClassEndedPacket } from '../src/lib/classEnded';
+import { classEndedCopy } from '../src/lib/classFinish';
+import { formatAuditLine } from '../src/lib/auditLog';
 import { studentCameraAllowed } from '../src/lib/speakingRules';
 import { camWanted } from '../src/lib/camOnDemand';
 import { buildStudentTrackPermissions } from '../src/components/classroom/StudentMediaPrivacy';
@@ -41,6 +44,7 @@ test('privilege enforcement: monitorLive or SYSTEM required for live tab, observ
     'src/app/api/admin/live/[code]/token/route.ts',
     'src/app/api/admin/live/[code]/whiteboard/route.ts',
     'src/app/api/admin/live/[code]/observer/route.ts',
+    'src/app/api/admin/live/[code]/end/route.ts',
   ]) {
     const src = readFileSync(route, 'utf8');
     assert.match(src, /requireAdminApi\(\s*'monitorLive'\s*\)/, `${route} must require monitorLive`);
@@ -197,4 +201,99 @@ test('Live overview streams zero media; observer stage disables zoom and default
   assert.match(wb, /disableZoom = false/);
   assert.match(wb, /if \(disableZoom\) return;/);
   assert.match(wb, /!disableZoom && mode !== 'edit' && isZoomed\(zp\)/);
+});
+
+test('admin end class: monitorLive required, 404 when not live, reuses endRoom with admin actor', async () => {
+  const admin = { id: 'adm1', name: 'Head', email: 'h@x.org' };
+  const adminGuardOk = async () => ({ admin });
+  const unauthorized = async () => ({
+    res: new Response(JSON.stringify({ error: 'Admin sign-in required' }), { status: 401 }),
+  });
+  const room = { id: 'r1', code: 'ABC123', sessionId: 's1', classSessionId: 'cs1', status: 'LIVE' };
+  const load = async (code: string) => (code === 'ABC123' ? room : null);
+  const ended: unknown[] = [];
+  const end = async (...args: unknown[]) => {
+    ended.push(args);
+  };
+
+  const r401 = await handleAdminEndClass('ABC123', { guard: unauthorized, load, end });
+  assert.equal(r401.status, 401);
+  assert.equal(ended.length, 0);
+
+  const r404 = await handleAdminEndClass('NOPE', { guard: adminGuardOk, load, end });
+  assert.equal(r404.status, 404);
+  assert.equal(ended.length, 0);
+
+  const already = await handleAdminEndClass('ABC123', {
+    guard: adminGuardOk,
+    load: async () => ({ ...room, status: 'ENDED' }),
+    end,
+  });
+  assert.equal(already.status, 404);
+  assert.equal(ended.length, 0);
+
+  const ok = await handleAdminEndClass('abc123', { guard: adminGuardOk, load, end });
+  assert.equal(ok.status, 200);
+  const body = await ok.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.code, 'ABC123');
+  assert.equal(body.classSessionId, 'cs1');
+  assert.equal(ended.length, 1);
+  assert.equal((ended[0] as unknown[])[0], room);
+  assert.deepEqual((ended[0] as unknown[])[1], { endedBy: 'admin', admin });
+});
+
+test('class-ended packet and teacher copy distinguish an admin end; student copy stays generic', () => {
+  assert.equal(isClassEndedPacket({ v: 1, type: 'class-ended' }), true);
+  assert.equal(isClassEndedPacket({ v: 1, type: 'class-ended', by: 'admin' }), true);
+  assert.equal(endedByFromPacket({ v: 1, type: 'class-ended' }), undefined);
+  assert.equal(endedByFromPacket({ v: 1, type: 'class-ended', by: 'admin' }), 'admin');
+  assert.equal(endedByFromPacket({ v: 1, type: 'nudge' }), undefined);
+
+  assert.equal(classEndedCopy(true).title, 'Class finished');
+  assert.equal(classEndedCopy(true, 'admin').title, 'Class ended by admin');
+  assert.match(classEndedCopy(true, 'admin').body, /administrator ended this class/);
+  assert.equal(classEndedCopy(false, 'admin').title, 'Class ended');
+
+  const line = formatAuditLine({
+    at: '2026-11-25T13:00:00.000Z',
+    action: 'end_class',
+    actorKind: 'admin',
+    actorId: 'adm1',
+    actorName: 'Head',
+    actorEmail: 'h@x.org',
+    roomCode: 'ABC123',
+    classSessionId: 'cs1',
+  });
+  assert.match(line, /\[audit\]/);
+  assert.match(line, /end_class/);
+  assert.match(line, /adm1/);
+  assert.match(line, /ABC123/);
+  assert.match(line, /cs1/);
+});
+
+test('observer and Live tab expose End class with a confirmation dialog; endRoom stays the shared closer', () => {
+  const page = readFileSync('src/app/admin/live/[code]/page.tsx', 'utf8');
+  assert.match(page, /data-testid="admin-end-class"/);
+  assert.match(page, /EndClassDialog/);
+  assert.match(page, /requestAdminEndClass/);
+
+  const cards = readFileSync('src/components/admin/OngoingClasses.tsx', 'utf8');
+  assert.match(cards, /data-testid="live-card-end-class"/);
+  assert.match(cards, /End this class for everyone\?|EndClassDialog/);
+
+  const dialog = readFileSync('src/components/admin/EndClassDialog.tsx', 'utf8');
+  assert.match(dialog, /End this class for everyone\?/);
+  assert.match(dialog, /data-testid="admin-end-class-confirm"/);
+
+  const endLib = readFileSync('src/lib/teacherRoom.ts', 'utf8');
+  const signalAt = endLib.indexOf("type: 'class-ended'");
+  const deleteAt = endLib.indexOf('deleteRoom(');
+  const adminAt = endLib.indexOf("by: 'admin'");
+  assert.ok(signalAt > 0 && deleteAt > signalAt, 'class-ended packet still goes out before the room is deleted');
+  assert.ok(adminAt > 0 && adminAt < deleteAt, 'admin end marks the packet before deleteRoom');
+
+  const route = readFileSync('src/app/api/admin/live/[code]/end/route.ts', 'utf8');
+  assert.match(route, /endRoom\(/);
+  assert.match(route, /handleAdminEndClass/);
 });

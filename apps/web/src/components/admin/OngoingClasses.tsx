@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
+import { EndClassDialog, requestAdminEndClass } from '@/components/admin/EndClassDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { IconUsers, IconVideo } from '@/components/ui/Icons';
 import { api } from '@/lib/clientFetch';
@@ -51,6 +52,8 @@ export function OngoingClasses() {
   // Signed out / replaced (StaffSessionGuard shows why): stop polling.
   const sessionEnded = useSessionEnded();
   const [stopped, setStopped] = useState(false);
+  const [endTarget, setEndTarget] = useState<LiveClass | null>(null);
+  const [endingClass, setEndingClass] = useState(false);
 
   const load = useCallback(async () => {
     const { ok, status, data } = await api<{ classes: LiveClass[] }>('/api/admin/live');
@@ -62,6 +65,25 @@ export function OngoingClasses() {
       setClasses([]);
     } else setError(data.error || 'Could not load ongoing classes');
   }, []);
+
+  const confirmEndClass = async () => {
+    if (!endTarget || endingClass) return;
+    setEndingClass(true);
+    const res = await requestAdminEndClass(endTarget.code);
+    if (!res.ok) {
+      setEndingClass(false);
+      setEndTarget(null);
+      setError(res.error || 'Could not end the class. Everyone is still in the room.');
+      return;
+    }
+    const ended = endTarget;
+    setClasses((list) =>
+      list ? list.filter((x) => !(x.code === ended.code && x.sessionId === ended.sessionId)) : list
+    );
+    setEndTarget(null);
+    setEndingClass(false);
+    void load();
+  };
 
   useEffect(() => {
     if (sessionEnded || stopped) return;
@@ -107,7 +129,7 @@ export function OngoingClasses() {
         <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
           {shown.map((c) => (
             <li key={`${c.code}:${c.sessionId}`}>
-              <LiveClassCard c={c} now={now} />
+              <LiveClassCard c={c} now={now} onAskEnd={() => setEndTarget(c)} />
             </li>
           ))}
         </ul>
@@ -125,23 +147,39 @@ export function OngoingClasses() {
           </button>
         </nav>
       )}
+      <EndClassDialog
+        open={!!endTarget}
+        busy={endingClass}
+        classLabel={endTarget ? `${endTarget.subject || endTarget.title} · ${endTarget.teacherName}` : undefined}
+        onConfirm={() => void confirmEndClass()}
+        onCancel={() => { setEndTarget(null); setEndingClass(false); }}
+      />
     </section>
   );
 }
 
-function LiveClassCard({ c, now }: { c: LiveClass; now: number }) {
+function LiveClassCard({ c, now, onAskEnd }: { c: LiveClass; now: number; onAskEnd: () => void }) {
   const elapsed = formatElapsed(now - new Date(c.startedAt).getTime());
   const students = `${c.studentCount} student${c.studentCount === 1 ? '' : 's'}`;
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = () => setMenuOpen(false);
+    document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, [menuOpen]);
 
   return (
-    <Link
-      href={`/admin/live/${encodeURIComponent(c.code)}`}
-      data-testid="live-class-card"
-      className="group flex h-full flex-col justify-between gap-3 rounded-2xl border border-white/10 bg-surface-2 p-4 transition hover:border-brand-400/60 focus-visible:border-brand-400 focus-visible:outline-none"
-      aria-label={`Open ${c.subject || c.title} (${c.gradeDivision}, ${c.teacherName})`}
-    >
+    <article className="group relative flex h-full flex-col overflow-visible rounded-2xl border border-white/10 bg-surface-2 transition hover:border-brand-400/60">
+      <Link
+        href={`/admin/live/${encodeURIComponent(c.code)}`}
+        data-testid="live-class-card"
+        className="flex h-full flex-col justify-between gap-3 p-4 focus-visible:outline-none"
+        aria-label={`Open ${c.subject || c.title} (${c.gradeDivision}, ${c.teacherName})`}
+      >
       <div className="space-y-2">
-        <div className="flex items-center justify-between gap-2 text-[11px] font-medium">
+        <div className="flex items-center justify-between gap-2 pr-8 text-[11px] font-medium">
           <span className="inline-flex items-center gap-1.5 rounded-full bg-red-500/15 px-2 py-0.5 text-red-300">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-400" aria-hidden />
             Live · <span className="font-mono tabular-nums">{elapsed}</span>
@@ -169,6 +207,42 @@ function LiveClassCard({ c, now }: { c: LiveClass; now: number }) {
           <span className="font-medium text-brand-300 group-hover:text-brand-200">Open live view →</span>
         </div>
       </div>
-    </Link>
+      </Link>
+      <div className="absolute right-2 top-2 z-10">
+        <button
+          type="button"
+          data-testid="live-card-menu"
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          aria-label={`More actions for ${c.subject || c.title}`}
+          className="rounded-lg border border-white/10 bg-ink-950/80 px-2 py-0.5 text-sm leading-none text-slate-200 hover:bg-white/10"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setMenuOpen((v) => !v);
+          }}
+        >
+          ⋯
+        </button>
+        {menuOpen && (
+          <div role="menu" className="absolute right-0 mt-1 w-40 rounded-xl border border-white/10 bg-surface-1 py-1 shadow-lift">
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="live-card-end-class"
+              className="block w-full px-3 py-2 text-left text-sm text-red-300 hover:bg-red-500/10"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setMenuOpen(false);
+                onAskEnd();
+              }}
+            >
+              End class
+            </button>
+          </div>
+        )}
+      </div>
+    </article>
   );
 }

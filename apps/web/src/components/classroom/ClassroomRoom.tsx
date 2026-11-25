@@ -724,7 +724,7 @@ function RoomInner({
   displayName: string;
   onVisibilityChange: (v: boolean) => void;
   /** The class ended; teachers get that session's summary on the finished screen. */
-  onClassEnded: (classSessionId: string | null) => void;
+  onClassEnded: (classSessionId: string | null, endedBy?: 'teacher' | 'admin') => void;
   /** Student: the class view stops for good (left / ended / removed / another device). */
   onFinished: (r: FinishReason) => void;
 }) {
@@ -1188,7 +1188,7 @@ function RoomInner({
       } catch {
         /* ignore */
       }
-      onClassEnded(state?.classInfo?.classSessionId ?? classSessionIdRef.current);
+      onClassEnded(state?.classInfo?.classSessionId ?? classSessionIdRef.current, state?.endedBy);
     }
   }, [state?.status, state?.ended, state?.classInfo?.classSessionId, room, onClassEnded, code]);
 
@@ -3901,6 +3901,7 @@ export function ClassroomRoom({ code }: { code: string }) {
   const [tokenData, setTokenData] = useState<TokenPayload | null>(null);
   const [error, setError] = useState('');
   const [classEnded, setClassEnded] = useState(false);
+  const [endedByAdmin, setEndedByAdmin] = useState(false);
   /** Student: why the class view stopped for good (static screen, zero requests). */
   const [finished, setFinished] = useState<FinishReason | null>(null);
   const [isTeacher, setIsTeacher] = useState(false);
@@ -4126,8 +4127,9 @@ export function ClassroomRoom({ code }: { code: string }) {
   }, [isTeacher, schoolStudent, router]);
 
   const [endedSessionId, setEndedSessionId] = useState<string | null>(null);
-  const markEnded = useCallback((classSessionId: string | null) => {
+  const markEnded = useCallback((classSessionId: string | null, endedBy?: 'teacher' | 'admin') => {
     setClassEnded(true);
+    if (endedBy === 'admin') setEndedByAdmin(true);
     if (classSessionId) setEndedSessionId(classSessionId);
     setTokenData(null);
   }, []);
@@ -4291,7 +4293,7 @@ export function ClassroomRoom({ code }: { code: string }) {
   }
 
   if (classEnded) {
-    const endCopy = classEndedCopy(isTeacher);
+    const endCopy = classEndedCopy(isTeacher, endedByAdmin ? 'admin' : undefined);
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-4 px-6" data-finished="ended">
         <div className="max-w-md rounded-2xl border border-white/10 bg-surface-1 p-8 text-center shadow-lift">

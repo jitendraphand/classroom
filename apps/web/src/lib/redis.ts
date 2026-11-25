@@ -87,6 +87,13 @@ export const keys = {
   teacherAbsenceDue: () => `teacher-absence:due`,
   /** SET NX lock: weekly rank snapshots run on one worker. */
   leaderRank: () => `leader:rank-scheduler`,
+  /**
+   * Who ended this room session ('admin' | 'teacher'). Kept after clearRoomRedis
+   * so /state can tell the teacher; keyed by sessionId because rooms are reused.
+   */
+  endedBy: (code: string, sessionId: string) => `ended-by:${code}:${sessionId}`,
+  /** Append-only audit event list (JSON lines), newest first. */
+  auditEvents: () => `audit:events`,
 };
 
 export type StageMode = 'idle' | 'screen';

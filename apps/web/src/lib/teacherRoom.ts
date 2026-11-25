@@ -5,6 +5,7 @@ import { prisma } from '@/lib/db';
 import { generateRoomCode, generateIdentity, generateSessionToken } from '@/lib/codes';
 import { ensureRedis, keys, legacyKeys } from '@/lib/redis';
 import { clampMaxVisible } from '@/lib/sample';
+import { recordAudit, rememberClassEndedBy } from '@/lib/auditLog';
 import { forgetLivekitRoomName, livekitRoomName, sendRoomData } from '@/lib/livekit';
 import { STATE_TOPIC } from '@/lib/pollPolicy';
 
@@ -235,12 +236,21 @@ export async function startOrReopenTeacherRoom(
   return room;
 }
 
+export type EndRoomActor = {
+  endedBy?: 'teacher' | 'admin';
+  admin?: { id: string; name: string; email: string };
+};
+
 /**
  * End the class running in a room: room ENDED, everyone LEFT, Redis state
  * cleared, LiveKit room deleted and the room's current ClassSession closed.
- * Shared by POST /end and by switching the permanent room to another class.
+ * Shared by POST /end, by switching the permanent room to another class, and
+ * by an admin ending a live class (same close path; optional `endedBy: admin`).
  */
-export async function endRoom(room: { id: string; code: string; sessionId: string; classSessionId?: string | null }) {
+export async function endRoom(
+  room: { id: string; code: string; sessionId: string; classSessionId?: string | null },
+  actor?: EndRoomActor
+) {
   const now = new Date();
   await prisma.room.update({
     where: { id: room.id },
@@ -249,7 +259,30 @@ export async function endRoom(room: { id: string; code: string; sessionId: strin
   // Tell everyone the class ended BEFORE the room is deleted. Under load,
   // deleteRoom is often reported as PARTICIPANT_REMOVED ("you were removed").
   const rn = livekitRoomName(room.code, room.sessionId);
-  await sendRoomData(rn, { v: 1, type: 'class-ended' }, { topic: STATE_TOPIC });
+  const endedByAdmin = actor?.endedBy === 'admin';
+  await sendRoomData(
+    rn,
+    endedByAdmin ? { v: 1, type: 'class-ended', by: 'admin' } : { v: 1, type: 'class-ended' },
+    { topic: STATE_TOPIC }
+  );
+  if (endedByAdmin && actor?.admin) {
+    const admin = actor.admin;
+    await recordAudit({
+      at: now.toISOString(),
+      action: 'end_class',
+      actorKind: 'admin',
+      actorId: admin.id,
+      actorName: admin.name || admin.email,
+      actorEmail: admin.email,
+      roomCode: room.code,
+      roomId: room.id,
+      classSessionId: room.classSessionId ?? null,
+      sessionId: room.sessionId,
+    }).catch((e) => console.warn('audit end_class', e instanceof Error ? e.message : e));
+    await rememberClassEndedBy(room.code, room.sessionId, 'admin').catch((e) =>
+      console.warn('ended-by', e instanceof Error ? e.message : e)
+    );
+  }
   await prisma.participant.updateMany({
     where: { roomId: room.id, status: { not: 'LEFT' } },
     data: { status: 'LEFT', leftAt: now },

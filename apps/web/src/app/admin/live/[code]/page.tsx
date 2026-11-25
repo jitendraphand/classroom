@@ -6,6 +6,8 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AdminShell } from '@/components/admin/AdminShell';
+import { EndClassDialog, requestAdminEndClass } from '@/components/admin/EndClassDialog';
+import { Button } from '@/components/ui/Button';
 import { useNow } from '@/components/admin/OngoingClasses';
 import { isTeacherParticipant } from '@/components/classroom/participantRoles';
 import { StudentViewStage } from '@/components/classroom/StudentViewStage';
@@ -72,6 +74,9 @@ function Observer({ code }: { code: string }) {
   const [conn, setConn] = useState<{ token: string; serverUrl: string; identity: string } | null>(null);
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [hiddenPaused, setHiddenPaused] = useState(false);
+  const [endAsk, setEndAsk] = useState(false);
+  const [endingClass, setEndingClass] = useState(false);
+  const [endedByAdmin, setEndedByAdmin] = useState(false);
   const [search, setSearch] = useState('');
   const [camerasOnly, setCamerasOnly] = useState(false);
   const now = useNow();
@@ -216,10 +221,32 @@ function Observer({ code }: { code: string }) {
     }
   };
 
+  const confirmEndClass = async () => {
+    if (endingClass) return;
+    setEndingClass(true);
+    const res = await requestAdminEndClass(code);
+    if (!res.ok) {
+      setEndingClass(false);
+      setEndAsk(false);
+      setError(res.error || 'Could not end the class. Everyone is still in the room.');
+      return;
+    }
+    handleLeave();
+    setEndedByAdmin(true);
+    setEnded(true);
+    setConn(null);
+    setEndAsk(false);
+    setEndingClass(false);
+  };
+
   if (ended) {
     return (
       <Card>
-        <p className="text-sm text-slate-300">This class is not live (it may have just ended).</p>
+        <p className="text-sm text-slate-300">
+          {endedByAdmin
+            ? 'You ended this class for everyone. Attendance is saved.'
+            : 'This class is not live (it may have just ended).'}
+        </p>
         <Link href="/admin/live" className="btn-secondary mt-4 inline-flex px-3 py-1.5 text-sm">
           Back to ongoing classes
         </Link>
@@ -366,6 +393,16 @@ function Observer({ code }: { code: string }) {
             {audioEnabled ? <IconSpeaker size={15} /> : <IconSpeakerOff size={15} />}
             {audioEnabled ? 'Audio on' : 'Audio off'}
           </button>
+          <Button
+            type="button"
+            variant="danger"
+            size="sm"
+            data-testid="admin-end-class"
+            onClick={() => setEndAsk(true)}
+            disabled={!info || endingClass}
+          >
+            End class
+          </Button>
           <Link href="/admin/live" onClick={handleLeave} className="btn-secondary px-3 py-1.5 text-sm">
             Leave
           </Link>
@@ -413,6 +450,14 @@ function Observer({ code }: { code: string }) {
           {studentGridSection}
         </div>
       )}
+
+      <EndClassDialog
+        open={endAsk}
+        busy={endingClass}
+        classLabel={c ? `${c.subject || c.title} · ${c.teacherName}` : code}
+        onConfirm={() => void confirmEndClass()}
+        onCancel={() => { setEndAsk(false); setEndingClass(false); }}
+      />
     </div>
   );
 }

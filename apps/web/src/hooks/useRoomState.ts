@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { RoomEvent, type Room } from 'livekit-client';
 import { roomFetch, getClassroomRole } from '@/lib/classroomClient';
 import { STATE_TOPIC, jitterMs, nudgeDelayMs, statePollMs } from '@/lib/pollPolicy';
-import { isClassEndedPacket, noteClassEnded } from '@/lib/classEnded';
+import { endedByFromPacket, endedByFromUnknown, isClassEndedPacket, noteClassEnded } from '@/lib/classEnded';
 import {
   SIGNAL_TOPIC,
   applyDrawReqPush,
@@ -35,6 +35,8 @@ export type RoomState = {
   name: string;
   status: string;
   ended?: boolean;
+  /** Who ended the class, when known (admin end is surfaced to the teacher). */
+  endedBy?: 'teacher' | 'admin';
   public?: boolean;
   maxVisibleVideos: number;
   /** Waiting room for this class session (teacher toggle; default on). */
@@ -187,12 +189,13 @@ export function useRoomState(code: string, intervalMs = 2000, room?: Room | null
           noteClassEnded(code);
           setState((prev) =>
             prev
-              ? { ...prev, status: 'ENDED', ended: true }
+              ? { ...prev, status: 'ENDED', ended: true, endedBy: endedByFromUnknown(data.endedBy) ?? prev.endedBy }
               : {
                   code,
                   name: data.name || 'Classroom',
                   status: 'ENDED',
                   ended: true,
+                  endedBy: endedByFromUnknown(data.endedBy),
                   maxVisibleVideos: 0,
                   isTeacher: false,
                   teacherName: '',
@@ -219,7 +222,7 @@ export function useRoomState(code: string, intervalMs = 2000, room?: Room | null
       }
       if (data.status === 'ENDED' || data.ended) {
         noteClassEnded(code);
-        setState({ ...data, status: 'ENDED', ended: true });
+        setState({ ...data, status: 'ENDED', ended: true, endedBy: endedByFromUnknown(data.endedBy) });
         stopped.current = true;
         setError('');
         return;
@@ -295,14 +298,16 @@ export function useRoomState(code: string, intervalMs = 2000, room?: Room | null
         if (isClassEndedPacket(raw)) {
           noteClassEnded(code);
           stopped.current = true;
+          const endedBy = endedByFromPacket(raw);
           setState((prev) =>
             prev
-              ? { ...prev, status: 'ENDED', ended: true }
+              ? { ...prev, status: 'ENDED', ended: true, ...(endedBy ? { endedBy } : {}) }
               : {
                   code,
                   name: 'Classroom',
                   status: 'ENDED',
                   ended: true,
+                  endedBy,
                   maxVisibleVideos: 0,
                   isTeacher: false,
                   teacherName: '',
