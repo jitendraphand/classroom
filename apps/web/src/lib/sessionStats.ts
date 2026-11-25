@@ -11,6 +11,7 @@ type Person = {
 
 type SessionBits = {
   campus: string;
+  campuses?: string[] | null;
   grade: string;
   divisions: string[];
   allDivisions: boolean;

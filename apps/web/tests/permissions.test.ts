@@ -6,7 +6,9 @@ import { isPresenceTeacher, presenceActionFor, teacherPresentAmong } from '../sr
 
 test('effective student sources: teacher absence locks the mic, spotlight keeps the camera', () => {
   const ctx = { teacherPresent: true, spotlightIdentity: 'student_s' };
-  assert.deepEqual(effectiveStudentSources({ identity: 'student_a', allowCamera: false, allowMic: true }, ctx).sources, [TrackSource.MICROPHONE]);
+  // Nov 25: a teacher-unmuted student may also publish camera (speaking pop-up).
+  assert.deepEqual(effectiveStudentSources({ identity: 'student_a', allowCamera: false, allowMic: true }, ctx).sources, [TrackSource.CAMERA, TrackSource.MICROPHONE]);
+  assert.deepEqual(effectiveStudentSources({ identity: 'student_a', allowCamera: false, allowMic: false }, ctx).sources, []);
   assert.deepEqual(effectiveStudentSources({ identity: 'student_s', allowCamera: false, allowMic: false }, ctx).sources, [TrackSource.CAMERA]);
   const away = effectiveStudentSources({ identity: 'student_a', allowCamera: true, allowMic: true }, { ...ctx, teacherPresent: false });
   assert.equal(away.allowMic, false);

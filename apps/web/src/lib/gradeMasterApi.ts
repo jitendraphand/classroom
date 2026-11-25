@@ -13,6 +13,7 @@ import {
   describeUsage,
   divisionInput,
   gradeInput,
+  newGradeSortOrder,
   inUse,
   missingFromMaster,
   unrecognisedFromStudents,
@@ -94,7 +95,7 @@ export async function handleCreateGrade(body: unknown, deps: Deps) {
   if ('error' in parsed) return err(parsed.error);
   const master = await deps.store.list();
   if (master.some((x) => x.name === input.name)) return err(`Grade ${input.name} already exists.`, 409);
-  const sortOrder = master.reduce((m, x) => Math.max(m, x.sortOrder), 0) + 10;
+  const sortOrder = newGradeSortOrder(input.name, master);
   const grade = await deps.store.createGrade({ ...input, sortOrder });
   const divisions: DivisionRow[] = [];
   for (const d of parsed.divisions) {
@@ -274,7 +275,7 @@ export async function handleRecognise(body: unknown, deps: Deps) {
   let gr = master.find((x) => x.name === gi.name);
   let gradeId = gr?.id;
   if (!gradeId) {
-    const sortOrder = master.reduce((m, x) => Math.max(m, x.sortOrder), 0) + 10;
+    const sortOrder = newGradeSortOrder(gi.name, master);
     gradeId = (await deps.store.createGrade({ ...gi, sortOrder })).id;
   } else if (gr && !gr.active) {
     await deps.store.updateGrade(gradeId, { active: true });

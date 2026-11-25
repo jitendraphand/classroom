@@ -68,7 +68,7 @@ import { LocalPreview } from './LocalPreview';
 import { DrawOverlay, ShareDrawingProvider, useDrawingActions, useShareDrawing } from './ShareDrawing';
 import { TeacherInkOverlay, TeacherInkProvider, useTeacherInk } from './TeacherInk';
 import { WhiteboardMeetingBar } from './MeetingBar';
-import { SHARE_POSITION_NOTICE_KEY, inlineShareDockHint, sharePositionNoticeOpen } from '@/lib/shareChrome';
+import { MEETING_BAR_PX, SHARE_POSITION_NOTICE_KEY, inlineShareDockHint, sharePositionNoticeOpen } from '@/lib/shareChrome';
 import { ZoomPanSurface } from './ZoomPanSurface';
 import { WhiteboardHost, WhiteboardViewer, hasSavedBoard } from './Whiteboard';
 import { useChatThread } from './chatThread';
@@ -100,7 +100,7 @@ import {
   IconHand,
   IconHandDown,
   IconMic,
-  IconMicOff,
+  IconMicLock, IconMicOff,
   IconPen,
   IconPin,
   IconStar,
@@ -184,6 +184,9 @@ import { TeacherCameraFloat, TeacherStageCamera } from './TeacherCameraFloat';
 import { TeacherPeersFloat } from './TeacherPeersFloat';
 import { enqueueLocalPublish, safeStop } from './localPublish';
 import { primeVoiceAudio } from '@/lib/audio/voiceProcessor';
+import { SpeakingStudentsFloat } from './SpeakingStudentsFloat';
+import { rosterMicState, speakingStudents, teacherUnmuteBlock, type RosterMicState } from '@/lib/speakingRules';
+import { useMicLive } from './useMicLive';
 import { isTeacherParticipant, useHasTeacherScreen, useTeacherLive } from './participantRoles';
 
 function sleepConnectDelay(body: unknown): Promise<void> {
@@ -726,6 +729,7 @@ function RoomInner({
 }) {
   const router = useRouter();
   const room = useRoomContext();
+  const micLive = useMicLive(room);
   const { localParticipant } = useLocalParticipant();
   const [studentVideoMode, setStudentVideoMode] = useState<StudentVideoMode>(() => {
     if (typeof window === 'undefined') return 'both';
@@ -875,6 +879,8 @@ function RoomInner({
       for (const t of timers.values()) window.clearTimeout(t);
     };
   }, [isTeacher, room, code]);
+  /** Student: is my camera on (lib/speakingRules). Sent with every heartbeat. */
+  const camReportRef = useRef(false);
   useEffect(() => {
     if (isTeacher || !room) return;
     let unload = false;
@@ -885,7 +891,7 @@ function RoomInner({
       void roomFetch(code, '/heartbeat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sid }),
+        body: JSON.stringify({ sid, cam: camReportRef.current }),
       }).catch(() => undefined);
     };
     send();
@@ -924,6 +930,24 @@ function RoomInner({
   const [screenOn, setScreenOn] = useState(false);
   const [chatUnread, setChatUnread] = useState(0);
   const [localCamStream, setLocalCamStream] = useState<MediaStream | null>(null);
+  // Student: report camera on/off so the teacher can only unmute students
+  // whose camera is on, and the server mutes a student whose camera goes off.
+  const camLive = !isTeacher && camOn && !!localCamStream?.getVideoTracks().some((t) => t.readyState === 'live');
+  useEffect(() => {
+    camReportRef.current = camLive;
+    if (isTeacher || !room) return;
+    const report = () =>
+      void roomFetch(code, '/camera', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ on: camLive }),
+      }).catch(() => undefined);
+    report();
+    room.on(RoomEvent.Reconnected, report);
+    return () => {
+      room.off(RoomEvent.Reconnected, report);
+    };
+  }, [camLive, isTeacher, room, code]);
   const [chatOpen, setChatOpen] = useState(false);
   const [hudChatOpen, setHudChatOpen] = useState(false);
   const [rosterOpen, setRosterOpen] = useState(false);
@@ -2045,30 +2069,46 @@ function RoomInner({
     refresh();
   }
 
-  async function muteStudent(participantId: string, muted: boolean) {
+  /**
+   * Mute / unmute one student. Unmute is one student at a time and only while
+   * their camera is on (server answers 409 "Camera must be on"); several
+   * students can be unmuted together, one click each (Nov 25).
+   */
+  async function muteStudent(participantId: string, muted: boolean): Promise<boolean> {
+    const who = (state?.admitted ?? []).find((p) => p.id === participantId);
+    if (!muted && who) {
+      const block = teacherUnmuteBlock({ camOn: who.camOn });
+      if (block) {
+        setHudNotice(`${who.displayName}: ${block}`);
+        return false;
+      }
+    }
     setMuteOverrides((cur) => ({ ...cur, [participantId]: muted }));
-    const ok = await roomFetch(code, '/mute', {
+    const res = await roomFetch(code, '/mute', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ participantId, muted }),
-    })
-      .then((r) => r.ok)
-      .catch(() => false);
+    }).catch(() => null);
+    const ok = !!res?.ok;
     if (!ok) {
       setMuteOverrides((cur) => {
         const next = { ...cur };
         delete next[participantId];
         return next;
       });
+      const err = res ? await res.json().then((d: { error?: string }) => d?.error, () => undefined) : undefined;
+      setHudNotice(`${who?.displayName ? `${who.displayName}: ` : ''}${err || (muted ? 'Could not mute' : 'Could not unmute')}`);
     }
     refresh();
+    return ok;
   }
 
-  async function muteAllStudents(muted: boolean) {
+  /** Mute every student. There is no "unmute all" (Nov 25). */
+  async function muteAllStudents() {
     await roomFetch(code, '/mute', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ all: true, muted }),
+      body: JSON.stringify({ all: true, muted: true }),
     });
     refresh();
   }
@@ -2148,7 +2188,6 @@ function RoomInner({
   const [wbOpen, setWbOpen] = useState(false);
   /** Student videos stay up when the board opens. The meeting bar can hide them. */
   const [wbVideosOn, setWbVideosOn] = useState(true);
-  const [wbAllMuted, setWbAllMuted] = useState(false);
   /** In-tab class panel while sharing without a separate videos window. */
   const [shareVideosOn, setShareVideosOn] = useState(true);
   // Fresh teacher session: reopen a board this tab still has, or clear a stale flag.
@@ -2286,6 +2325,13 @@ function RoomInner({
     }))
   );
   const studentCount = rosterStudents.length;
+  // Teacher speaking pop-up (Nov 25): every student the teacher has unmuted.
+  const speakers = isTeacher
+    ? speakingStudents(rosterStudents, (id) => videoHidden(id, { dropped: droppedStudents, now: Date.now(), liveRoster })).map((p) => ({
+        identity: p.livekitIdentity,
+        name: p.displayName,
+      }))
+    : [];
   const rosterWin = rosterWindow(filterPeople(rosterStudents, rosterQuery), rosterLimit);
   const waitingWin = rosterWindow(filterPeople(state?.waiting ?? [], rosterQuery), waitingLimit);
   const shownRoster = rosterWin.shown;
@@ -2442,8 +2488,8 @@ function RoomInner({
   }
   /** Raised hand → give the student the floor: unmute them, then lower the hand. */
   async function letSpeak(participantId: string) {
-    await muteStudent(participantId, false);
-    await lowerHand(participantId);
+    // Camera off: the hand stays up, the teacher sees "Camera must be on".
+    if (await muteStudent(participantId, false)) await lowerHand(participantId);
   }
   const mutedStudentIds = useMemo(
     () => new Set((state?.admitted ?? []).filter((p) => p.role === 'STUDENT' && p.mutedByTeacher).map((p) => p.id)),
@@ -2886,6 +2932,36 @@ function RoomInner({
     );
   }
 
+  /** Teacher (i): class details on hover / tap, replacing the header (Nov 25). */
+  const teacherInfoEl = (placement: 'left' | 'up') => {
+    const slots = panelSlots ?? panelSlotsForCap(sampleCap ?? state?.maxVisibleVideos ?? 5);
+    const v = videosShown(shownVisibles.length, slots);
+    const live = [
+      'Live',
+      stageMode === 'screen' ? 'stage: screen' : null,
+      focusAlertCount > 0 ? `${focusAlertCount} not in fullscreen` : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    return (
+      <ClassInfoButton
+        hover
+        compact
+        placement={placement}
+        subject={state?.classInfo ? state.classInfo.subject : state?.name || null}
+        audience={state?.classInfo?.audience || null}
+        scheduledStart={state?.classInfo?.scheduledStart ?? null}
+        scheduledEnd={state?.classInfo?.scheduledEnd ?? null}
+        extra={[
+          { k: 'Class code', v: code },
+          { k: 'Videos shown', v: `${v.shown}/${v.total}` },
+          { k: 'Students', v: `${studentCount}${waitingCount > 0 ? ` · ${waitingCount} waiting` : ''}` },
+          { k: 'Status', v: live },
+        ]}
+      />
+    );
+  };
+
   const shareHudEl = (over: Partial<TeacherShareHudProps>) => (
           <TeacherShareHud
             videoMode={videoMode}
@@ -2901,6 +2977,7 @@ function RoomInner({
               return !isRosterDropped(p.livekitIdentity, droppedStudents, Date.now());
             }).map((p) => ({
               ...p,
+              micLive: micLive.has(p.livekitIdentity),
               reconnecting: !!p.reconnecting || reconnectingIds.has(p.livekitIdentity),
             }))}
             waiting={(state?.waiting ?? []).map((w) => ({
@@ -2932,7 +3009,7 @@ function RoomInner({
             }}
             onStopSharing={() => void toggleScreen()}
             onMuteStudent={(id, muted) => void muteStudent(id, muted)}
-            onMuteAll={(muted) => void muteAllStudents(muted)}
+            onMuteAll={() => void muteAllStudents()}
             onLowerHand={(id) => void lowerHand(id)}
             onTogglePin={(id, on) => void togglePin(id, on)}
             drawHolderName={drawHolder?.name ?? null}
@@ -2961,7 +3038,11 @@ function RoomInner({
   );
 
   return withDrawing(
-    <div className="h-dvh-safe max-h-dvh-safe flex flex-col overflow-hidden bg-surface-0/40">
+    <div
+      className="h-dvh-safe max-h-dvh-safe flex flex-col overflow-hidden bg-surface-0/40"
+      // Right inset for fixed toasts / banners: clear of the whiteboard meeting bar (Nov 25).
+      style={{ ['--wb-bar-right' as string]: wbOpen ? `${MEETING_BAR_PX}px` : '0px' }}
+    >
       <SelectivePublisher
         isTeacher
         canPublishVideo={effectiveCanPublish}
@@ -2984,6 +3065,7 @@ function RoomInner({
           })}
         />
       )}
+      {isTeacher && speakers.length > 0 && <SpeakingStudentsFloat speakers={speakers} whiteboard={wbOpen} />}
       {wbOpen && (
         <WhiteboardHost
           code={code}
@@ -2997,8 +3079,17 @@ function RoomInner({
       {/* Above every floating panel (z-60 > floats 34–55) and marked as the top
           bound, so panels are clamped below it and never cover Admit. */}
       <div data-whiteboard-chrome data-float-bound="top" className="relative z-[60] shrink-0">
+      {/* Teacher (Nov 25): no title/badges block, so the whiteboard gets the
+          height. Class details live in the (i) button (meeting bar / dock);
+          the header only appears for the waiting-room and raised-hands bars. */}
+      {(!isTeacher || waitingCount > 0 || raisedHands.length > 0) && (
       <header
-        className="relative z-[60] flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-b border-white/[0.06] bg-surface-1/95 px-3 py-2 backdrop-blur-xl sm:px-4 sm:py-2.5"
+        className={cn(
+          'relative z-[60] flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-b border-white/[0.06] bg-surface-1/95 backdrop-blur-xl',
+          isTeacher ? 'px-2 py-1' : 'px-3 py-2 sm:px-4 sm:py-2.5'
+        )}
+        style={isTeacher && wbOpen ? { marginRight: MEETING_BAR_PX } : undefined}
+        data-testid="classroom-header"
       >
         {isTeacher && waitingCount > 0 && (
           <WaitingAdmitBar
@@ -3017,53 +3108,55 @@ function RoomInner({
             onOpenRoster={screenOn ? undefined : openRoster}
           />
         )}
+        {!isTeacher && (
         <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge tone={isTeacher ? 'brand' : 'neutral'}>
-              {isTeacher ? 'Teacher' : 'Student'}
-            </Badge>
-            <Badge tone="success" pulse>
-              Live
-            </Badge>
-            {isTeacher && stageMode === 'screen' && (
-              <Badge tone="neutral">Stage · Screen</Badge>
-            )}
-            {isTeacher && focusAlertCount > 0 && (
-              <Badge tone="warning" className="whitespace-nowrap">
-                {focusAlertCount} not in fullscreen
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge tone={isTeacher ? 'brand' : 'neutral'}>
+                {isTeacher ? 'Teacher' : 'Student'}
               </Badge>
-            )}
+              <Badge tone="success" pulse>
+                Live
+              </Badge>
+              {isTeacher && stageMode === 'screen' && (
+                <Badge tone="neutral">Stage · Screen</Badge>
+              )}
+              {isTeacher && focusAlertCount > 0 && (
+                <Badge tone="warning" className="whitespace-nowrap">
+                  {focusAlertCount} not in fullscreen
+                </Badge>
+              )}
+            </div>
+            <h1 className="mt-0.5 truncate font-display text-base font-semibold tracking-tight sm:text-xl [@media(max-height:480px)]:text-sm">
+              {state?.name || 'Classroom'}
+            </h1>
+            <p className="truncate text-2xs text-slate-400 sm:text-xs [@media(max-height:480px)]:hidden">
+              Code <span className="font-mono text-brand-300">{code}</span>
+              {isTeacher ? (
+                <>
+                  {' · '}
+                  <span title="Tiles in the Class panel, including you (the 2 / 4 / 6 buttons use the same count)">
+                    {(() => {
+                      const slots =
+                        panelSlots ?? panelSlotsForCap(sampleCap ?? state?.maxVisibleVideos ?? 5);
+                      const v = videosShown(shownVisibles.length, slots);
+                      return `${v.shown}/${v.total} videos shown`;
+                    })()}
+                  </span>
+                  {' · '}
+                  {studentCount} student{studentCount === 1 ? '' : 's'}
+                  {waitingCount > 0 ? ` · ${waitingCount} waiting` : ''}
+                </>
+              ) : (
+                <>
+                  {' · '}
+                  <span className="text-emerald-300">Live</span>
+                </>
+              )}
+            </p>
           </div>
-          <h1 className="mt-0.5 truncate font-display text-base font-semibold tracking-tight sm:text-xl [@media(max-height:480px)]:text-sm">
-            {state?.name || 'Classroom'}
-          </h1>
-          <p className="truncate text-2xs text-slate-400 sm:text-xs [@media(max-height:480px)]:hidden">
-            Code <span className="font-mono text-brand-300">{code}</span>
-            {isTeacher ? (
-              <>
-                {' · '}
-                <span title="Tiles in the Class panel, including you (the 2 / 4 / 6 buttons use the same count)">
-                  {(() => {
-                    const slots =
-                      panelSlots ?? panelSlotsForCap(sampleCap ?? state?.maxVisibleVideos ?? 5);
-                    const v = videosShown(shownVisibles.length, slots);
-                    return `${v.shown}/${v.total} videos shown`;
-                  })()}
-                </span>
-                {' · '}
-                {studentCount} student{studentCount === 1 ? '' : 's'}
-                {waitingCount > 0 ? ` · ${waitingCount} waiting` : ''}
-              </>
-            ) : (
-              <>
-                {' · '}
-                <span className="text-emerald-300">Live</span>
-              </>
-            )}
-          </p>
-        </div>
-
+        )}
       </header>
+      )}
       {isTeacher && (
         <span className="sr-only" aria-live="polite">
           {waitingCount > 0
@@ -3123,7 +3216,8 @@ function RoomInner({
       {hudNotice && isTeacher && !hudOpen && (
         <div
           role="status"
-          className="flex shrink-0 items-center gap-2 border-b border-amber-400/25 bg-amber-500/10 px-3 py-1.5 text-2xs text-amber-100 sm:px-4"
+          data-testid="teacher-notice"
+          className="teacher-banner"
         >
           <span className="flex-1">{hudNotice}</span>
           <button
@@ -3243,9 +3337,7 @@ function RoomInner({
                   {shownWaiting.map((p) => (
                     <li key={p.id} className="roster-row" title={rosterLabel(p)}>
                       <Avatar name={p.displayName} size="xs" />
-                      <span className="roster-name" title={rosterLabel(p)}>{p.displayName}
-                        {p.gradeDivision && <span className="block text-[10px] font-normal text-slate-400">{p.gradeDivision}</span>}
-                      </span>
+                      <span className="roster-name" title={p.displayName}>{p.displayName}</span>
                       {p.late && <span className="roster-chip roster-chip-red">Late</span>}
                       <span className="roster-actions">
                         <button type="button" className="text-xs text-red-300" onClick={() => void removeStudent(p.id, true)} aria-label={`Deny ${p.displayName}`}>Deny</button>
@@ -3270,11 +3362,8 @@ function RoomInner({
               </div>
             )}
             <div className="flex shrink-0 flex-wrap items-center gap-2" data-no-drag>
-              <Button size="sm" variant="warning" onClick={() => muteAllStudents(true)}>
+              <Button size="sm" variant="warning" onClick={() => muteAllStudents()}>
                 Mute all
-              </Button>
-              <Button size="sm" variant="secondary" onClick={() => muteAllStudents(false)}>
-                Allow all to unmute
               </Button>
               <button
                 type="button"
@@ -3366,9 +3455,7 @@ function RoomInner({
                       </span>
                     )}
                     <Avatar name={p.displayName} size="xs" />
-                    <span className="roster-name" title={rosterLabel(p)}>{p.displayName}
-                      {p.gradeDivision && <span className="block text-[10px] font-normal text-slate-400">{p.gradeDivision}</span>}
-                    </span>
+                    <span className="roster-name" title={p.displayName}>{p.displayName}</span>
                     {focus && (
                       <span
                         className={cn('roster-chip', isFocusAlert(p.focus) ? 'roster-chip-warn' : '')}
@@ -3385,14 +3472,33 @@ function RoomInner({
                     {p.late && <span className="roster-chip roster-chip-red">Late</span>}
                     <span className="roster-actions">
                       <button type="button" className="text-xs text-red-300" onClick={() => void removeStudent(p.id)} aria-label={`Remove ${p.displayName}`}>Remove</button>
-                      <RosterIconButton
-                        label={p.mutedByTeacher ? `Unmute ${p.displayName}` : `Mute ${p.displayName}`}
-                        tone={p.mutedByTeacher ? 'warn' : 'plain'}
-                        pressed={!!p.mutedByTeacher}
-                        onClick={() => muteStudent(p.id, !p.mutedByTeacher)}
-                      >
-                        {p.mutedByTeacher ? <IconMicOff size={14} /> : <IconMic size={14} />}
-                      </RosterIconButton>
+                      {(() => {
+                        // Three states (Nov 25): locked · allowed (mic off) · live.
+                        const mic = rosterMicState({
+                          name: p.displayName,
+                          mutedByTeacher: !!p.mutedByTeacher,
+                          micLive: micLive.has(p.livekitIdentity),
+                          camOn: p.camOn,
+                        });
+                        return (
+                          <RosterIconButton
+                            label={mic.label}
+                            tone={mic.state}
+                            pressed={mic.state !== 'locked'}
+                            disabled={mic.disabled}
+                            testId={`roster-mic-${mic.state}`}
+                            onClick={() => void muteStudent(p.id, mic.action === 'mute')}
+                          >
+                            {mic.state === 'locked' ? (
+                              <IconMicLock size={14} />
+                            ) : mic.state === 'allowed' ? (
+                              <IconMicOff size={14} />
+                            ) : (
+                              <IconMic size={14} />
+                            )}
+                          </RosterIconButton>
+                        );
+                      })()}
                       <RosterIconButton
                         label={p.pinned ? `Unpin ${p.displayName}'s video` : `Pin ${p.displayName}'s video`}
                         tone={p.pinned ? 'on' : 'plain'}
@@ -3495,6 +3601,7 @@ function RoomInner({
         visibleIdentities={shownVisibles}
         droppedStudents={droppedStudents}
         liveRoster={liveRoster}
+        keepIdentities={speakers.map((s) => s.identity)}
         spotlightIdentity={
           state?.spotlight &&
           !videoHidden(state.spotlight.identity, { dropped: droppedStudents, now: Date.now(), liveRoster })
@@ -3590,13 +3697,8 @@ function RoomInner({
             .map((p) => ({ id: p.id, displayName: rosterLabel(p) }))}
           onAllowDraw={(id) => void allowDrawing(id)}
           onRevokeDraw={(id) => void revokeDrawing(id)}
-          allMuted={wbAllMuted}
-          onToggleMuteAll={() => {
-            setWbAllMuted((v) => {
-              void muteAllStudents(!v);
-              return !v;
-            });
-          }}
+          onMuteAll={() => void muteAllStudents()}
+          info={teacherInfoEl('left')}
           videosOn={wbVideosOn}
           onToggleVideos={() => setWbVideosOn((v) => !v)}
           onStopWhiteboard={() => {
@@ -3609,7 +3711,9 @@ function RoomInner({
 
       {/* Bottom dock — hidden while the whiteboard meeting bar owns these actions. */}
       {!wbOpen && (
-      <footer data-float-bound="bottom" data-testid="teacher-dock" className="relative z-[80] shrink-0 border-t border-white/[0.06] bg-surface-1/90 px-3 py-2.5 backdrop-blur-xl sm:px-4">
+      <footer data-float-bound="bottom" data-testid="teacher-dock" className="relative z-[80] flex shrink-0 items-center gap-2 border-t border-white/[0.06] bg-surface-1/90 px-3 py-2.5 backdrop-blur-xl sm:px-4">
+        <div className="shrink-0">{teacherInfoEl('up')}</div>
+        <div className="min-w-0 flex-1">
         <Controls
           {...controlsProps}
           onPrepareScreenShare={() => {
@@ -3617,8 +3721,7 @@ function RoomInner({
           }}
           onEnd={endClass}
           onRotateSample={rotateSample}
-          onMuteAll={() => muteAllStudents(true)}
-          onUnmuteAll={() => muteAllStudents(false)}
+          onMuteAll={() => muteAllStudents()}
           onToggleChat={screenOn ? undefined : toggleChat}
           chatOpen={chatOpen}
           chatUnread={chatUnread}
@@ -3627,6 +3730,7 @@ function RoomInner({
           rosterBadge={waitingCount}
           handsCount={raisedHands.length}
         />
+        </div>
       </footer>
       )}
       {endAsk && (
@@ -4462,15 +4566,9 @@ function StudentFinished({
   );
 }
 
-/** "Name · Roll 12 · 7-B · late" for compact lists (share HUD). */
+/** Roster / compact lists show the student's name only (Nov 25: no campus, grade or roll). */
 function rosterLabel(p: { displayName: string } & RosterInfo): string {
-  const bits = [p.displayName];
-  if (p.rollNumber) bits.push(`Roll ${p.rollNumber}`);
-  if (p.gradeDivision) bits.push(p.gradeDivision);
-  if (p.late) bits.push('late');
-  if (p.viaSchoolApp && !p.onTimetable) bits.push(p.adHocClass ? 'outside class audience' : 'not on timetable');
-  if (!p.viaSchoolApp) bits.push('guest');
-  return bits.join(' · ');
+  return p.displayName;
 }
 
 /** Small square icon button for roster rows, with tooltip and aria-label. */
@@ -4480,21 +4578,28 @@ function RosterIconButton({
   children,
   tone = 'plain',
   pressed,
+  disabled,
+  testId,
 }: {
   label: string;
   onClick: () => void;
   children: ReactNode;
-  tone?: 'plain' | 'warn' | 'on';
+  tone?: 'plain' | 'warn' | 'on' | RosterMicState;
   pressed?: boolean;
+  /** Greyed out; the label is the tooltip that says why (e.g. "Camera must be on"). */
+  disabled?: boolean;
+  testId?: string;
 }) {
   return (
     <button
       type="button"
-      className={cn('roster-icon-btn', tone !== 'plain' && `roster-icon-btn-${tone}`)}
-      onClick={onClick}
+      className={cn('roster-icon-btn', tone !== 'plain' && `roster-icon-btn-${tone}`, disabled && 'cursor-not-allowed opacity-40')}
+      onClick={disabled ? undefined : onClick}
       aria-label={label}
       title={label}
       aria-pressed={pressed}
+      aria-disabled={disabled || undefined}
+      data-testid={testId}
     >
       {children}
     </button>

@@ -20,13 +20,14 @@ import { createPortal } from 'react-dom';
 import { MEETING_BAR_PX } from '@/lib/shareChrome';
 import { floatInsets, useFloatDrag, readFloatPref, writeFloatPref, type FloatPos } from './FloatingPanel';
 import {
+  PEER_HEADER_MIN_W,
   VIDEO_PANEL_MIN_W,
   WB_TOOL_CLEAR_PX,
   clampVideoPanelSize,
+  fitPaneToTiles,
   parseStoredPos,
   parseStoredSize,
   placeWhiteboardVideo,
-  tilesInPane,
   videoPanelSizeFromDrag,
   type FloatRect,
   type VideoPanelClampOpts,
@@ -142,6 +143,7 @@ export function TeacherPeersFloat({
   droppedStudents = EMPTY_DROPPED,
   liveRoster = null,
   spotlightIdentity = null,
+  keepIdentities,
 }: {
   /** Panel visibility to the teacher (drives student cameras on demand). */
   onShownChange?: (shown: boolean) => void;
@@ -177,6 +179,8 @@ export function TeacherPeersFloat({
   liveRoster?: ReadonlySet<string> | null;
   /** Keep this camera subscribed even when it is not one of the mosaic tiles. */
   spotlightIdentity?: string | null;
+  /** Also keep these cameras subscribed (teacher-unmuted students in the speaking pop-up, Nov 25). */
+  keepIdentities?: readonly string[];
   /** Student-camera count that fills this window (tiles minus the teacher). */
   onSlotsChange?: (studentSlots: number) => void;
   /** Panel size chosen by the room (synced with the server student cap). */
@@ -312,14 +316,15 @@ export function TeacherPeersFloat({
   }, [whiteboard, activeSlots, viewport.w, viewport.h]);
   const layout = useMemo(() => {
     if (wbPlaced) {
-      const tiles = tilesInPane(wbPlaced.w, wbPlaced.h, 1, 2);
+      // Snap to the two 16:9 tiles (Nov 25), so no empty band and the header fits.
+      const fit = fitPaneToTiles({ w: wbPlaced.w, h: wbPlaced.h }, 1, 2);
       return {
         cols: 1,
         rows: 2,
-        tileW: tiles.tileW,
-        tileH: tiles.tileH,
-        paneW: wbPlaced.w,
-        paneH: wbPlaced.h,
+        tileW: fit.tileW,
+        tileH: fit.tileH,
+        paneW: fit.paneW,
+        paneH: fit.paneH,
         gap: 6,
       };
     }
@@ -331,6 +336,7 @@ export function TeacherPeersFloat({
   // keeps the 2/4/6 preset until the teacher floats it.
   const allowResize = !isMin && !embedLayout && (whiteboard || sharing || floating || portal);
   const panelClampOpts: VideoPanelClampOpts = {
+    minW: PEER_HEADER_MIN_W,
     insets: (() => {
       const base = floatInsets();
       return {
@@ -343,8 +349,9 @@ export function TeacherPeersFloat({
   };
   const clampedManual =
     allowResize && manualSize ? clampVideoPanelSize(manualSize, viewport, panelClampOpts) : null;
+  // A dragged size snaps to whole 16:9 tiles too (Nov 25).
   const manualTiles =
-    clampedManual != null ? tilesInPane(clampedManual.w, clampedManual.h, layout.cols, layout.rows) : null;
+    clampedManual != null ? fitPaneToTiles(clampedManual, layout.cols, layout.rows) : null;
   const view =
     clampedManual && manualTiles
       ? {
@@ -353,8 +360,8 @@ export function TeacherPeersFloat({
           gap: layout.gap,
           tileW: manualTiles.tileW,
           tileH: manualTiles.tileH,
-          paneW: clampedManual.w,
-          paneH: clampedManual.h,
+          paneW: manualTiles.paneW,
+          paneH: manualTiles.paneH,
         }
       : layout;
   sizeRef.current = isMin
@@ -658,6 +665,7 @@ export function TeacherPeersFloat({
   droppedRef.current = droppedStudents;
   const liveRosterRef = useRef(liveRoster);
   liveRosterRef.current = liveRoster;
+  const keepKey = [...(keepIdentities ?? [])].sort().join(',');
   const spotlightRef = useRef(spotlightIdentity);
   spotlightRef.current = spotlightIdentity;
   useEffect(() => {
@@ -665,6 +673,9 @@ export function TeacherPeersFloat({
     const want = new Set(shownKey ? shownKey.split(',') : []);
     if (spotlightRef.current && !videoHidden(spotlightRef.current, { dropped: droppedRef.current, now: Date.now(), liveRoster: liveRosterRef.current })) {
       want.add(spotlightRef.current);
+    }
+    for (const id of keepKey ? keepKey.split(',') : []) {
+      if (!videoHidden(id, { dropped: droppedRef.current, now: Date.now(), liveRoster: liveRosterRef.current })) want.add(id);
     }
     const hiddenNow = (identity: string) =>
       videoHidden(identity, { dropped: droppedRef.current, now: Date.now(), liveRoster: liveRosterRef.current });
@@ -706,7 +717,7 @@ export function TeacherPeersFloat({
       room.off(RoomEvent.ParticipantConnected, apply);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [room, shownKey, teacherIdentities.join(','), droppedStudents, liveRoster, spotlightIdentity]);
+  }, [room, shownKey, teacherIdentities.join(','), droppedStudents, liveRoster, spotlightIdentity, keepKey]);
 
   const cells: Array<string | null> = ['__self__'];
   for (let i = 0; i < activeSlots - 1; i++) cells.push(peerIds[i] ?? null);
@@ -933,6 +944,7 @@ export function TeacherPeersFloat({
           className="peers-float-grid"
           data-slots={activeSlots}
           style={{
+            justifyContent: 'center',
             gridTemplateRows: `repeat(${L.rows}, ${L.tileH}px)`,
             ...(portal ? { gridTemplateColumns: `repeat(${L.cols}, ${L.tileW}px)` } : {}),
           }}

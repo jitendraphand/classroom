@@ -3,6 +3,7 @@ import { roomRowCached } from '@/lib/roomStateCache';
 import { resolveRoomAccess } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
 import { recordStudentHeartbeat } from '@/lib/studentPresence';
+import { applyCameraReport } from '@/lib/teacherMute';
 
 /**
  * Admitted student heartbeat. A crash, kill, or network loss never sends
@@ -11,6 +12,8 @@ import { recordStudentHeartbeat } from '@/lib/studentPresence';
  */
 const schema = z.object({
   sid: z.string().min(1).max(120),
+  /** Camera on (repairs a lost POST /camera report). Older clients omit it. */
+  cam: z.boolean().optional(),
 });
 
 export const dynamic = 'force-dynamic';
@@ -37,5 +40,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
   if (!me.livekitIdentity.startsWith('student_')) return jsonError('Not a student', 400);
 
   await recordStudentHeartbeat(code, me.livekitIdentity, parsed.data.sid);
+  if (typeof parsed.data.cam === 'boolean') await applyCameraReport(room, me, parsed.data.cam);
   return jsonOk({ ok: true });
 }

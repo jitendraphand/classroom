@@ -1,7 +1,7 @@
 import { academicYearForDate, isAcademicYearLabel } from './academicYear';
 import { z } from 'zod';
 import { prisma } from './db';
-import { formatAudience, MAX_AUDIENCE_INPUT_LENGTH, normalizeCampus, normalizeGrade, parseDivisionList } from './grades';
+import { audienceCampuses, formatAudienceOf, MAX_AUDIENCE_INPUT_LENGTH, normalizeGrade, parseCampusList, parseDivisionList } from './grades';
 import { campusUnknownMessage } from './campusMaster';
 import {
   WEEKDAYS,
@@ -42,7 +42,10 @@ const optDate = z
 
 export const slotBody = z.object({
   teacherId: z.string().min(1),
-  campus: z.string().min(1).max(MAX_AUDIENCE_INPUT_LENGTH),
+  /** Primary campus (older clients send only this). */
+  campus: z.string().max(MAX_AUDIENCE_INPUT_LENGTH).optional().default(''),
+  /** Every campus the slot covers (any combination); wins over `campus`. */
+  campuses: z.array(z.string().max(MAX_AUDIENCE_INPUT_LENGTH)).max(20).optional(),
   grade: z.string().min(1).max(MAX_AUDIENCE_INPUT_LENGTH),
   divisions: z.union([z.string().max(200), z.array(z.string().max(MAX_AUDIENCE_INPUT_LENGTH)).max(40)]),
   subject: z.string().trim().min(1).max(80),
@@ -62,10 +65,12 @@ export type SlotBody = z.infer<typeof slotBody>;
 
 function toInput(b: SlotBody, id?: string): SlotInput {
   const d = parseDivisionList(b.divisions);
+  const campuses = parseCampusList(b.campuses?.length ? b.campuses : b.campus);
   return {
     id,
     teacherId: b.teacherId,
-    campus: normalizeCampus(b.campus),
+    campus: campuses[0] ?? '',
+    campuses,
     grade: normalizeGrade(b.grade),
     divisions: d.divisions,
     allDivisions: d.allDivisions,
@@ -80,12 +85,7 @@ function toInput(b: SlotBody, id?: string): SlotInput {
 }
 
 function describeSlot(s: SlotLike, names: Map<string, string>) {
-  return `${WEEKDAYS[s.weekday]} ${formatHHMM(s.startMinute)}–${formatHHMM(s.endMinute)} ${s.subject} (${formatAudience(
-    s.campus,
-    s.grade,
-    s.divisions,
-    s.allDivisions
-  )}, ${names.get(s.teacherId) ?? 'teacher'})`;
+  return `${WEEKDAYS[s.weekday]} ${formatHHMM(s.startMinute)}–${formatHHMM(s.endMinute)} ${s.subject} (${formatAudienceOf(s)}, ${names.get(s.teacherId) ?? 'teacher'})`;
 }
 
 async function teacherNames() {
@@ -94,20 +94,23 @@ async function teacherNames() {
 }
 
 /** Same audience as the stored row (editing other fields of a legacy slot stays possible). */
-function sameAudience(a: { campus: string; grade: string; divisions: string[]; allDivisions: boolean }, b: typeof a) {
-  return a.campus === b.campus && a.grade === b.grade && a.allDivisions === b.allDivisions && [...a.divisions].sort().join() === [...b.divisions].sort().join();
+type AudienceRow = { campus: string; campuses?: string[] | null; grade: string; divisions: string[]; allDivisions: boolean };
+function sameAudience(a: AudienceRow, b: AudienceRow) {
+  return audienceCampuses(a).sort().join() === audienceCampuses(b).sort().join() && a.grade === b.grade && a.allDivisions === b.allDivisions && [...a.divisions].sort().join() === [...b.divisions].sort().join();
 }
 
 async function validateSlot(
   input: SlotInput,
   force: boolean,
-  existing?: { campus: string; grade: string; divisions: string[]; allDivisions: boolean }
+  existing?: AudienceRow
 ) {
   const problem = slotProblem(input);
   if (problem) throw new TimetableError(problem);
   if (!existing || !sameAudience(existing, input)) {
-    const campusUnknown = await campusUnknownMessage(input.campus);
-    if (campusUnknown) throw new TimetableError(campusUnknown);
+    for (const c of audienceCampuses(input)) {
+      const campusUnknown = await campusUnknownMessage(c);
+      if (campusUnknown) throw new TimetableError(campusUnknown);
+    }
     const unknown = await audienceUnknownMessage(input.grade, input.divisions, input.allDivisions);
     if (unknown) throw new TimetableError(unknown);
   }
@@ -136,6 +139,7 @@ function slotData(input: SlotInput) {
   return {
     teacherId: input.teacherId,
     campus: input.campus,
+    campuses: audienceCampuses(input),
     grade: input.grade,
     divisions: input.divisions,
     allDivisions: input.allDivisions,
@@ -198,6 +202,8 @@ export const overrideBody = z.object({
   slotId: z.string().optional().nullable(),
   teacherId: z.string().optional().nullable(),
   campus: z.string().max(MAX_AUDIENCE_INPUT_LENGTH).optional().nullable(),
+  /** Every campus of an extra class / changed audience (any combination); wins over `campus`. */
+  campuses: z.array(z.string().max(MAX_AUDIENCE_INPUT_LENGTH)).max(20).optional().nullable(),
   grade: z.string().max(MAX_AUDIENCE_INPUT_LENGTH).optional().nullable(),
   divisions: z.union([z.string().max(200), z.array(z.string().max(MAX_AUDIENCE_INPUT_LENGTH)).max(40)]).optional().nullable(),
   subject: z.string().max(80).optional().nullable(),
@@ -218,12 +224,7 @@ function minuteOrNull(s: string | null | undefined, label: string): number | nul
 }
 
 function describeOcc(o: Occurrence, names: Map<string, string>) {
-  return `${formatHHMM(o.startMinute)}–${formatHHMM(o.endMinute)} ${o.subject} (${formatAudience(
-    o.campus,
-    o.grade,
-    o.divisions,
-    o.allDivisions
-  )}, ${names.get(o.teacherId) ?? 'teacher'})`;
+  return `${formatHHMM(o.startMinute)}–${formatHHMM(o.endMinute)} ${o.subject} (${formatAudienceOf(o)}, ${names.get(o.teacherId) ?? 'teacher'})`;
 }
 
 export async function createOverride(body: OverrideBody) {
@@ -231,7 +232,8 @@ export async function createOverride(body: OverrideBody) {
   const endMinute = minuteOrNull(body.end, 'End');
   const div = body.divisions != null && body.divisions !== '' ? parseDivisionList(body.divisions) : null;
   const grade = body.grade ? normalizeGrade(body.grade) : null;
-  const campusIn = body.campus ? normalizeCampus(body.campus) : null;
+  const campusList = parseCampusList(body.campuses?.length ? body.campuses : body.campus);
+  const campusIn = campusList[0] ?? null;
   const subject = body.subject?.trim() || null;
   const teacherId = body.teacherId || null;
 
@@ -273,8 +275,9 @@ export async function createOverride(body: OverrideBody) {
   }
   // A changed audience keeps the slot's campus unless another is given.
   const campus = body.kind === 'CANCEL' || !grade ? null : campusIn ?? slot?.campus ?? null;
-  if (campus) {
-    const campusUnknown = await campusUnknownMessage(campus);
+  const campuses = !campus ? [] : campusIn ? campusList : slot ? audienceCampuses(slot) : [campus];
+  for (const c of campuses) {
+    const campusUnknown = await campusUnknownMessage(c);
     if (campusUnknown) throw new TimetableError(campusUnknown);
   }
   if (body.kind !== 'CANCEL' && grade && div) {
@@ -293,6 +296,7 @@ export async function createOverride(body: OverrideBody) {
     slotId: body.kind === 'EXTRA' ? null : body.slotId!,
     teacherId: body.kind === 'CANCEL' ? null : teacherId,
     campus,
+    campuses,
     grade: body.kind === 'CANCEL' ? null : grade,
     divisions: body.kind === 'CANCEL' ? [] : div?.divisions ?? [],
     allDivisions: body.kind === 'CANCEL' ? false : div?.allDivisions ?? false,

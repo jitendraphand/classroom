@@ -1,6 +1,8 @@
+import { displayCampusLabel, displayGradeLabel } from '@/lib/audienceLabels';
+import { loadAudienceLabels } from '@/lib/audienceLabelStore';
 import { prisma } from '@/lib/db';
 import { getTeacherSession } from '@/lib/auth';
-import { displayAssignment, formatAudience } from '@/lib/grades';
+import { displayAssignment, formatAudienceOf } from '@/lib/grades';
 import { jsonError, jsonOk } from '@/lib/response';
 import { isAcademicYearLabel } from '@/lib/academicYear';
 import { prismaOccurrenceKeys, pickSessionForOccurrence } from '@/lib/occurrenceRuns';
@@ -49,7 +51,7 @@ export async function GET(req: Request) {
       key: o.key,
       date: o.date,
       subject: o.subject,
-      audience: formatAudience(o.campus, o.grade, o.divisions, o.allDivisions),
+      audience: formatAudienceOf(o),
       start: o.start.toISOString(),
       end: o.end.toISOString(),
       startLabel: formatHHMM(o.startMinute),
@@ -75,7 +77,7 @@ export async function GET(req: Request) {
       active = {
         id: cs.id,
         subject: cs.subject,
-        audience: formatAudience(cs.campus, cs.grade, cs.divisions, cs.allDivisions),
+        audience: formatAudienceOf(cs),
         adHoc: cs.adHoc,
         code: room!.code,
       };
@@ -84,6 +86,7 @@ export async function GET(req: Request) {
     active = { id: null, subject: room.name, audience: '', adHoc: true, code: room.code };
   }
 
+  const labels = await loadAudienceLabels().catch(() => undefined);
   return jsonOk({
     timezone: tz,
     earlyMinutes: early,
@@ -93,7 +96,11 @@ export async function GET(req: Request) {
     active,
     assignments: assignments.map((a) => ({ ...a, label: displayAssignment(a) })),
     /** Ad-hoc start dropdowns: assigned grades, divisions from Grades & divisions (active only). */
-    gradeChoices: teacherGradeChoices(assignments, master),
+    gradeChoices: teacherGradeChoices(assignments, master).map((c) => ({
+      ...c,
+      campusLabel: displayCampusLabel(c.campus, labels),
+      gradeLabel: displayGradeLabel(c.grade, labels),
+    })),
     gradesConfigured: master.length > 0,
   });
 }

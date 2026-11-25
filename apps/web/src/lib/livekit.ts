@@ -1,3 +1,4 @@
+import { studentCameraAllowed } from './speakingRules';
 import {
   AccessToken,
   DataPacket_Kind,
@@ -127,7 +128,7 @@ export function classroomGrant(input: ParticipantGrantInput) {
   const sources = isTeacher
     ? publishSourcesFor({ allowCamera: true, allowMic: true, allowScreen: true })
     : publishSourcesFor({
-        allowCamera: input.allowCamera ?? false,
+        allowCamera: studentCameraAllowed({ inSample: input.allowCamera ?? false, unmuted: input.mutedByTeacher === false && !input.micLocked }),
         allowMic: studentMicAllowed({
           mutedByTeacher: !!input.mutedByTeacher,
           teacherPresent: !input.micLocked,
@@ -353,7 +354,13 @@ export function effectiveStudentSources(
   ctx: Pick<PermissionContext, 'teacherPresent' | 'spotlightIdentity'>
 ): { allowCamera: boolean; allowMic: boolean; sources: TrackSource[] } {
   const allowMic = studentMicAllowed({ mutedByTeacher: !req.allowMic, teacherPresent: ctx.teacherPresent });
-  const allowCamera = req.allowCamera || (!!ctx.spotlightIdentity && ctx.spotlightIdentity === req.identity);
+  // Camera: in the sample, spotlighted, or unmuted by the teacher (the
+  // teacher's speaking pop-up shows them; classmates still cannot subscribe).
+  const allowCamera = studentCameraAllowed({
+    inSample: req.allowCamera,
+    spotlighted: !!ctx.spotlightIdentity && ctx.spotlightIdentity === req.identity,
+    unmuted: allowMic,
+  });
   return { allowCamera, allowMic, sources: publishSourcesFor({ allowCamera, allowMic }) };
 }
 

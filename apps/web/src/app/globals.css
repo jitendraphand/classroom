@@ -497,6 +497,12 @@ input[type='time'].input {
     font-size: 11px;
     font-weight: 700;
   }
+  .peers-float-header > * {
+    flex-shrink: 0;
+  }
+  .peers-float-header .peers-float-slot {
+    flex: none;
+  }
   .peers-float-slot.is-on {
     background: #1d4ed8;
     border-color: #93c5fd;
@@ -597,6 +603,16 @@ input[type='time'].input {
   }
   .roster-icon-btn-warn {
     @apply bg-amber-500/15 text-amber-200 hover:bg-amber-500/25;
+  }
+  /* Roster mic, three states (Nov 25). */
+  .roster-icon-btn-locked {
+    @apply bg-slate-500/15 text-slate-400 hover:bg-slate-500/25;
+  }
+  .roster-icon-btn-allowed {
+    @apply bg-amber-500/15 text-amber-300 ring-1 ring-inset ring-amber-400/50 hover:bg-amber-500/25;
+  }
+  .roster-icon-btn-live {
+    @apply bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30;
   }
   .roster-icon-btn-on {
     @apply bg-amber-500 text-ink-950 hover:bg-amber-400 hover:text-ink-950;
@@ -887,7 +903,8 @@ input[type='time'].input {
 }
 .teacher-toast {
   position: fixed;
-  right: 16px;
+  /* Clear of the whiteboard meeting bar on the right (Nov 25: Dismiss was under it). */
+  right: calc(16px + var(--wb-bar-right, 0px));
   bottom: 88px;
   z-index: 120;
   display: flex;
@@ -904,6 +921,27 @@ input[type='time'].input {
 }
 /* One-time share-position note: bottom-left so it never covers the draw-request
    Allow/Deny banner or other teacher toasts at bottom-right. */
+/* Teacher notice (e.g. "Camera must be on"): compact overlay at the top, not
+   an in-flow strip, so it never shrinks the whiteboard; right edge set inline
+   to clear the meeting bar (Nov 25). */
+.teacher-banner {
+  position: fixed;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 125;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(560px, calc(100vw - 2 * (var(--wb-bar-right, 0px) + 12px)));
+  border-radius: 12px;
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  background: rgba(40, 30, 8, 0.94);
+  padding: 6px 10px;
+  font-size: 12px;
+  color: #fef3c7;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
 .teacher-toast.teacher-toast-left {
   right: auto;
   left: 16px;
@@ -991,4 +1029,23 @@ html.has-draw-toolbar .control-status-pill {
   html.has-draw-toolbar .control-status-pill.is-second {
     top: 4.75rem;
   }
+}
+
+/* Teacher speaking pop-up (Nov 25): unmuted students' cameras. */
+.speaking-tile {
+  width: min(42vw, 184px);
+}
+.speaking-tile-name {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 10px 6px 3px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.75), transparent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

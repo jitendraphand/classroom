@@ -80,6 +80,8 @@ export type RoomState = {
     livekitIdentity: string;
     mutedByTeacher: boolean;
     isVisible: boolean;
+    /** Teacher only: the student's camera is on (client report, Nov 25). Unmute needs it. */
+    camOn?: boolean;
     handRaised?: boolean;
     /** Teacher only: ms epoch the hand went up. */
     handRaisedAt?: number | null;

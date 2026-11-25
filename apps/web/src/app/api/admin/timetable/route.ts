@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/adminGuard';
-import { audienceIncludes, formatAudience, normalizeCampus, normalizeDivision, normalizeGrade } from '@/lib/grades';
+import { audienceCampuses, audienceIncludes, formatAudienceOf, normalizeCampus, normalizeDivision, normalizeGrade } from '@/lib/grades';
 import { jsonOk } from '@/lib/response';
 import { modifyLabel } from '@/lib/overrideRules';
 import { addDays, dateOnly, dateValue, formatHHMM, localDateOf } from '@/lib/schedule';
@@ -34,7 +34,7 @@ export async function GET(req: Request) {
       select: { id: true, name: true, disabled: true, assignments: { select: { campus: true, grade: true, division: true } } },
     }),
     prisma.timetableSlot.findMany({
-      where: { ...(teacherId ? { teacherId } : {}), ...(campus ? { campus } : {}), ...(grade ? { grade } : {}), ...yearWhere },
+      where: { ...(teacherId ? { teacherId } : {}), ...(campus ? { OR: [{ campus }, { campuses: { has: campus } }] } : {}), ...(grade ? { grade } : {}), ...yearWhere },
       orderBy: [{ weekday: 'asc' }, { startMinute: 'asc' }],
     }),
     prisma.scheduleOverride.findMany({
@@ -51,10 +51,11 @@ export async function GET(req: Request) {
       teacherId: s.teacherId,
       teacherName: names.get(s.teacherId) ?? '—',
       campus: s.campus,
+      campuses: audienceCampuses(s),
       grade: s.grade,
       divisions: s.divisions,
       allDivisions: s.allDivisions,
-      audience: formatAudience(s.campus, s.grade, s.divisions, s.allDivisions),
+      audience: formatAudienceOf(s),
       subject: s.subject,
       weekday: s.weekday,
       start: formatHHMM(s.startMinute),
@@ -69,19 +70,16 @@ export async function GET(req: Request) {
     date: dateOnly(o.date),
     slotId: o.slotId,
     slotLabel: o.slot
-      ? `${o.slot.subject} ${formatHHMM(o.slot.startMinute)}–${formatHHMM(o.slot.endMinute)} · ${formatAudience(
-          o.slot.campus,
-          o.slot.grade,
-          o.slot.divisions,
-          o.slot.allDivisions
-        )} · ${names.get(o.slot.teacherId) ?? ''}`
+      ? `${o.slot.subject} ${formatHHMM(o.slot.startMinute)}–${formatHHMM(o.slot.endMinute)} · ${formatAudienceOf(o.slot)} · ${names.get(o.slot.teacherId) ?? ''}`
       : null,
     teacherId: o.teacherId,
     teacherName: o.teacherId ? names.get(o.teacherId) ?? '—' : null,
     originalTeacherId: o.slot?.teacherId ?? null,
     originalTeacherName: o.slot ? names.get(o.slot.teacherId) ?? null : null,
     label: o.kind === 'MODIFY' ? modifyLabel({ teacherId: o.teacherId, originalTeacherId: o.slot?.teacherId, startMinute: o.startMinute, endMinute: o.endMinute }) : null,
-    audience: o.grade ? formatAudience(o.campus ?? o.slot?.campus ?? '', o.grade, o.divisions, o.allDivisions) : null,
+    audience: o.grade
+      ? formatAudienceOf({ campus: o.campus ?? o.slot?.campus ?? '', campuses: o.campus ? o.campuses : o.slot?.campuses, grade: o.grade, divisions: o.divisions, allDivisions: o.allDivisions })
+      : null,
     subject: o.subject,
     start: o.startMinute != null ? formatHHMM(o.startMinute) : null,
     end: o.endMinute != null ? formatHHMM(o.endMinute) : null,

@@ -1,0 +1,19 @@
+/**
+ * Teacher whiteboard tool rail grouping (pure, unit-tested).
+ * The laser pointer lives in the writing group with pen, highlighter and
+ * text (Nov 25: "laser pointer option should be clubbed with the text and
+ * writing"), so the rail has one button less.
+ */
+export type DrawGroupTool = 'pen' | 'hl' | 'text' | 'laser';
+
+export const DRAW_GROUP_TOOLS: readonly DrawGroupTool[] = ['pen', 'hl', 'text', 'laser'];
+
+export const DRAW_GROUP_LABEL = 'Write: pen, highlighter, text, laser pointer';
+
+/** Icon the group button shows: the active writing tool, else the pen. */
+export function drawGroupIcon(tool: string): 'pen' | 'highlighter' | 'text' | 'laser' {
+  if (tool === 'hl') return 'highlighter';
+  if (tool === 'text') return 'text';
+  if (tool === 'laser') return 'laser';
+  return 'pen';
+}

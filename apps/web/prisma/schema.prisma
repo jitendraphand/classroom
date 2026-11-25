@@ -187,7 +187,10 @@ model TimetableSlot {
   id            String             @id @default(cuid())
   teacherId     String
   teacher       Teacher            @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  /// Primary campus (first of `campuses`); kept for indexes and older readers.
   campus        String
+  /// Every campus the slot covers (any combination). Read via audienceCampuses().
+  campuses      String[]           @default([])
   grade         String
   /// Combined divisions (e.g. ["A","B"]); ignored when allDivisions.
   divisions     String[]
@@ -208,6 +211,7 @@ model TimetableSlot {
 
   @@index([teacherId, weekday])
   @@index([campus, grade, weekday])
+  @@index([campuses], type: Gin)
   @@index([academicYear])
 }
 
@@ -230,8 +234,10 @@ model ScheduleOverride {
   /// MODIFY: substitute teacher; EXTRA: the teacher.
   teacherId    String?
   teacher      Teacher?       @relation(fields: [teacherId], references: [id], onDelete: Cascade)
-  /// EXTRA (and optionally MODIFY): audience.
+  /// EXTRA (and optionally MODIFY): audience. `campus` is the primary campus.
   campus       String?
+  /// Every campus of the audience (any combination); empty = just `campus`.
+  campuses     String[]       @default([])
   grade        String?
   divisions    String[]
   allDivisions Boolean        @default(false)
@@ -265,7 +271,10 @@ model ClassSession {
   teacher        Teacher            @relation(fields: [teacherId], references: [id], onDelete: Cascade)
   roomId         String?
   room           Room?              @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  /// Primary campus (first of `campuses`).
   campus         String
+  /// Every campus of the class (any combination). Read via audienceCampuses().
+  campuses       String[]           @default([])
   grade          String
   divisions      String[]
   allDivisions   Boolean            @default(false)
@@ -285,6 +294,7 @@ model ClassSession {
 
   @@index([teacherId, sessionDate])
   @@index([campus, grade, sessionDate])
+  @@index([campuses], type: Gin)
   @@index([sessionDate])
   @@index([academicYear])
 }

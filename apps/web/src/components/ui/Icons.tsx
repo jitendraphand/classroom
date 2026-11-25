@@ -24,6 +24,18 @@ export function IconMicOff(p: P) {
   );
 }
 
+/** Mic off with a padlock: muted and not allowed to unmute (roster, Nov 25). */
+export function IconMicLock(p: P) {
+  return (
+    <svg {...base(p)}>
+      <path d="m3 3 13 13M9 9v3a3 3 0 0 0 4.2 2.7M15 9.3V6a3 3 0 0 0-5.7-1.3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M5 11a7 7 0 0 0 7 7M12 18v3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <rect x="15" y="15" width="7" height="6" rx="1.2" fill="currentColor" />
+      <path d="M16.6 15v-1.4a1.9 1.9 0 0 1 3.8 0V15" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
 export function IconCam(p: P) {
   return (
     <svg {...base(p)}>

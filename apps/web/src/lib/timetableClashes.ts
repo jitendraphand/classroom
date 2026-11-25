@@ -4,10 +4,14 @@
  * shared division, or a whole-grade slot). Shown on the admin timetable so
  * clashes are visible at a glance; saving one still asks the admin to confirm.
  */
+import { audienceCampuses } from './grades';
+
 export type ClashSlot = {
   id: string;
   teacherId: string;
   campus: string;
+  /** Every campus of the slot; empty/missing = just `campus`. */
+  campuses?: string[];
   grade: string;
   divisions: string[];
   allDivisions: boolean;
@@ -32,7 +36,8 @@ function datesOverlap(a: ClashSlot, b: ClashSlot): boolean {
 }
 
 function sameClass(a: ClashSlot, b: ClashSlot): boolean {
-  if (a.campus !== b.campus || a.grade !== b.grade) return false;
+  const bc = new Set(audienceCampuses(b));
+  if (!audienceCampuses(a).some((c) => bc.has(c)) || a.grade !== b.grade) return false;
   if (a.allDivisions || b.allDivisions) return true;
   return a.divisions.some((d) => b.divisions.includes(d));
 }

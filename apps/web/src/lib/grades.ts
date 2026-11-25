@@ -78,8 +78,38 @@ export function displayDivision(d: string): string {
 
 export type Assignment = { campus: string; grade: string; division: string };
 
-/** Audience of a class / slot: one campus, one grade, some (or all) divisions. */
-export type Audience = { campus: string; grade: string; divisions: string[]; allDivisions: boolean };
+/**
+ * Audience of a class / slot: one grade, some (or all) divisions, and one or
+ * more campuses. `campus` is the first (primary) campus, kept on every row for
+ * indexes and older readers; `campuses` lists every campus (Nov 25: a slot or
+ * ad-hoc class may cover any combination of campuses). Rows written before
+ * `campuses` existed have it empty (or missing): read through audienceCampuses.
+ */
+export type Audience = { campus: string; campuses?: string[] | null; grade: string; divisions: string[]; allDivisions: boolean };
+
+/** Every campus of an audience, canonical and de-duplicated, primary first. */
+export function audienceCampuses(a: { campus?: string | null; campuses?: string[] | null }): string[] {
+  const out: string[] = [];
+  for (const c of [a.campus ?? '', ...(a.campuses ?? [])]) {
+    const n = normalizeCampus(c);
+    if (n && !out.includes(n)) out.push(n);
+  }
+  return out;
+}
+
+/**
+ * Normalise a campus selection (string or list, any spelling) to canonical,
+ * de-duplicated codes in the given order: [primary, ...rest].
+ */
+export function parseCampusList(raw: string | string[] | null | undefined): string[] {
+  const items = Array.isArray(raw) ? raw : String(raw ?? '').split(/[,;]+/);
+  const out: string[] = [];
+  for (const c of items) {
+    const n = normalizeCampus(c);
+    if (n && !out.includes(n)) out.push(n);
+  }
+  return out;
+}
 
 /**
  * Parse "7-A, 7-B, 8-*" / "7A 7B 8 ALL" style text from the admin form, for
@@ -123,11 +153,17 @@ export function displayAssignment(a: Assignment): string {
   return `${a.campus} · ${a.grade}-${displayDivision(a.division)}`;
 }
 
-/** "CC · 7-A, B" or "CC · 7 (all divisions)". */
-export function formatAudience(campus: string, grade: string, divisions: string[], allDivisions: boolean): string {
-  const c = campus ? `${campus} · ` : '';
+/** "CC · 7-A, B" or "CC · 7 (all divisions)"; several campuses: "CC, NORTH · 7-A". */
+export function formatAudience(campus: string | string[], grade: string, divisions: string[], allDivisions: boolean): string {
+  const list = Array.isArray(campus) ? campus.filter(Boolean) : campus ? [campus] : [];
+  const c = list.length ? `${list.join(', ')} · ` : '';
   if (allDivisions) return `${c}${grade} (all divisions)`;
   return `${c}${grade}-${[...divisions].sort().map(displayDivision).join(', ')}`;
+}
+
+/** formatAudience for a row (every campus of a multi-campus audience). */
+export function formatAudienceOf(a: Audience): string {
+  return formatAudience(audienceCampuses(a), a.grade, a.divisions, a.allDivisions);
 }
 
 /**
@@ -138,11 +174,16 @@ export function formatAudience(campus: string, grade: string, divisions: string[
  */
 export function canTeachAudience(
   assignments: Assignment[],
-  campus: string,
+  campus: string | string[],
   grade: string,
   divisions: string[],
   allDivisions: boolean
 ): boolean {
+  // Several campuses: the teacher must be assigned the audience in each one.
+  if (Array.isArray(campus)) {
+    const list = parseCampusList(campus);
+    return list.length > 0 && list.every((c) => canTeachAudience(assignments, c, grade, divisions, allDivisions));
+  }
   const g = normalizeGrade(grade);
   const c = normalizeCampus(campus);
   const mine = assignments.filter((a) => normalizeCampus(a.campus) === c && normalizeGrade(a.grade) === g);
@@ -162,7 +203,7 @@ export function audienceIncludes(
   student: { campus: string; grade: string; division: string }
 ): boolean {
   const { campus, grade, division } = student;
-  if (normalizeCampus(audience.campus) !== normalizeCampus(campus)) return false;
+  if (!audienceCampuses(audience).includes(normalizeCampus(campus))) return false;
   if (normalizeGrade(audience.grade) !== normalizeGrade(grade)) return false;
   if (audience.allDivisions) return true;
   const d = normalizeDivision(division);
@@ -171,7 +212,8 @@ export function audienceIncludes(
 
 /** Do two audiences share at least one campus-grade-division? */
 export function audiencesOverlap(a: Audience, b: Audience): boolean {
-  if (normalizeCampus(a.campus) !== normalizeCampus(b.campus)) return false;
+  const bc = new Set(audienceCampuses(b));
+  if (!audienceCampuses(a).some((c) => bc.has(c))) return false;
   if (normalizeGrade(a.grade) !== normalizeGrade(b.grade)) return false;
   if (a.allDivisions || b.allDivisions) return true;
   const set = new Set(a.divisions.map(normalizeDivision));

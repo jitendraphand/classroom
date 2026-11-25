@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
-import { CampusSelect, DivisionSelect, DivisionsPicker, GradeSelect, defaultCampus, useGradeOptions } from '@/components/admin/GradePickers';
+import { CampusSelect, CampusesPicker, DivisionSelect, DivisionsPicker, GradeSelect, defaultCampus, useGradeOptions } from '@/components/admin/GradePickers';
 import { api } from '@/lib/clientFetch';
 import { cn } from '@/lib/cn';
 import { modifyLabel, substituteProblem } from '@/lib/overrideRules';
@@ -20,6 +20,8 @@ type Slot = {
   teacherId: string;
   teacherName: string;
   campus: string;
+  /** Every campus the slot covers (primary first). */
+  campuses?: string[];
   grade: string;
   divisions: string[];
   allDivisions: boolean;
@@ -55,7 +57,8 @@ const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
 
 const emptySlot = {
   teacherId: '',
-  campus: '',
+  /** Any combination of campuses, like divisions (Nov 25). */
+  campuses: [] as string[],
   grade: '',
   divisions: '',
   subject: '',
@@ -106,7 +109,7 @@ function TimetableEditor() {
     date: '',
     slotId: '',
     teacherId: '',
-    campus: '',
+    campuses: [] as string[],
     grade: '',
     divisions: '',
     subject: '',
@@ -167,9 +170,15 @@ function TimetableEditor() {
       setError('Pick at least one day.');
       return;
     }
+    const campuses = slotForm.campuses.length ? slotForm.campuses : [defaultCampus(gradeOptions)].filter(Boolean);
+    if (!campuses.length) {
+      setError('Pick at least one campus.');
+      return;
+    }
     const body = {
       ...slotForm,
-      campus: slotForm.campus || defaultCampus(gradeOptions),
+      campus: campuses[0],
+      campuses,
       weekday: days[0],
       weekdays: editingId ? undefined : days,
       effectiveFrom: slotForm.effectiveFrom || null,
@@ -192,7 +201,7 @@ function TimetableEditor() {
     setSlotForm({
       ...emptySlot,
       teacherId: slotForm.teacherId,
-      campus: slotForm.campus,
+      campuses: slotForm.campuses,
       grade: slotForm.grade,
       divisions: slotForm.divisions,
       weekdays: slotForm.weekdays,
@@ -204,7 +213,7 @@ function TimetableEditor() {
     setEditingId(s.id);
     setSlotForm({
       teacherId: s.teacherId,
-      campus: s.campus,
+      campuses: s.campuses?.length ? s.campuses : [s.campus],
       grade: s.grade,
       divisions: s.allDivisions ? 'ALL' : s.divisions.join(', '),
       subject: s.subject,
@@ -241,12 +250,14 @@ function TimetableEditor() {
       setError(same);
       return;
     }
+    const ovCampuses = ov.campuses.length ? ov.campuses : [defaultCampus(gradeOptions)].filter(Boolean);
     const body = {
       kind: ov.kind,
       date: ov.date,
       slotId: ov.kind === 'EXTRA' ? null : ov.slotId || null,
       teacherId: ov.teacherId || null,
-      campus: ov.kind === 'EXTRA' ? ov.campus || defaultCampus(gradeOptions) || null : null,
+      campus: ov.kind === 'EXTRA' ? ovCampuses[0] || null : null,
+      campuses: ov.kind === 'EXTRA' ? ovCampuses : null,
       grade: ov.grade || null,
       divisions: ov.divisions || null,
       subject: ov.subject || null,
@@ -264,7 +275,7 @@ function TimetableEditor() {
       return;
     }
     setNotice('Change saved.');
-    setOv({ ...ov, slotId: '', teacherId: '', campus: '', grade: '', divisions: '', subject: '', start: '', end: '', note: '' });
+    setOv({ ...ov, slotId: '', teacherId: '', campuses: [], grade: '', divisions: '', subject: '', start: '', end: '', note: '' });
     void load();
   }
 
@@ -419,15 +430,14 @@ function TimetableEditor() {
               ))}
             </select>
           </label>
-          <label className="block">
-            <span className="label">Campus</span>
-            <CampusSelect
-              required
-              value={slotForm.campus || defaultCampus(gradeOptions)}
-              onChange={(c) => setSlotForm({ ...slotForm, campus: c })}
+          <div className="block sm:col-span-2 lg:col-span-1">
+            <span className="label">Campuses</span>
+            <CampusesPicker
+              value={slotForm.campuses.length ? slotForm.campuses : [defaultCampus(gradeOptions)].filter(Boolean)}
+              onChange={(c) => setSlotForm({ ...slotForm, campuses: c })}
               options={gradeOptions}
             />
-          </label>
+          </div>
           <label className="block">
             <span className="label">Grade</span>
             <GradeSelect
@@ -586,10 +596,14 @@ function TimetableEditor() {
               </label>
               {ov.kind === 'EXTRA' && (
                 <>
-                  <label className="block">
-                    <span className="label">Campus</span>
-                    <CampusSelect required value={ov.campus || defaultCampus(gradeOptions)} onChange={(c) => setOv({ ...ov, campus: c })} options={gradeOptions} />
-                  </label>
+                  <div className="block sm:col-span-2 lg:col-span-1">
+                    <span className="label">Campuses</span>
+                    <CampusesPicker
+                      value={ov.campuses.length ? ov.campuses : [defaultCampus(gradeOptions)].filter(Boolean)}
+                      onChange={(c) => setOv({ ...ov, campuses: c })}
+                      options={gradeOptions}
+                    />
+                  </div>
                   <label className="block">
                     <span className="label">Grade</span>
                     <GradeSelect

@@ -3,7 +3,7 @@ import { academicYearForDate, isAcademicYearLabel } from './academicYear';
 import { listAcademicYears } from './academicYears';
 import { classTone, TONE_LABEL, type ClassTone } from './capacity';
 import { averageStars, presentStars } from './feedbackText';
-import { formatAudience } from './grades';
+import { formatAudienceOf } from './grades';
 import { latestRank, ensureWeeklySnapshots } from './rankingService';
 import { occurrenceBaseKey, pickSessionForOccurrence } from './occurrenceRuns';
 import { formatHHMM, isLocalDate, localDateOf, localMinuteOf } from './schedule';
@@ -198,7 +198,7 @@ export async function buildTeacherHome(teacherId: string, url: URL) {
       id: cs.id,
       date,
       subject: cs.subject,
-      audience: formatAudience(cs.campus, cs.grade, cs.divisions, cs.allDivisions),
+      audience: formatAudienceOf(cs),
       grade: cs.grade,
       divisions: cs.divisions,
       allDivisions: cs.allDivisions,
@@ -226,7 +226,7 @@ export async function buildTeacherHome(teacherId: string, url: URL) {
       id: null,
       date,
       subject: o.subject,
-      audience: formatAudience(o.campus, o.grade, o.divisions, o.allDivisions),
+      audience: formatAudienceOf(o),
       grade: o.grade,
       divisions: o.divisions,
       allDivisions: o.allDivisions,

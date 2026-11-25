@@ -1,7 +1,9 @@
 import type { ClassSession, Room } from '@prisma/client';
 import { naturalCompare } from './naturalSort';
 import { prisma } from './db';
-import { formatAudience } from './grades';
+import { formatAudienceOf } from './grades';
+import { studentPlaceLabel } from './audienceLabels';
+import { loadAudienceLabels } from './audienceLabelStore';
 import { livekitRoomName } from './livekit';
 import { listRoomParticipants } from './teacherPresence';
 import { isOngoingClass, summarizeRoomParticipants, type LiveClass } from './liveClassesLogic';
@@ -80,7 +82,7 @@ function toLiveClass(room: RoomWithTeacher, cs: ClassSession, p: Awaited<ReturnT
     classSessionId: cs.id,
     title: room.name,
     subject: cs.subject,
-    gradeDivision: formatAudience(cs.campus, cs.grade, cs.divisions, cs.allDivisions),
+    gradeDivision: formatAudienceOf(cs),
     campus: cs.campus,
     teacherName: room.teacher.name,
     startedAt: cs.startedAt!.toISOString(),
@@ -125,6 +127,7 @@ export async function getLiveClass(
   const p = await presence(room, cs);
 
   let students: LiveRosterStudent[] = [];
+  const labels = await loadAudienceLabels().catch(() => undefined);
   if (p.studentIdentities) {
     const identities = p.studentIdentities;
     const rows = identities.length
@@ -150,7 +153,7 @@ export async function getLiveClass(
         students.push({
           id: st.id,
           name: st.name.trim() || row?.displayName?.trim() || 'Student',
-          gradeDivision: `${st.campus} · ${st.grade}-${st.division}`,
+          gradeDivision: studentPlaceLabel(st, labels),
           rollNumber: st.rollNumber,
         });
       } else {
@@ -177,7 +180,7 @@ export async function getLiveClass(
         ? {
             id: s.id,
             name: s.name.trim() || 'Student',
-            gradeDivision: `${s.campus} · ${s.grade}-${s.division}`,
+            gradeDivision: studentPlaceLabel(s, labels),
             rollNumber: s.rollNumber,
           }
         : { id, name: 'Student', gradeDivision: 'Guest', rollNumber: null };

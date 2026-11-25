@@ -101,7 +101,8 @@ test('wired: leave, disconnect, limit change, idle sweep, awaited mutes, labels,
   }
   for (const f of ['components/classroom/Controls.tsx', 'components/classroom/ClassroomRoom.tsx', 'components/classroom/TeacherShareHud.tsx', 'components/classroom/MeetingBar.tsx']) {
     assert.doesNotMatch(src(f), /Unmute all/, f);
-    assert.match(src(f), /Allow all to unmute/, f);
+    // Nov 25: no "Allow all to unmute" anywhere; students are unmuted one at a time.
+    assert.doesNotMatch(src(f), /Allow all to unmute/, f);
   }
   assert.match(src('components/classroom/ClassroomRoom.tsx'), /const askByHand = !isTeacher && effectiveMuted;/);
 });

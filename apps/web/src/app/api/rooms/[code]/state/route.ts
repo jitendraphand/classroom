@@ -1,5 +1,7 @@
 import { whiteboardOn } from '@/lib/whiteboardServer';
 import { camWanted } from '@/lib/camOnDemand';
+import { studentCamMap } from '@/lib/studentCamera';
+import { studentCameraAllowed } from '@/lib/speakingRules';
 import { prisma } from '@/lib/db';
 import { endedSessionReason, getStudentSessionToken, resolveRoomAccess } from '@/lib/auth';
 import { recentTakeovers, wasReplaced } from '@/lib/deviceTakeoverServer';
@@ -7,7 +9,7 @@ import { jsonError, jsonOk } from '@/lib/response';
 import { clampMaxVisible, ensureSampleFresh, getVisibleSample } from '@/lib/sample';
 import { ensureRedis, keys } from '@/lib/redis';
 import { audienceIncludes } from '@/lib/grades';
-import { formatStudentAudience } from '@/lib/audienceLabels';
+import { formatStudentAudienceOf, studentPlaceLabel } from '@/lib/audienceLabels';
 import { loadAudienceLabels } from '@/lib/audienceLabelStore';
 import { manualStudentJoinAllowed } from '@/lib/schoolConfig';
 import { decodeFocus } from '@/lib/focusStatus';
@@ -231,6 +233,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
         select: {
           id: true,
           campus: true,
+          campuses: true,
           grade: true,
           divisions: true,
           allDivisions: true,
@@ -253,12 +256,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       for (const r of recs) lateByStudent.set(r.studentId, r.late);
     }
   }
+  const audienceLabels = await loadAudienceLabels().catch(() => undefined);
   const classInfo = classSession
     ? {
         subject: classSession.subject,
         teacherName: classSession.teacher?.name || room.teacher.name,
         teacherGender: teacherGenderOf(classSession.teacher?.gender || room.teacher.gender),
-        audience: formatStudentAudience(classSession.campus, classSession.grade, classSession.divisions, classSession.allDivisions, await loadAudienceLabels().catch(() => undefined)),
+        audience: formatStudentAudienceOf(classSession, audienceLabels),
         scheduledStart: classSession.scheduledStart ? classSession.scheduledStart.toISOString() : null,
         scheduledEnd: classSession.scheduledEnd ? classSession.scheduledEnd.toISOString() : null,
         classSessionId: classSession.id,
@@ -271,7 +275,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     return {
       rollNumber: st?.rollNumber ?? null,
       sid: st?.externalId ?? null,
-      gradeDivision: st ? `${st.campus} · ${st.grade}-${st.division}` : null,
+      gradeDivision: st ? studentPlaceLabel(st, audienceLabels) : null,
       late: p.studentId ? lateByStudent.get(p.studentId) ?? false : false,
       onTimetable: !!st && !!classSession && audienceIncludes(classSession, st),
       viaSchoolApp: !!p.studentId,
@@ -281,6 +285,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   // Explicit leave drops off after a short grace. A late heartbeat stays
   // listed as reconnecting (lib/studentPresence) so the count matches who is
   // still in the room.
+  const camMap = isTeacher ? await studentCamMap(code).catch(() => new Map<string, boolean>()) : new Map<string, boolean>();
   const presence = isTeacher
     ? await studentRosterPresence(code)
     : { gone: new Set<string>(), reconnecting: new Set<string>() };
@@ -307,8 +312,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       ? room.participants.find((p) => p.id === access.student!.id)
       : null;
 
+  // A teacher-unmuted student may publish camera outside the sample: the
+  // teacher's speaking pop-up shows them (lib/speakingRules).
+  const meUnmuted = !!me && me.role === 'STUDENT' && !me.mutedByTeacher && !mutedIds.includes(me.id);
   const canPublishVideo =
-    isTeacher || (me ? visible.includes(me.livekitIdentity) : false);
+    isTeacher || (me ? studentCameraAllowed({ inSample: visible.includes(me.livekitIdentity), unmuted: meUnmuted }) : false);
 
   const mePayload = me
     ? {
@@ -326,7 +334,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
           isTeacher,
           inSample: canPublishVideo,
           panelRaw,
-          spotlighted: !!spotlight && spotlight.participantId === me.id,
+          spotlighted: (!!spotlight && spotlight.participantId === me.id) || meUnmuted,
         }),
         handRaised: raisedHands.includes(me.id),
         drawRequested: drawReqAt.has(me.id),
@@ -355,6 +363,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
             drawRequestedAt: drawReqAt.get(p.id) ?? null,
             reconnecting: presence.reconnecting.has(p.livekitIdentity),
             studentId: p.studentId,
+            /** Camera on (student's report): the teacher may only unmute these. */
+            camOn: camMap.get(p.livekitIdentity) === true,
           }
         : {}),
       drawing: p.role === 'STUDENT' && drawingIds.has(p.id),
@@ -389,7 +399,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
 
   return jsonOk({
     code: room.code,
-    name: room.name,
+    // Readable title (Nov 25): "Physics · Airport Campus · Grade 7 · …", not the stored codes.
+    name: classInfo ? [classInfo.subject, classInfo.audience].filter(Boolean).join(' · ') || room.name : room.name,
     status: room.status,
     maxVisibleVideos: clampMaxVisible(room.maxVisibleVideos),
     waitingRoomOn: room.waitingRoomOn,

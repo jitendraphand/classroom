@@ -96,7 +96,14 @@ export function gradeInput(raw: unknown): { name: string; label: string } | null
   const label = String(raw ?? '').trim().replace(/\s+/g, ' ').slice(0, 32);
   const name = normalizeGrade(label);
   if (!name || !/^[A-Z0-9 .-]+$/.test(name)) return null;
-  return { name, label };
+  // A bare number reads as "Grade 7" everywhere (Nov 25: "7" sat beside "Grade 6").
+  return { name, label: /^\d+$/.test(label) ? `Grade ${label}` : label };
+}
+
+/** Sort position for a new grade: numeric grades go to their number (7 → 70). */
+export function newGradeSortOrder(name: string, existing: { sortOrder: number }[]): number {
+  if (/^\d+$/.test(name)) return Number(name) * 10;
+  return existing.reduce((m, x) => Math.max(m, x.sortOrder), 0) + 10;
 }
 
 /** Clean an admin-typed division into canonical name + display label. */

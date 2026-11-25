@@ -1,9 +1,10 @@
 'use client';
 
+import { rosterMicState } from '@/lib/speakingRules';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Avatar } from '@/components/ui/Avatar';
-import { IconCam, IconCamOff, IconChat, IconFilm, IconHand, IconHandDown, IconMic, IconMicOff, IconPen, IconPin, IconScreen, IconUserPlus, IconUsers, IconVideo } from '@/components/ui/Icons';
+import { IconCam, IconCamOff, IconChat, IconFilm, IconHand, IconHandDown, IconMic, IconMicLock, IconMicOff, IconPen, IconPin, IconScreen, IconUserPlus, IconUsers, IconVideo } from '@/components/ui/Icons';
 import { toolbarInnerSize } from '@/lib/sideWindowGeometry';
 import { closeSideWindow, openSideWindow, sideWindow, SideWindowPortal, useSideWindows } from './shareSideWindows';
 import { sortRoster } from '@/lib/classSlots';
@@ -65,6 +66,10 @@ export type RosterEntry = {
   focus?: import('@/lib/focusStatus').FocusStatus;
   focusIphone?: boolean;
   gradeDivision?: string | null;
+  /** Student's camera is on (client report). Unmute needs it (Nov 25). */
+  camOn?: boolean;
+  /** Student's microphone track is on (LiveKit), for the 3-state mic button. */
+  micLive?: boolean;
   /** School-app student ID (teacher view only), for search. */
   sid?: string | null;
   /** Asked to draw on the share / drawing now. */
@@ -92,7 +97,8 @@ export type TeacherShareHudProps = {
   onToggleTeacherMic: () => void;
   onStopSharing: () => void;
   onMuteStudent: (participantId: string, muted: boolean) => void;
-  onMuteAll: (muted: boolean) => void;
+  /** Mute every student. No "allow all to unmute" (Nov 25). */
+  onMuteAll: () => void;
   onLowerHand: (participantId: string) => void;
   /** Pin / unpin a student's video in the class panel. */
   onTogglePin?: (participantId: string, pinned: boolean) => void;
@@ -328,6 +334,9 @@ background:${BADGE_AMBER};color:${BADGE_TEXT};font-size:9px;font-weight:800;disp
 .tsh-icon{display:inline-grid;place-items:center;width:28px;height:28px;padding:0;flex-shrink:0}
 .tsh-icon.is-on{background:#f59e0b;color:#111;border-color:#f59e0b}
 .tsh-icon.is-warn{color:#fcd34d;border-color:#f59e0b;background:transparent}
+.tsh-mic-locked{color:#94a3b8;background:rgba(100,116,139,.18)}
+.tsh-mic-allowed{color:#fcd34d;border-color:#f59e0b;background:transparent}
+.tsh-mic-live{color:#6ee7b7;border-color:#10b981;background:rgba(16,185,129,.2)}
 .tsh-person.is-raised{background:rgba(245,158,11,.12)}
 .tsh-person .tsh-chip{max-width:84px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0}
 .tsh-chat{height:220px;min-height:160px}
@@ -594,7 +603,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                 {shownWaiting.map((w) => (
                   <div className="tsh-person" key={w.id} title={w.displayName}>
                     <Avatar name={w.displayName} size="xs" />
-                    <span className="tsh-person-name" title={w.displayName}>{w.displayName}{w.gradeDivision && <span className="tsh-person-sub" style={{ display: 'block' }}>{w.gradeDivision}</span>}</span>
+                    <span className="tsh-person-name" title={w.displayName}>{w.displayName}</span>
                     {onRemove && <button type="button" className="tsh-btn" onClick={() => onRemove(w.id, true)} aria-label={`Deny ${w.displayName}`}>Deny</button>}
                     <button
                       type="button"
@@ -615,11 +624,8 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
               </div>
             )}
             <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
-              <button type="button" className="tsh-btn" onClick={() => onMuteAll(true)}>
+              <button type="button" className="tsh-btn" onClick={() => onMuteAll()}>
                 Mute all
-              </button>
-              <button type="button" className="tsh-btn" onClick={() => onMuteAll(false)}>
-                Allow all to unmute
               </button>
               {onWaitingRoom && (
                 <button
@@ -659,20 +665,28 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                       </span>
                     )}
                     <Avatar name={s.displayName} size="xs" />
-                    <span className="tsh-person-name" title={s.displayName}>{s.displayName}{s.gradeDivision && <span className="tsh-person-sub" style={{ display: 'block' }}>{s.gradeDivision}</span>}</span>
+                    <span className="tsh-person-name" title={s.displayName}>{s.displayName}</span>
                     {onRemove && <button type="button" className="tsh-btn" onClick={() => onRemove(s.id)} aria-label={`Remove ${s.displayName}`}>Remove</button>}
                     {focus ? <span className="tsh-chip tsh-chip-muted" title={focus}>{focus}</span> : null}
                     {s.reconnecting ? <span className="tsh-chip" title="Reconnecting">Reconnecting</span> : null}
-                    <button
-                      type="button"
-                      className={s.mutedByTeacher ? 'tsh-btn tsh-icon is-warn' : 'tsh-btn tsh-icon'}
-                      aria-pressed={!!s.mutedByTeacher}
-                      aria-label={s.mutedByTeacher ? `Unmute ${s.displayName}` : `Mute ${s.displayName}`}
-                      title={s.mutedByTeacher ? `Unmute ${s.displayName}` : `Mute ${s.displayName}`}
-                      onClick={() => onMuteStudent(s.id, !s.mutedByTeacher)}
-                    >
-                      {s.mutedByTeacher ? <IconMicOff size={13} /> : <IconMic size={13} />}
-                    </button>
+                    {(() => {
+                      const mic = rosterMicState({ name: s.displayName, mutedByTeacher: !!s.mutedByTeacher, micLive: !!s.micLive, camOn: s.camOn });
+                      return (
+                        <button
+                          type="button"
+                          className={`tsh-btn tsh-icon tsh-mic-${mic.state}`}
+                          data-testid={`hud-mic-${mic.state}`}
+                          aria-pressed={mic.state !== 'locked'}
+                          aria-label={mic.label}
+                          title={mic.label}
+                          disabled={mic.disabled}
+                          style={mic.disabled ? { opacity: 0.4, cursor: 'not-allowed' } : undefined}
+                          onClick={() => onMuteStudent(s.id, mic.action === 'mute')}
+                        >
+                          {mic.state === 'locked' ? <IconMicLock size={13} /> : mic.state === 'allowed' ? <IconMicOff size={13} /> : <IconMic size={13} />}
+                        </button>
+                      );
+                    })()}
                     {onTogglePin && (
                       <button
                         type="button"
@@ -955,7 +969,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
               handsPage.shown.map((s) => (
                 <div className="tsh-person" key={s.id}>
                   <Avatar name={s.displayName} size="sm" />
-                  <span className="tsh-person-name" title={s.displayName}>{s.displayName}{s.gradeDivision && <span className="tsh-person-sub" style={{ display: 'block' }}>{s.gradeDivision}</span>}</span>
+                  <span className="tsh-person-name" title={s.displayName}>{s.displayName}</span>
                   <button type="button" className="tsh-btn" onClick={() => onLowerHand(s.id)}>
                     Lower
                   </button>

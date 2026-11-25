@@ -28,10 +28,10 @@ export async function campusUsage(campus: string): Promise<Usage> {
   const c = normalizeCampus(campus);
   const [assign, slots, overrides, students, sessions] = await Promise.all([
     prisma.teacherAssignment.count({ where: { campus: c, teacher: { deletedAt: null } } }),
-    prisma.timetableSlot.count({ where: { campus: c } }),
-    prisma.scheduleOverride.count({ where: { campus: c } }),
+    prisma.timetableSlot.count({ where: { OR: [{ campus: c }, { campuses: { has: c } }] } }),
+    prisma.scheduleOverride.count({ where: { OR: [{ campus: c }, { campuses: { has: c } }] } }),
     prisma.student.count({ where: { campus: c, deletedAt: null } }),
-    prisma.classSession.count({ where: { campus: c } }),
+    prisma.classSession.count({ where: { OR: [{ campus: c }, { campuses: { has: c } }] } }),
   ]);
   return [
     { what: 'teacher assignment(s)', count: assign, examples: [] },
@@ -47,10 +47,10 @@ export async function campusUsageCounts(): Promise<Record<string, number>> {
     SELECT c, SUM(n)::int AS n FROM (
       SELECT a.campus AS c, COUNT(*) AS n FROM "TeacherAssignment" a
         JOIN "Teacher" t ON t.id = a."teacherId" WHERE t."deletedAt" IS NULL GROUP BY 1
-      UNION ALL SELECT campus, COUNT(*) FROM "TimetableSlot" GROUP BY 1
-      UNION ALL SELECT campus, COUNT(*) FROM "ScheduleOverride" WHERE campus IS NOT NULL GROUP BY 1
+      UNION ALL SELECT c2, COUNT(*) FROM "TimetableSlot", unnest(CASE WHEN cardinality("campuses") > 0 THEN "campuses" ELSE ARRAY["campus"] END) AS c2 GROUP BY 1
+      UNION ALL SELECT c2, COUNT(*) FROM "ScheduleOverride", unnest(CASE WHEN cardinality("campuses") > 0 THEN "campuses" ELSE ARRAY["campus"] END) AS c2 WHERE campus IS NOT NULL GROUP BY 1
       UNION ALL SELECT campus, COUNT(*) FROM "Student" WHERE "deletedAt" IS NULL GROUP BY 1
-      UNION ALL SELECT campus, COUNT(*) FROM "ClassSession" GROUP BY 1
+      UNION ALL SELECT c2, COUNT(*) FROM "ClassSession", unnest(CASE WHEN cardinality("campuses") > 0 THEN "campuses" ELSE ARRAY["campus"] END) AS c2 GROUP BY 1
     ) x GROUP BY c`);
   const out: Record<string, number> = {};
   for (const r of rows) out[normalizeCampus(r.c)] = (out[normalizeCampus(r.c)] ?? 0) + Number(r.n);

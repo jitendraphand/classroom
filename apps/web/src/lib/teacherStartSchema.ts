@@ -15,7 +15,10 @@ export const startClassSchema = z.discriminatedUnion('kind', [
   }),
   z.object({
     kind: z.literal('adhoc'),
-    campus: z.string().min(1).max(MAX_AUDIENCE_INPUT_LENGTH),
+    /** Primary campus (older clients send only this). */
+    campus: z.string().max(MAX_AUDIENCE_INPUT_LENGTH).optional(),
+    /** Any combination of the teacher's assigned campuses (wins over `campus`). */
+    campuses: z.array(z.string().min(1).max(MAX_AUDIENCE_INPUT_LENGTH)).max(20).optional(),
     grade: z.string().min(1).max(MAX_AUDIENCE_INPUT_LENGTH),
     divisions: z.array(z.string().max(MAX_AUDIENCE_INPUT_LENGTH)).max(40).default([]),
     allDivisions: z.boolean().optional(),

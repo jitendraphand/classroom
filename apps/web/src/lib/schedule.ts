@@ -9,7 +9,7 @@
  * - weekday 0 = Sunday … 6 = Saturday (JS getDay()).
  */
 import { academicYearForDate } from './academicYear';
-import { audiencesOverlap, audienceIncludes, normalizeCampus, normalizeDivision, normalizeGrade, type Audience } from './grades';
+import { audienceCampuses, audiencesOverlap, audienceIncludes, normalizeDivision, normalizeGrade, type Audience } from './grades';
 import { slotStartsOn } from './slotEffective';
 
 export type { Audience };
@@ -38,6 +38,8 @@ export type OverrideLike = {
   slotId: string | null;
   teacherId: string | null;
   campus: string | null;
+  /** Every campus (multi-campus extra class / changed audience); empty = just `campus`. */
+  campuses?: string[];
   grade: string | null;
   divisions: string[];
   allDivisions: boolean;
@@ -216,8 +218,14 @@ export function occurrencesOn(
     const endMinute = mod?.endMinute ?? slot.endMinute;
     const teacherId = mod?.teacherId ?? slot.teacherId;
     const audience: Audience = mod?.grade
-      ? { campus: mod.campus || slot.campus, grade: mod.grade, divisions: mod.divisions, allDivisions: mod.allDivisions }
-      : { campus: slot.campus, grade: slot.grade, divisions: slot.divisions, allDivisions: slot.allDivisions };
+      ? {
+          campus: mod.campus || slot.campus,
+          campuses: mod.campus ? audienceCampuses(mod) : audienceCampuses(slot),
+          grade: mod.grade,
+          divisions: mod.divisions,
+          allDivisions: mod.allDivisions,
+        }
+      : { campus: slot.campus, campuses: audienceCampuses(slot), grade: slot.grade, divisions: slot.divisions, allDivisions: slot.allDivisions };
     out.push({
       ...audience,
       key: occurrenceKeyForSlot(slot.id, date),
@@ -241,6 +249,7 @@ export function occurrencesOn(
     if (o.kind !== 'EXTRA' || !o.teacherId || !o.campus || !o.grade || o.startMinute == null || o.endMinute == null) continue;
     out.push({
       campus: o.campus,
+      campuses: audienceCampuses(o),
       grade: o.grade,
       divisions: o.divisions,
       allDivisions: o.allDivisions,
@@ -321,7 +330,7 @@ export type SlotInput = Omit<SlotLike, 'id'> & { id?: string };
 
 /** Basic field checks; returns an error message or null. */
 export function slotProblem(s: SlotInput): string | null {
-  if (!normalizeCampus(s.campus)) return 'Campus is required';
+  if (!audienceCampuses(s).length) return 'Pick at least one campus';
   if (!normalizeGrade(s.grade)) return 'Grade is required';
   if (!s.allDivisions && !s.divisions.map(normalizeDivision).filter(Boolean).length) {
     return 'Pick at least one division (or all divisions)';

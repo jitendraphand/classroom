@@ -3,10 +3,13 @@
 /**
  * Whiteboard meeting column, docked on the right. Same order as the Windows
  * MeetingBar: mic, camera, chat, people/hands, admit, student drawing,
- * mute all, student videos, Stop whiteboard, End.
+ * mute all, student videos, class info, Stop whiteboard, End.
+ * No allow-all-unmute (Nov 25): students are unmuted one at a time
+ * from the roster, and only while their camera is on.
  */
-import type { ReactNode } from 'react';
-import { IconCam, IconCamOff, IconChat, IconHand, IconMic, IconMicOff, IconPen, IconScreen, IconSpeaker, IconSpeakerOff, IconUserPlus, IconUsers, IconVideo } from '@/components/ui/Icons';
+import { useEffect, type ReactNode } from 'react';
+import { notifyFloatBounds } from './FloatingPanel';
+import { IconCam, IconCamOff, IconChat, IconHand, IconMic, IconMicOff, IconPen, IconScreen, IconSpeakerOff, IconUserPlus, IconUsers, IconVideo } from '@/components/ui/Icons';
 import { FlyoutBar, barBtn, type FlyoutGroup } from '@/lib/whiteboard/FlyoutBar';
 import { ALLOW_GREEN, MEETING_BAR_PX, admitLabel, focusAlertDanger, peopleBadgeCount } from '@/lib/shareChrome';
 
@@ -31,8 +34,8 @@ export function WhiteboardMeetingBar({
   drawers,
   onAllowDraw,
   onRevokeDraw,
-  allMuted,
-  onToggleMuteAll,
+  onMuteAll,
+  info,
   videosOn,
   onToggleVideos,
   onStopWhiteboard,
@@ -56,13 +59,23 @@ export function WhiteboardMeetingBar({
   drawers: MeetingPerson[];
   onAllowDraw: (id: string) => void;
   onRevokeDraw: (id?: string) => void;
-  allMuted: boolean;
-  onToggleMuteAll: () => void;
+  /** Mutes every student (one-way; unmuting is per student). */
+  onMuteAll: () => void;
+  /** Class info (i) button, hover/tap (Nov 25: replaces the teacher header). */
+  info?: ReactNode;
   videosOn: boolean;
   onToggleVideos: () => void;
   onStopWhiteboard: () => void;
   onEndClass: () => void;
 }) {
+  // Floats (roster, chat, videos, spotlight) re-clamp left of this bar when it
+  // appears and spread back when it goes (Nov 25).
+  useEffect(() => {
+    notifyFloatBounds();
+    return () => {
+      requestAnimationFrame(() => notifyFloatBounds());
+    };
+  }, []);
   const ic = (node: ReactNode) => node;
   const waitingN = waiting.length;
   const oldest = waiting[0];
@@ -147,10 +160,9 @@ export function WhiteboardMeetingBar({
     },
     {
       id: 'muteall',
-      label: allMuted ? 'Allow all to unmute' : 'Mute all',
-      icon: ic(allMuted ? <IconSpeakerOff size={18} /> : <IconSpeaker size={18} />),
-      active: allMuted,
-      onClick: onToggleMuteAll,
+      label: 'Mute all students',
+      icon: ic(<IconSpeakerOff size={18} />),
+      onClick: onMuteAll,
       testId: 'wbm-mute-all',
     },
     {
@@ -164,6 +176,11 @@ export function WhiteboardMeetingBar({
   ];
   const tail = (
     <>
+      {info ? (
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '4px 0' }} data-testid="wbm-info">
+          {info}
+        </div>
+      ) : null}
       <span style={{ flex: 1 }} />
       <button type="button" style={barBtn(false, { background: '#b91c1c', width: 40 })} title="Stop whiteboard sharing" aria-label="Stop whiteboard sharing" data-testid="wbm-stop" onClick={onStopWhiteboard}>
         <IconScreen size={18} />

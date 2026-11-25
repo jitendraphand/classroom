@@ -13,7 +13,7 @@ import { PageLoading } from '@/components/ui/Skeleton';
 import { claimTeacherTab } from '@/lib/classroomClient';
 import { api } from '@/lib/clientFetch';
 import { loginHref } from '@/lib/sessionClient';
-import { adhocProblem } from '@/lib/adhocForm';
+import { adhocCampuses, adhocDivisions, adhocGrades, adhocProblem, type AdhocGradeChoice } from '@/lib/adhocForm';
 import { TeacherInsights } from '@/components/teacher/TeacherInsights';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { formatDate, formatTime } from '@/lib/timeFormat';
@@ -43,7 +43,7 @@ type Schedule = {
   classes: ClassItem[];
   active: { id: string | null; subject: string; audience: string; adHoc: boolean; code: string } | null;
   assignments: { campus: string; grade: string; division: string; label: string }[];
-  gradeChoices: { campus: string; grade: string; label: string; whole: boolean; divisions: { name: string; label: string }[] }[];
+  gradeChoices: AdhocGradeChoice[];
   gradesConfigured: boolean;
 };
 
@@ -70,7 +70,7 @@ export default function TeacherDashboard() {
   const [error, setError] = useState('');
   const [lastStart, setLastStart] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [adhoc, setAdhoc] = useState({ campus: '', grade: '', divisions: [] as string[], all: false, extra: '', subject: '' });
+  const [adhoc, setAdhoc] = useState({ campuses: [] as string[], grade: '', divisions: [] as string[], all: false, extra: '', subject: '' });
   const [year, setYear] = useState('');
   useDocumentTitle('Dashboard');
 
@@ -105,32 +105,40 @@ export default function TeacherDashboard() {
 
   // Assigned grades only; divisions come from Grades & divisions (active entries).
   const allChoices = useMemo(() => schedule?.gradeChoices ?? [], [schedule]);
-  // Campus first (only the teacher's assigned campuses), then that campus's grades.
-  const campuses = useMemo(() => [...new Set(allChoices.map((c) => c.campus))], [allChoices]);
-  const choices = useMemo(() => allChoices.filter((c) => c.campus === adhoc.campus), [allChoices, adhoc.campus]);
-  const grades = useMemo(() => choices.map((c) => c.grade), [choices]);
-  const choice = choices.find((c) => c.grade === adhoc.grade);
-  const gradeDivs = choice?.divisions ?? [];
-  const wholeGrade = !!choice?.whole;
+  // Grade first, then any combination of the campuses assigned for it, then
+  // any combination of the divisions offered in every chosen campus (Nov 25).
+  const grades = useMemo(() => adhocGrades(allChoices), [allChoices]);
+  const campusChoices = useMemo(() => adhocCampuses(allChoices, adhoc.grade), [allChoices, adhoc.grade]);
+  const divChoice = useMemo(() => adhocDivisions(allChoices, adhoc.grade, adhoc.campuses), [allChoices, adhoc.grade, adhoc.campuses]);
+  const gradeDivs = divChoice.divisions;
+  const wholeGrade = divChoice.whole;
   // Free-text extra divisions only before the admin has set up Grades & divisions.
   const freeTextExtra = wholeGrade && !schedule?.gradesConfigured;
 
   useEffect(() => {
-    if ((!adhoc.campus || !campuses.includes(adhoc.campus)) && campuses.length)
-      setAdhoc((a) => ({ ...a, campus: campuses[0]!, grade: '', divisions: [], all: false }));
-  }, [campuses, adhoc.campus]);
-  useEffect(() => {
-    if ((!adhoc.grade || !grades.includes(adhoc.grade)) && grades.length) setAdhoc((a) => ({ ...a, grade: grades[0]!, divisions: [], all: false }));
+    if ((!adhoc.grade || !grades.some((g) => g.grade === adhoc.grade)) && grades.length)
+      setAdhoc((a) => ({ ...a, grade: grades[0]!.grade, campuses: [], divisions: [], all: false }));
   }, [grades, adhoc.grade]);
-  // Tick the first division of the chosen grade by default (Start used to do
-  // nothing visible with every box unticked).
+  // One campus for this grade: pick it. Several: the teacher ticks them.
   useEffect(() => {
+    const valid = adhoc.campuses.filter((c) => campusChoices.some((x) => x.campus === c));
+    if (valid.length !== adhoc.campuses.length) setAdhoc((a) => ({ ...a, campuses: valid }));
+    else if (!valid.length && campusChoices.length === 1) setAdhoc((a) => ({ ...a, campuses: [campusChoices[0]!.campus] }));
+  }, [campusChoices, adhoc.campuses]);
+  // Drop divisions no longer offered in every chosen campus; tick the first by default.
+  useEffect(() => {
+    const keep = adhoc.divisions.filter((d) => gradeDivs.some((x) => x.name === d));
+    if (keep.length !== adhoc.divisions.length) {
+      setAdhoc((a) => ({ ...a, divisions: keep }));
+      return;
+    }
     const first = gradeDivs[0]?.name;
     if (first && !adhoc.all && adhoc.divisions.length === 0 && !adhoc.extra)
       setAdhoc((a) => (a.divisions.length || a.all ? a : { ...a, divisions: [first] }));
-    // Only when the grade (and so its divisions) changes, not on every tick.
+    if (adhoc.all && !wholeGrade) setAdhoc((a) => ({ ...a, all: false }));
+    // Only when the grade / campuses (and so the divisions) change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adhoc.campus, adhoc.grade, gradeDivs.length]);
+  }, [adhoc.grade, adhoc.campuses.join(','), gradeDivs.length, wholeGrade]);
   const [adhocError, setAdhocError] = useState('');
 
   async function go(code: string) {
@@ -161,11 +169,19 @@ export default function TeacherDashboard() {
       .map((d) => d.trim())
       .filter(Boolean);
     const divisions = [...adhoc.divisions.filter((d) => d !== '*'), ...extra];
-    const problem = adhocProblem({ campus: adhoc.campus, grade: adhoc.grade, all: adhoc.all, divisions });
+    const problem = adhocProblem({ campuses: adhoc.campuses, grade: adhoc.grade, all: adhoc.all, divisions });
     setAdhocError(problem ?? '');
     if (problem) return;
     void start(
-      { kind: 'adhoc', campus: adhoc.campus, grade: adhoc.grade, divisions, allDivisions: adhoc.all, subject: adhoc.subject || undefined },
+      {
+        kind: 'adhoc',
+        campus: adhoc.campuses[0],
+        campuses: adhoc.campuses,
+        grade: adhoc.grade,
+        divisions,
+        allDivisions: adhoc.all,
+        subject: adhoc.subject || undefined,
+      },
       'adhoc'
     );
   }
@@ -330,34 +346,41 @@ export default function TeacherDashboard() {
           <form onSubmit={startAdhoc} className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-3">
               <label className="block">
-                <span className="label">Campus</span>
-                <select
-                  className="input"
-                  value={adhoc.campus}
-                  onChange={(e) => setAdhoc({ ...adhoc, campus: e.target.value, grade: '', divisions: [], all: false, extra: '' })}
-                  aria-label="Campus"
-                >
-                  {campuses.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="block">
                 <span className="label">Grade</span>
                 <select
                   className="input"
                   value={adhoc.grade}
-                  onChange={(e) => setAdhoc({ ...adhoc, grade: e.target.value, divisions: [], all: false, extra: '' })}
+                  onChange={(e) => setAdhoc({ ...adhoc, grade: e.target.value, campuses: [], divisions: [], all: false, extra: '' })}
+                  aria-label="Grade"
                 >
-                  {choices.map((c) => (
-                    <option key={`${c.campus}|${c.grade}`} value={c.grade}>
-                      {c.label !== c.grade ? `${c.label} (${c.grade})` : c.grade}
+                  {grades.map((g) => (
+                    <option key={g.grade} value={g.grade}>
+                      {g.label}
                     </option>
                   ))}
                 </select>
               </label>
+              <fieldset className="block">
+                <legend className="label">Campuses</legend>
+                <div className="flex flex-wrap gap-3 pt-2" data-testid="adhoc-campuses">
+                  {campusChoices.map((c) => (
+                    <label key={c.campus} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={adhoc.campuses.includes(c.campus)}
+                        onChange={(e) => {
+                          setAdhocError('');
+                          setAdhoc({
+                            ...adhoc,
+                            campuses: e.target.checked ? [...adhoc.campuses, c.campus] : adhoc.campuses.filter((x) => x !== c.campus),
+                          });
+                        }}
+                      />
+                      {c.label}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
               <Input
                 label="Subject / title"
                 name="subject"
@@ -370,6 +393,7 @@ export default function TeacherDashboard() {
             <fieldset>
               <legend className="label">Divisions</legend>
               <div className="flex flex-wrap gap-3">
+                {!adhoc.campuses.length && <span className="text-sm text-slate-400">Choose a campus first.</span>}
                 {gradeDivs.map((d) => (
                   <label key={d.name} className="flex items-center gap-2 text-sm">
                     <input
@@ -384,7 +408,7 @@ export default function TeacherDashboard() {
                         });
                       }}
                     />
-                    {adhoc.grade}-{d.label}
+                    {d.label}
                   </label>
                 ))}
                 {wholeGrade && (
@@ -393,7 +417,7 @@ export default function TeacherDashboard() {
                         setAdhocError('');
                         setAdhoc({ ...adhoc, all: e.target.checked });
                       }} />
-                    All divisions of grade {adhoc.grade}
+                    All divisions of {grades.find((g) => g.grade === adhoc.grade)?.label ?? `grade ${adhoc.grade}`}
                   </label>
                 )}
               </div>

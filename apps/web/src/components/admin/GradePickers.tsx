@@ -13,7 +13,6 @@ import { api } from '@/lib/clientFetch';
 import { cn } from '@/lib/cn';
 import {
   ALL_DIVISIONS,
-  displayAssignment,
   displayDivision,
   formatAssignment,
   normalizeDivision,
@@ -25,6 +24,9 @@ import {
 } from '@/lib/grades';
 import type { GradeOption } from '@/lib/gradeMasterLogic';
 import type { CampusOption } from '@/lib/campusLogic';
+import { displayCampusLabel, displayFoundationLabel, displayGradeLabel } from '@/lib/audienceLabels';
+import { addAssignments } from '@/lib/assignmentPick';
+import { sortGradeOptions } from '@/lib/gradeOrder';
 
 export type GradeOptions = {
   grades: GradeOption[];
@@ -76,7 +78,8 @@ export function defaultCampus(options: GradeOptions): string {
   return options.campuses.length === 1 ? options.campuses[0].name : '';
 }
 
-const campusLabel = (c: CampusOption) => (c.label && c.label !== c.name ? `${c.label} (${c.name})` : c.name);
+/** "Airport Campus": the readable label only (no "(AIRPORTCAMPUS)" code suffix). */
+const campusLabel = (c: CampusOption) => displayCampusLabel(c.name, { campuses: [c] }) || c.name;
 
 type CampusSelectProps = {
   value: string;
@@ -127,7 +130,65 @@ export function CampusSelect({ value, onChange, options, emptyLabel = 'Campus…
   );
 }
 
-const gradeLabel = (g: GradeOption) => (g.label && g.label !== g.name ? `${g.label} (${g.name})` : g.name);
+type CampusesPickerProps = {
+  /** Canonical campus codes, primary first. */
+  value: string[];
+  onChange: (campuses: string[]) => void;
+  options: GradeOptions;
+  /** Limit to these canonical campuses (teacher's assigned campuses). */
+  only?: string[];
+  className?: string;
+};
+
+/**
+ * Multi-select of campuses (any combination), like DivisionsPicker. Nov 25:
+ * a weekly slot, extra class or ad-hoc class may cover several campuses.
+ */
+export function CampusesPicker({ value, onChange, options, only, className }: CampusesPickerProps) {
+  if (!options.campusesConfigured && !options.loading) {
+    return (
+      <input
+        className={cn('input', className)}
+        value={value.join(', ')}
+        onChange={(e) => onChange(e.target.value.split(/[,;]+/).map((x) => normalizeCampus(x)).filter(Boolean))}
+        placeholder="Campus, or several separated by commas"
+        aria-label="Campuses"
+      />
+    );
+  }
+  const sel = value.map((c) => normalizeCampus(c)).filter(Boolean);
+  const list = options.campuses.filter((c) => !only || only.includes(c.name));
+  const extra = sel.filter((c) => !list.some((x) => x.name === c));
+  const all = list.length > 1 && list.every((c) => sel.includes(c.name));
+  const toggle = (e: React.MouseEvent, c: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onChange(sel.includes(c) ? sel.filter((x) => x !== c) : [...sel, c]);
+  };
+  return (
+    <div className={cn('flex min-h-[42px] flex-wrap items-center gap-1.5 rounded-xl border border-white/10 bg-black/20 p-1.5', className)} role="group" aria-label="Campuses">
+      {list.length > 1 && (
+        <Chip active={all} onClick={(e) => { e.preventDefault(); e.stopPropagation(); onChange(all ? [] : list.map((c) => c.name)); }}>
+          All campuses
+        </Chip>
+      )}
+      {list.map((c) => (
+        <Chip key={c.name} active={sel.includes(c.name)} onClick={(e) => toggle(e, c.name)}>
+          {campusLabel(c)}
+        </Chip>
+      ))}
+      {extra.map((c) => (
+        <Chip key={`extra-${c}`} active onClick={(e) => toggle(e, c)} title="Not in Campuses (or inactive)">
+          {c} ⚠
+        </Chip>
+      ))}
+      {!list.length && !extra.length && <span className="px-1 text-xs text-slate-500">{options.loading ? 'Loading…' : 'No campuses set up'}</span>}
+    </div>
+  );
+}
+
+/** "Grade 7": the readable label only (no "(7)" code suffix). */
+const gradeLabel = (g: GradeOption) => displayGradeLabel(g.name, { grades: [g] }) || g.name;
 
 type GradeSelectProps = {
   value: string;
@@ -156,7 +217,7 @@ export function GradeSelect({ value, onChange, options, emptyLabel = 'Choose…'
     );
   }
   const v = value ? normalizeGrade(value) : '';
-  const list = options.grades.filter((g) => !only || only.includes(g.name));
+  const list = sortGradeOptions(options.grades.filter((g) => !only || only.includes(g.name)));
   const missing = v && !list.some((g) => g.name === v);
   return (
     <select
@@ -348,10 +409,10 @@ function safeAssignments(text: string): Assignment[] {
  * Value/onChange use the "CC@7-A, CC@8-ALL" text the teachers API takes.
  */
 export function AssignmentsPicker({ value, onChange, options }: { value: string; onChange: (text: string) => void; options: GradeOptions }) {
-  const [campusPick, setCampus] = useState('');
-  const campus = campusPick || defaultCampus(options);
+  const [campusPick, setCampuses] = useState<string[]>([]);
+  const campuses = campusPick.length ? campusPick : [defaultCampus(options)].filter(Boolean);
   const [grade, setGrade] = useState('');
-  const [division, setDivision] = useState('');
+  const [divisionsText, setDivisionsText] = useState('');
   if (!options.configured && !options.loading) {
     return (
       <input className="input" value={value} onChange={(e) => onChange(e.target.value)} placeholder="CC@7-A, CC@7-B, CC@8-ALL" aria-label="Grades" />
@@ -359,14 +420,18 @@ export function AssignmentsPicker({ value, onChange, options }: { value: string;
   }
   const items = safeAssignments(value);
   const write = (list: Assignment[]) => onChange(list.map(formatAssignment).join(', '));
+  const pick = parseDivisionsText(divisionsText);
+  const canAdd = campuses.length > 0 && !!grade && (pick.all || pick.divisions.length > 0);
   const add = () => {
-    const c = normalizeCampus(campus);
-    if (!c || !grade || !division) return;
-    const d = division === 'ALL' ? ALL_DIVISIONS : division;
-    const rest = items.filter((a) => !(a.campus === c && a.grade === grade && (a.division === d || d === ALL_DIVISIONS)));
-    write([...rest, { campus: c, grade, division: d }]);
-    setDivision('');
+    if (!canAdd) return;
+    write(addAssignments(items, campuses, grade, pick));
+    setDivisionsText('');
   };
+  const labels = { campuses: options.campuses, grades: options.grades };
+  const chipLabel = (a: Assignment) =>
+    `${displayCampusLabel(a.campus, labels)} · ${displayGradeLabel(a.grade, labels)} · ${
+      a.division === ALL_DIVISIONS ? 'All divisions' : displayFoundationLabel(a.grade, a.division, labels)
+    }`;
   const known = (a: Assignment) => {
     const g = options.grades.find((x) => x.name === a.grade);
     const campusOk = !options.campusesConfigured || options.campuses.some((c) => c.name === a.campus);
@@ -385,11 +450,11 @@ export function AssignmentsPicker({ value, onChange, options }: { value: string;
               )}
               title={known(a) ? undefined : 'Not in Grades & divisions (or inactive)'}
             >
-              {displayAssignment(a)}
+              {chipLabel(a)}
               <button
                 type="button"
                 className="text-slate-400 hover:text-red-300"
-                aria-label={`Remove ${displayAssignment(a)}`}
+                aria-label={`Remove ${chipLabel(a)}`}
                 onClick={() => write(items.filter((x) => x !== a))}
               >
                 ×
@@ -400,24 +465,18 @@ export function AssignmentsPicker({ value, onChange, options }: { value: string;
           <span className="px-1 py-1 text-xs text-slate-500">No grades yet</span>
         )}
       </div>
-      <div className="flex flex-wrap gap-2">
-        <CampusSelect className="w-36" value={campus} onChange={setCampus} options={options} />
-        <GradeSelect className="w-36" value={grade} onChange={(g) => {
-            setGrade(g);
-            setDivision('');
-          }} options={options} emptyLabel="Grade…" />
-        <select className="input w-40" value={division} disabled={!grade} onChange={(e) => setDivision(e.target.value)} aria-label="Division">
-          <option value="">Division…</option>
-          <option value="ALL">All divisions</option>
-          {divisionsOf(options, grade).map((d) => (
-            <option key={d.name} value={d.name}>
-              {d.label}
-            </option>
-          ))}
-        </select>
-        <button type="button" className="btn-secondary px-3 py-1.5 text-xs" disabled={!campus || !grade || !division} onClick={add}>
-          Add
-        </button>
+      <div className="grid gap-2" data-testid="assignment-add">
+        <CampusesPicker value={campuses} onChange={setCampuses} options={options} />
+        <div className="flex flex-wrap items-start gap-2">
+          <GradeSelect className="w-36" value={grade} onChange={(g) => {
+              setGrade(g);
+              setDivisionsText('');
+            }} options={options} emptyLabel="Grade…" />
+          <DivisionsPicker className="min-w-[12rem] flex-1" grade={grade} value={divisionsText} onChange={setDivisionsText} options={options} />
+          <button type="button" className="btn-secondary px-3 py-1.5 text-xs" disabled={!canAdd} onClick={add}>
+            Add
+          </button>
+        </div>
       </div>
     </div>
   );

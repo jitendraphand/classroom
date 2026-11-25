@@ -50,6 +50,15 @@ export function floatInsets(): FloatInsets {
   return insets;
 }
 
+/** Fired when a `data-float-bound` bar appears or goes (e.g. the whiteboard meeting bar). */
+export const FLOAT_BOUNDS_EVENT = 'classroom:float-bounds';
+
+/** Tell open floats to re-clamp against the current bound bars (Nov 25). */
+export function notifyFloatBounds() {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new Event(FLOAT_BOUNDS_EVENT));
+}
+
 function viewportSize() {
   return { w: window.innerWidth, h: window.innerHeight };
 }
@@ -108,6 +117,7 @@ export function useFloatDrag(opts: {
   const desired = useRef<FloatPos | null>(null);
   const [pos, setPos] = useState<FloatPos | null>(null);
   const [maxH, setMaxH] = useState<number | null>(null);
+  const [maxW, setMaxW] = useState<number | null>(null);
   const drag = useRef<{ pointerId: number; px: number; py: number; x: number; y: number; active: boolean } | null>(null);
 
   const clampNow = useCallback(
@@ -132,6 +142,13 @@ export function useFloatDrag(opts: {
     const insets = floatInsets();
     const avail = Math.max(120, window.innerHeight - insets.top - insets.bottom - 8);
     setMaxH((prev) => (prev === avail ? prev : avail));
+    // Never wider than the room left of the right-hand toolbar (Nov 25).
+    const extra = extraRef.current?.() ?? {};
+    const availW = Math.max(
+      140,
+      window.innerWidth - Math.max(insets.left, extra.left ?? 0) - Math.max(insets.right, extra.right ?? 0) - 8
+    );
+    setMaxW((prev) => (prev === availW ? prev : availW));
     if (!want) return;
     const next = clampNow(want);
     setPos((prev) => (prev && prev.x === next.x && prev.y === next.y ? prev : next));
@@ -151,9 +168,17 @@ export function useFloatDrag(opts: {
     const vv = window.visualViewport;
     vv?.addEventListener('resize', onChange);
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(onChange) : null;
+    const observeBounds = () => document.querySelectorAll('[data-float-bound]').forEach((el) => ro?.observe(el));
     if (paneRef.current) ro?.observe(paneRef.current);
-    document.querySelectorAll('[data-float-bound]').forEach((el) => ro?.observe(el));
+    observeBounds();
+    // A bound bar mounted later (whiteboard meeting bar): observe it and re-clamp.
+    const onBounds = () => {
+      observeBounds();
+      onChange();
+    };
+    window.addEventListener(FLOAT_BOUNDS_EVENT, onBounds);
     return () => {
+      window.removeEventListener(FLOAT_BOUNDS_EVENT, onBounds);
       window.removeEventListener('resize', onChange);
       window.removeEventListener('orientationchange', onChange);
       vv?.removeEventListener('resize', onChange);
@@ -226,6 +251,7 @@ export function useFloatDrag(opts: {
   return {
     pos,
     maxH,
+    maxW,
     reclamp: apply,
     moveTo,
     handleProps: {
@@ -314,7 +340,7 @@ function FloatingPanelInner({
     return defaultMinimized;
   });
 
-  const { pos, maxH, handleProps, reclamp } = useFloatDrag({ id: storageKey, paneRef, defaultPos });
+  const { pos, maxH, maxW, handleProps, reclamp } = useFloatDrag({ id: storageKey, paneRef, defaultPos });
 
   useEffect(() => {
     writeFloatPref(`${storageKey}.min`, minimized ? '1' : '0');
@@ -331,6 +357,7 @@ function FloatingPanelInner({
       className={cn('float-panel', minimized && 'float-panel-minimized', className)}
       style={{
         ...style,
+        ...(maxW ? { maxWidth: maxW } : {}),
         height: minimized ? undefined : maxH ? Math.min(height, maxH) : height,
       }}
     >

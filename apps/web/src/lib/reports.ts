@@ -3,7 +3,7 @@ import { naturalCompare } from './naturalSort';
 import { prisma } from './db';
 import { attendanceStatus, STATUS_LABEL, tallyAttendance, totalConnectedMs, type AttendanceStatus } from './attendance';
 import { toCsv, type Cell } from './csv';
-import { audienceIncludes, formatAudience, normalizeCampus, normalizeDivision, normalizeGrade } from './grades';
+import { audienceCampuses, audienceIncludes, formatAudienceOf, normalizeCampus, normalizeDivision, normalizeGrade } from './grades';
 import { isAcademicYearLabel } from './academicYear';
 import { occurrenceBaseKey } from './occurrenceRuns';
 import { addDays, dateOnly, dateValue, daysBetween, formatHHMM, isLocalDate, localDateOf, localMinuteOf } from './schedule';
@@ -74,10 +74,13 @@ function sessionWhere(f: ReportFilter): Prisma.ClassSessionWhereInput {
   return {
     sessionDate: { gte: dateValue(f.from), lte: dateValue(f.to) },
     ...(f.teacherId ? { teacherId: f.teacherId } : {}),
-    ...(f.campus ? { campus: f.campus } : {}),
     ...(f.grade ? { grade: f.grade } : {}),
     ...(f.subject ? { subject: { contains: f.subject, mode: 'insensitive' } } : {}),
-    ...(f.division ? { OR: [{ allDivisions: true }, { divisions: { has: f.division } }] } : {}),
+    AND: [
+      // Multi-campus classes match a campus filter on any of their campuses.
+      ...(f.campus ? [{ OR: [{ campus: f.campus }, { campuses: { has: f.campus } }] }] : []),
+      ...(f.division ? [{ OR: [{ allDivisions: true }, { divisions: { has: f.division } }] }] : []),
+    ],
     ...(f.classSessionId ? { id: f.classSessionId } : {}),
     ...(f.academicYear ? { academicYear: f.academicYear } : {}),
   };
@@ -149,7 +152,7 @@ async function sessionGrades(f: ReportFilter, extra: Prisma.ClassSessionWhereInp
 /** Students the system knew for this session's audience by the time it ended. */
 function knownStudents(cs: ClassSession, index: Map<string, ReportStudent[]>, division?: string) {
   const cutoff = (cs.endedAt ?? cs.scheduledEnd ?? new Date()).getTime();
-  const group = index.get(`${normalizeCampus(cs.campus)}|${normalizeGrade(cs.grade)}`) ?? [];
+  const group = audienceCampuses(cs).flatMap((c) => index.get(`${c}|${normalizeGrade(cs.grade)}`) ?? []);
   return group.filter(
     (s) =>
       audienceIncludes(cs, s) &&
@@ -229,7 +232,7 @@ function sessionRow(cs: SessionWith, students: Map<string, ReportStudent[]>, f: 
     date: dateOnly(cs.sessionDate)!,
     subject: cs.subject,
     teacher: cs.teacher.name,
-    audience: formatAudience(cs.campus, cs.grade, cs.divisions, cs.allDivisions),
+    audience: formatAudienceOf(cs),
     type: cs.adHoc ? 'Ad-hoc' : cs.slotId ? 'Timetable' : 'Extra',
     scheduledStart: hhmm(cs.scheduledStart, tz),
     scheduledEnd: hhmm(cs.scheduledEnd, tz),
@@ -280,7 +283,7 @@ async function appendNotHeld(
         const born = createdAt.get(o.extra ? `override:${o.overrideId}` : `slot:${o.slotId}`);
         if (born != null && o.end.getTime() < born) continue;
         if (f.teacherId && o.teacherId !== f.teacherId) continue;
-        if (f.campus && o.campus !== f.campus) continue;
+        if (f.campus && !audienceCampuses(o).includes(f.campus)) continue;
         if (f.grade && o.grade !== f.grade) continue;
         if (f.division && !audienceIncludes(o, { campus: o.campus, grade: o.grade, division: f.division })) continue;
         if (f.subject && !o.subject.toLowerCase().includes(f.subject.toLowerCase())) continue;
@@ -289,7 +292,7 @@ async function appendNotHeld(
           date: o.date,
           subject: o.subject,
           teacher: teacherNames.get(o.teacherId) ?? '',
-          audience: formatAudience(o.campus, o.grade, o.divisions, o.allDivisions),
+          audience: formatAudienceOf(o),
           type: o.extra ? 'Extra' : 'Timetable',
           scheduledStart: formatHHMM(o.startMinute),
           scheduledEnd: formatHHMM(o.endMinute),
@@ -369,7 +372,7 @@ async function forEachDetailRow(f: ReportFilter, emit: (row: DetailRow) => void)
           date: dateOnly(cs.sessionDate)!,
           subject: cs.subject,
           teacher: cs.teacher.name,
-          audience: formatAudience(cs.campus, cs.grade, cs.divisions, cs.allDivisions),
+          audience: formatAudienceOf(cs),
           studentId: st.id,
           externalId: st.externalId,
           name: st.name,

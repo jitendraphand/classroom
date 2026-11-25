@@ -7,7 +7,8 @@ import { getSchoolSettings } from '@/lib/schoolSettings';
 import { updateMicBook } from '@/lib/micBook';
 import { studentSetMic } from '@/lib/micSlots';
 import { setParticipantMicAllowed } from '@/lib/livekit';
-import { getVisibleSample } from '@/lib/sample';
+import { isStudentCamOn } from '@/lib/studentCamera';
+import { CAMERA_REQUIRED, teacherUnmuteBlock } from '@/lib/speakingRules';
 
 export const dynamic = 'force-dynamic';
 
@@ -35,6 +36,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     return jsonOk({ granted: false, waiting: false, position: null, limited: false });
   }
 
+  if (body.want && teacherUnmuteBlock({ camOn: await isStudentCamOn(code, me.livekitIdentity) })) {
+    return jsonError(CAMERA_REQUIRED, 409, { reason: 'camera_off' });
+  }
   const { next } = await updateMicBook(code, (book) => ({ next: studentSetMic(book, me.id, body.want as boolean, limit) }));
 
   const redis = await ensureRedis();
@@ -47,8 +51,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
   } else {
     await prisma.participant.update({ where: { id: me.id }, data: { mutedByTeacher: false } });
     await redis.srem(keys.muted(code), me.id);
-    const { visible } = await getVisibleSample(code);
-    await setParticipantMicAllowed(code, me.livekitIdentity, true, visible.includes(me.livekitIdentity));
+    await setParticipantMicAllowed(code, me.livekitIdentity, true, true);
     pushMuteState(room.code, room.sessionId, [me.livekitIdentity], false);
   }
 
@@ -58,8 +61,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     if (nextStudent) {
       await prisma.participant.update({ where: { id: nextStudent.id }, data: { mutedByTeacher: false } });
       await redis.srem(keys.muted(code), nextStudent.id);
-      const { visible } = await getVisibleSample(code);
-      await setParticipantMicAllowed(code, nextStudent.livekitIdentity, true, visible.includes(nextStudent.livekitIdentity));
+      await setParticipantMicAllowed(code, nextStudent.livekitIdentity, true, true);
       pushMuteState(room.code, room.sessionId, [nextStudent.livekitIdentity], false);
     }
   }

@@ -144,6 +144,32 @@ export function clampWhiteboardFloat(
   return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
 }
 
+/**
+ * Narrowest class-video pane that still shows its whole header: grip, minimise
+ * and the 2 / 4 / 6 buttons (Nov 25: the "6" was cut off on a small pane).
+ */
+export const PEER_HEADER_MIN_W = 172;
+
+/**
+ * Snap a class-video pane to its tiles (Nov 25): 16:9 tiles that fill the
+ * width, the height follows, so there is no empty band beside or under the
+ * videos (2 tiles looked squashed / letterboxed). Never narrower than the
+ * header needs; the grid is centred when the header is the wider part.
+ */
+export function fitPaneToTiles(
+  pane: { w: number; h: number },
+  cols: number,
+  rows: number,
+  minW = PEER_HEADER_MIN_W
+): { paneW: number; paneH: number; tileW: number; tileH: number } {
+  const t = tilesInPane(pane.w, pane.h, cols, rows);
+  const c = Math.max(1, cols);
+  const r = Math.max(1, rows);
+  const paneW = Math.max(minW, WB_BORDER + WB_PAD + c * t.tileW + WB_GAP * (c - 1));
+  const paneH = WB_HEADER + WB_PAD + r * t.tileH + WB_GAP * (r - 1);
+  return { paneW, paneH, tileW: t.tileW, tileH: t.tileH };
+}
+
 /** Two stacked tiles, bottom-right, at most ~20% of the board, clear of the tools. */
 export function compactWhiteboardVideo(board: FloatRect, toolClear = WB_TOOL_CLEAR_PX): FloatRect {
   const margin = 8;
@@ -156,9 +182,12 @@ export function compactWhiteboardVideo(board: FloatRect, toolClear = WB_TOOL_CLE
     const paneH = WB_HEADER + WB_PAD + tileH * 2 + WB_GAP;
     return { paneW, paneH, tileW: tw, area: paneW * paneH };
   };
-  let tileW = Math.min(168, Math.max(72, maxW - WB_BORDER - WB_PAD));
+  // Nov 25: a little larger by default (192 px tiles) and never narrower than
+  // the header with its 2 / 4 / 6 buttons.
+  const minTile = PEER_HEADER_MIN_W - WB_BORDER - WB_PAD;
+  let tileW = Math.min(192, Math.max(minTile, maxW - WB_BORDER - WB_PAD));
   let m = measure(tileW);
-  for (let i = 0; i < 80 && (m.area > maxArea || m.paneW > maxW || m.paneH > maxH) && tileW > 72; i++) {
+  for (let i = 0; i < 80 && (m.area > maxArea || m.paneW > maxW || m.paneH > maxH) && tileW > minTile; i++) {
     tileW -= 2;
     m = measure(tileW);
   }

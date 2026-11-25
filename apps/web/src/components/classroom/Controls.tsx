@@ -49,8 +49,8 @@ type Props = {
   isTeacher?: boolean;
   onEnd?: () => void;
   onRotateSample?: () => void;
+  /** Teacher: mute every student (no "allow all to unmute": unmute is per student, Nov 25). */
   onMuteAll?: () => void;
-  onUnmuteAll?: () => void;
   canPublishVideo: boolean;
   mutedByTeacher?: boolean;
   /**
@@ -120,7 +120,6 @@ export function Controls({
   onEnd,
   onRotateSample,
   onMuteAll,
-  onUnmuteAll,
   canPublishVideo: _canPublishVideo,
   mutedByTeacher,
   micLockReason,
@@ -387,11 +386,6 @@ export function Controls({
         {isTeacher && onMuteAll && !isFloat && (
           <Button variant="warning" size="sm" onClick={onMuteAll}>
             Mute all
-          </Button>
-        )}
-        {isTeacher && onUnmuteAll && !isFloat && (
-          <Button variant="secondary" size="sm" onClick={onUnmuteAll}>
-            Allow all to unmute
           </Button>
         )}
 

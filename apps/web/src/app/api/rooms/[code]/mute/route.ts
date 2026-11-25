@@ -4,12 +4,19 @@ import { prisma } from '@/lib/db';
 import { getTeacherSession } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
 import { ensureRedis, keys } from '@/lib/redis';
-import { setManyParticipantMics, setParticipantMicAllowed } from '@/lib/livekit';
-import { clearPinnedSpeakers, getVisibleSample, unpinSpeaker } from '@/lib/sample';
+import { setManyParticipantMics } from '@/lib/livekit';
+import { clearPinnedSpeakers, getVisibleSample } from '@/lib/sample';
 import { getSchoolSettings } from '@/lib/schoolSettings';
 import { updateMicBook } from '@/lib/micBook';
-import { teacherSetMic } from '@/lib/micSlots';
+import { isStudentCamOn } from '@/lib/studentCamera';
+import { NO_UNMUTE_ALL, teacherUnmuteBlock } from '@/lib/speakingRules';
+import { setStudentMuted } from '@/lib/teacherMute';
 
+/**
+ * Teacher mutes everyone ({all:true, muted:true}), or mutes / unmutes one
+ * student. There is no "allow all to unmute" (Nov 25): the teacher unmutes
+ * students one by one, and only students whose camera is on (lib/speakingRules).
+ */
 const schema = z.union([
   z.object({
     all: z.literal(true),
@@ -39,149 +46,48 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
 
   try {
     const body = schema.parse(await req.json());
-    const redis = await ensureRedis();
-    const { maxOpenStudentMics: micLimit } = await getSchoolSettings();
 
     if ('all' in body) {
+      if (!body.muted) return jsonError(NO_UNMUTE_ALL, 400);
+      const redis = await ensureRedis();
+      const { maxOpenStudentMics: micLimit } = await getSchoolSettings();
       const students = await prisma.participant.findMany({
         where: { roomId: room.id, role: 'STUDENT', status: 'ADMITTED' },
         orderBy: { createdAt: 'asc' },
         select: { id: true, livekitIdentity: true },
       });
-      if (micLimit > 0) {
-        const { visible } = await getVisibleSample(code);
-        const inSample = new Set(visible);
-        if (body.muted) {
-          await updateMicBook(code, () => ({ next: { open: [], queue: [] } }));
-          await prisma.participant.updateMany({
-            where: { roomId: room.id, role: 'STUDENT', status: 'ADMITTED' },
-            data: { mutedByTeacher: true },
-          });
-          const ids = students.map((s) => s.id);
-          await replaceMutedSet(redis, code, ids);
-          await setManyParticipantMics(code, students.map((s) => s.livekitIdentity), false, (identity) => inSample.has(identity));
-          await clearPinnedSpeakers(code);
-          pushMuteState(room.code, room.sessionId, students.map((s) => s.livekitIdentity), true);
-          nudgeRoomState(room.code, 'all');
-          return jsonOk({ ok: true, all: true, muted: true, count: ids.length, waiting: 0 });
-        }
-        const { openIds } = await updateMicBook(code, () => {
-          let book = { open: [] as string[], queue: [] as { id: string; source: 'teacher' | 'student' }[] };
-          const opened: string[] = [];
-          for (const s of students) {
-            const next = teacherSetMic(book, s.id, false, micLimit);
-            book = next;
-            if (next.granted) opened.push(s.id);
-          }
-          return { next: book, openIds: opened };
-        });
-        const waiting = students.filter((s) => !openIds.includes(s.id)).map((s) => s.id);
-        if (openIds.length) {
-          await prisma.participant.updateMany({ where: { id: { in: openIds } }, data: { mutedByTeacher: false } });
-        }
-        if (waiting.length) {
-          await prisma.participant.updateMany({ where: { id: { in: waiting } }, data: { mutedByTeacher: true } });
-        }
-        await replaceMutedSet(redis, code, waiting);
-        const openSet = new Set(openIds);
-        const openIdentities = new Set(students.filter((s) => openSet.has(s.id)).map((s) => s.livekitIdentity));
-        await setManyParticipantMics(
-          code,
-          students.map((s) => s.livekitIdentity),
-          (identity) => openIdentities.has(identity),
-          (identity) => inSample.has(identity)
-        );
-        pushMuteState(room.code, room.sessionId, students.filter((s) => openSet.has(s.id)).map((s) => s.livekitIdentity), false);
-        pushMuteState(room.code, room.sessionId, students.filter((s) => !openSet.has(s.id)).map((s) => s.livekitIdentity), true);
-        nudgeRoomState(room.code, 'all');
-        return jsonOk({ ok: true, all: true, muted: false, count: openIds.length, waiting: waiting.length });
-      }
-      const ids = students.map((s) => s.id);
-      const identities = students.map((s) => s.livekitIdentity);
-
+      if (micLimit > 0) await updateMicBook(code, () => ({ next: { open: [], queue: [] } }));
       await prisma.participant.updateMany({
         where: { roomId: room.id, role: 'STUDENT', status: 'ADMITTED' },
-        data: { mutedByTeacher: body.muted },
+        data: { mutedByTeacher: true },
       });
-
-      await replaceMutedSet(redis, code, body.muted ? ids : []);
-
-      // Force LiveKit mic off / restore so clients cannot self-unmute. Camera
-      // permission must follow current sample membership, otherwise this would
-      // re-grant camera to students outside the visible sample.
+      const ids = students.map((s) => s.id);
+      const identities = students.map((s) => s.livekitIdentity);
+      await replaceMutedSet(redis, code, ids);
+      // Force LiveKit mic off so clients cannot self-unmute. Camera permission
+      // follows sample membership (no speaking students remain).
       const { visible } = await getVisibleSample(code);
       const inSample = new Set(visible);
-      await setManyParticipantMics(
-        code,
-        identities,
-        !body.muted,
-        (identity) => inSample.has(identity)
-      );
-
-      // Speaker pins end on mute — clear all when muting everyone
-      if (body.muted) {
-        await clearPinnedSpeakers(code);
-      }
-
-      pushMuteState(room.code, room.sessionId, identities, body.muted);
+      await setManyParticipantMics(code, identities, false, (identity) => inSample.has(identity));
+      await clearPinnedSpeakers(code);
+      pushMuteState(room.code, room.sessionId, identities, true);
       nudgeRoomState(room.code, 'all');
-      return jsonOk({ ok: true, all: true, muted: body.muted, count: ids.length });
+      return jsonOk({ ok: true, all: true, muted: true, count: ids.length, waiting: 0 });
     }
 
     const participant = await prisma.participant.findFirst({
       where: { id: body.participantId, roomId: room.id, role: 'STUDENT' },
+      select: { id: true, livekitIdentity: true },
     });
     if (!participant) return jsonError('Participant not found', 404);
 
-    if (micLimit > 0) {
-      const { next } = await updateMicBook(code, (book) => ({ next: teacherSetMic(book, participant.id, body.muted, micLimit) }));
-      const muted = body.muted || !next.granted;
-      await prisma.participant.update({ where: { id: participant.id }, data: { mutedByTeacher: muted } });
-      if (muted) await redis.sadd(keys.muted(code), participant.id);
-      else await redis.srem(keys.muted(code), participant.id);
-      const { visible } = await getVisibleSample(code);
-      await setParticipantMicAllowed(code, participant.livekitIdentity, !muted, visible.includes(participant.livekitIdentity));
-      if (muted) await unpinSpeaker(code, participant.livekitIdentity);
-      pushMuteState(room.code, room.sessionId, [participant.livekitIdentity], muted);
-      const promoted = 'promoted' in next ? (next as { promoted?: string | null }).promoted : null;
-      if (promoted) {
-        const nextStudent = await prisma.participant.findFirst({ where: { id: promoted, roomId: room.id, role: 'STUDENT' } });
-        if (nextStudent) {
-          await prisma.participant.update({ where: { id: nextStudent.id }, data: { mutedByTeacher: false } });
-          await redis.srem(keys.muted(code), nextStudent.id);
-          await setParticipantMicAllowed(code, nextStudent.livekitIdentity, true, visible.includes(nextStudent.livekitIdentity));
-          pushMuteState(room.code, room.sessionId, [nextStudent.livekitIdentity], false);
-        }
-      }
-      // Item 14: one student's mute only refreshes the teacher + affected students, not 2,000 clients.
-      nudgeRoomState(room.code, { participantIds: promoted ? [participant.id, promoted] : [participant.id] });
-      return jsonOk({ ok: true, muted, waiting: next.waiting });
+    if (!body.muted) {
+      const block = teacherUnmuteBlock({ camOn: await isStudentCamOn(code, participant.livekitIdentity) });
+      if (block) return jsonError(block, 409, { reason: 'camera_off' });
     }
 
-    await prisma.participant.update({
-      where: { id: participant.id },
-      data: { mutedByTeacher: body.muted },
-    });
-
-    if (body.muted) await redis.sadd(keys.muted(code), participant.id);
-    else await redis.srem(keys.muted(code), participant.id);
-
-    const { visible } = await getVisibleSample(code);
-    await setParticipantMicAllowed(
-      code,
-      participant.livekitIdentity,
-      !body.muted,
-      visible.includes(participant.livekitIdentity)
-    );
-
-    // Sticky speak-pin: drop when teacher mutes this student
-    if (body.muted) {
-      await unpinSpeaker(code, participant.livekitIdentity);
-    }
-
-    pushMuteState(room.code, room.sessionId, [participant.livekitIdentity], body.muted);
-    nudgeRoomState(room.code, { participantIds: [participant.id] });
-    return jsonOk({ ok: true, muted: body.muted });
+    const res = await setStudentMuted(room, participant, body.muted);
+    return jsonOk({ ok: true, muted: res.muted, waiting: res.waiting });
   } catch (e) {
     if (e instanceof z.ZodError) return jsonError(e.errors[0]?.message || 'Invalid input');
     console.error(e);

@@ -7,7 +7,7 @@ import { prisma } from './db';
 import { getStudentSessionToken, setActAsStudent, setStudentCookie } from './auth';
 import { generateIdentity, generateSessionToken } from './codes';
 import { audienceIncludes, normalizeCampus, normalizeDivision, normalizeGrade } from './grades';
-import { formatStudentAudience } from './audienceLabels';
+import { formatStudentAudienceOf } from './audienceLabels';
 import { loadAudienceLabels } from './audienceLabelStore';
 import { ensureRedis, keys } from './redis';
 import { recordArrival } from './attendanceService';
@@ -244,7 +244,7 @@ async function occInfo(o: Occurrence): Promise<ClassInfo> {
   const [teacher, labels] = await Promise.all([teacherInfo(o.teacherId), loadAudienceLabels()]);
   return {
     subject: o.subject,
-    audience: formatStudentAudience(o.campus, o.grade, o.divisions, o.allDivisions, labels),
+    audience: formatStudentAudienceOf(o, labels),
     teacherName: teacher.name,
     teacherGender: teacher.gender,
     date: o.date,
@@ -259,7 +259,7 @@ async function sessionInfo(cs: ClassSession): Promise<ClassInfo> {
   const [teacher, labels] = await Promise.all([teacherInfo(cs.teacherId), loadAudienceLabels()]);
   return {
     subject: cs.subject,
-    audience: formatStudentAudience(cs.campus, cs.grade, cs.divisions, cs.allDivisions, labels),
+    audience: formatStudentAudienceOf(cs, labels),
     teacherName: teacher.name,
     teacherGender: teacher.gender,
     date: cs.sessionDate.toISOString().slice(0, 10),
@@ -320,7 +320,7 @@ export async function decideStudentRoute(student: Student) {
   const liveIds = liveRooms.map((r) => r.classSessionId!);
   const adHoc = (
     await prisma.classSession.findMany({
-      where: { id: { in: liveIds }, adHoc: true, endedAt: null, campus: who.campus, grade: who.grade },
+      where: { id: { in: liveIds }, adHoc: true, endedAt: null, grade: who.grade, OR: [{ campus: who.campus }, { campuses: { has: who.campus } }] },
       orderBy: { startedAt: 'asc' },
     })
   ).filter((s) => audienceIncludes(s, who));

@@ -3,7 +3,7 @@ import { academicYearForDate, isAcademicYearLabel } from './academicYear';
 import { listAcademicYears } from './academicYears';
 import { todayTag, type TodayTag } from './capacity';
 import { averageStars, presentStars } from './feedbackText';
-import { formatAudience } from './grades';
+import { formatAudienceOf } from './grades';
 import { prismaOccurrenceKeys, pickSessionForOccurrence } from './occurrenceRuns';
 import { formatHHMM, localDateOf, localMinuteOf } from './schedule';
 import { occurrencesForDate } from './scheduleService';
@@ -62,7 +62,7 @@ export async function adminToday(url: URL) {
     return {
       key: o.key,
       subject: o.subject,
-      audience: formatAudience(o.campus, o.grade, o.divisions, o.allDivisions),
+      audience: formatAudienceOf(o),
       teacherId: o.teacherId,
       teacherName: names.get(o.teacherId) ?? 'Teacher',
       start: formatHHMM(o.startMinute),
@@ -155,6 +155,7 @@ export async function adminTeacherSessions(teacherId: string, year: string) {
       id: true,
       subject: true,
       campus: true,
+      campuses: true,
       grade: true,
       divisions: true,
       allDivisions: true,
@@ -166,7 +167,7 @@ export async function adminTeacherSessions(teacherId: string, year: string) {
   return sessions.map((s) => ({
     id: s.id,
     subject: s.subject,
-    audience: formatAudience(s.campus, s.grade, s.divisions, s.allDivisions),
+    audience: formatAudienceOf(s),
     date: dateKey(s.sessionDate),
     startedAt: s.startedAt,
     endedAt: s.endedAt,

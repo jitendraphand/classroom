@@ -3,7 +3,7 @@ import { waitingRoomDefaultFor } from './waitingRoomPref';
 import type { ClassSession, Room } from '@prisma/client';
 import { prisma } from './db';
 import { audienceUnknownMessage } from './gradeMaster';
-import { canTeachAudience, formatAudience, normalizeCampus, normalizeGrade, parseDivisionList } from './grades';
+import { audienceCampuses, canTeachAudience, formatAudienceOf, normalizeGrade, parseCampusList, parseDivisionList } from './grades';
 import { campusUnknownMessage } from './campusMaster';
 import { findOccurrence, occurrencesForDate } from './scheduleService';
 import { dateValue, formatHHMM, localDateOf, phaseOf, type Occurrence } from './schedule';
@@ -22,8 +22,8 @@ export class SessionError extends Error {
 type TeacherRef = { id: string; name: string; permanentCode?: string | null };
 type StartOpts = { maxVisibleVideos?: number; name?: string };
 
-export function sessionTitle(s: { subject: string; campus: string; grade: string; divisions: string[]; allDivisions: boolean }) {
-  return `${s.subject} · ${formatAudience(s.campus, s.grade, s.divisions, s.allDivisions)}`;
+export function sessionTitle(s: { subject: string; campus: string; campuses?: string[] | null; grade: string; divisions: string[]; allDivisions: boolean }) {
+  return `${s.subject} · ${formatAudienceOf(s)}`;
 }
 
 function occurrenceSessionData(occ: Occurrence) {
@@ -33,6 +33,7 @@ function occurrenceSessionData(occ: Occurrence) {
     sessionDate: dateValue(occ.date),
     teacherId: occ.teacherId,
     campus: occ.campus,
+    campuses: audienceCampuses(occ),
     grade: occ.grade,
     divisions: occ.divisions,
     allDivisions: occ.allDivisions,
@@ -156,25 +157,29 @@ export async function startScheduledClass(teacher: TeacherRef, key: string, opts
 /** Ad-hoc class, only for the teacher's assigned grades/divisions. */
 export async function startAdHocClass(
   teacher: TeacherRef,
-  input: { campus: string; grade: string; divisions: string[] | string; allDivisions?: boolean; subject?: string },
+  input: { campus?: string; campuses?: string[]; grade: string; divisions: string[] | string; allDivisions?: boolean; subject?: string },
   opts: StartOpts = {}
 ) {
-  const campus = normalizeCampus(input.campus);
+  // Any combination of the campuses the admin assigned (Nov 25).
+  const campuses = parseCampusList(input.campuses?.length ? input.campuses : input.campus);
+  const campus = campuses[0] ?? '';
   const grade = normalizeGrade(input.grade);
   if (!campus) throw new SessionError('Pick a campus.', 400);
   const parsed = input.allDivisions
     ? { divisions: [], allDivisions: true }
     : parseDivisionList(input.divisions);
   const assignments = await getTeacherAssignments(teacher.id);
-  if (!canTeachAudience(assignments, campus, grade, parsed.divisions, parsed.allDivisions)) {
+  if (!canTeachAudience(assignments, campuses, grade, parsed.divisions, parsed.allDivisions)) {
     throw new SessionError('You can only start classes for your assigned campus, grades and divisions.', 403);
   }
-  const campusUnknown = await campusUnknownMessage(campus);
-  if (campusUnknown) throw new SessionError(campusUnknown.replace(' Add it there first.', ' Ask the admin to add it.'), 400);
+  for (const c of campuses) {
+    const campusUnknown = await campusUnknownMessage(c);
+    if (campusUnknown) throw new SessionError(campusUnknown.replace(' Add it there first.', ' Ask the admin to add it.'), 400);
+  }
   // Whole-grade ("*") teachers pick divisions from Grades & divisions; explicitly
   // assigned divisions were already checked when the admin assigned them.
   const explicit = new Set(
-    assignments.filter((a) => a.campus === campus && normalizeGrade(a.grade) === grade).map((a) => a.division)
+    assignments.filter((a) => campuses.includes(a.campus) && normalizeGrade(a.grade) === grade).map((a) => a.division)
   );
   if (!parsed.allDivisions && parsed.divisions.some((d) => !explicit.has(d))) {
     const unknown = await audienceUnknownMessage(grade, parsed.divisions, false);
@@ -191,7 +196,7 @@ export async function startAdHocClass(
       current &&
       current.adHoc &&
       !current.endedAt &&
-      current.campus === campus &&
+      audienceCampuses(current).join(',') === campuses.join(',') &&
       current.grade === grade &&
       current.allDivisions === parsed.allDivisions &&
       current.divisions.join(',') === parsed.divisions.join(',') &&
@@ -207,6 +212,7 @@ export async function startAdHocClass(
       sessionDate: dateValue(localDateOf(new Date(), appTimeZone())),
       teacherId: teacher.id,
       campus,
+      campuses,
       grade,
       divisions: parsed.divisions,
       allDivisions: parsed.allDivisions,

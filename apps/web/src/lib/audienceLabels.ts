@@ -5,6 +5,7 @@
  */
 import {
   ALL_DIVISIONS,
+  audienceCampuses,
   normalizeCampus,
   normalizeDivision,
   normalizeGrade,
@@ -113,13 +114,17 @@ export function displayFoundationLabel(grade: string, division: string, labels?:
  * `allDivisions` → "Airport Campus · Grade 6 · all divisions".
  */
 export function formatStudentAudience(
-  campus: string,
+  campus: string | string[],
   grade: string,
   divisions: string[],
   allDivisions: boolean,
   labels?: AudienceLabels,
 ): string {
-  const parts = [displayCampusLabel(campus, labels), displayGradeLabel(grade, labels)].filter(Boolean);
+  const campusText = (Array.isArray(campus) ? campus : [campus])
+    .map((c) => displayCampusLabel(c, labels))
+    .filter(Boolean)
+    .join(', ');
+  const parts = [campusText, displayGradeLabel(grade, labels)].filter(Boolean);
   if (allDivisions) {
     parts.push('all divisions');
   } else {
@@ -130,6 +135,14 @@ export function formatStudentAudience(
     if (foundations.length) parts.push([...new Set(foundations)].join(', '));
   }
   return parts.join(' · ');
+}
+
+/** formatStudentAudience for a row: every campus of a multi-campus class. */
+export function formatStudentAudienceOf(
+  a: { campus: string; campuses?: string[] | null; grade: string; divisions: string[]; allDivisions: boolean },
+  labels?: AudienceLabels,
+): string {
+  return formatStudentAudience(audienceCampuses(a), a.grade, a.divisions, a.allDivisions, labels);
 }
 
 export function audienceLabelsFromMaster(
@@ -144,4 +157,18 @@ export function audienceLabelsFromMaster(
       divisions: (g.divisions ?? []).map((d) => ({ name: d.name, label: d.label || d.name })),
     })),
   };
+}
+
+/** "Airport Campus · Grade 7 · Foundation A" for one student (readable, Nov 25). */
+export function studentPlaceLabel(
+  st: { campus: string; grade: string; division: string },
+  labels?: AudienceLabels
+): string {
+  return [
+    displayCampusLabel(st.campus, labels),
+    displayGradeLabel(st.grade, labels),
+    displayFoundationLabel(st.grade, st.division, labels),
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }
