@@ -16,11 +16,30 @@ import { hasActiveObserver } from './adminObservers';
 import { forgetMemo, memo } from './roomStateCache';
 
 /**
- * LiveKit access-token lifetime. Short on purpose: LiveKit refreshes the token
- * of a connected participant automatically, so this only bounds how long a
- * token copied out of a browser (or kept by a removed student) stays usable.
+ * LiveKit access-token lifetime for class join (teachers, students, and the
+ * Windows screen-share sidecar), in seconds. Default 90 minutes so a student
+ * who drops late in a typical class can resume with the token they joined
+ * with.
+ *
+ * LiveKit does refresh tokens for *connected* participants, and livekit-client
+ * stores the refresh (`RTCEngine.token`) and uses it on resume/restart. A
+ * client that is offline or backgrounded can miss the refresh and then fail
+ * to resume if the original token has already expired — which is what the
+ * previous 10-minute TTL caused (expired-token warnings on late reconnect).
+ * A longer TTL means a copied or leftover token stays usable for longer;
+ * room membership and session cookies still gate who can mint a *new* token.
+ *
+ * Override with LIVEKIT_TOKEN_TTL_SECONDS (clamped to 60s–6h).
  */
-export const LIVEKIT_TOKEN_TTL = '10m';
+export const LIVEKIT_TOKEN_TTL_SECONDS = 5400;
+const LIVEKIT_TOKEN_TTL_MIN_S = 60;
+const LIVEKIT_TOKEN_TTL_MAX_S = 6 * 60 * 60;
+
+export function livekitTokenTtlSeconds(env: Record<string, string | undefined> = process.env): number {
+  const n = Number(env.LIVEKIT_TOKEN_TTL_SECONDS);
+  if (!Number.isFinite(n) || n <= 0) return LIVEKIT_TOKEN_TTL_SECONDS;
+  return Math.min(LIVEKIT_TOKEN_TTL_MAX_S, Math.max(LIVEKIT_TOKEN_TTL_MIN_S, Math.floor(n)));
+}
 
 export function getLiveKitHttpUrl() {
   return (
@@ -166,7 +185,7 @@ export async function createParticipantToken(
     identity: opts.identity,
     name: opts.name,
     metadata: opts.metadata ? JSON.stringify(opts.metadata) : undefined,
-    ttl: LIVEKIT_TOKEN_TTL,
+    ttl: livekitTokenTtlSeconds(),
   });
   at.addGrant(classroomGrant(opts));
   return at.toJwt();
@@ -187,7 +206,13 @@ export async function createParticipantToken(
  * allows only participants they can see, and a hidden participant is not one).
  */
 export type ObserverMode = 'preview' | 'observe';
+/** Preview tile only: reminted while the live list is open. Keep short. */
 export const OBSERVER_PREVIEW_TTL = '2m';
+/**
+ * Full observe session. Shorter than class-join tokens: the admin viewer
+ * remints when opening a class, and LiveKit refreshes the token while the
+ * observer stays connected.
+ */
 export const OBSERVER_TOKEN_TTL = '10m';
 
 export function observerGrant(roomName: string) {
@@ -572,7 +597,7 @@ export async function createScreenSidecarToken(opts: { roomName: string; teacher
     identity,
     name: opts.name,
     metadata: JSON.stringify({ role: 'TEACHER', screenFor: opts.teacherIdentity, participantId: opts.participantId }),
-    ttl: LIVEKIT_TOKEN_TTL,
+    ttl: livekitTokenTtlSeconds(),
   });
   at.addGrant(screenSidecarGrant(opts.roomName));
   return { token: await at.toJwt(), identity };
