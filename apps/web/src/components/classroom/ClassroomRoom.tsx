@@ -2727,6 +2727,7 @@ function RoomInner({
             <ClassInfoButton
               placement="up"
               teacherName={state?.classInfo?.teacherName || state?.teacherName || null}
+              teacherGender={state?.classInfo?.teacherGender || state?.teacherGender || null}
               subject={state?.classInfo ? state.classInfo.subject : state?.name || null}
               audience={state?.classInfo?.audience || null}
               scheduledStart={state?.classInfo?.scheduledStart ?? null}

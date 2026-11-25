@@ -41,6 +41,7 @@ export type RoomState = {
   waitingRoomOn?: boolean;
   isTeacher: boolean;
   teacherName: string;
+  teacherGender?: 'male' | 'female' | null;
   actingAsStudent?: boolean;
   me: {
     id: string;
@@ -103,6 +104,7 @@ export type RoomState = {
   classInfo?: {
     subject: string;
     teacherName: string;
+    teacherGender?: 'male' | 'female' | null;
     audience: string;
     scheduledStart: string | null;
     scheduledEnd: string | null;

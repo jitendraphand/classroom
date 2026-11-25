@@ -2,9 +2,11 @@
 
 import { useState } from 'react';
 import { formatDate, formatTimeRange } from '@/lib/timeFormat';
+import { formatTeacherName } from '@/lib/teacherSalutation';
 
 type Props = {
   teacherName?: string | null;
+  teacherGender?: string | null;
   subject?: string | null;
   audience?: string | null;
   scheduledStart?: string | null;
@@ -21,11 +23,12 @@ function scheduledLabel(start?: string | null, end?: string | null): string | nu
 }
 
 /** Small "i" that opens the class details (teacher, subject, audience, time). */
-export function ClassInfoButton({ teacherName, subject, audience, scheduledStart, scheduledEnd, placement = 'down' }: Props) {
+export function ClassInfoButton({ teacherName, teacherGender, subject, audience, scheduledStart, scheduledEnd, placement = 'down' }: Props) {
   const [open, setOpen] = useState(false);
   const when = scheduledLabel(scheduledStart, scheduledEnd);
+  const teacher = teacherName ? formatTeacherName(teacherName, teacherGender, 'plain') : '';
   const rows = [
-    teacherName ? { k: 'Teacher', v: teacherName } : null,
+    teacher ? { k: 'Teacher', v: teacher } : null,
     subject ? { k: 'Subject', v: subject } : null,
     audience ? { k: 'Audience', v: audience } : null,
     when ? { k: 'Scheduled', v: when } : null,

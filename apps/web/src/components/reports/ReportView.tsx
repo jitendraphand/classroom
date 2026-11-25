@@ -153,58 +153,62 @@ export function ReportView({
   return (
     <div className="space-y-5">
       <Card>
-        <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-7">
-          <label className="block">
-            <span className="label">From</span>
-            <input className="input" type="date" value={filter.from} onChange={set('from')} />
-          </label>
-          <label className="block">
-            <span className="label">To</span>
-            <input className="input" type="date" value={filter.to} onChange={set('to')} />
-          </label>
-          <label className="block">
-            <span className="label">Academic year</span>
-            <select className="input" value={filter.year} onChange={set('year')}>
-              <option value="">All years</option>
-              {[new Date().getFullYear() - 1, new Date().getFullYear(), new Date().getFullYear() + 1].map((y) => {
-                const label = formatAcademicYear(y);
-                return (
-                  <option key={label} value={label}>
-                    {label}
-                  </option>
-                );
-              })}
-            </select>
-          </label>
-          {showTeacherFilter && (
-            <label className="block">
-              <span className="label">Teacher</span>
-              <select className="input" value={filter.teacherId} onChange={set('teacherId')}>
-                <option value="">All</option>
-                {(teachers ?? []).map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <label className="block min-w-0">
+              <span className="label">From</span>
+              <input className="input w-full" type="date" value={filter.from} onChange={set('from')} />
+            </label>
+            <label className="block min-w-0">
+              <span className="label">To</span>
+              <input className="input w-full" type="date" value={filter.to} onChange={set('to')} />
+            </label>
+            <label className="block min-w-0">
+              <span className="label">Academic year</span>
+              <select className="input w-full" value={filter.year} onChange={set('year')}>
+                <option value="">All years</option>
+                {[new Date().getFullYear() - 1, new Date().getFullYear(), new Date().getFullYear() + 1].map((y) => {
+                  const label = formatAcademicYear(y);
+                  return (
+                    <option key={label} value={label}>
+                      {label}
+                    </option>
+                  );
+                })}
               </select>
             </label>
-          )}
-          <label className="block">
-            <span className="label">Campus</span>
-            <CampusSelect value={filter.campus} onChange={(c) => setFilter({ ...filter, campus: c })} options={gradeOptions} emptyLabel="Any" />
-          </label>
-          <label className="block">
-            <span className="label">Grade</span>
-            <GradeSelect value={filter.grade} onChange={(g) => setFilter({ ...filter, grade: g, division: '' })} options={gradeOptions} emptyLabel="Any" />
-          </label>
-          <label className="block">
-            <span className="label">Division</span>
-            <DivisionSelect grade={filter.grade} value={filter.division} onChange={(d) => setFilter({ ...filter, division: d })} options={gradeOptions} emptyLabel="Any" />
-          </label>
-          <label className="block">
-            <span className="label">Subject</span>
-            <input className="input" value={filter.subject} onChange={set('subject')} placeholder="Any" />
-          </label>
+            {showTeacherFilter && (
+              <label className="block min-w-0">
+                <span className="label">Teacher</span>
+                <select className="input w-full" value={filter.teacherId} onChange={set('teacherId')}>
+                  <option value="">All</option>
+                  {(teachers ?? []).map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <label className="block min-w-0">
+              <span className="label">Campus</span>
+              <CampusSelect className="w-full" value={filter.campus} onChange={(c) => setFilter({ ...filter, campus: c })} options={gradeOptions} emptyLabel="Any" />
+            </label>
+            <label className="block min-w-0">
+              <span className="label">Grade</span>
+              <GradeSelect className="w-full" value={filter.grade} onChange={(g) => setFilter({ ...filter, grade: g, division: '' })} options={gradeOptions} emptyLabel="Any" />
+            </label>
+            <label className="block min-w-0">
+              <span className="label">Division</span>
+              <DivisionSelect className="w-full" grade={filter.grade} value={filter.division} onChange={(d) => setFilter({ ...filter, division: d })} options={gradeOptions} emptyLabel="Any" />
+            </label>
+            <label className="block min-w-0">
+              <span className="label">Subject</span>
+              <input className="input w-full" value={filter.subject} onChange={set('subject')} placeholder="Any" />
+            </label>
+          </div>
         </div>
         {filter.sessionId && (
           <p className="mt-3 text-sm text-slate-300">

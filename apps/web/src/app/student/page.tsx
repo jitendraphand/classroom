@@ -11,11 +11,13 @@ import { api } from '@/lib/clientFetch';
 import { nextPollDelay } from '@/lib/studentCheck';
 import { formatDate, formatTime } from '@/lib/timeFormat';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { formatTeacherName } from '@/lib/teacherSalutation';
 
 type ClassInfo = {
   subject: string;
   audience: string;
   teacherName: string | null;
+  teacherGender?: 'male' | 'female' | null;
   date: string;
   start: string | null;
   end: string | null;
@@ -38,6 +40,11 @@ type Route = {
   | { kind: 'ended'; cls: ClassInfo; next: ClassInfo | null }
   | { kind: 'none'; next: ClassInfo | null }
 );
+
+function teacherLine(cls: Pick<ClassInfo, 'teacherName' | 'teacherGender'>, style: 'plain' | 'possessive' = 'possessive') {
+  if (!cls.teacherName) return '';
+  return formatTeacherName(cls.teacherName, cls.teacherGender, style);
+}
 
 function time(iso: string | null) {
   return formatTime(iso);
@@ -198,7 +205,7 @@ export default function StudentHome() {
     next ? (
       <p className="mt-4 text-sm text-slate-300">
         Next: <strong className="text-white">{next.subject}</strong> · {day(next.start)} at {time(next.start)}
-        {next.teacherName ? ` · ${next.teacherName}` : ''}
+        {next.teacherName ? ` · ${teacherLine(next)}` : ''}
       </p>
     ) : (
       <p className="mt-4 text-sm text-slate-500">No classes scheduled in the next 7 days.</p>
@@ -222,7 +229,7 @@ export default function StudentHome() {
           {route.cls.start ? ` · ${time(route.cls.start)}${route.cls.end ? `–${time(route.cls.end)}` : ''}` : ''}
         </p>
         <p className="mt-4 text-sm text-slate-300">
-          Waiting for {route.cls.teacherName || 'your teacher'} to open the class. You&apos;ll go in automatically —
+          Waiting for {teacherLine(route.cls, 'plain') || 'your teacher'} to open the class. You&apos;ll go in automatically —
           keep this page open.
         </p>
       </>
@@ -235,7 +242,7 @@ export default function StudentHome() {
         <h2 className="mt-3 font-display text-xl font-semibold">{route.cls.subject}</h2>
         <p className="mt-1 text-sm text-slate-400">
           {time(route.cls.start)}–{time(route.cls.end)}
-          {route.cls.teacherName ? ` · ${route.cls.teacherName}` : ''}
+          {route.cls.teacherName ? ` · ${teacherLine(route.cls)}` : ''}
         </p>
         <p className="mt-6 text-xs uppercase tracking-wider text-slate-500">Waiting room opens in</p>
         <p className="mt-1 font-display text-4xl font-bold tabular-nums text-brand-300" aria-live="polite">

@@ -4,9 +4,11 @@ import { parseAssignments } from '@/lib/grades';
 import { soleCampus } from '@/lib/campusMaster';
 import { jsonError, jsonOk } from '@/lib/response';
 import { deleteTeacher, TeacherError, updateTeacher } from '@/lib/teachers';
+import { parseTeacherGender } from '@/lib/teacherSalutation';
 
 const schema = z.object({
   name: z.string().trim().min(1).max(80).optional(),
+  gender: z.enum(['male', 'female']).optional(),
   disabled: z.boolean().optional(),
   assignments: z.string().max(2000).optional(),
   campus: z.string().max(40).optional(),
@@ -20,6 +22,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     const body = schema.parse(await req.json());
     const teacher = await updateTeacher(id, {
       name: body.name,
+      gender: body.gender !== undefined ? parseTeacherGender(body.gender) : undefined,
       disabled: body.disabled,
       assignments: body.assignments !== undefined ? parseAssignments(body.assignments, body.campus || (await soleCampus())) : undefined,
     });

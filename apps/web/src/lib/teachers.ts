@@ -9,10 +9,12 @@ import { endRoom } from './teacherRoom';
 import { kickReplacedTeacher } from './sessionKick';
 import { loadMaster } from './gradeMaster';
 import { assignmentsProblem } from './gradeMasterLogic';
+import { parseTeacherGender, type TeacherGender } from './teacherSalutation';
 
 export type TeacherRow = {
   id: string;
   name: string;
+  gender: TeacherGender | null;
   email: string;
   disabled: boolean;
   mustChangePassword: boolean;
@@ -25,6 +27,7 @@ export type TeacherRow = {
 function toRow(t: {
   id: string;
   name: string;
+  gender?: string | null;
   email: string;
   disabled: boolean;
   mustChangePassword: boolean;
@@ -43,6 +46,7 @@ function toRow(t: {
   return {
     id: t.id,
     name: t.name,
+    gender: parseTeacherGender(t.gender),
     email: t.email,
     disabled: t.disabled,
     mustChangePassword: t.mustChangePassword,
@@ -92,7 +96,7 @@ async function checkAssignments(assignments: Assignment[], keep: Assignment[] = 
   }
 }
 
-export async function createTeacher(input: { name: string; email: string; assignments: Assignment[] }) {
+export async function createTeacher(input: { name: string; email: string; gender: TeacherGender; assignments: Assignment[] }) {
   await checkAssignments(input.assignments);
   const email = input.email.trim().toLowerCase();
   const [existing, admin] = await Promise.all([
@@ -105,6 +109,7 @@ export async function createTeacher(input: { name: string; email: string; assign
     data: {
       email,
       name: input.name.trim(),
+      gender: input.gender,
       passwordHash: await hashPassword(temporaryPassword),
       mustChangePassword: true,
       permanentCode: await allocateUniqueCode(),
@@ -117,7 +122,7 @@ export async function createTeacher(input: { name: string; email: string; assign
 
 export async function updateTeacher(
   id: string,
-  input: { name?: string; disabled?: boolean; assignments?: Assignment[] }
+  input: { name?: string; gender?: TeacherGender | null; disabled?: boolean; assignments?: Assignment[] }
 ) {
   const current = await prisma.teacher.findUnique({ where: { id } });
   if (!current || current.deletedAt) throw new TeacherError('Teacher not found', 404);
@@ -135,6 +140,7 @@ export async function updateTeacher(
       where: { id },
       data: {
         ...(input.name ? { name: input.name.trim() } : {}),
+        ...(input.gender !== undefined ? { gender: input.gender } : {}),
         ...(input.disabled !== undefined && input.disabled !== current.disabled
           ? { disabled: input.disabled, sessionVersion: { increment: 1 } }
           : {}),

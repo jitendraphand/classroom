@@ -14,12 +14,14 @@ import { PageLoading } from '@/components/ui/Skeleton';
 import { SchoolAppOnly } from '@/components/join/SchoolAppOnly';
 import { lobbyEndedFor } from '@/lib/lobbyState';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { formatTeacherName } from '@/lib/teacherSalutation';
 
 type State = {
   code?: string;
   name?: string;
   status?: string;
   teacherName?: string;
+  teacherGender?: 'male' | 'female' | null;
   public?: boolean;
   me?: { status: string; displayName: string; role?: string; viaSchoolApp?: boolean };
   manualJoinAllowed?: boolean;
@@ -328,7 +330,7 @@ export default function JoinRoomPage() {
         </h1>
         <p className="mt-1 text-sm text-slate-400">
           Room <span className="font-mono text-brand-300">{code}</span>
-          {roomInfo?.teacherName ? ` · ${roomInfo.teacherName}` : ''}
+          {roomInfo?.teacherName ? ` · ${formatTeacherName(roomInfo.teacherName, roomInfo.teacherGender, 'possessive')}` : ''}
         </p>
         {roomInfo?.status === 'ENDED' ? (
           <p className="mt-6 text-warning-fg">This class has ended.</p>

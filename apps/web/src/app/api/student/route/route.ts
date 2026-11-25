@@ -1,5 +1,6 @@
 import { getPupil, refreshPupilCookie } from '@/lib/auth';
-import { formatAudience } from '@/lib/grades';
+import { formatStudentAudience } from '@/lib/audienceLabels';
+import { loadAudienceLabels } from '@/lib/audienceLabelStore';
 import { jsonError, jsonOk } from '@/lib/response';
 import { routeStudent } from '@/lib/studentService';
 import { appTimeZone } from '@/lib/schoolConfig';
@@ -20,17 +21,14 @@ export async function POST() {
     const route = await routeStudent(student);
     // Grade/division the school app sent but Grades & divisions does not know:
     // no class can be found, so say so instead of a plain "No class right now".
-    const audienceStatus = studentAudienceStatus(
-      await loadMaster().catch(() => []),
-      student.grade,
-      student.division
-    );
+    const [master, labels] = await Promise.all([loadMaster().catch(() => []), loadAudienceLabels().catch(() => undefined)]);
+    const audienceStatus = studentAudienceStatus(master, student.grade, student.division);
     await refreshPupilCookie(student).catch(() => undefined);
     return jsonOk({
       student: {
         name: student.name,
         rollNumber: student.rollNumber,
-        gradeDivision: formatAudience(student.campus, student.grade, [student.division], false),
+        gradeDivision: formatStudentAudience(student.campus, student.grade, [student.division], false, labels),
         audienceStatus,
       },
       timezone: appTimeZone(),

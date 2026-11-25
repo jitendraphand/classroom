@@ -15,12 +15,40 @@ import { useAdminPrivileges } from '@/components/admin/useAdminPrivileges';
 type Teacher = {
   id: string;
   name: string;
+  gender: 'male' | 'female' | null;
   email: string;
   disabled: boolean;
   mustChangePassword: boolean;
   permanentCode: string;
   assignmentsText: string;
 };
+
+function GenderSelect({
+  id,
+  value,
+  required,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  required?: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div>
+      <label htmlFor={id} className="label">
+        Gender
+      </label>
+      <select id={id} className="input" value={value} required={required} onChange={(e) => onChange(e.target.value)} aria-label="Gender">
+        <option value="" disabled>
+          Select gender
+        </option>
+        <option value="male">Male (Sir)</option>
+        <option value="female">Female (Ma&apos;am)</option>
+      </select>
+    </div>
+  );
+}
 
 export default function AdminTeachersPage() {
   return (
@@ -34,10 +62,10 @@ function TeachersPanel() {
   const [teachers, setTeachers] = useState<Teacher[] | null>(null);
   const [error, setError] = useState('');
   const [secret, setSecret] = useState<{ title: string; lines: [string, string][] } | null>(null);
-  const [form, setForm] = useState({ name: '', email: '', assignments: '' });
+  const [form, setForm] = useState({ name: '', email: '', gender: '', assignments: '' });
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ name: '', assignments: '' });
+  const [editForm, setEditForm] = useState({ name: '', gender: '', assignments: '' });
   const [filter, setFilter] = useState('');
   const gradeOptions = useGradeOptions();
   const [deleting, setDeleting] = useState<Teacher | null>(null);
@@ -76,14 +104,16 @@ function TeachersPanel() {
         ['Temporary password', data.temporaryPassword],
       ],
     });
-    setForm({ name: '', email: '', assignments: '' });
+    setForm({ name: '', email: '', gender: '', assignments: '' });
     setAdding(false);
     void load();
   }
 
   async function patch(id: string, body: Record<string, unknown>) {
     setError('');
-    const { ok, data } = await api(`/api/admin/teachers/${id}`, { method: 'PATCH', body });
+    const payload = { ...body };
+    if (!payload.gender) delete payload.gender;
+    const { ok, data } = await api(`/api/admin/teachers/${id}`, { method: 'PATCH', body: payload });
     if (!ok) {
       setError(data.error || 'Update failed');
       return false;
@@ -182,6 +212,7 @@ function TeachersPanel() {
             onChange={(e) => setForm({ ...form, email: e.target.value })}
             required
           />
+          <GenderSelect id="teacher-gender" value={form.gender} required onChange={(gender) => setForm({ ...form, gender })} />
           <div className="sm:col-span-2">
             <span className="label">Assigned grades / divisions</span>
             <AssignmentsPicker value={form.assignments} onChange={(a) => setForm({ ...form, assignments: a })} options={gradeOptions} />
@@ -226,13 +257,18 @@ function TeachersPanel() {
               <li key={t.id} className="flex flex-col gap-3 px-5 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
                 {editing === t.id && canManage ? (
                   <form
-                    className="grid w-full items-start gap-3 sm:grid-cols-[1fr_2fr_auto]"
+                    className="grid w-full items-start gap-3 sm:grid-cols-[1fr_8rem_2fr_auto]"
                     onSubmit={async (e) => {
                       e.preventDefault();
                       if (await patch(t.id, editForm)) setEditing(null);
                     }}
                   >
                     <input className="input" value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} aria-label="Name" required />
+                    <select className="input" value={editForm.gender} onChange={(e) => setEditForm({ ...editForm, gender: e.target.value })} aria-label="Gender">
+                      <option value="">Not set</option>
+                      <option value="male">Male (Sir)</option>
+                      <option value="female">Female (Ma&apos;am)</option>
+                    </select>
                     <AssignmentsPicker value={editForm.assignments} onChange={(a) => setEditForm({ ...editForm, assignments: a })} options={gradeOptions} />
                     <div className="flex gap-2">
                       <Button type="submit" size="sm">Save</Button>
@@ -244,6 +280,8 @@ function TeachersPanel() {
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="font-medium text-white">{t.name}</p>
+                        {t.gender === 'male' && <Badge tone="neutral">Male</Badge>}
+                        {t.gender === 'female' && <Badge tone="neutral">Female</Badge>}
                         {t.disabled && <Badge tone="danger">Disabled</Badge>}
                         {t.mustChangePassword && !t.disabled && <Badge tone="warning">Temporary password</Badge>}
                       </div>
@@ -260,7 +298,7 @@ function TeachersPanel() {
                         variant="secondary"
                         onClick={() => {
                           setEditing(t.id);
-                          setEditForm({ name: t.name, assignments: t.assignmentsText });
+                          setEditForm({ name: t.name, gender: t.gender ?? '', assignments: t.assignmentsText });
                         }}
                       >
                         Edit

@@ -6,7 +6,9 @@ import { recentTakeovers, wasReplaced } from '@/lib/deviceTakeoverServer';
 import { jsonError, jsonOk } from '@/lib/response';
 import { clampMaxVisible, ensureSampleFresh, getVisibleSample } from '@/lib/sample';
 import { ensureRedis, keys } from '@/lib/redis';
-import { audienceIncludes, formatAudience } from '@/lib/grades';
+import { audienceIncludes } from '@/lib/grades';
+import { formatStudentAudience } from '@/lib/audienceLabels';
+import { loadAudienceLabels } from '@/lib/audienceLabelStore';
 import { manualStudentJoinAllowed } from '@/lib/schoolConfig';
 import { decodeFocus } from '@/lib/focusStatus';
 import { currentHolders, drawRequests } from '@/lib/drawServer';
@@ -16,6 +18,10 @@ import { getSchoolSettings } from '@/lib/schoolSettings';
 import { classCapacity } from '@/lib/capacity';
 import { readMicBook, micQueueView } from '@/lib/micBook';
 import { memo, roomVersion, stateCacheMs } from '@/lib/roomStateCache';
+
+function teacherGenderOf(g: string | null | undefined) {
+  return g === 'male' || g === 'female' ? g : null;
+}
 
 export const dynamic = 'force-dynamic';
 
@@ -29,7 +35,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   const loadRoom = () => prisma.room.findUnique({
     where: { code },
     include: {
-      teacher: { select: { id: true, name: true } },
+      teacher: { select: { id: true, name: true, gender: true } },
       participants: {
         where: { status: { in: ['WAITING', 'ADMITTED'] } },
         orderBy: { createdAt: 'asc' },
@@ -62,6 +68,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       status: 'ENDED',
       ended: true,
       teacherName: room.teacher.name,
+      teacherGender: teacherGenderOf(room.teacher.gender),
       public: true,
       maxVisibleVideos: clampMaxVisible(room.maxVisibleVideos),
       isTeacher: false,
@@ -93,6 +100,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       name: room.name,
       status: room.status,
       teacherName: room.teacher.name,
+      teacherGender: teacherGenderOf(room.teacher.gender),
       public: true,
       teacherSessionActive: !!access.teacher,
       teacherSessionName: access.teacher?.name ?? null,
@@ -124,6 +132,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
         name: room.name,
         status: room.status,
         teacherName: room.teacher.name,
+        teacherGender: teacherGenderOf(room.teacher.gender),
         maxVisibleVideos: clampMaxVisible(room.maxVisibleVideos),
         isTeacher: false,
         actingAsStudent: forceStudent || (access.mode === 'student' && !!access.teacherOwns),
@@ -211,7 +220,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     academicYear: string;
     scheduledStart: Date | null;
     scheduledEnd: Date | null;
-    teacher?: { name: string };
+    teacher?: { name: string; gender: string | null };
   } | null = null;
   const lateByStudent = new Map<string, boolean>();
   if (room.classSessionId) {
@@ -230,7 +239,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
           academicYear: true,
           scheduledStart: true,
           scheduledEnd: true,
-          teacher: { select: { name: true } },
+          teacher: { select: { name: true, gender: true } },
         },
       });
     // These fields do not change during a class: students share them for 30 s.
@@ -248,7 +257,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     ? {
         subject: classSession.subject,
         teacherName: classSession.teacher?.name || room.teacher.name,
-        audience: formatAudience(classSession.campus, classSession.grade, classSession.divisions, classSession.allDivisions),
+        teacherGender: teacherGenderOf(classSession.teacher?.gender || room.teacher.gender),
+        audience: formatStudentAudience(classSession.campus, classSession.grade, classSession.divisions, classSession.allDivisions, await loadAudienceLabels().catch(() => undefined)),
         scheduledStart: classSession.scheduledStart ? classSession.scheduledStart.toISOString() : null,
         scheduledEnd: classSession.scheduledEnd ? classSession.scheduledEnd.toISOString() : null,
         classSessionId: classSession.id,
@@ -384,6 +394,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     maxVisibleVideos: clampMaxVisible(room.maxVisibleVideos),
     waitingRoomOn: room.waitingRoomOn,
     teacherName: room.teacher.name,
+    teacherGender: teacherGenderOf(room.teacher.gender),
     isTeacher,
     actingAsStudent: forceStudent || (access.mode === 'student' && !!access.teacherOwns),
     teacherSessionActive: !!access.teacher,
@@ -399,7 +410,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     classSession: classSession
       ? {
           subject: classSession.subject,
-          audience: formatAudience(classSession.campus, classSession.grade, classSession.divisions, classSession.allDivisions),
+          audience: classInfo?.audience || '',
           adHoc: classSession.adHoc,
         }
       : null,

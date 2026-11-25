@@ -6,7 +6,9 @@ import { nudgeRoomState } from './roomNudge';
 import { prisma } from './db';
 import { getStudentSessionToken, setActAsStudent, setStudentCookie } from './auth';
 import { generateIdentity, generateSessionToken } from './codes';
-import { audienceIncludes, formatAudience, normalizeCampus, normalizeDivision, normalizeGrade } from './grades';
+import { audienceIncludes, normalizeCampus, normalizeDivision, normalizeGrade } from './grades';
+import { formatStudentAudience } from './audienceLabels';
+import { loadAudienceLabels } from './audienceLabelStore';
 import { ensureRedis, keys } from './redis';
 import { recordArrival } from './attendanceService';
 import { upsertOccurrenceSession } from './classSessions';
@@ -224,6 +226,7 @@ export type ClassInfo = {
   subject: string;
   audience: string;
   teacherName: string | null;
+  teacherGender: 'male' | 'female' | null;
   date: string;
   start: string | null;
   end: string | null;
@@ -231,15 +234,19 @@ export type ClassInfo = {
   endLabel: string | null;
 };
 
-async function teacherName(id: string) {
-  return (await prisma.teacher.findUnique({ where: { id }, select: { name: true } }))?.name ?? null;
+async function teacherInfo(id: string): Promise<{ name: string | null; gender: 'male' | 'female' | null }> {
+  const t = await prisma.teacher.findUnique({ where: { id }, select: { name: true, gender: true } });
+  const gender = t?.gender === 'male' || t?.gender === 'female' ? t.gender : null;
+  return { name: t?.name ?? null, gender };
 }
 
 async function occInfo(o: Occurrence): Promise<ClassInfo> {
+  const [teacher, labels] = await Promise.all([teacherInfo(o.teacherId), loadAudienceLabels()]);
   return {
     subject: o.subject,
-    audience: formatAudience(o.campus, o.grade, o.divisions, o.allDivisions),
-    teacherName: await teacherName(o.teacherId),
+    audience: formatStudentAudience(o.campus, o.grade, o.divisions, o.allDivisions, labels),
+    teacherName: teacher.name,
+    teacherGender: teacher.gender,
     date: o.date,
     start: o.start.toISOString(),
     end: o.end.toISOString(),
@@ -249,10 +256,12 @@ async function occInfo(o: Occurrence): Promise<ClassInfo> {
 }
 
 async function sessionInfo(cs: ClassSession): Promise<ClassInfo> {
+  const [teacher, labels] = await Promise.all([teacherInfo(cs.teacherId), loadAudienceLabels()]);
   return {
     subject: cs.subject,
-    audience: formatAudience(cs.campus, cs.grade, cs.divisions, cs.allDivisions),
-    teacherName: await teacherName(cs.teacherId),
+    audience: formatStudentAudience(cs.campus, cs.grade, cs.divisions, cs.allDivisions, labels),
+    teacherName: teacher.name,
+    teacherGender: teacher.gender,
     date: cs.sessionDate.toISOString().slice(0, 10),
     start: (cs.scheduledStart ?? cs.startedAt)?.toISOString() ?? null,
     end: cs.scheduledEnd?.toISOString() ?? null,

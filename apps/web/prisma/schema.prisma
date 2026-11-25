@@ -49,6 +49,8 @@ model Teacher {
   email              String              @unique
   passwordHash       String
   name               String
+  /// "male" or "female". Null until the admin sets it; student pages then omit Sir/Ma'am.
+  gender             String?
   /// Stable meeting code reused for every class this teacher starts.
   permanentCode      String              @unique
   /// Disabled teachers cannot sign in; existing sessions stop working.

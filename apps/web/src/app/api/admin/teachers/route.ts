@@ -6,12 +6,14 @@ import { parseAssignments } from '@/lib/grades';
 import { soleCampus } from '@/lib/campusMaster';
 import { jsonError, jsonOk } from '@/lib/response';
 import { createTeacher, listTeachers, teacherNamesOnly, TeacherError } from '@/lib/teachers';
+import { parseTeacherGender } from '@/lib/teacherSalutation';
 
 export const dynamic = 'force-dynamic';
 
 const createSchema = z.object({
   name: z.string().trim().min(1).max(80),
   email: z.string().trim().email().max(200),
+  gender: z.enum(['male', 'female'], { required_error: "Pick the teacher's gender.", invalid_type_error: "Pick the teacher's gender." }),
   assignments: z.string().max(2000).default(''),
   /** Campus for assignment tokens without a "CAMPUS@" prefix. */
   campus: z.string().max(40).optional(),
@@ -35,7 +37,9 @@ export async function POST(req: Request) {
   try {
     const body = createSchema.parse(await req.json());
     const assignments = parseAssignments(body.assignments, body.campus || (await soleCampus()));
-    const out = await createTeacher({ name: body.name, email: body.email, assignments });
+    const gender = parseTeacherGender(body.gender);
+    if (!gender) return jsonError("Pick the teacher's gender.");
+    const out = await createTeacher({ name: body.name, email: body.email, gender, assignments });
     // The temporary password is returned exactly once; only its hash is stored.
     return jsonOk(out, { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {
