@@ -128,3 +128,32 @@ stacking two noise removers.
   streams), DTX on.
 - Shared system audio is captured only when the browser confirms it
   excludes the classroom's own output (no echo of students to themselves).
+
+## Echo audit (Nov 25)
+
+Routing checked end to end: remote audio plays only through one
+`RoomAudioRenderer` per layout (`<audio>` elements, never Web Audio:
+`webAudioMix` off), which skips the local participant, so nobody hears their
+own mic. Every `<video>` is muted and carries video-only streams. Students
+subscribe to the teacher and classmates' mics, never to themselves; the
+speaking and spotlight pop-ups attach camera video only. The Windows sidecar
+token cannot subscribe. Whole-screen system audio is dropped unless the
+browser excludes the classroom tab's own output.
+
+Changes:
+- Phones and tablets (Android, iPhone, iPad) publish the plain
+  browser-processed mic: the platform's hardware echo cancellation, noise
+  suppression and AGC, no AudioContext or worklets in the mic path (same
+  rule as the Android teacher app). Noise settings apply on computers only.
+- The mic is never re-opened through LiveKit's enable-microphone helper; a
+  stale or ended own track is replaced; mute unpublishes and releases the
+  device; a student just unmuted by the teacher waits for the SFU grant
+  instead of failing with a 403.
+- Share-audio ducking hands the mic back to the full voice chain when the
+  share ends.
+- Blocked playback (iOS Safari without a tap) is started by any tap, with a
+  "Tap to turn on class sound" button until then.
+
+What code cannot fix: a speaker next to another participant's mic (two
+devices in one room, or a student phone on loudspeaker beside a classmate's)
+sends the teacher's voice back. Headphones on the unmuted student fix it.

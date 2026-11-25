@@ -7,6 +7,7 @@
 import { useEffect, useRef } from 'react';
 import { Track, type LocalAudioTrack, type LocalParticipant } from 'livekit-client';
 import { DUCK_IDLE, HEADPHONES_HINT, MicDuckProcessor, duckStep, trackLevelMeter } from '@/lib/micDuck';
+import { requestVoiceRepublish } from '@/lib/audio/voiceProcessor';
 
 export function useMicDuck(enabled: boolean, participant: LocalParticipant | undefined, shareAudio: () => LocalAudioTrack | null, onHint: (text: string) => void) {
   const hintRef = useRef(onHint);
@@ -26,6 +27,11 @@ export function useMicDuck(enabled: boolean, participant: LocalParticipant | und
       a.stopMeter();
       await a.mic.stopProcessor().catch(() => undefined);
       await a.ctx.close().catch(() => undefined);
+      // The duck replaced the voice chain (noise removal, voice focus) on the
+      // live mic; stopping it leaves the raw mic, captured without the
+      // browser's suppression when a denoiser was planned. Still published:
+      // republish it with the full chain (echo audit, Nov 25).
+      if (participant.getTrackPublication(Track.Source.Microphone)?.track === a.mic) requestVoiceRepublish();
     };
     const check = async () => {
       if (busy) return;

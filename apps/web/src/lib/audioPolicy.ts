@@ -25,6 +25,38 @@ export function keepShareAudio(surface: ShareSurface, settings: { restrictOwnAud
   return settings?.restrictOwnAudio === true;
 }
 
+/** LiveKit proto TrackSource.MICROPHONE (livekit-protocol). */
+const PROTO_MICROPHONE = 2;
+
+/**
+ * May this client publish a microphone under its current SFU grant?
+ * Unknown permissions (not connected yet) count as allowed: the publish
+ * itself is the check. livekit-client refuses a publish the grant does not
+ * allow with no retry, so the publisher waits for the grant instead of
+ * opening the mic and failing (echo audit, Nov 25).
+ */
+export function micPublishAllowed(perms: { canPublish?: boolean; canPublishSources?: number[] } | null | undefined): boolean {
+  if (!perms) return true;
+  if (perms.canPublish === false) return false;
+  const src = perms.canPublishSources ?? [];
+  return src.length === 0 || src.includes(PROTO_MICROPHONE);
+}
+
+/**
+ * Is our own mic track still the live, published microphone? False after the
+ * SFU unpublished it (grant revoked), the device ended it (another app took
+ * the mic, Bluetooth switch), or a stray track replaced it: the publisher
+ * then drops it and publishes a fresh one.
+ */
+export function ownMicCurrent(
+  ours: { mediaStreamTrack?: { readyState?: string } | null } | null | undefined,
+  published: unknown
+): boolean {
+  if (!ours) return false;
+  if (published !== ours) return false;
+  return ours.mediaStreamTrack?.readyState !== 'ended';
+}
+
 /** Dedupe audio playback by track sid: one element per remote audio track. */
 export class AudioRegistry<E> {
   private els = new Map<string, E>();

@@ -179,6 +179,7 @@ import {
 
 /** Wait the server-assigned connect slot (lib/joinPacingLogic). */
 import { CameraErrorBanner, SelectivePublisher } from './SelectivePublisher';
+import { ClassAudioUnlock } from './ClassAudioUnlock';
 import { StudentMediaPrivacy } from './StudentMediaPrivacy';
 import { TeacherCameraFloat, TeacherStageCamera } from './TeacherCameraFloat';
 import { TeacherPeersFloat } from './TeacherPeersFloat';
@@ -2762,6 +2763,7 @@ function RoomInner({
           spotlightIdentity={state?.spotlight?.identity ?? null}
         />
         <RoomAudioRenderer />
+        <ClassAudioUnlock />
 
         {/* Status and class details: one row in the lower-left corner (Nov 22).
             The controls are on the right edge (or a bottom row on a portrait
@@ -3054,6 +3056,7 @@ function RoomInner({
         onCameraError={setCamError}
       />
       <RoomAudioRenderer />
+      <ClassAudioUnlock />
       {state?.spotlight && (
         <SpotlightFloat
           identity={state.spotlight.identity}

@@ -55,6 +55,12 @@ export type VoiceEnv = {
   cores: number;
   /** Phone-class device (coarse pointer, small screen). */
   phone: boolean;
+  /**
+   * Phone or tablet OS (Android, iPhone, iPad). Their browsers capture the
+   * mic through the platform's voice-processing path (hardware echo
+   * cancellation), which an extra Web Audio graph only gets in the way of.
+   */
+  mobile?: boolean;
 };
 
 export type VoicePlan = {
@@ -66,7 +72,13 @@ export type VoicePlan = {
 
 /** The processing chain to build for these settings on this device. */
 export function planVoice(s: VoiceSettings, env: VoiceEnv, isTeacher: boolean): VoicePlan {
-  if (!env.worklet) return { denoiser: null, focus: false, browserNs: true };
+  // Phones and tablets (echo audit, Nov 25): keep the platform's own echo
+  // cancellation, noise suppression and AGC, with no AudioContext in the mic
+  // path. On iOS a running AudioContext next to the capture can change the
+  // audio session, and on every phone the worklets' CPU load adds timing
+  // jitter that the echo canceller has to track, so a speakerphone leaks the
+  // class back into the mic. Same rule as the Android teacher app.
+  if (!env.worklet || env.mobile) return { denoiser: null, focus: false, browserNs: true };
   const focus = isTeacher && s.focus;
   let denoiser: VoicePlan['denoiser'] = null;
   if (env.wasm && s.noise === 'enhanced') denoiser = 'rnnoise';
@@ -84,4 +96,13 @@ export function needsGraph(p: VoicePlan): boolean {
 export function planLabel(p: VoicePlan): string {
   const base = p.denoiser === 'gtcrn' ? 'Strong noise removal' : p.denoiser === 'rnnoise' ? 'Enhanced noise removal' : 'Browser noise suppression';
   return p.focus ? `${base} + voice focus` : base;
+}
+
+/**
+ * Phone or tablet OS from the user agent. iPadOS reports a Mac user agent;
+ * a touch-screen "Mac" is an iPad.
+ */
+export function isMobileOs(ua: string, maxTouchPoints = 0): boolean {
+  if (/Android|iPhone|iPad|iPod|Mobile Safari|CriOS|FxiOS/i.test(ua)) return true;
+  return /Macintosh/i.test(ua) && maxTouchPoints > 1;
 }

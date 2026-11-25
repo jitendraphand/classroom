@@ -22,6 +22,7 @@ import { createLocalAudioTrack, type AudioProcessorOptions, type LocalAudioTrack
 import { MIC_CAPTURE } from '../audioPolicy';
 import {
   VOICE_SETTINGS_KEY,
+  isMobileOs,
   needsGraph,
   parseVoiceSettings,
   planLabel,
@@ -94,7 +95,7 @@ export function onVoiceSettings(fn: () => void): () => void {
 let env: VoiceEnv | null = null;
 export function detectVoiceEnv(): VoiceEnv {
   if (env) return env;
-  if (typeof window === 'undefined') return { worklet: false, wasm: false, cores: 2, phone: false };
+  if (typeof window === 'undefined') return { worklet: false, wasm: false, cores: 2, phone: false, mobile: false };
   const AC = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   let phone = false;
   try {
@@ -107,6 +108,7 @@ export function detectVoiceEnv(): VoiceEnv {
     wasm: typeof WebAssembly === 'object' && typeof WebAssembly.instantiate === 'function',
     cores: navigator.hardwareConcurrency || 2,
     phone,
+    mobile: isMobileOs(navigator.userAgent || '', navigator.maxTouchPoints || 0),
   };
   return env;
 }
@@ -178,6 +180,16 @@ let generation = 0;
 /** Changes when the mic should be republished (settings changed, or clean-up became possible). */
 export function voiceKey(isTeacher: boolean): string {
   return `${JSON.stringify(voiceSettings(isTeacher))}#${generation}`;
+}
+
+/**
+ * Republish the microphone with the full clean-up chain (and the browser's
+ * own suppression if it was turned off for the denoiser). Used after another
+ * processor (share-audio ducking) replaced the voice chain on the live mic.
+ */
+export function requestVoiceRepublish(): void {
+  generation++;
+  settingsListeners.forEach((fn) => fn());
 }
 
 async function running(c: AudioContext, ms = 800): Promise<boolean> {
@@ -414,7 +426,16 @@ export async function createVoiceTrack(isTeacher: boolean, device?: { deviceId?:
     setStatus({ label: 'Browser noise suppression', active: false, note });
     return createLocalAudioTrack({ ...MIC_CAPTURE, ...pick });
   };
-  if (!needsGraph(plan)) return plain(detectVoiceEnv().worklet ? undefined : 'This browser cannot run enhanced noise removal.');
+  if (!needsGraph(plan)) {
+    const e = detectVoiceEnv();
+    return plain(
+      e.mobile
+        ? "Phones and tablets use the device's own echo cancellation and noise suppression."
+        : e.worklet
+          ? undefined
+          : 'This browser cannot run enhanced noise removal.'
+    );
+  }
   const c = audioCtx();
   if (!c) return plain('This browser cannot run enhanced noise removal.');
   if (plan.denoiser && c.sampleRate !== 48000) return plain('Enhanced noise removal needs 48 kHz audio on this device.');

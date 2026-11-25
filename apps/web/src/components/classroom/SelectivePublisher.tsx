@@ -20,6 +20,7 @@ import { createVoiceTrack, onVoiceSettings, voiceKey as currentVoiceKey } from '
 import { cameraProfile, studentCamera, teacherCamera } from '@/lib/videoQuality';
 import { withNegotiationRetry } from '@/lib/joinPacingLogic';
 import { enqueueLocalPublish, safeStop, unpublishThenStop } from './localPublish';
+import { micPublishAllowed, ownMicCurrent } from '@/lib/audioPolicy';
 
 /** Human-readable camera failure. Shown instead of publishing a fake camera. */
 export function cameraErrorMessage(err: unknown): string {
@@ -246,10 +247,19 @@ export function SelectivePublisher({
     let cancelled = false;
     const participant = localParticipant;
     if (!participant) return;
+    void permTick; // students: retry when the SFU grant arrives (unmute race)
     void enqueueLocalPublish(async () => {
       if (cancelled) return;
       // Teacher mute is authoritative — never publish audio while mutedByTeacher
       const want = micDesired && !mutedByTeacher;
+      // Our track is no longer the live published mic (SFU unpublished it on a
+      // grant change, or the device ended it): drop it, publish fresh below.
+      if (micTrackRef.current && !ownMicCurrent(micTrackRef.current, participant.getTrackPublication(Track.Source.Microphone)?.track)) {
+        const stale = micTrackRef.current;
+        micTrackRef.current = null;
+        await unpublishThenStop(participant, stale);
+        if (cancelled) return;
+      }
       if (want && micTrackRef.current && micKeyRef.current !== voiceKey) {
         const old = micTrackRef.current;
         micTrackRef.current = null;
@@ -263,13 +273,16 @@ export function SelectivePublisher({
           await unpublishThenStop(participant, track);
         }
         if (cancelled) return;
-        try {
-          await participant.setMicrophoneEnabled(false);
-        } catch {
-          /* publication already removed */
-        }
+        // Muted = nothing published and the mic device released. A muted
+        // publication (LiveKit mute) would keep the mic device open:
+        // on phones that keeps the call audio mode (quiet earpiece playback).
+        const stray = participant.getTrackPublication(Track.Source.Microphone)?.track as LocalAudioTrack | undefined;
+        if (stray) await unpublishThenStop(participant, stray);
         return;
       }
+      // Not granted yet (teacher just unmuted us): wait for the grant
+      // (ParticipantPermissionsChanged re-runs this) instead of a 403.
+      if (!micTrackRef.current && !micPublishAllowed(participant.permissions)) return;
       try {
         if (!micTrackRef.current) {
           // Cleaned up (noise removal, teacher voice focus) where the device
@@ -311,11 +324,11 @@ export function SelectivePublisher({
           micKeyRef.current = voiceKey;
         }
         if (cancelled) return;
-        if (mutedByTeacher) {
-          await participant.setMicrophoneEnabled(false);
-          return;
-        }
-        await participant.setMicrophoneEnabled(true);
+        // Our own track only (never LiveKit's enable-microphone helper: with no
+        // publication it would open a second, untracked mic). A server-side
+        // mute (teacher muted, then allowed again) is undone here.
+        const mine = micTrackRef.current;
+        if (mine?.isMuted) await mine.unmute();
       } catch (e) {
         console.warn('mic', e);
       }
@@ -323,7 +336,7 @@ export function SelectivePublisher({
     return () => {
       cancelled = true;
     };
-  }, [micDesired, mutedByTeacher, localParticipant, isTeacher, voiceKey]);
+  }, [micDesired, mutedByTeacher, localParticipant, isTeacher, voiceKey, permTick]);
 
   return null;
 }
