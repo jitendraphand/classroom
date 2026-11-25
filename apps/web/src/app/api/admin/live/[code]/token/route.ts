@@ -1,7 +1,10 @@
 import { requireAdminApi } from '@/lib/adminGuard';
 import { handleObserverToken } from '@/lib/adminLiveApi';
+import { registerObserver } from '@/lib/adminObservers';
 import { getLiveClass } from '@/lib/liveClasses';
 import { createObserverToken, mediaUrlForRoom } from '@/lib/livekit';
+import { syncObserverCameras } from '@/lib/observerSync';
+import { nudgeRoomState } from '@/lib/roomNudge';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -18,5 +21,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     get: getLiveClass,
     mint: createObserverToken,
     serverUrl: (roomName) => mediaUrlForRoom(roomName, req),
+    onObserveStart: async ({ code, identity }) => {
+      const { transitionedToActive } = await registerObserver(code, identity);
+      if (transitionedToActive) await syncObserverCameras(code, true);
+      else nudgeRoomState(code, 'all');
+    },
   });
 }

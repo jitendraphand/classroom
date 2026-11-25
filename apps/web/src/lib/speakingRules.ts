@@ -25,8 +25,13 @@ export function teacherUnmuteBlock(student: { camOn: boolean | null | undefined 
 }
 
 /** Camera publish permission for a student. */
-export function studentCameraAllowed(opts: { inSample: boolean; spotlighted?: boolean; unmuted?: boolean }): boolean {
-  return !!(opts.inSample || opts.spotlighted || opts.unmuted);
+export function studentCameraAllowed(opts: {
+  inSample: boolean;
+  spotlighted?: boolean;
+  unmuted?: boolean;
+  observerActive?: boolean;
+}): boolean {
+  return !!(opts.inSample || opts.spotlighted || opts.unmuted || opts.observerActive);
 }
 
 /** Should the server mute this student because their camera went off? */

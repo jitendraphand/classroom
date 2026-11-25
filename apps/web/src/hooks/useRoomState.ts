@@ -53,6 +53,8 @@ export type RoomState = {
     livekitIdentity: string;
     mutedByTeacher: boolean;
     canPublishVideo: boolean;
+    /** Student camera is visible to the teacher (not solely because an observer is watching). */
+    camForTeacher?: boolean;
     inVisibleSample: boolean;
     /** Camera video wanted now (sample AND teacher panel shown). Missing on old servers. */
     camWanted?: boolean;
@@ -141,6 +143,8 @@ export type RoomState = {
   meLeft?: boolean;
   /** Teacher: recent device takeovers (toast). */
   takeovers?: import('@/lib/deviceTakeover').TakeoverNotice[];
+  /** Active hidden admin observers (for StudentMediaPrivacy SFU permissions only). */
+  observerIdentities?: string[];
 };
 
 /** `{v:1,type:'mute',muted}` from the server → muted flag; anything else → null. */

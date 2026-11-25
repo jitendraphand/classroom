@@ -6,6 +6,7 @@ import { distinctConnectedStudents } from './connectedStudents';
 
 export type LiveClass = {
   campus?: string;
+  campuses?: string[];
   /** Teacher's permanent room code (what the admin joins). */
   code: string;
   /** Current room session id (part of the LiveKit room name). */
@@ -87,3 +88,8 @@ export function formatElapsed(ms: number) {
 export function parseObserverMode(raw: unknown): 'preview' | 'observe' | null {
   return raw === 'preview' || raw === 'observe' ? raw : null;
 }
+
+/** Client heartbeat interval while an admin is observing a live class. */
+export const OBSERVER_HEARTBEAT_MS = 15_000;
+/** Disconnect observer media when the browser tab stays hidden this long. */
+export const OBSERVER_HIDDEN_DISCONNECT_MS = 60_000;

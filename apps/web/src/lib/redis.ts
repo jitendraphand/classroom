@@ -77,6 +77,10 @@ export const keys = {
   micPendingRooms: () => `mic-pending:rooms`,
   /** Participant id the teacher is spotlighting, or absent. */
   spotlight: (code: string) => `room:${code}:spotlight`,
+  /** Hash adminobserver identity -> expiresAt ms for active live observers. */
+  observers: (code: string) => `room:${code}:observers`,
+  /** '1' while at least one admin observer is active in this room. */
+  observerMarker: (code: string) => `room:${code}:observer-active`,
   /** Redis pub/sub channel for chat SSE (not a stored key). */
   chatChannel: (code: string) => `room:${code}:chat`,
   /** Sorted set score=due-ms member=`code|sessionId` for teacher-absence grace. */

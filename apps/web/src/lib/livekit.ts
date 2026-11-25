@@ -12,6 +12,7 @@ import { resolvePublicLiveKitUrl } from './url';
 import { isTeacherPresent } from './teacherPresence';
 import { studentMicAllowed } from './teacherPresenceLogic';
 import { mediaServers, serverForRoom, type MediaServer } from './mediaServers';
+import { hasActiveObserver } from './adminObservers';
 import { forgetMemo, memo } from './roomStateCache';
 
 /**
@@ -314,6 +315,8 @@ export type PermissionContext = {
   teacherPresent: boolean;
   /** LiveKit identity of the spotlighted student (keeps their camera grant), or null. */
   spotlightIdentity: string | null;
+  /** True while an admin observer is actively watching the student grid. */
+  observerActive?: boolean;
 };
 
 async function spotlightIdentityFor(code: string): Promise<string | null> {
@@ -332,18 +335,19 @@ async function spotlightIdentityFor(code: string): Promise<string | null> {
 
 export async function permissionContext(
   code: string,
-  opts: { teacherPresent?: boolean; room?: { code: string; sessionId: string } | null } = {}
+  opts: { teacherPresent?: boolean; observerActive?: boolean; room?: { code: string; sessionId: string } | null } = {}
 ): Promise<PermissionContext | null> {
   const room =
     opts.room ?? (await prisma.room.findUnique({ where: { code }, select: { code: true, sessionId: true } }));
   if (!room) return null;
   const roomName = livekitRoomName(room.code, room.sessionId);
-  const [svc, teacherPresent, spotlightIdentity] = await Promise.all([
+  const [svc, teacherPresent, spotlightIdentity, observerActive] = await Promise.all([
     roomServiceFor(roomName),
     opts.teacherPresent ?? isTeacherPresent(code, room),
     spotlightIdentityFor(code),
+    opts.observerActive !== undefined ? Promise.resolve(opts.observerActive) : hasActiveObserver(code),
   ]);
-  return { code, roomName, svc, teacherPresent, spotlightIdentity };
+  return { code, roomName, svc, teacherPresent, spotlightIdentity, observerActive };
 }
 
 export type StudentPublishRequest = { identity: string } & PublishPermissions;
@@ -351,15 +355,15 @@ export type StudentPublishRequest = { identity: string } & PublishPermissions;
 /** Effective sources for one student: teacher absence locks the mic, spotlight keeps the camera. */
 export function effectiveStudentSources(
   req: StudentPublishRequest,
-  ctx: Pick<PermissionContext, 'teacherPresent' | 'spotlightIdentity'>
+  ctx: Pick<PermissionContext, 'teacherPresent' | 'spotlightIdentity' | 'observerActive'>
 ): { allowCamera: boolean; allowMic: boolean; sources: TrackSource[] } {
   const allowMic = studentMicAllowed({ mutedByTeacher: !req.allowMic, teacherPresent: ctx.teacherPresent });
-  // Camera: in the sample, spotlighted, or unmuted by the teacher (the
-  // teacher's speaking pop-up shows them; classmates still cannot subscribe).
+  // Camera: in the sample, spotlighted, unmuted by the teacher, or observed by an admin.
   const allowCamera = studentCameraAllowed({
     inSample: req.allowCamera,
     spotlighted: !!ctx.spotlightIdentity && ctx.spotlightIdentity === req.identity,
     unmuted: allowMic,
+    observerActive: !!ctx.observerActive,
   });
   return { allowCamera, allowMic, sources: publishSourcesFor({ allowCamera, allowMic }) };
 }
@@ -472,7 +476,7 @@ export async function runBounded<T>(items: readonly T[], n: number, fn: (t: T) =
 export async function pushStudentPermissions(
   code: string,
   requests: StudentPublishRequest[],
-  opts: { teacherPresent?: boolean; room?: { code: string; sessionId: string } | null; ctx?: PermissionContext } = {}
+  opts: { teacherPresent?: boolean; observerActive?: boolean; room?: { code: string; sessionId: string } | null; ctx?: PermissionContext } = {}
 ): Promise<{ failed: string[] }> {
   const students = requests.filter((r) => r.identity.startsWith('student_'));
   if (!students.length) return { failed: [] };

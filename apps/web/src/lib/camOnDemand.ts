@@ -17,8 +17,10 @@ export function camWanted(opts: {
   panelRaw: string | null;
   /** Teacher spotlight: the class is watching this camera, even outside the mosaic. */
   spotlighted?: boolean;
+  /** Active admin observer watching the student grid: students publish camera while on. */
+  observerActive?: boolean;
 }): boolean {
-  if (opts.isTeacher || opts.spotlighted) return true;
+  if (opts.isTeacher || opts.spotlighted || opts.observerActive) return true;
   return opts.inSample && opts.panelRaw !== '0';
 }
 

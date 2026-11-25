@@ -1,9 +1,11 @@
 import type { ClassSession, Room } from '@prisma/client';
 import { naturalCompare } from './naturalSort';
 import { prisma } from './db';
-import { formatAudienceOf } from './grades';
-import { studentPlaceLabel } from './audienceLabels';
+import { audienceCampuses } from './grades';
+import { formatStudentAudienceOf, studentPlaceLabel, type AudienceLabels } from './audienceLabels';
 import { loadAudienceLabels } from './audienceLabelStore';
+import { formatTeacherName } from './teacherSalutation';
+import { studentCamMap } from './studentCamera';
 import { livekitRoomName } from './livekit';
 import { listRoomParticipants } from './teacherPresence';
 import { isOngoingClass, summarizeRoomParticipants, type LiveClass } from './liveClassesLogic';
@@ -18,14 +20,21 @@ import { isOngoingClass, summarizeRoomParticipants, type LiveClass } from './liv
  * by that webhook) are used instead and `countSource` says so.
  */
 
-type RoomWithTeacher = Room & { teacher: { name: string } };
+type RoomWithTeacher = Room & { teacher: { name: string; gender: string | null } };
 
-export type LiveRosterStudent = { id: string; name: string; gradeDivision: string; rollNumber: string | null };
+export type LiveRosterStudent = {
+  id: string;
+  identity: string;
+  name: string;
+  gradeDivision: string;
+  rollNumber: string | null;
+  camOn: boolean;
+};
 
 async function ongoingPairs(code?: string): Promise<{ room: RoomWithTeacher; cs: ClassSession }[]> {
   const rooms = await prisma.room.findMany({
     where: { status: { not: 'ENDED' }, classSessionId: { not: null }, ...(code ? { code } : {}) },
-    include: { teacher: { select: { name: true } } },
+    include: { teacher: { select: { name: true, gender: true } } },
   });
   if (!rooms.length) return [];
   const sessions = await prisma.classSession.findMany({
@@ -75,16 +84,24 @@ async function presence(room: Room, cs: ClassSession) {
   }
 }
 
-function toLiveClass(room: RoomWithTeacher, cs: ClassSession, p: Awaited<ReturnType<typeof presence>>): LiveClass {
+function toLiveClass(
+  room: RoomWithTeacher,
+  cs: ClassSession,
+  p: Awaited<ReturnType<typeof presence>>,
+  labels?: AudienceLabels
+): LiveClass {
+  const audience = formatStudentAudienceOf(cs, labels);
+  const title = [cs.subject, audience].filter(Boolean).join(' · ') || room.name;
   return {
     code: room.code,
     sessionId: room.sessionId,
     classSessionId: cs.id,
-    title: room.name,
+    title,
     subject: cs.subject,
-    gradeDivision: formatAudienceOf(cs),
+    gradeDivision: audience,
     campus: cs.campus,
-    teacherName: room.teacher.name,
+    campuses: audienceCampuses(cs),
+    teacherName: formatTeacherName(room.teacher.name, room.teacher.gender),
     startedAt: cs.startedAt!.toISOString(),
     studentCount: p.studentCount,
     teacherConnected: p.teacherConnected,
@@ -113,21 +130,27 @@ export async function listLiveClasses(): Promise<LiveClass[]> {
 
 async function computeLiveClasses(): Promise<LiveClass[]> {
   const pairs = await ongoingPairs();
-  const out = await Promise.all(pairs.map(async ({ room, cs }) => toLiveClass(room, cs, await presence(room, cs))));
+  const labels = pairs.length ? await loadAudienceLabels().catch(() => undefined) : undefined;
+  const out = await Promise.all(
+    pairs.map(async ({ room, cs }) => toLiveClass(room, cs, await presence(room, cs), labels))
+  );
   return out.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
 }
 
-/** One ongoing class plus the students currently connected (names only: no media). */
+/** One ongoing class plus the students currently connected (with camera status). */
 export async function getLiveClass(
   code: string
 ): Promise<{ liveClass: LiveClass; roomName: string; students: LiveRosterStudent[] } | null> {
   const [pair] = await ongoingPairs(code);
   if (!pair) return null;
   const { room, cs } = pair;
-  const p = await presence(room, cs);
+  const [p, labels, camMap] = await Promise.all([
+    presence(room, cs),
+    loadAudienceLabels().catch(() => undefined),
+    studentCamMap(room.code).catch(() => new Map<string, boolean>()),
+  ]);
 
   let students: LiveRosterStudent[] = [];
-  const labels = await loadAudienceLabels().catch(() => undefined);
   if (p.studentIdentities) {
     const identities = p.studentIdentities;
     const rows = identities.length
@@ -148,47 +171,69 @@ export async function getLiveClass(
       const key = row?.studentId || identity;
       if (seen.has(key)) continue;
       seen.add(key);
+      const camOn = camMap.get(identity) === true;
       const st = row?.student;
       if (st) {
         students.push({
           id: st.id,
+          identity,
           name: st.name.trim() || row?.displayName?.trim() || 'Student',
           gradeDivision: studentPlaceLabel(st, labels),
           rollNumber: st.rollNumber,
+          camOn,
         });
       } else {
         students.push({
           id: identity,
+          identity,
           name: row?.displayName?.trim() || 'Guest',
           gradeDivision: 'Guest',
           rollNumber: null,
+          camOn,
         });
       }
     }
   } else {
     const studentIds = 'openStudentIds' in p ? (p.openStudentIds ?? []) : [];
-    const found = studentIds.length
-      ? await prisma.student.findMany({
-          where: { id: { in: studentIds } },
-          select: { id: true, name: true, campus: true, grade: true, division: true, rollNumber: true },
-        })
-      : [];
+    const [found, partRows] = studentIds.length
+      ? await Promise.all([
+          prisma.student.findMany({
+            where: { id: { in: studentIds } },
+            select: { id: true, name: true, campus: true, grade: true, division: true, rollNumber: true },
+          }),
+          prisma.participant.findMany({
+            where: { roomId: room.id, studentId: { in: studentIds }, role: 'STUDENT', status: 'ADMITTED' },
+            orderBy: { createdAt: 'desc' },
+            select: { studentId: true, livekitIdentity: true },
+          }),
+        ])
+      : [[], []];
     const byId = new Map(found.map((s) => [s.id, s]));
+    const identityByStudentId = new Map<string, string>();
+    for (const pr of partRows) {
+      if (pr.studentId && !identityByStudentId.has(pr.studentId)) {
+        identityByStudentId.set(pr.studentId, pr.livekitIdentity);
+      }
+    }
     students = studentIds.map((id) => {
       const s = byId.get(id);
+      const identity = identityByStudentId.get(id) ?? id;
+      const camOn = camMap.get(identity) === true;
       return s
         ? {
             id: s.id,
+            identity,
             name: s.name.trim() || 'Student',
             gradeDivision: studentPlaceLabel(s, labels),
             rollNumber: s.rollNumber,
+            camOn,
           }
-        : { id, name: 'Student', gradeDivision: 'Guest', rollNumber: null };
+        : { id, identity, name: 'Student', gradeDivision: 'Guest', rollNumber: null, camOn };
     });
   }
   students.sort((a, b) => naturalCompare(a.name, b.name));
   // The heading on the class page is students.length. Keep it equal to the card.
-  const liveClass = { ...toLiveClass(room, cs, p), studentCount: students.length };
+  const liveClass = { ...toLiveClass(room, cs, p, labels), studentCount: students.length };
   return {
     liveClass,
     roomName: livekitRoomName(room.code, room.sessionId),

@@ -66,6 +66,8 @@ type Props = {
   waitingLabel?: string;
   /** Hide the Stop button in the tool column (the host shows it elsewhere). */
   hideStop?: boolean;
+  /** Disable viewer zoom/pan (pinch, wheel, drag, Reset button). Used by the admin observer. */
+  disableZoom?: boolean;
 };
 
 export const WIDTHS = [2, 4, 8, 14, 24];
@@ -110,7 +112,7 @@ function unionBounds(items: Item[]): Box | null {
 
 const xfBox = (b: Box, t: Xf): Box => ({ x: (b.x - t.ox) * t.s + t.ox + t.dx, y: (b.y - t.oy) * t.s + t.oy + t.dy, w: b.w * t.s, h: b.h * t.s });
 
-export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onClose, style, waitingLabel, hideStop }: Props) {
+export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onClose, style, waitingLabel, hideStop, disableZoom = false }: Props) {
   const version = useSyncExternalStore(
     (fn) => session.subscribe(fn),
     () => session.version,
@@ -158,7 +160,7 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
     const base = fitView(size.w, size.h);
     return { scale: base.scale * zp.s, tx: base.tx * zp.s + zp.x, ty: base.ty * zp.s + zp.y };
   }, [size.w, size.h, zp]);
-  const zoomBy = (factor: number, sx = size.w / 2, sy = size.h / 2) => setZp((t) => zoomAt(t, factor, sx, sy, size.w, size.h, minZoom));
+  const zoomBy = (factor: number, sx = size.w / 2, sy = size.h / 2) => { if (!disableZoom) setZp((t) => zoomAt(t, factor, sx, sy, size.w, size.h, minZoom)); };
   const resetZoom = () => setZp(ZP_IDENTITY);
 
   // Selection: ids still on the current page (a remote delete or a page change drops them).
@@ -442,7 +444,7 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
   };
 
   const onDown = (e: React.PointerEvent) => {
-    if (textAt) return;
+    if (textAt || (disableZoom && !editing)) return;
     try {
       (e.target as Element).setPointerCapture?.(e.pointerId);
     } catch {
@@ -450,6 +452,7 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
     }
     pointers.current.set(e.pointerId, local(e));
     if (pointers.current.size >= 2) {
+      if (disableZoom) return;
       // Second finger: pinch-zoom / two-finger pan (any mode). A stroke the
       // first finger just started is kept as drawn so far.
       const d = drag.current;
@@ -527,8 +530,10 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
   };
 
   const onMove = (e: React.PointerEvent) => {
+    if (disableZoom && !editing) return;
     const prev = pointers.current.get(e.pointerId);
     if (prev && pointers.current.size >= 2) {
+      if (disableZoom) return;
       const next = local(e);
       const other = [...pointers.current.entries()].find(([id]) => id !== e.pointerId)?.[1];
       pointers.current.set(e.pointerId, next);
@@ -662,6 +667,7 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
   };
 
   const onWheel = (e: React.WheelEvent) => {
+    if (disableZoom) return;
     // Teacher: Ctrl+wheel (plain wheel is free for the page). Viewers: wheel zooms.
     if (mode === 'edit' && !(e.ctrlKey || e.metaKey)) return;
     const [sx, sy] = local(e);
@@ -794,7 +800,7 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
   };
 
-  const cursor = !editing ? (isZoomed(zp) ? 'grab' : 'default') : tool === 'hand' ? 'grab' : tool === 'text' ? 'text' : tool === 'select' ? 'default' : tool === 'laser' ? 'none' : 'crosshair';
+  const cursor = !editing ? (!disableZoom && isZoomed(zp) ? 'grab' : 'default') : tool === 'hand' ? 'grab' : tool === 'text' ? 'text' : tool === 'select' ? 'default' : tool === 'laser' ? 'none' : 'crosshair';
   const btn = (active: boolean, extra?: CSSProperties): CSSProperties => barBtn(active, { minWidth: 38, height: 38, fontSize: 13, ...extra });
   const icon = (n: WbIconName) => <WbIcon name={n} />;
   const toolBtn = (t: Tool) => (
@@ -964,7 +970,7 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
         <canvas
           ref={canvasRef}
           data-testid="wb-canvas"
-          style={{ width: '100%', height: '100%', display: 'block', touchAction: 'none', cursor }}
+          style={{ width: '100%', height: '100%', display: 'block', touchAction: disableZoom ? 'auto' : 'none', cursor }}
           onPointerDown={onDown}
           onPointerMove={onMove}
           onPointerUp={onUp}
@@ -974,7 +980,7 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
         {mode === 'view' && !session.ready && (
           <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: '#94a3b8', fontSize: 14 }}>{waitingLabel ?? 'Loading whiteboard…'}</div>
         )}
-        {mode !== 'edit' && isZoomed(zp) && (
+        {!disableZoom && mode !== 'edit' && isZoomed(zp) && (
           <button type="button" data-testid="wb-reset-zoom" onClick={resetZoom} style={{ ...btn(false), position: 'absolute', right: 10, bottom: 10, zIndex: 4, background: 'rgba(17,24,39,0.9)', padding: '0 12px' }}>
             Reset zoom
           </button>

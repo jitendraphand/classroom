@@ -20,6 +20,8 @@ import { getSchoolSettings } from '@/lib/schoolSettings';
 import { classCapacity } from '@/lib/capacity';
 import { readMicBook, micQueueView } from '@/lib/micBook';
 import { memo, roomVersion, stateCacheMs } from '@/lib/roomStateCache';
+import { listActiveObservers } from '@/lib/adminObservers';
+import { syncObserverCameras } from '@/lib/observerSync';
 
 function teacherGenderOf(g: string | null | undefined) {
   return g === 'male' || g === 'female' ? g : null;
@@ -167,7 +169,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   const loadShared = async () => {
   await ensureSampleFresh(code);
   // Independent reads, issued together (ioredis pipelines them on one socket).
-  const [[{ visible }, mutedIds, handList, handTimes, stageRaw, focusRaw, drawHolders, drawReqs, desktopInkRaw, panelRaw], [settings, spotlightId, micBook], whiteboard] = await Promise.all([Promise.all([
+  const [[{ visible }, mutedIds, handList, handTimes, stageRaw, focusRaw, drawHolders, drawReqs, desktopInkRaw, panelRaw], [settings, spotlightId, micBook, obsRes], whiteboard] = await Promise.all([Promise.all([
     getVisibleSample(code),
     redis.smembers(keys.muted(code)),
     redis.smembers(keys.hands(code)),
@@ -183,11 +185,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     getSchoolSettings(),
     redis.get(keys.spotlight(code)),
     readMicBook(code),
+    listActiveObservers(code).catch(() => ({ observers: [] as string[], transitionedToInactive: false })),
   ]), whiteboardOn(code)]);
-  return { visible, mutedIds, handList, handTimes, stageRaw, focusRaw, drawHolders, drawReqs, desktopInkRaw, panelRaw, settings, spotlightId, micBook, whiteboard };
+  if (obsRes.transitionedToInactive) void syncObserverCameras(code, false);
+  return { visible, mutedIds, handList, handTimes, stageRaw, focusRaw, drawHolders, drawReqs, desktopInkRaw, panelRaw, settings, spotlightId, micBook, whiteboard, activeObservers: obsRes.observers };
   };
   // Students: one computation per room version per worker, shared by every request.
-  const { visible, mutedIds, handList, handTimes, stageRaw, focusRaw, drawHolders, drawReqs, desktopInkRaw, panelRaw, settings, spotlightId, micBook, whiteboard } =
+  const { visible, mutedIds, handList, handTimes, stageRaw, focusRaw, drawHolders, drawReqs, desktopInkRaw, panelRaw, settings, spotlightId, micBook, whiteboard, activeObservers } =
     isTeacher ? await loadShared() : await memo(`state-shared:${code}:${ver}`, cacheMs, loadShared);
   const drawingIds = new Set(drawHolders.map((h) => h.participantId));
   // Back-compat single holder: a drawing student sees their own allow (timer).
@@ -312,11 +316,16 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       ? room.participants.find((p) => p.id === access.student!.id)
       : null;
 
-  // A teacher-unmuted student may publish camera outside the sample: the
-  // teacher's speaking pop-up shows them (lib/speakingRules).
+  // A teacher-unmuted student may publish camera outside the sample (teacher's
+  // speaking pop-up), and an active admin observer lets all camera-on students
+  // publish low-layer video without flooding the teacher.
+  const observerActive = activeObservers.length > 0;
   const meUnmuted = !!me && me.role === 'STUDENT' && !me.mutedByTeacher && !mutedIds.includes(me.id);
+  const meSpotlighted = !!me && !!spotlight && spotlight.participantId === me.id;
+  const camForTeacher =
+    isTeacher || (me ? studentCameraAllowed({ inSample: visible.includes(me.livekitIdentity), spotlighted: meSpotlighted, unmuted: meUnmuted }) : false);
   const canPublishVideo =
-    isTeacher || (me ? studentCameraAllowed({ inSample: visible.includes(me.livekitIdentity), unmuted: meUnmuted }) : false);
+    isTeacher || (me ? studentCameraAllowed({ inSample: visible.includes(me.livekitIdentity), spotlighted: meSpotlighted, unmuted: meUnmuted, observerActive }) : false);
 
   const mePayload = me
     ? {
@@ -328,13 +337,15 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
         livekitIdentity: me.livekitIdentity,
         mutedByTeacher: me.mutedByTeacher || mutedIds.includes(me.id),
         canPublishVideo,
+        camForTeacher,
         inVisibleSample: canPublishVideo,
-        /** Publish camera video now (in the sample AND the teacher shows the video panel, or spotlighted). */
+        /** Publish camera video now (in the sample AND the teacher shows the video panel, spotlighted, or observed). */
         camWanted: camWanted({
           isTeacher,
           inSample: canPublishVideo,
           panelRaw,
-          spotlighted: (!!spotlight && spotlight.participantId === me.id) || meUnmuted,
+          spotlighted: meSpotlighted || meUnmuted,
+          observerActive,
         }),
         handRaised: raisedHands.includes(me.id),
         drawRequested: drawReqAt.has(me.id),
@@ -452,5 +463,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     spotlight,
     micLimit: settings.maxOpenStudentMics,
     micQueue: isTeacher ? micQueue : undefined,
+    observerIdentities: !isTeacher && activeObservers.length ? activeObservers : undefined,
   });
 }

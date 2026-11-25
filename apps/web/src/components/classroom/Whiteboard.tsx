@@ -225,6 +225,7 @@ export function WhiteboardViewer({
   requestSnapshot,
   fetchStored,
   sendOps,
+  disableZoom = false,
 }: {
   identity: string;
   canAnnotate: boolean;
@@ -232,6 +233,7 @@ export function WhiteboardViewer({
   /** Server-kept snapshot (base64 packets) when the teacher's device does not answer. */
   fetchStored?: () => Promise<unknown>;
   sendOps?: (ops: Op[]) => Promise<unknown>;
+  disableZoom?: boolean;
 }) {
   const room = useRoomContext();
   const session = useMemo(() => new WhiteboardSession(), []);
@@ -319,6 +321,7 @@ export function WhiteboardViewer({
         void pump();
       }}
       waitingLabel="Loading the whiteboard…"
+      disableZoom={disableZoom}
     />
   );
 }

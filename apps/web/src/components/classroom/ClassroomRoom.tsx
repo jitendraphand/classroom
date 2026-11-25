@@ -2761,6 +2761,8 @@ function RoomInner({
           teacherIdentities={teacherIdentities}
           studentIdentities={studentIdentities}
           spotlightIdentity={state?.spotlight?.identity ?? null}
+          observerIdentities={state?.observerIdentities}
+          allowTeacherCam={state?.me?.camForTeacher ?? true}
         />
         <RoomAudioRenderer />
         <ClassAudioUnlock />

@@ -689,7 +689,12 @@ export function TeacherPeersFloat({
               if (pub.isSubscribed) pub.setSubscribed(false);
               continue;
             }
-            if (dropOnly) continue;
+            if (dropOnly) {
+              if (pub.source === Track.Source.Camera && !want.has(p.identity) && pub.isSubscribed) {
+                pub.setSubscribed(false);
+              }
+              continue;
+            }
             if (pub.source === Track.Source.Microphone) {
               if (!pub.isSubscribed) pub.setSubscribed(true);
             } else if (pub.source === Track.Source.Camera) {

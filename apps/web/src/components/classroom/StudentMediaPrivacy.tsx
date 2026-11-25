@@ -3,13 +3,56 @@
 /**
  * Student-side media privacy: a student subscribes only to the teacher,
  * classmates' microphones and the spotlighted camera, and lets only the
- * teacher (plus classmates, for the mic / spotlight camera) subscribe to their
- * own tracks. (Split out of ClassroomRoom.tsx.)
+ * teacher (plus classmates, for the mic / spotlight camera, and active hidden
+ * admin observers) subscribe to their own tracks. (Split out of ClassroomRoom.tsx.)
  */
 import { useRoomContext } from '@livekit/components-react';
 import { Track, RoomEvent, ConnectionState, VideoQuality, type ParticipantTrackPermission } from 'livekit-client';
 import { useEffect, useRef } from 'react';
 import { isTeacherParticipant } from './participantRoles';
+
+export function buildStudentTrackPermissions(opts: {
+  teachers: Iterable<string>;
+  classmates: Iterable<string>;
+  observers?: Iterable<string>;
+  micSid?: string | null;
+  camSid?: string | null;
+  spotlighted: boolean;
+  allowTeacherCam?: boolean;
+}): ParticipantTrackPermission[] {
+  const teacherList = Array.from(new Set(opts.teachers)).sort();
+  const teacherSet = new Set(teacherList);
+  const observerList = Array.from(new Set(opts.observers ?? []))
+    .filter((id) => !teacherSet.has(id))
+    .sort();
+  const observerSet = new Set(observerList);
+  const classmateList = Array.from(new Set(opts.classmates))
+    .filter((id) => !teacherSet.has(id) && !observerSet.has(id))
+    .sort();
+
+  const allowTeacherCam = opts.allowTeacherCam !== false;
+  const teacherSids = opts.micSid ? [opts.micSid] : [];
+  const perms: ParticipantTrackPermission[] = teacherList.map((identity) =>
+    allowTeacherCam
+      ? { participantIdentity: identity, allowAll: true }
+      : { participantIdentity: identity, allowAll: false, allowedTrackSids: teacherSids }
+  );
+
+  for (const identity of observerList) {
+    perms.push({ participantIdentity: identity, allowAll: true });
+  }
+
+  const classmateSids = [
+    ...(opts.micSid ? [opts.micSid] : []),
+    ...(opts.spotlighted && opts.camSid ? [opts.camSid] : []),
+  ];
+  if (classmateSids.length) {
+    for (const identity of classmateList) {
+      perms.push({ participantIdentity: identity, allowAll: false, allowedTrackSids: classmateSids });
+    }
+  }
+  return perms;
+}
 
 /**
  * Student-side media privacy (H-4).
@@ -20,28 +63,39 @@ import { isTeacherParticipant } from './participantRoles';
  * cameras stay unsubscribed, except the one teacher-spotlighted student.
  *
  * Publisher side (enforced by the SFU for this student's own tracks): only
- * the teacher may subscribe to everything; classmates may subscribe to the
- * microphone track only, plus this camera while this student is spotlighted.
+ * the teacher (and active hidden admin observers) may subscribe to everything;
+ * when a student's camera is published solely for an active admin observer,
+ * teachers keep microphone access without receiving unwanted camera streams.
+ * Classmates may subscribe to the microphone track only, plus this camera
+ * while this student is spotlighted.
  */
 export function StudentMediaPrivacy({
   teacherIdentities,
   studentIdentities,
   spotlightIdentity = null,
+  observerIdentities = [],
+  allowTeacherCam = true,
 }: {
   teacherIdentities: string[];
   studentIdentities: string[];
   /** LiveKit identity of the spotlighted student, if any. */
   spotlightIdentity?: string | null;
+  /** Active hidden admin observer identities (from /state; never displayed). */
+  observerIdentities?: string[];
+  /** False when camera is published solely because an admin observer is active. */
+  allowTeacherCam?: boolean;
 }) {
   const room = useRoomContext();
   const teacherKey = teacherIdentities.join(',');
   const studentKey = studentIdentities.join(',');
+  const observerKey = observerIdentities.join(',');
   const lastPermKey = useRef('');
 
   useEffect(() => {
     if (!room) return;
     const teacherSet = new Set(teacherKey ? teacherKey.split(',') : []);
     const rosterStudents = studentKey ? studentKey.split(',') : [];
+    const observers = observerKey ? observerKey.split(',') : [];
 
     const sync = () => {
       if (room.state !== ConnectionState.Connected) return;
@@ -86,18 +140,15 @@ export function StudentMediaPrivacy({
       const micSid = me.getTrackPublication(Track.Source.Microphone)?.trackSid;
       const camSid = me.getTrackPublication(Track.Source.Camera)?.trackSid;
       const spotlighted = !!spotlightIdentity && me.identity === spotlightIdentity;
-      const perms: ParticipantTrackPermission[] = Array.from(teachers)
-        .sort()
-        .map((identity) => ({ participantIdentity: identity, allowAll: true }));
-      const classmateSids = [
-        ...(micSid ? [micSid] : []),
-        ...(spotlighted && camSid ? [camSid] : []),
-      ];
-      if (classmateSids.length) {
-        for (const identity of Array.from(classmates).sort()) {
-          perms.push({ participantIdentity: identity, allowAll: false, allowedTrackSids: classmateSids });
-        }
-      }
+      const perms = buildStudentTrackPermissions({
+        teachers,
+        classmates,
+        observers,
+        micSid,
+        camSid,
+        spotlighted,
+        allowTeacherCam,
+      });
       const key = JSON.stringify(perms);
       if (key === lastPermKey.current) return;
       lastPermKey.current = key;
@@ -137,7 +188,7 @@ export function StudentMediaPrivacy({
       room.off(RoomEvent.LocalTrackUnpublished, sync);
       window.clearInterval(iv);
     };
-  }, [room, teacherKey, studentKey, spotlightIdentity]);
+  }, [room, teacherKey, studentKey, observerKey, spotlightIdentity, allowTeacherCam]);
 
   return null;
 }

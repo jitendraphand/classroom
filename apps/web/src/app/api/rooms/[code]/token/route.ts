@@ -9,6 +9,7 @@ import { isTeacherPresent } from '@/lib/teacherPresence';
 import { clearStage } from '@/lib/sessionKick';
 import { nextConnectDelayMs } from '@/lib/joinPacing';
 import { parseMediaProfile } from '@/lib/videoQuality';
+import { hasActiveObserver } from '@/lib/adminObservers';
 
 export const dynamic = 'force-dynamic';
 
@@ -61,15 +62,16 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   // Students joining while the teacher is not connected to the SFU get a token
   // without microphone publish; the LiveKit webhook grants it when the teacher
   // connects (and revokes it again when the teacher leaves).
-  const [sample, mutedFlag, teacherPresent, spotlightId] = await Promise.all([
+  const [sample, mutedFlag, teacherPresent, spotlightId, observerActive] = await Promise.all([
     ensureSampleFresh(code),
     isTeacher ? Promise.resolve(0) : redis.sismember(keys.muted(code), participant.id),
     isTeacher ? Promise.resolve(true) : isTeacherPresent(code, room),
     isTeacher ? Promise.resolve(null) : redis.get(keys.spotlight(code)),
+    isTeacher ? Promise.resolve(false) : hasActiveObserver(code),
   ]);
   const inSample = isTeacher || sample.visible.includes(participant.livekitIdentity);
-  const canPublishVideo = inSample;
-  const allowCamera = inSample || (!isTeacher && spotlightId === participant.id);
+  const canPublishVideo = inSample || (!isTeacher && observerActive);
+  const allowCamera = inSample || (!isTeacher && (spotlightId === participant.id || observerActive));
   const mutedByTeacher = !isTeacher && (participant.mutedByTeacher || mutedFlag === 1);
 
   if (isTeacher) {

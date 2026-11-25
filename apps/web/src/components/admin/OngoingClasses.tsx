@@ -1,45 +1,22 @@
 'use client';
 
-import { LiveKitRoom } from '@livekit/components-react';
 import Link from 'next/link';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { StudentViewStage } from '@/components/classroom/StudentViewStage';
+import { useCallback, useEffect, useState } from 'react';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { IconUsers, IconVideo } from '@/components/ui/Icons';
 import { api } from '@/lib/clientFetch';
 import { formatElapsed, type LiveClass } from '@/lib/liveClassesLogic';
+import { formatTime } from '@/lib/timeFormat';
 import { useSessionEnded } from '@/hooks/useSessionEnded';
 import { CampusSelect, useGradeOptions } from '@/components/admin/GradePickers';
 import { normalizeCampus } from '@/lib/grades';
 
 /** How often the list (counts, new/ended classes) is refreshed. */
 const POLL_MS = 5_000;
-/** Tiles per page (run 4: 30 classes at once made the page take 9.4 s). */
+/** Cards per page. */
 export const PAGE_SIZE = 12;
-/** Preview connections opened at the same time (the rest wait their turn). */
-const MAX_CONCURRENT_CONNECTS = 3;
 
-let connectSlots = MAX_CONCURRENT_CONNECTS;
-const connectQueue: (() => void)[] = [];
-/** Wait for a free preview-connect slot; call the returned release when connected (or failed). */
-function acquireConnectSlot(): Promise<() => void> {
-  return new Promise((resolve) => {
-    const grant = () => {
-      connectSlots--;
-      let released = false;
-      resolve(() => {
-        if (released) return;
-        released = true;
-        connectSlots++;
-        connectQueue.shift()?.();
-      });
-    };
-    if (connectSlots > 0) grant();
-    else connectQueue.push(grant);
-  });
-}
-
-/** Ticking "now" for the elapsed-time overlays (one timer for all tiles). */
+/** Ticking "now" for the elapsed-time badges (one timer for all cards). */
 export function useNow(intervalMs = 1_000) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -49,14 +26,23 @@ export function useNow(intervalMs = 1_000) {
   return now;
 }
 
-/** Admin → Ongoing classes: a responsive grid of live, muted, low-quality tiles. */
+function matchesCampus(c: LiveClass, campus: string): boolean {
+  if (!campus) return true;
+  const list = c.campuses && c.campuses.length > 0 ? c.campuses : c.campus ? [c.campus] : [];
+  return list.some((x) => normalizeCampus(x) === campus);
+}
+
+/**
+ * Admin -> Live classes overview: lightweight metadata cards ONLY.
+ * No LiveKit connection, audio, or video streams start until the admin opens a class.
+ */
 export function OngoingClasses() {
   const [classes, setClasses] = useState<LiveClass[] | null>(null);
   const [error, setError] = useState('');
   const now = useNow();
   const gradeOptions = useGradeOptions();
   const [campus, setCampus] = useState('');
-  const filtered = classes && campus ? classes.filter((c) => normalizeCampus(c.campus ?? '') === campus) : classes;
+  const filtered = classes && campus ? classes.filter((c) => matchesCampus(c, campus)) : classes;
   const [page, setPage] = useState(0);
   const pages = filtered ? Math.max(1, Math.ceil(filtered.length / PAGE_SIZE)) : 1;
   const safePage = Math.min(page, pages - 1);
@@ -101,7 +87,7 @@ export function OngoingClasses() {
           <CampusSelect className="w-44 py-1.5 text-sm" value={campus} onChange={setCampus} options={gradeOptions} emptyLabel="All campuses" />
         )}
         <p className="text-xs text-slate-500">
-          Muted previews of what students see · refreshes every {POLL_MS / 1000}s · click a class to sit in
+          No video or audio streams here · click a class to watch and listen · refreshes every {POLL_MS / 1000}s
         </p>
       </div>
       {error && (
@@ -121,7 +107,7 @@ export function OngoingClasses() {
         <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
           {shown.map((c) => (
             <li key={`${c.code}:${c.sessionId}`}>
-              <LiveClassTile c={c} now={now} />
+              <LiveClassCard c={c} now={now} />
             </li>
           ))}
         </ul>
@@ -143,128 +129,46 @@ export function OngoingClasses() {
   );
 }
 
-const PREVIEW_ROOM_OPTIONS = {
-  adaptiveStream: true,
-  dynacast: false,
-  disconnectOnPageLeave: true,
-} as const;
-const PREVIEW_CONNECT_OPTIONS = { autoSubscribe: false, peerConnectionTimeout: 20_000 } as const;
-
-/** Connect only while the tile is (nearly) on screen. */
-function useInView<T extends Element>() {
-  const ref = useRef<T | null>(null);
-  const [inView, setInView] = useState(false);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || typeof IntersectionObserver === 'undefined') {
-      setInView(true);
-      return;
-    }
-    const io = new IntersectionObserver(([e]) => setInView(!!e?.isIntersecting), { rootMargin: '0px' });
-    io.observe(el);
-    return () => io.disconnect();
-  }, []);
-  return { ref, inView };
-}
-
-function LiveClassTile({ c, now }: { c: LiveClass; now: number }) {
-  const { ref, inView } = useInView<HTMLAnchorElement>();
-  const [conn, setConn] = useState<{ token: string; serverUrl: string } | null>(null);
-  const [failed, setFailed] = useState(false);
-  const [attempt, setAttempt] = useState(0);
-  // Admin signed in elsewhere: stop the preview for good (no reconnect loop).
-  const sessionEnded = useSessionEnded();
-
-  useEffect(() => {
-    if (!inView || sessionEnded) {
-      setConn(null);
-      return;
-    }
-    let cancelled = false;
-    let release: (() => void) | null = null;
-    void acquireConnectSlot().then((rel) => {
-      release = rel;
-      if (cancelled) return rel();
-      // Free the slot once the connection had time to come up.
-      window.setTimeout(rel, 2_500);
-      return api<{ token: string; serverUrl: string }>(`/api/admin/live/${encodeURIComponent(c.code)}/token`, {
-        body: { mode: 'preview' },
-      }).then(({ ok, data }) => {
-        if (cancelled) return;
-        if (ok) {
-          setConn({ token: data.token, serverUrl: data.serverUrl });
-          setFailed(false);
-        } else setFailed(true);
-      });
-    });
-    return () => {
-      cancelled = true;
-      release?.();
-    };
-  }, [inView, c.code, c.sessionId, attempt, sessionEnded]);
-
-  const reconnectLater = useCallback(() => {
-    setConn(null);
-    if (!sessionEnded) setTimeout(() => setAttempt((n) => n + 1), 4_000);
-  }, [sessionEnded]);
-
+function LiveClassCard({ c, now }: { c: LiveClass; now: number }) {
   const elapsed = formatElapsed(now - new Date(c.startedAt).getTime());
   const students = `${c.studentCount} student${c.studentCount === 1 ? '' : 's'}`;
 
   return (
     <Link
-      ref={ref}
       href={`/admin/live/${encodeURIComponent(c.code)}`}
-      className="group block overflow-hidden rounded-2xl border border-white/10 bg-surface-2 transition hover:border-brand-400/60 focus-visible:border-brand-400 focus-visible:outline-none"
-      aria-label={`Join ${c.title} (${c.gradeDivision}, ${c.teacherName}) as observer`}
+      data-testid="live-class-card"
+      className="group flex h-full flex-col justify-between gap-3 rounded-2xl border border-white/10 bg-surface-2 p-4 transition hover:border-brand-400/60 focus-visible:border-brand-400 focus-visible:outline-none"
+      aria-label={`Open ${c.subject || c.title} (${c.gradeDivision}, ${c.teacherName})`}
     >
-      <div className="pointer-events-none relative aspect-video w-full bg-ink-950">
-        {conn && !sessionEnded ? (
-          <LiveKitRoom
-            token={conn.token}
-            serverUrl={conn.serverUrl}
-            connect
-            audio={false}
-            video={false}
-            options={PREVIEW_ROOM_OPTIONS}
-            connectOptions={PREVIEW_CONNECT_OPTIONS}
-            onDisconnected={reconnectLater}
-            onError={reconnectLater}
-            className="h-full w-full"
-          >
-            <StudentViewStage code={c.code} mode="preview" />
-          </LiveKitRoom>
-        ) : (
-          <div className="flex h-full items-center justify-center text-xs text-slate-500">
-            {failed ? 'Preview unavailable' : 'Connecting preview…'}
-          </div>
-        )}
-        <div className="absolute right-2 top-2 flex items-center gap-2 rounded-lg bg-black/65 px-2 py-1 text-[11px] font-medium text-white backdrop-blur">
-          <span className="flex items-center gap-1">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500" aria-hidden />
-            <span className="font-mono tabular-nums" title="Time since the class started">
-              {elapsed}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2 text-[11px] font-medium">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-red-500/15 px-2 py-0.5 text-red-300">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-400" aria-hidden />
+            Live · <span className="font-mono tabular-nums">{elapsed}</span>
+          </span>
+          {c.teacherConnected === false ? (
+            <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-amber-300">Teacher away</span>
+          ) : (
+            <span className="inline-flex items-center gap-1 rounded-full bg-white/5 px-2 py-0.5 text-slate-300" title="Students connected now">
+              <IconUsers size={12} />
+              <span className="tabular-nums">{c.studentCount}</span>
+              <span className="sr-only">{students}</span>
             </span>
-          </span>
-          <span className="flex items-center gap-1" title="Students connected now">
-            <IconUsers size={12} />
-            <span className="tabular-nums">{c.studentCount}</span>
-            <span className="sr-only">{students}</span>
-          </span>
+          )}
         </div>
-        {c.teacherConnected === false && (
-          <span className="absolute left-2 top-2 rounded-lg bg-amber-500/80 px-2 py-0.5 text-[11px] font-medium text-black">
-            Teacher away
-          </span>
-        )}
+        <div>
+          <p className="truncate text-base font-semibold text-white group-hover:text-brand-200">{c.subject || c.title}</p>
+          <p className="mt-0.5 line-clamp-2 text-xs text-slate-300">{c.gradeDivision}</p>
+        </div>
       </div>
-      <div className="px-3 py-2.5">
-        <p className="truncate text-sm font-medium text-white group-hover:text-brand-200">{c.title}</p>
-        <p className="truncate text-xs text-slate-400">
-          {c.title.includes(c.gradeDivision) ? c.teacherName : `${c.gradeDivision} · ${c.teacherName}`}
-        </p>
+
+      <div className="space-y-1.5 border-t border-white/5 pt-2.5 text-xs text-slate-400">
+        <p className="truncate text-slate-200">{c.teacherName}</p>
+        <div className="flex items-center justify-between gap-2 text-[11px] text-slate-400">
+          <span>Started {formatTime(c.startedAt)}</span>
+          <span className="font-medium text-brand-300 group-hover:text-brand-200">Open live view →</span>
+        </div>
       </div>
     </Link>
   );
 }
-

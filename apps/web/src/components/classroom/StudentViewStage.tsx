@@ -18,17 +18,14 @@ import { isTeacherParticipant } from './participantRoles';
 import { useFloatDrag } from './FloatingPanel';
 
 /**
- * What a student sees on the main stage, for someone who is *not* a student
- * (the admin's "Ongoing classes" tiles and observer view). Same precedence and
- * placeholders as the student stage in ClassroomRoom:
- *   teacher screen share → teacher camera → "Teacher camera off" / "Waiting for teacher…".
+ * What a student sees on the main stage, for the admin observer view.
+ * Same precedence and placeholders as the student stage in ClassroomRoom:
+ *   whiteboard → teacher screen share → teacher camera → "Teacher camera off" / "Waiting for teacher…".
  *
  * Connect the surrounding LiveKitRoom with `autoSubscribe: false`; this
- * component subscribes to teacher tracks only. Student tracks are never
- * requested (and the students' own subscription permissions would refuse a
- * hidden observer anyway). `preview` subscribes to teacher video only, capped
- * at the low layer, and never to audio; `observe` also takes the teacher's
- * microphone / screen-share audio.
+ * component subscribes to teacher tracks only (plus teacher audio only when
+ * `audioEnabled` is true). Read-only and fit-to-area, with zoom disabled when
+ * `disableZoom` is true.
  */
 export type StudentViewMode = 'preview' | 'observe';
 
@@ -55,7 +52,7 @@ function isSharePub(p: { identity: string }, pub: { source: Track.Source; kind: 
   );
 }
 
-function useTeacherOnlySubscriptions(mode: StudentViewMode) {
+function useTeacherOnlySubscriptions(mode: StudentViewMode, audioEnabled: boolean) {
   const room = useRoomContext();
   // Bumped on every relevant room event so the stage re-reads publications
   // (a published-but-not-yet-subscribed share must not read as "camera off").
@@ -64,12 +61,21 @@ function useTeacherOnlySubscriptions(mode: StudentViewMode) {
     const sync = () => {
       room.remoteParticipants.forEach((p: RemoteParticipant) => {
         const teacher = isTeacherParticipant(p, NO_TEACHERS);
+        if (!teacher) return;
         p.trackPublications.forEach((pub) => {
           const video = isVideoPub(pub);
           const audio =
-            pub.source === Track.Source.Microphone || pub.source === Track.Source.ScreenShareAudio;
-          const want = teacher && (video || (audio && mode === 'observe'));
-          if (pub.isDesired !== want) pub.setSubscribed(want);
+            pub.source === Track.Source.Microphone ||
+            pub.source === Track.Source.ScreenShareAudio ||
+            (pub.kind === Track.Kind.Audio && pub.source === Track.Source.Unknown);
+          const want = video || (audio && mode === 'observe' && audioEnabled);
+          if (pub.isDesired !== want || pub.isSubscribed !== want) {
+            try {
+              pub.setSubscribed(want);
+            } catch {
+              /* ignore transient subscription state */
+            }
+          }
           if (want && video && mode === 'preview') pub.setVideoQuality(VideoQuality.LOW);
         });
       });
@@ -93,20 +99,24 @@ function useTeacherOnlySubscriptions(mode: StudentViewMode) {
     return () => {
       events.forEach((e) => room.off(e, sync));
     };
-  }, [room, mode]);
+  }, [room, mode, audioEnabled]);
   return version;
 }
 
 export function StudentViewStage({
   code,
   mode,
+  audioEnabled = false,
+  disableZoom = false,
   className,
 }: {
   code: string;
   mode: StudentViewMode;
+  audioEnabled?: boolean;
+  disableZoom?: boolean;
   className?: string;
 }) {
-  useTeacherOnlySubscriptions(mode);
+  useTeacherOnlySubscriptions(mode, audioEnabled);
   const room = useRoomContext();
   const wbOn = useAdminWhiteboardFlag(code);
   const compact = mode === 'preview';
@@ -138,15 +148,31 @@ export function StudentViewStage({
       : 'Waiting for teacher…';
 
   if (wbOn) {
+    const url = `/api/admin/live/${encodeURIComponent(code)}/whiteboard`;
     const ask = () =>
-      void fetch(`/api/admin/live/${encodeURIComponent(code)}/whiteboard`, {
+      void fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ identity: room.localParticipant.identity }),
       }).catch(() => undefined);
+    const fetchStored = () =>
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stored: true }),
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => (Array.isArray(d?.packets) ? d.packets : []))
+        .catch(() => []);
     return (
       <div className={cn('relative h-full w-full overflow-hidden bg-ink-950', className)} data-admin-whiteboard="1">
-        <WhiteboardViewer identity={room.localParticipant.identity} canAnnotate={false} requestSnapshot={ask} />
+        <WhiteboardViewer
+          identity={room.localParticipant.identity}
+          canAnnotate={false}
+          requestSnapshot={ask}
+          fetchStored={fetchStored}
+          disableZoom={disableZoom}
+        />
       </div>
     );
   }
@@ -156,7 +182,7 @@ export function StudentViewStage({
       {screen ? (
         <>
           {screen.source === Track.Source.ScreenShare && !compact ? (
-            <TeacherScreenStage teacherIdentities={[]} />
+            <TeacherScreenStage teacherIdentities={[]} zoomable={false} />
           ) : (
             <VideoTrack trackRef={screen} className="h-full w-full bg-black object-contain" />
           )}
@@ -213,7 +239,7 @@ function useAdminWhiteboardFlag(code: string): boolean {
         })
         .catch(() => undefined);
     void check();
-    const iv = window.setInterval(check, 8000);
+    const iv = window.setInterval(check, 4000);
     return () => {
       stop = true;
       window.clearInterval(iv);
