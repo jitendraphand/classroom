@@ -134,9 +134,6 @@ export function RosterView({ snap, send, showLayout = false }: { snap: PanelSnap
         <button type="button" className="btn sm warn" onClick={() => send({ type: 'mute-all', muted: true })}>
           Mute all
         </button>
-        <button type="button" className="btn sm" onClick={() => send({ type: 'mute-all', muted: false })}>
-          Allow all to unmute
-        </button>
         {showLayout && (
           <div className="seg" role="group" aria-label="Videos on screen">
             {([2, 4, 6] as const).map((n) => (

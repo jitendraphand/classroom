@@ -46,6 +46,7 @@ import { LayeredRenderer, drawLaser, fitView, renderPageToCanvas, toPage, type V
 import { SNAP_HOLD_MS, SNAP_STILL_PX, recognizeShape } from './recognize';
 import { jpegsToPdf } from './pdf';
 import { FlyoutBar, barBtn, type FlyoutGroup } from './FlyoutBar';
+import { DRAW_GROUP_LABEL, DRAW_GROUP_TOOLS, drawGroupIcon } from './toolGroups';
 import { WbIcon, type WbIconName } from './icons';
 import { ZP_IDENTITY, clampZP, isZoomed, panBy, pinchZP, wheelFactor, zoomAt, type ZoomPan } from '../zoomPan';
 import type { WhiteboardSession } from './session';
@@ -834,19 +835,12 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
     { id: 'select', label: TOOL_LABEL.select, icon: icon('select'), active: tool === 'select', onClick: () => setTool('select'), testId: 'wb-tool-select' },
     {
       id: 'draw',
-      label: 'Draw: pen, highlighter, text',
-      icon: icon(tool === 'hl' ? 'highlighter' : tool === 'text' ? 'text' : 'pen'),
-      active: isTool('pen', 'hl', 'text'),
+      label: DRAW_GROUP_LABEL,
+      icon: icon(drawGroupIcon(tool)),
+      active: isTool(...DRAW_GROUP_TOOLS),
       testId: 'wb-group-draw',
-      content: (
-        <>
-          {toolBtn('pen')}
-          {toolBtn('hl')}
-          {toolBtn('text')}
-        </>
-      ),
+      content: <>{DRAW_GROUP_TOOLS.map((t) => toolBtn(t))}</>,
     },
-    { id: 'laser', label: TOOL_LABEL.laser, icon: icon('laser'), active: tool === 'laser', onClick: () => setTool('laser'), testId: 'wb-tool-laser' },
     {
       id: 'shapes',
       label: 'Shapes: line, arrow, rectangle, ellipse, triangle',

@@ -27,7 +27,6 @@ export function MeetingBar({ meeting, onStop }: { meeting: WbMeeting; onStop: ()
   const requests = snap.admitted.filter((p) => p.drawRequested && !p.drawing);
   const drawers = snap.admitted.filter((p) => p.drawing);
   const waiting = hud.waitingCount;
-  const [allMuted, setAllMuted] = useState(false);
   const groups: FlyoutGroup[] = [
     { id: 'mic', label: hud.micOn ? 'Mute mic' : 'Unmute mic', icon: ic(hud.micOn ? 'mic' : 'micOff'), danger: !hud.micOn, onClick: () => send({ type: 'toggle-mic' }), testId: 'wbm-mic' },
     { id: 'cam', label: hud.camOn ? 'Turn camera off' : 'Turn camera on', icon: ic(hud.camOn ? 'cam' : 'camOff'), onClick: () => send({ type: 'toggle-cam' }), testId: 'wbm-cam' },
@@ -84,13 +83,10 @@ export function MeetingBar({ meeting, onStop }: { meeting: WbMeeting; onStop: ()
     },
     {
       id: 'muteall',
-      label: allMuted ? 'Allow all to unmute' : 'Mute all students',
-      icon: ic(allMuted ? 'speakerOff' : 'speaker'),
-      active: allMuted,
-      onClick: () => {
-        send({ type: 'mute-all', muted: !allMuted });
-        setAllMuted(!allMuted);
-      },
+      // Mute only (Nov 25): students are unmuted one at a time, camera on.
+      label: 'Mute all students',
+      icon: ic('speakerOff'),
+      onClick: () => send({ type: 'mute-all', muted: true }),
       testId: 'wbm-mute-all',
     },
     { id: 'videos', label: hud.videosOn ? 'Close student videos' : 'Show student videos', icon: ic('video'), active: hud.videosOn, onClick: () => send({ type: 'toggle-videos' }), testId: 'wbm-videos' },

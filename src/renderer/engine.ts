@@ -789,7 +789,6 @@ function buildClass(): void {
             <span class="tool-cap" aria-hidden="true">Videos</span>
           </span>
           <button class="btn sm warn" id="btn-mute" type="button">Mute all</button>
-          <button class="btn sm" id="btn-allow" type="button">Allow all to unmute</button>
           <span class="bar-div"></span>
           ${sym('btn-leave', 'leave', 'Leave class (it keeps running for the students)', '', 'Leave')}
           <span class="bar-div wide"></span>
@@ -810,7 +809,6 @@ function buildClass(): void {
   document.getElementById('btn-leave')?.addEventListener('click', act('leave'));
   document.getElementById('btn-end')?.addEventListener('click', act('end'));
   document.getElementById('btn-mute')?.addEventListener('click', () => controller?.handle({ type: 'mute-all', muted: true }));
-  document.getElementById('btn-allow')?.addEventListener('click', () => controller?.handle({ type: 'mute-all', muted: false }));
   for (const n of [2, 4, 6] as const) {
     document.getElementById(`layout-${n}`)?.addEventListener('click', () => {
       if (boot) boot.layout = n;
