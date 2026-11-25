@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db';
 import { loadMaster } from '@/lib/gradeMaster';
 import { loadCampuses } from '@/lib/campusMaster';
 import { handleJoinForm } from '@/lib/joinClassForm';
+import { ensureJoinAudience } from '@/lib/joinClassSeed';
 import { clientIp } from '@/lib/rateLimit';
 import { ensureRedis } from '@/lib/redis';
 import { joinRateLimited, joinRateLimitFromEnv, schoolJoinModeFromEnv } from '@/lib/schoolJoin';
@@ -11,8 +12,13 @@ import { finishStudentJoin } from '@/lib/studentJoinFinish';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-/** POST { name } (the class is fixed server-side) → session set, `{ ok, redirect: '/student' }`. */
+/** POST { name, grade, campus, foundation } → session set, `{ ok, redirect: '/student' }`. */
 export async function POST(req: Request) {
+  try {
+    await ensureJoinAudience();
+  } catch (e) {
+    console.error('join-class: could not seed options', e instanceof Error ? e.message : e);
+  }
   const body = await req.json().catch(() => null);
   return handleJoinForm(body, {
     mode: schoolJoinModeFromEnv(),
