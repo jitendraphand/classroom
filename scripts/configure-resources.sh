@@ -8,7 +8,9 @@
 # Profiles (auto from the host unless RESOURCE_PROFILE is set):
 #   small   ≤ 3 GB RAM or ≤ 2 vCPU  (a 2–4 GB VPS running everything)
 #   medium  ≤ 16 GB RAM and ≤ 8 vCPU
-#   large   bigger boxes (the defaults in docs/CAPACITY.md)
+#   large   bigger boxes below 32 GB (the defaults in docs/CAPACITY.md)
+#   xlarge  ≥ 32 GB RAM (16 OCPU / 48 GB class: ~12 GB Postgres buffers,
+#           half the cores for web, memory caps, LiveKit uncapped)
 #
 # What it sets (only keys it owns; everything else in .env is left alone):
 #   web workers, Prisma pool, Postgres memory/connections, Redis maxmemory,
@@ -43,6 +45,7 @@ profile="${RESOURCE_PROFILE:-auto}"
 if [[ "$profile" == "auto" ]]; then
   if (( ram_mb <= 3200 || cpus <= 2 )); then profile=small
   elif (( ram_mb <= 16384 && cpus <= 8 )); then profile=medium
+  elif (( ram_mb >= 32768 )); then profile=xlarge
   else profile=large
   fi
 fi
@@ -98,8 +101,25 @@ case "$profile" in
     media_default=standard
     log_size=20m
     ;;
+  xlarge)
+    # Half the cores for web (8 on a 16-OCPU box, up to 16), so LiveKit
+    # keeps the rest. ~25% of RAM for Postgres shared_buffers, capped at
+    # 12 GB; container caps leave headroom for the uncapped media server.
+    web_workers=$(clamp $(( cpus / 2 )) 8 16)
+    db_pool=10
+    pg_shared=$(clamp $(( ram_mb / 4 )) 8192 12288)
+    pg_cache=$(clamp $(( ram_mb / 2 )) 16384 32768)
+    pg_maint=1024
+    pg_work=16
+    redis_max=2048
+    web_limit=$(( web_workers * 1024 ))
+    pg_limit=$(clamp $(( pg_shared + 4096 )) 12288 20480)
+    caddy_limit=512
+    media_default=standard
+    log_size=20m
+    ;;
   *)
-    echo "RESOURCE_PROFILE must be small, medium, large or auto" >&2
+    echo "RESOURCE_PROFILE must be small, medium, large, xlarge or auto" >&2
     exit 1
     ;;
 esac
