@@ -14,7 +14,7 @@ import {
   PICK_CLASS,
   UNKNOWN_CLASS,
   campusKey,
-  checkName,
+  checkNames,
   formStudentId,
   gradeKey,
   handleJoinForm,
@@ -151,8 +151,17 @@ test('joinFormModel locks values a join link already carries, including a non-ad
   assert.equal(partial.prefill.campus, 'CITY');
   assert.equal(partial.prefill.locked.campus, true);
   assert.equal(partial.prefill.locked.grade, false);
-  assert.equal(partial.prefill.grade, '7');
-  assert.equal(partial.prefill.division, 'SCIENCEFOUNDATION');
+  assert.equal(partial.prefill.locked.division, false);
+  assert.equal(partial.prefill.grade, '');
+  assert.equal(partial.prefill.division, '');
+
+  const empty = joinFormModel(GRADES, CAMPUSES, {});
+  assert.deepEqual(empty.prefill, { grade: '', campus: '', division: '', locked: { grade: false, campus: false, division: false } });
+
+  // A foundation without a grade is not locked: it exists on more than one grade.
+  const onlyDiv = joinFormModel(GRADES, CAMPUSES, { division: 'Science Foundation' });
+  assert.equal(onlyDiv.prefill.division, '');
+  assert.equal(onlyDiv.prefill.locked.division, false);
 });
 
 test('Foundation is accepted as a Division alias on join links', () => {
@@ -198,17 +207,18 @@ test('planJoinAudience adds missing grades, campuses and foundations without ren
   assert.ok(!inactive.campusesToAdd.some((c) => c.name === 'OSMANPURACAMPUS'));
 });
 
-test('checkName: trimmed, first name and surname, letters only, length limit', () => {
-  assert.deepEqual(checkName('  asha   patil '), { name: 'asha patil' });
-  assert.deepEqual(checkName("D'Souza Ann-Marie"), { name: "D'Souza Ann-Marie" });
-  assert.deepEqual(checkName('आशा पाटील'), { name: 'आशा पाटील' });
-  assert.ok('error' in checkName(''));
-  assert.ok('error' in checkName('   '));
-  assert.ok('error' in checkName('Asha'));
-  assert.ok('error' in checkName('Asha 123'));
-  assert.ok('error' in checkName('<b>Asha</b> P'));
-  assert.ok('error' in checkName('A'.repeat(40) + ' ' + 'B'.repeat(30)));
-  assert.ok('error' in checkName(42));
+test('checkNames: trimmed first and last, letters only, length limit', () => {
+  assert.deepEqual(checkNames('  asha  ', '  patil '), { firstName: 'asha', lastName: 'patil', name: 'asha patil' });
+  assert.deepEqual(checkNames("D'Souza", 'Ann-Marie'), { firstName: "D'Souza", lastName: 'Ann-Marie', name: "D'Souza Ann-Marie" });
+  assert.deepEqual(checkNames('आशा', 'पाटील'), { firstName: 'आशा', lastName: 'पाटील', name: 'आशा पाटील' });
+  assert.deepEqual(checkNames('Asha', 'Kumar Patil'), { firstName: 'Asha', lastName: 'Kumar Patil', name: 'Asha Kumar Patil' });
+  assert.equal((checkNames('', 'Patil') as { field: string }).field, 'firstName');
+  assert.equal((checkNames('Asha', '  ') as { field: string }).field, 'lastName');
+  assert.ok('error' in checkNames('Asha', '123'));
+  assert.ok('error' in checkNames('<b>Asha</b>', 'P'));
+  assert.ok('error' in checkNames('A'.repeat(51), 'Patil'));
+  assert.ok('error' in checkNames('Asha', 'B'.repeat(51)));
+  assert.ok('error' in checkNames(42, 'Patil'));
 });
 
 test('name matching ignores case, accents and spacing; derived IDs are stable', () => {
@@ -254,7 +264,7 @@ test('handleJoinForm: uses the chosen class; unknown or missing class is refused
   const { d, calls } = deps();
   const r = await body(
     await handleJoinForm(
-      { name: ' Meera  Iyer ', grade: '6', campus: 'CITY', foundation: 'Science Foundation', sid: 'HACK' },
+      { firstName: ' Meera  ', lastName: ' Iyer ', grade: '6', campus: 'CITY', foundation: 'Science Foundation', sid: 'HACK' },
       d,
     ),
   );
@@ -268,18 +278,18 @@ test('handleJoinForm: uses the chosen class; unknown or missing class is refused
   assert.equal(c.claims.name, 'Meera Iyer');
   assert.equal(c.claims.studentId, formStudentId({ campus: 'CITY', grade: '6', division: 'SCIENCEFOUNDATION' }, 'Meera Iyer'));
 
-  const missing = await body(await handleJoinForm({ name: 'Meera Iyer' }, deps().d));
+  const missing = await body(await handleJoinForm({ firstName: 'Meera', lastName: 'Iyer' }, deps().d));
   assert.equal(missing.status, 400);
   assert.equal(missing.error, PICK_CLASS);
 
   const unknown = await body(
-    await handleJoinForm({ name: 'Meera Iyer', grade: '7', campus: 'AIRPORTCAMPUS', foundation: 'Sports Foundation' }, deps().d),
+    await handleJoinForm({ firstName: 'Meera', lastName: 'Iyer', grade: '7', campus: 'AIRPORTCAMPUS', foundation: 'Sports Foundation' }, deps().d),
   );
   assert.equal(unknown.status, 400);
   assert.equal(unknown.error, UNKNOWN_CLASS);
 
   const spoof = await body(
-    await handleJoinForm({ name: 'Meera Iyer', grade: '7', campus: 'AIRPORTCAMPUS', foundation: 'A' }, deps().d),
+    await handleJoinForm({ firstName: 'Meera', lastName: 'Iyer', grade: '7', campus: 'AIRPORTCAMPUS', foundation: 'A' }, deps().d),
   );
   // "A" is on the grade 7 master list, so a direct POST is accepted (the form does not offer it).
   assert.equal(spoof.status, 200);
@@ -288,34 +298,34 @@ test('handleJoinForm: uses the chosen class; unknown or missing class is refused
 
 test('handleJoinForm: a student on file keeps their record (attendance lands on it)', async () => {
   const { d, calls } = deps();
-  await handleJoinForm({ name: 'asha patil', grade: '7', campus: 'Airport Campus', division: 'Science Foundation' }, d);
+  await handleJoinForm({ firstName: 'asha', lastName: 'patil', grade: '7', campus: 'Airport Campus', division: 'Science Foundation' }, d);
   assert.equal(calls[0]!.claims.studentId, 'GOS001');
   assert.equal(calls[0]!.claims.campus, 'AIRPORTCAMPUS');
 });
 
 test('handleJoinForm: friendly errors', async () => {
-  let r = await body(await handleJoinForm({ name: 'Asha' }, deps().d));
+  let r = await body(await handleJoinForm({ firstName: 'Asha' }, deps().d));
   assert.equal(r.status, 400);
-  assert.equal(r.field, 'name');
+  assert.equal(r.field, 'lastName');
   r = await body(await handleJoinForm(null, deps().d));
   assert.equal(r.status, 400);
   r = await body(
     await handleJoinForm(
-      { name: 'Asha Patil', grade: '7', campus: 'Airport Campus', foundation: 'Science Foundation' },
+      { firstName: 'Asha', lastName: 'Patil', grade: '7', campus: 'Airport Campus', foundation: 'Science Foundation' },
       deps({ campuses: async () => [CAMPUSES[0]!] }).d,
     ),
   );
   assert.deepEqual([r.status, r.error], [400, UNKNOWN_CLASS]);
   r = await body(
     await handleJoinForm(
-      { name: 'Asha Patil', grade: '7', campus: 'Airport Campus', foundation: 'Science Foundation' },
+      { firstName: 'Asha', lastName: 'Patil', grade: '7', campus: 'Airport Campus', foundation: 'Science Foundation' },
       deps({ grades: async () => [], campuses: async () => [] }).d,
     ),
   );
   assert.deepEqual([r.status, r.error], [503, NOT_AVAILABLE]);
   r = await body(
     await handleJoinForm(
-      { name: 'Rahul Shah', grade: '7', campus: 'Airport Campus', foundation: 'Science Foundation' },
+      { firstName: 'Rahul', lastName: 'Shah', grade: '7', campus: 'Airport Campus', foundation: 'Science Foundation' },
       deps({ onFile: async () => [{ externalId: 'a', name: 'Rahul Shah' }, { externalId: 'b', name: 'Rahul Shah' }] }).d,
     ),
   );
@@ -323,21 +333,21 @@ test('handleJoinForm: friendly errors', async () => {
   assert.match(r.error, /ask your teacher/);
   r = await body(
     await handleJoinForm(
-      { name: 'Asha Patil', grade: '7', campus: 'Airport Campus', foundation: 'Science Foundation' },
+      { firstName: 'Asha', lastName: 'Patil', grade: '7', campus: 'Airport Campus', foundation: 'Science Foundation' },
       deps({ mode: 'signed' }).d,
     ),
   );
   assert.equal(r.status, 403);
   r = await body(
     await handleJoinForm(
-      { name: 'Asha Patil', grade: '7', campus: 'Airport Campus', foundation: 'Science Foundation' },
+      { firstName: 'Asha', lastName: 'Patil', grade: '7', campus: 'Airport Campus', foundation: 'Science Foundation' },
       deps({ limited: async () => true }).d,
     ),
   );
   assert.equal(r.status, 429);
   r = await body(
     await handleJoinForm(
-      { name: 'New Person', grade: '7', campus: 'Airport Campus', foundation: 'Science Foundation' },
+      { firstName: 'New', lastName: 'Person', grade: '7', campus: 'Airport Campus', foundation: 'Science Foundation' },
       deps({ finish: async () => { throw new JoinTokenError('unknown_student', 'sid'); } }).d,
     ),
   );
@@ -345,7 +355,7 @@ test('handleJoinForm: friendly errors', async () => {
   assert.match(r.error, /school list/);
   r = await body(
     await handleJoinForm(
-      { name: 'Asha Patil', grade: '7', campus: 'Airport Campus', foundation: 'Science Foundation' },
+      { firstName: 'Asha', lastName: 'Patil', grade: '7', campus: 'Airport Campus', foundation: 'Science Foundation' },
       deps({ grades: async () => { throw new Error('db down'); } }).d,
     ),
   );
@@ -367,9 +377,16 @@ test('feature stays self-contained: no toggle, homepage button, form page, endpo
   assert.match(form, /import type \{[^}]*\} from '@\/lib\/joinClassForm'/);
   assert.doesNotMatch(form, /import \{[^}]*\} from '@\/lib\/joinClassForm'/);
   assert.match(form, /Foundation/);
+  assert.match(form, /join-first-name/);
+  assert.match(form, /join-last-name/);
   assert.match(form, /join-grade/);
   assert.match(form, /join-campus/);
   assert.match(form, /join-foundation/);
+  assert.match(form, /Select grade/);
+  assert.match(form, /Select campus/);
+  assert.match(form, /Select foundation/);
+  assert.doesNotMatch(form, /join-name"/);
+  assert.match(form, /disabled=\{busy \|\| !ready\}/);
   const lib = readFileSync(new URL('lib/joinClassForm.ts', root), 'utf8');
   assert.doesNotMatch(lib, /process\.env/);
   // The school-app link and the form share the same finishing step.

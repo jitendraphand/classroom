@@ -6,13 +6,16 @@
  * src/app/api/join-class/, src/components/joinClass/, tests/joinClassForm.test.ts,
  * and the "Join the class" button in src/app/page.tsx.
  *
- * The student types a name and picks grade (6–10), campus (Airport, City,
- * Osmanpura) and foundation (Science, Sports, Civil, Fine Arts). Foundation
- * is the school's name for a division and is stored as one. The server
- * resolves the three choices against the admin master lists (canonical names
- * such as AIRPORTCAMPUS / 7 / SCIENCEFOUNDATION) and ignores any other class
- * the browser might send. A join link that already carries Grade, Campus or
- * Foundation/Division is preselected and locked.
+ * The student types a first name and last name and picks grade (6–10), campus
+ * (Airport, City, Osmanpura) and foundation (Science, Sports, Civil, Fine Arts).
+ * The dropdowns start on a "Select …" placeholder; only a join link that
+ * already carries Grade, Campus or Foundation/Division is preselected and
+ * locked. Foundation is the school's name for a division and is stored as one.
+ * The two name parts are stored as the existing combined `name` ("First Last")
+ * so returning students still match. The server resolves the three class
+ * choices against the admin master lists (canonical names such as
+ * AIRPORTCAMPUS / 7 / SCIENCEFOUNDATION) and ignores any other class the
+ * browser might send.
  *
  * Not a separate join path: the name + chosen class become the same claims an
  * unsigned school-app link produces (validateUnsignedJoin) and finish with
@@ -64,7 +67,8 @@ export const JOIN_FOUNDATION_LABELS = [
   { key: 'FINEARTSFOUNDATION', label: 'Fine Arts Foundation' },
 ] as const;
 
-export const NAME_MAX = 60;
+export const FIRST_MAX = 50;
+export const LAST_MAX = 50;
 const NAME_RE = /^[\p{L}\p{M} .'’-]+$/u;
 
 /** One resolved class as stored in the master lists (canonical names + labels to show). */
@@ -271,31 +275,27 @@ export function joinFormModel(
     });
   }
 
-  const gradeForDiv = linkGrade ?? matchGrade(grades, JOIN_CLASS_DEFAULT.grade);
-  const linkDiv = link.division && gradeForDiv ? matchDivision(gradeForDiv.divisions, link.division) : undefined;
-  if (linkDiv && gradeForDiv) {
+  // A foundation in the link is only locked when the grade is also named:
+  // the same label exists on every advertised grade, so we cannot guess.
+  const linkDiv = link.division && linkGrade ? matchDivision(linkGrade.divisions, link.division) : undefined;
+  if (linkDiv && linkGrade) {
     locked.division = true;
-    const current = options.foundationsByGrade[gradeForDiv.name] ?? [];
-    options.foundationsByGrade[gradeForDiv.name] = includeChoice(current, {
+    const current = options.foundationsByGrade[linkGrade.name] ?? [];
+    options.foundationsByGrade[linkGrade.name] = includeChoice(current, {
       name: linkDiv.name,
       label: linkDiv.label || linkDiv.name,
     });
   }
 
-  const defGrade = matchGrade(grades, JOIN_CLASS_DEFAULT.grade);
-  const defCampus = matchCampus(campuses, JOIN_CLASS_DEFAULT.campus);
-  const defDiv = defGrade ? matchDivision(defGrade.divisions, JOIN_CLASS_DEFAULT.division) : undefined;
-
-  const grade = linkGrade?.name ?? defGrade?.name ?? options.grades[0]?.name ?? '';
-  const campus = linkCampus?.name ?? defCampus?.name ?? options.campuses[0]?.name ?? '';
-  const foundations = options.foundationsByGrade[grade] ?? [];
-  const division =
-    (linkDiv && gradeForDiv && gradeForDiv.name === grade ? linkDiv.name : undefined) ??
-    (defDiv && defGrade && defGrade.name === grade ? defDiv.name : undefined) ??
-    foundations[0]?.name ??
-    '';
-
-  return { options, prefill: { grade, campus, division, locked } };
+  return {
+    options,
+    prefill: {
+      grade: linkGrade?.name ?? '',
+      campus: linkCampus?.name ?? '',
+      division: linkDiv?.name ?? '',
+      locked,
+    },
+  };
 }
 
 /**
@@ -353,17 +353,28 @@ export function cleanName(raw: unknown): string {
   return typeof raw === 'string' ? collapse(raw) : '';
 }
 
-/** Validate the typed name (first and last name). Returns the cleaned name or a friendly error. */
-export function checkName(raw: unknown): { name: string } | { error: string } {
+function checkNamePart(raw: unknown, which: 'first' | 'last'): { name: string } | { error: string } {
   const name = cleanName(raw);
-  if (!name) return { error: 'Type your name.' };
-  if (name.length > NAME_MAX) return { error: `Your name can be at most ${NAME_MAX} letters.` };
-  if (!NAME_RE.test(name)) return { error: 'Use only letters, spaces, dots, hyphens and apostrophes in your name.' };
-  const words = name.split(' ').filter((w) => /\p{L}/u.test(w));
-  if (words.length < 2 || words.some((w) => w.replace(/[^\p{L}]/gu, '').length < 1)) {
-    return { error: 'Type your first name and surname, e.g. Asha Patil.' };
+  const label = which === 'first' ? 'first name' : 'last name';
+  const max = which === 'first' ? FIRST_MAX : LAST_MAX;
+  if (!name) return { error: `Type your ${label}.` };
+  if (name.length > max) return { error: `Your ${label} can be at most ${max} letters.` };
+  if (!NAME_RE.test(name) || !/\p{L}/u.test(name)) {
+    return { error: 'Use only letters, spaces, dots, hyphens and apostrophes in your name.' };
   }
   return { name };
+}
+
+/** Validate first + last name. Combined `name` is "First Last", the stored student name. */
+export function checkNames(
+  first: unknown,
+  last: unknown,
+): { firstName: string; lastName: string; name: string } | { error: string; field: 'firstName' | 'lastName' } {
+  const f = checkNamePart(first, 'first');
+  if ('error' in f) return { error: f.error, field: 'firstName' };
+  const l = checkNamePart(last, 'last');
+  if ('error' in l) return { error: l.error, field: 'lastName' };
+  return { firstName: f.name, lastName: l.name, name: `${f.name} ${l.name}` };
 }
 
 /** Name as compared: no Latin accents, lower-case, letters (and Indic vowel signs) with single spaces. */
@@ -414,7 +425,7 @@ export const FORM_ERROR_TEXT: Partial<Record<JoinErrorCode | 'ambiguous' | 'pick
   rate_limited: 'Too many tries. Wait a minute and try again.',
   unsigned_disabled: 'Joining with this form is switched off here. Open your class from the school app.',
   invalid_details: 'Your name could not be read. Use letters only and try again.',
-  missing_details: 'Type your name.',
+  missing_details: 'Type your first name and last name.',
   pick_class: PICK_CLASS,
   unknown_class: UNKNOWN_CLASS,
   default: 'Something went wrong. Wait a moment and try again.',
@@ -442,13 +453,13 @@ function readClassFields(body: Record<string, unknown>): { grade: string; campus
   };
 }
 
-/** POST `{ name, grade, campus, foundation }` → `{ ok, redirect }` or `{ error, field? }`. */
+/** POST `{ firstName, lastName, grade, campus, foundation }` → `{ ok, redirect }` or `{ error, field? }`. */
 export async function handleJoinForm(body: unknown, deps: JoinFormDeps): Promise<Response> {
   if (deps.mode !== 'unsigned') return json({ error: FORM_ERROR_TEXT.unsigned_disabled }, 403);
   if (deps.limited && (await deps.limited())) return json({ error: FORM_ERROR_TEXT.rate_limited }, 429);
   const b = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
-  const checked = checkName(b.name);
-  if ('error' in checked) return json({ error: checked.error, field: 'name' }, 400);
+  const checked = checkNames(b.firstName, b.lastName);
+  if ('error' in checked) return json({ error: checked.error, field: checked.field }, 400);
   const picked = readClassFields(b);
   if (!picked.grade || !picked.campus || !picked.division) {
     return json({ error: PICK_CLASS, field: !picked.grade ? 'grade' : !picked.campus ? 'campus' : 'foundation' }, 400);
@@ -469,7 +480,8 @@ export async function handleJoinForm(body: unknown, deps: JoinFormDeps): Promise
     if ('error' in sid) return json({ error: FORM_ERROR_TEXT.ambiguous, field: 'name' }, 409);
     const claims = validateUnsignedJoin({
       sid: sid.sid,
-      ...splitName(checked.name),
+      firstName: checked.firstName,
+      lastName: checked.lastName,
       grade: cls.grade,
       division: cls.division,
       campus: cls.campus,

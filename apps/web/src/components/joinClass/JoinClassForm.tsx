@@ -7,18 +7,27 @@ import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import type { JoinFormOptions, JoinFormPrefill } from '@/lib/joinClassForm';
 
-const NAME_MAX = 60;
-const STORE_KEY = 'joinClass.name';
-const STORE_CLASS = 'joinClass.class';
+const FIRST_MAX = 50;
+const LAST_MAX = 50;
+const STORE_FIRST = 'joinClass.firstName';
+const STORE_LAST = 'joinClass.lastName';
+const STORE_LEGACY_NAME = 'joinClass.name';
 const NOT_AVAILABLE = 'Joining is not available right now. Please ask your teacher.';
+const PICK_ALL = 'Type your first name and last name, and select your grade, campus and foundation.';
 
-type StoredClass = { grade?: string; campus?: string; division?: string };
+function splitStoredName(name: string): { first: string; last: string } {
+  const parts = name.trim().replace(/\s+/g, ' ').split(' ');
+  const first = (parts.shift() ?? '').slice(0, FIRST_MAX);
+  const last = parts.join(' ').slice(0, LAST_MAX);
+  return { first, last };
+}
 
 function SelectField({
   id,
   label,
   value,
   locked,
+  disabled,
   options,
   onChange,
   placeholder,
@@ -27,6 +36,7 @@ function SelectField({
   label: string;
   value: string;
   locked: boolean;
+  disabled?: boolean;
   options: { name: string; label: string }[];
   onChange: (value: string) => void;
   placeholder: string;
@@ -41,17 +51,62 @@ function SelectField({
         name={id}
         className="input py-3 text-base"
         value={value}
-        disabled={locked || options.length === 0}
+        disabled={locked || disabled || options.length === 0}
         required
         onChange={(e) => onChange(e.target.value)}
       >
-        {!value && <option value="">{placeholder}</option>}
+        <option value="" disabled>
+          {placeholder}
+        </option>
         {options.map((o) => (
           <option key={o.name} value={o.name}>
             {o.label}
           </option>
         ))}
       </select>
+    </div>
+  );
+}
+
+function NameField({
+  id,
+  label,
+  value,
+  max,
+  autoComplete,
+  autoFocus,
+  error,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  max: number;
+  autoComplete: string;
+  autoFocus?: boolean;
+  error: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div>
+      <label htmlFor={id} className="label">
+        {label}
+      </label>
+      <input
+        id={id}
+        name={id}
+        className="input py-3 text-base"
+        placeholder={label}
+        value={value}
+        onChange={(e) => onChange(e.target.value.slice(0, max))}
+        maxLength={max}
+        autoComplete={autoComplete}
+        autoCapitalize="words"
+        autoFocus={autoFocus}
+        required
+        aria-invalid={error}
+        aria-describedby={error ? 'join-error' : undefined}
+      />
     </div>
   );
 }
@@ -63,84 +118,73 @@ export function JoinClassForm({
   options: JoinFormOptions | null;
   prefill: JoinFormPrefill | null;
 }) {
-  const [name, setName] = useState('');
-  const [grade, setGrade] = useState(prefill?.grade ?? '');
-  const [campus, setCampus] = useState(prefill?.campus ?? '');
-  const [division, setDivision] = useState(prefill?.division ?? '');
+  const locked = prefill?.locked ?? { grade: false, campus: false, division: false };
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [grade, setGrade] = useState(locked.grade ? prefill?.grade ?? '' : '');
+  const [campus, setCampus] = useState(locked.campus ? prefill?.campus ?? '' : '');
+  const [division, setDivision] = useState(locked.division ? prefill?.division ?? '' : '');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const locked = prefill?.locked ?? { grade: false, campus: false, division: false };
   const foundations = useMemo(
     () => (options && grade ? options.foundationsByGrade[grade] ?? [] : []),
     [options, grade],
   );
   const available = Boolean(options && options.grades.length && options.campuses.length);
+  const ready = Boolean(firstName.trim() && lastName.trim() && grade && campus && division);
+  const nameError = Boolean(error && (error.toLowerCase().includes('first name') || error.toLowerCase().includes('last name') || error.toLowerCase().includes('your name')));
 
   useEffect(() => {
     try {
-      const saved = window.localStorage.getItem(STORE_KEY);
-      if (saved) setName(saved.slice(0, NAME_MAX));
+      const storedFirst = window.localStorage.getItem(STORE_FIRST);
+      const storedLast = window.localStorage.getItem(STORE_LAST);
+      if (storedFirst || storedLast) {
+        if (storedFirst) setFirstName(storedFirst.slice(0, FIRST_MAX));
+        if (storedLast) setLastName(storedLast.slice(0, LAST_MAX));
+      } else {
+        const legacy = window.localStorage.getItem(STORE_LEGACY_NAME);
+        if (legacy) {
+          const parts = splitStoredName(legacy);
+          setFirstName(parts.first);
+          setLastName(parts.last);
+        }
+      }
     } catch {
       /* storage blocked */
     }
-    if (!options) return;
-    let stored: StoredClass = {};
-    try {
-      stored = JSON.parse(window.localStorage.getItem(STORE_CLASS) || '{}') as StoredClass;
-    } catch {
-      stored = {};
-    }
-    setGrade((current) => {
-      if (locked.grade && prefill?.grade) return prefill.grade;
-      if (current && options.grades.some((g) => g.name === current)) return current;
-      if (stored.grade && options.grades.some((g) => g.name === stored.grade)) return stored.grade;
-      return prefill?.grade || options.grades[0]?.name || '';
-    });
-    setCampus((current) => {
-      if (locked.campus && prefill?.campus) return prefill.campus;
-      if (current && options.campuses.some((c) => c.name === current)) return current;
-      if (stored.campus && options.campuses.some((c) => c.name === stored.campus)) return stored.campus;
-      return prefill?.campus || options.campuses[0]?.name || '';
-    });
-  }, [options, prefill, locked.grade, locked.campus]);
+  }, []);
 
   useEffect(() => {
-    if (!options) return;
+    if (!options || locked.division) return;
     const list = options.foundationsByGrade[grade] ?? [];
-    setDivision((current) => {
-      if (locked.division && prefill?.division && list.some((d) => d.name === prefill.division)) return prefill.division;
-      if (current && list.some((d) => d.name === current)) return current;
-      try {
-        const stored = JSON.parse(window.localStorage.getItem(STORE_CLASS) || '{}') as StoredClass;
-        if (stored.division && list.some((d) => d.name === stored.division)) return stored.division;
-      } catch {
-        /* ignore */
-      }
-      if (prefill?.division && list.some((d) => d.name === prefill.division)) return prefill.division;
-      return list[0]?.name || '';
-    });
-  }, [options, grade, prefill, locked.division]);
+    setDivision((current) => (current && list.some((d) => d.name === current) ? current : ''));
+  }, [options, grade, locked.division]);
+
+  function clearError() {
+    if (error) setError(null);
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    const clean = name.trim().replace(/\s+/g, ' ');
-    if (!clean) return setError('Type your name.');
-    if (clean.split(' ').length < 2) return setError('Type your first name and surname, e.g. Asha Patil.');
-    if (!grade || !campus || !division) return setError('Pick your grade, campus and foundation.');
+    const first = firstName.trim().replace(/\s+/g, ' ');
+    const last = lastName.trim().replace(/\s+/g, ' ');
+    if (!first) return setError('Type your first name.');
+    if (!last) return setError('Type your last name.');
+    if (!grade || !campus || !division) return setError('Select your grade, campus and foundation.');
     setBusy(true);
     setError(null);
     try {
       const res = await fetch('/api/join-class', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: clean, grade, campus, foundation: division }),
+        body: JSON.stringify({ firstName: first, lastName: last, grade, campus, foundation: division }),
       });
       const data = (await res.json().catch(() => ({}))) as { ok?: boolean; redirect?: string; error?: string };
       if (res.ok && data.ok) {
         try {
-          window.localStorage.setItem(STORE_KEY, clean);
-          window.localStorage.setItem(STORE_CLASS, JSON.stringify({ grade, campus, division }));
+          window.localStorage.setItem(STORE_FIRST, first);
+          window.localStorage.setItem(STORE_LAST, last);
         } catch {
           /* storage blocked */
         }
@@ -165,29 +209,31 @@ export function JoinClassForm({
           </p>
         ) : (
           <form className="mt-6 space-y-4" onSubmit={submit} noValidate>
-            <div>
-              <label htmlFor="join-name" className="label">
-                Your name
-              </label>
-              <input
-                id="join-name"
-                name="name"
-                className="input py-3 text-base"
-                placeholder="First name and surname"
-                value={name}
-                onChange={(e) => {
-                  setName(e.target.value.slice(0, NAME_MAX));
-                  if (error) setError(null);
-                }}
-                maxLength={NAME_MAX}
-                autoComplete="name"
-                autoCapitalize="words"
-                autoFocus
-                required
-                aria-invalid={!!error}
-                aria-describedby={error ? 'join-error' : undefined}
-              />
-            </div>
+            <NameField
+              id="join-first-name"
+              label="First name"
+              value={firstName}
+              max={FIRST_MAX}
+              autoComplete="given-name"
+              autoFocus
+              error={nameError}
+              onChange={(v) => {
+                setFirstName(v);
+                clearError();
+              }}
+            />
+            <NameField
+              id="join-last-name"
+              label="Last name"
+              value={lastName}
+              max={LAST_MAX}
+              autoComplete="family-name"
+              error={nameError}
+              onChange={(v) => {
+                setLastName(v);
+                clearError();
+              }}
+            />
             <SelectField
               id="join-grade"
               label="Grade"
@@ -196,9 +242,9 @@ export function JoinClassForm({
               options={options!.grades}
               onChange={(v) => {
                 setGrade(v);
-                if (error) setError(null);
+                clearError();
               }}
-              placeholder="Choose your grade"
+              placeholder="Select grade"
             />
             <SelectField
               id="join-campus"
@@ -208,28 +254,34 @@ export function JoinClassForm({
               options={options!.campuses}
               onChange={(v) => {
                 setCampus(v);
-                if (error) setError(null);
+                clearError();
               }}
-              placeholder="Choose your campus"
+              placeholder="Select campus"
             />
             <SelectField
               id="join-foundation"
               label="Foundation"
               value={division}
               locked={locked.division}
+              disabled={!grade}
               options={foundations}
               onChange={(v) => {
                 setDivision(v);
-                if (error) setError(null);
+                clearError();
               }}
-              placeholder="Choose your foundation"
+              placeholder="Select foundation"
             />
             {error && (
               <p id="join-error" className="text-sm text-danger-fg" role="alert">
                 {error}
               </p>
             )}
-            <Button type="submit" fullWidth className="py-3 text-base" disabled={busy}>
+            {!ready && !error && (
+              <p className="text-sm text-slate-400" role="status">
+                {PICK_ALL}
+              </p>
+            )}
+            <Button type="submit" fullWidth className="py-3 text-base" disabled={busy || !ready}>
               {busy ? 'Joining…' : 'Join'}
             </Button>
             <p className="text-center text-xs text-slate-500">Use the same name every time so your attendance is counted.</p>

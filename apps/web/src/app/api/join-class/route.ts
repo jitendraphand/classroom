@@ -12,7 +12,7 @@ import { finishStudentJoin } from '@/lib/studentJoinFinish';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-/** POST { name, grade, campus, foundation } → session set, `{ ok, redirect: '/student' }`. */
+/** POST { firstName, lastName, grade, campus, foundation } → session set, `{ ok, redirect: '/student' }`. */
 export async function POST(req: Request) {
   try {
     await ensureJoinAudience();
