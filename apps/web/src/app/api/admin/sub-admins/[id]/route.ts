@@ -4,6 +4,7 @@ import { requireAdminApi } from '@/lib/adminGuard';
 import { generatePassword } from '@/lib/passwords';
 import { parsePrivilegeBody, privilegeSetFrom } from '@/lib/privileges';
 import { jsonError, jsonOk } from '@/lib/response';
+import { mutateSubAdminDenied, rejectedKindChange, resolveNewSubAdminPassword } from '@/lib/subAdminAccounts';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,10 +12,12 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const { res } = await requireAdminApi('SYSTEM');
   if (res) return res;
   const id = (await params).id;
-  const row = await prisma.admin.findUnique({ where: { id } });
-  if (!row) return jsonError('Administrator not found', 404);
-  if (row.kind !== 'SUB') return jsonError('The system administrator is not edited here', 403);
-  const body = (await req.json().catch(() => null)) as { name?: unknown; privileges?: unknown; resetPassword?: unknown } | null;
+  const found = mutateSubAdminDenied(await prisma.admin.findUnique({ where: { id } }), { action: 'edit' });
+  if (!found.ok) return jsonError(found.error, found.status);
+  const row = found.row;
+  const body = (await req.json().catch(() => null)) as { name?: unknown; privileges?: unknown; resetPassword?: unknown; password?: unknown } | null;
+  const kindProblem = rejectedKindChange(body);
+  if (kindProblem) return jsonError(kindProblem, 403);
   const data: {
     name?: string;
     privManageTeachers?: boolean;
@@ -42,9 +45,11 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     return jsonError("This sub-administrator signs in with their teacher account; reset the teacher's password on the Teachers page", 400);
   }
   if (body?.resetPassword === true) {
-    temporaryPassword = generatePassword();
-    data.passwordHash = await hashPassword(temporaryPassword);
-    data.mustChangePassword = true;
+    const resolved = resolveNewSubAdminPassword(body?.password, { email: row.email });
+    if (!resolved.ok) return jsonError(resolved.error);
+    temporaryPassword = resolved.generated ? resolved.password : undefined;
+    data.passwordHash = await hashPassword(resolved.password);
+    data.mustChangePassword = resolved.mustChangePassword;
     data.sessionVersion = { increment: 1 };
   }
   const updated = await prisma.admin.update({ where: { id }, data });
@@ -58,11 +63,9 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
   const { res, admin } = await requireAdminApi('SYSTEM');
   if (res) return res;
   const id = (await params).id;
-  if (id === admin.id) return jsonError('You cannot delete your own account', 403);
-  const row = await prisma.admin.findUnique({ where: { id } });
-  if (!row) return jsonError('Administrator not found', 404);
-  if (row.kind !== 'SUB') return jsonError('The system administrator cannot be deleted', 403);
-  // Only the admin role goes; a linked teacher account (row.teacherId) stays as it is.
+  const found = mutateSubAdminDenied(await prisma.admin.findUnique({ where: { id } }), { actorId: admin.id, action: 'delete' });
+  if (!found.ok) return jsonError(found.error, found.status);
+  // Only the admin role goes; a linked teacher account (found.row.teacherId) stays as it is.
   await prisma.admin.delete({ where: { id } });
-  return jsonOk({ ok: true, teacherKept: !!row.teacherId });
+  return jsonOk({ ok: true, teacherKept: !!found.row.teacherId });
 }

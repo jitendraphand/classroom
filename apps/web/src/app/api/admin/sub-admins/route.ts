@@ -4,6 +4,7 @@ import { requireAdminApi } from '@/lib/adminGuard';
 import { generatePassword } from '@/lib/passwords';
 import { parsePrivilegeBody, privilegeSetFrom, PRIVILEGE_LABELS } from '@/lib/privileges';
 import { jsonError, jsonOk } from '@/lib/response';
+import { NEW_SUB_ADMIN_KIND, rejectedKindChange, resolveNewSubAdminPassword } from '@/lib/subAdminAccounts';
 
 export const dynamic = 'force-dynamic';
 
@@ -51,9 +52,12 @@ export async function POST(req: Request) {
   const body = (await req.json().catch(() => null)) as {
     name?: unknown;
     email?: unknown;
+    password?: unknown;
     privileges?: unknown;
     teacherId?: unknown;
   } | null;
+  const kindProblem = rejectedKindChange(body);
+  if (kindProblem) return jsonError(kindProblem, 403);
   if (typeof body?.teacherId === 'string' && body.teacherId) {
     return createForTeacher(body.teacherId, body.privileges);
   }
@@ -68,14 +72,15 @@ export async function POST(req: Request) {
   if (teacher) return jsonError('That email belongs to a teacher. Choose "Existing teacher" to give them admin privileges.');
   const taken = await prisma.admin.findUnique({ where: { email } });
   if (taken) return jsonError('An administrator with that email already exists', 409);
-  const temporaryPassword = generatePassword();
+  const resolved = resolveNewSubAdminPassword(body?.password, { email });
+  if (!resolved.ok) return jsonError(resolved.error);
   const row = await prisma.admin.create({
     data: {
       email,
       name,
-      kind: 'SUB',
-      passwordHash: await hashPassword(temporaryPassword),
-      mustChangePassword: true,
+      kind: NEW_SUB_ADMIN_KIND,
+      passwordHash: await hashPassword(resolved.password),
+      mustChangePassword: resolved.mustChangePassword,
       privManageTeachers: privileges.manageTeachers,
       privSchedule: privileges.schedule,
       privMonitorLive: privileges.monitorLive,
@@ -83,7 +88,10 @@ export async function POST(req: Request) {
       privManageSchool: privileges.manageSchool,
     },
   });
-  return jsonOk({ admin: view(row), temporaryPassword }, { headers: { 'Cache-Control': 'no-store' } });
+  return jsonOk(
+    { admin: view(row), temporaryPassword: resolved.generated ? resolved.password : undefined, passwordSet: !resolved.generated },
+    { headers: { 'Cache-Control': 'no-store' } }
+  );
 }
 
 /**
@@ -104,7 +112,7 @@ async function createForTeacher(teacherId: string, rawPrivileges: unknown) {
       // Placeholder, never a login: sign-in skips linked rows and uses the teacher's email.
       email: `teacher-${teacher.id}@linked.invalid`,
       name: teacher.name,
-      kind: 'SUB',
+      kind: NEW_SUB_ADMIN_KIND,
       teacherId: teacher.id,
       // Unusable hash of random bytes; this row has no password of its own.
       passwordHash: await hashPassword(generatePassword() + generatePassword()),

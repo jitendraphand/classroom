@@ -39,7 +39,7 @@ export const SETTINGS_ITEMS: SettingsItem[] = [
   { href: '/admin/grades', title: 'Campuses, grades and divisions', body: 'The school structure that students, teachers and classes use.', view: ['manageSchool'] },
   { href: '/admin/system/years', title: 'Academic years', body: 'Year labels such as 2026-27, stored on every class.', view: ['manageSchool'] },
   { href: '/admin/system/settings', title: 'Class size and microphones', body: 'Optional limits. Leave them empty for no limit.', view: ['manageSchool'] },
-  { href: '/admin/system/admins', title: 'Sub-administrators', body: 'Give other staff some admin permissions.', view: 'SYSTEM' },
+  { href: '/admin/system/admins', title: 'Sub-administrators', body: 'Create another administrator with every privilege except managing admin accounts, or give staff a smaller set of permissions.', view: 'SYSTEM' },
 ];
 
 /** Per-page needs where a page is stricter than its section (Settings children). */

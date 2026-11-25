@@ -6,16 +6,12 @@ import { Button } from '@/components/ui/Button';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { api } from '@/lib/clientFetch';
-import { PRIVILEGE_LABELS, type Privilege, type PrivilegeSet } from '@/lib/privileges';
+import { allPrivileges, PRIVILEGE_LABELS, type Privilege, type PrivilegeSet } from '@/lib/privileges';
 
 type AdminRow = { id: string; email: string; name: string; kind: 'SYSTEM' | 'SUB'; privileges: PrivilegeSet; teacherId: string | null };
 type TeacherOpt = { id: string; name: string; email: string; disabled?: boolean };
 
 const KEYS = Object.keys(PRIVILEGE_LABELS) as Privilege[];
-
-function blank(): PrivilegeSet {
-  return { manageTeachers: false, schedule: false, monitorLive: false, viewReports: false, manageSchool: false };
-}
 
 export default function SubAdminsPage() {
   return (
@@ -30,11 +26,11 @@ function Editor() {
   const [error, setError] = useState('');
   // Item 11: a failed load (e.g. 403 for a sub-admin) shows only the message, not the form too.
   const [loadError, setLoadError] = useState('');
-  const [form, setForm] = useState({ name: '', email: '', privileges: blank() });
+  const [form, setForm] = useState({ name: '', email: '', password: '', confirmPassword: '', privileges: allPrivileges(true) });
   const [notice, setNotice] = useState('');
   const [confirm, confirmDialog] = useConfirm();
   // Item 6: a sub-admin can be a new account or an existing teacher (one login, switchable views).
-  const [source, setSource] = useState<'teacher' | 'new'>('teacher');
+  const [source, setSource] = useState<'teacher' | 'new'>('new');
   const [teacherId, setTeacherId] = useState('');
   const [teachers, setTeachers] = useState<TeacherOpt[]>([]);
   const [secret, setSecret] = useState<{ title: string; lines: [string, string][] } | null>(null);
@@ -72,20 +68,33 @@ function Editor() {
         return;
       }
       setTeacherId('');
-      setForm({ name: '', email: '', privileges: blank() });
+      setForm({ name: '', email: '', password: '', confirmPassword: '', privileges: allPrivileges(true) });
       void load();
       return;
     }
-    const { ok, data } = await api<{ admin: AdminRow; temporaryPassword: string }>('/api/admin/sub-admins', {
+    if (form.password !== form.confirmPassword) {
+      setError('The two passwords do not match');
+      return;
+    }
+    const { ok, data } = await api<{ admin: AdminRow; temporaryPassword?: string; passwordSet?: boolean }>('/api/admin/sub-admins', {
       method: 'POST',
-      body: { name: form.name, email: form.email, privileges: form.privileges },
+      body: { name: form.name, email: form.email, password: form.password, privileges: form.privileges },
     });
     if (!ok) {
       setError(data.error || 'Could not create');
       return;
     }
-    setSecret({ title: 'Sub-administrator created', lines: [['Email', data.admin.email], ['Temporary password', data.temporaryPassword]] });
-    setForm({ name: '', email: '', privileges: blank() });
+    if (data.temporaryPassword) {
+      setSecret({ title: 'Sub-administrator created', lines: [['Email', data.admin.email], ['Temporary password', data.temporaryPassword]] });
+    } else {
+      const allOn = KEYS.every((k) => data.admin.privileges[k]);
+      setNotice(
+        allOn
+          ? `${data.admin.name || data.admin.email} can sign in with the email and password you chose. They can do everything except create or manage administrators.`
+          : `${data.admin.name || data.admin.email} can sign in with the email and password you chose.`
+      );
+    }
+    setForm({ name: '', email: '', password: '', confirmPassword: '', privileges: allPrivileges(true) });
     void load();
   }
 
@@ -142,7 +151,7 @@ function Editor() {
       )}
       {error && <p className="text-sm text-red-300">{error}</p>}
       <Card>
-        <CardHeader title="New sub-administrator" subtitle="Pick the privileges. The system administrator keeps every privilege." />
+        <CardHeader title="New sub-administrator" subtitle="They can have every school privilege. Only you, the system administrator, can create, edit, delete, or reset administrator accounts." />
         <form className="space-y-3" onSubmit={(e) => void create(e)}>
           <div className="flex gap-4 text-sm">
             <label className="flex items-center gap-2">
@@ -176,11 +185,30 @@ function Editor() {
               <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
             </label>
             <label className="block">
-              <span className="label">Email</span>
-              <input className="input" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required />
+              <span className="label">Email (sign-in)</span>
+              <input className="input" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required autoComplete="off" />
+            </label>
+            <label className="block">
+              <span className="label">Password</span>
+              <input className="input" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required minLength={10} autoComplete="new-password" />
+              <span className="mt-1 block text-xs text-slate-400">At least 10 characters. They can sign in with this password immediately.</span>
+            </label>
+            <label className="block">
+              <span className="label">Confirm password</span>
+              <input className="input" type="password" value={form.confirmPassword} onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })} required minLength={10} autoComplete="new-password" />
             </label>
           </div>
           )}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm text-slate-300">Privileges</p>
+            <button
+              type="button"
+              className="text-xs text-brand-200 underline-offset-2 hover:underline"
+              onClick={() => setForm((f) => ({ ...f, privileges: allPrivileges(true) }))}
+            >
+              Grant every privilege except managing administrators
+            </button>
+          </div>
           <PrivChecks value={form.privileges} onToggle={toggle} />
           <Button type="submit">Create sub-administrator</Button>
         </form>
