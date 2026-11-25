@@ -74,7 +74,12 @@ import { WhiteboardHost, WhiteboardViewer, hasSavedBoard } from './Whiteboard';
 import { useChatThread } from './chatThread';
 // Chat UI loads on first open (the thread hook above keeps unread counts live).
 const ChatView = dynamic(() => import('./Chat').then((m) => m.ChatView), { ssr: false });
-import { useStudentFocus } from './useStudentFocus';
+import { exitFullscreenIfActive, useStudentFocus } from './useStudentFocus';
+import { useTeacherFullscreen } from './useTeacherFullscreen';
+
+import { useScreenWakeLock } from './useScreenWakeLock';
+import { PermissionBanner } from './PermissionBanner';
+import { queryMediaPermission, requestSeparatePermission, type MediaAccessIssue } from '@/lib/permissions';
 import { countFocusAlerts, focusLabel, fullscreenGate, fullscreenGateText, isFocusAlert } from '@/lib/focusStatus';
 import { FloatingPanel } from './FloatingPanel';
 import { WB_TOOL_CLEAR_PX, shareControlsPlacement, showLocalSharePreview } from '@/lib/floatGeometry';
@@ -178,7 +183,7 @@ import {
 } from '@/lib/studentPresenceLogic';
 
 /** Wait the server-assigned connect slot (lib/joinPacingLogic). */
-import { CameraErrorBanner, SelectivePublisher } from './SelectivePublisher';
+import { SelectivePublisher } from './SelectivePublisher';
 import { ClassAudioUnlock } from './ClassAudioUnlock';
 import { StudentMediaPrivacy } from './StudentMediaPrivacy';
 import { TeacherCameraFloat, TeacherStageCamera } from './TeacherCameraFloat';
@@ -277,7 +282,7 @@ function ParticipantGrid({
             <p className="mt-1 text-sm text-slate-400">Share your screen or open the whiteboard to fill this space for everyone.</p>
             <div className="mt-4 flex flex-wrap justify-center gap-2">
               {onShareScreen && (
-                <Button onPointerDown={onPrepareShare} onClick={onShareScreen}>
+                <Button data-no-auto-fullscreen onPointerDown={onPrepareShare} onClick={onShareScreen}>
                   Share screen
                 </Button>
               )}
@@ -973,7 +978,12 @@ function RoomInner({
   const [endingClass, setEndingClass] = useState(false);
   // No element fullscreen (iPhone Safari): same look, as a scroll-locked fixed page.
   usePseudoFullscreen(!isTeacher && focus.focusMode);
-  const [camError, setCamError] = useState<string | null>(null);
+  const [camIssue, setCamIssue] = useState<MediaAccessIssue | null>(null);
+  const [micIssue, setMicIssue] = useState<MediaAccessIssue | null>(null);
+  const [camRetryTick, setCamRetryTick] = useState(0);
+  const [micRetryTick, setMicRetryTick] = useState(0);
+  const [shareStarting, setShareStarting] = useState(false);
+  useScreenWakeLock(true);
   const [hudOpen, setHudOpen] = useState(false);
   const [hudNotice, setHudNotice] = useState('');
   /** Share tuned for a playing video (30 fps, motion) instead of slides. Remembered in this tab. */
@@ -1072,6 +1082,10 @@ function RoomInner({
   const rawStage = state?.stageMode ?? 'idle';
   // Whiteboard product surface removed — treat legacy redis value as idle.
   const stageMode: 'idle' | 'screen' = rawStage === 'screen' ? 'screen' : 'idle';
+  const teacherFs = useTeacherFullscreen({
+    enabled: isTeacher,
+    sharing: screenOn || stageMode === 'screen' || shareStarting,
+  });
   // Stable arrays (same contents → same identity) so the children's LiveKit
   // listeners are not torn down and re-added on every render of this view.
   const teacherKey = (state?.admitted ?? [])
@@ -1131,18 +1145,23 @@ function RoomInner({
     if (effectiveMuted) setMicOn(false);
   }, [effectiveMuted]);
 
-  // Teacher: the mic usually goes live without a click on it (on at join), so
-  // the first tap or key press anywhere starts the noise-removal audio, and a
-  // mic published plain until then is republished cleaned up.
+  // First tap/key press (and returning to the tab on iOS Safari) starts/resumes
+  // the voice audio context cleanly without dropping the LiveKit room.
   useEffect(() => {
-    if (!isTeacher) return;
-    const prime = () => primeVoiceAudio(true);
+    const prime = () => primeVoiceAudio(isTeacher);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') prime();
+    };
     const opts = { capture: true, passive: true } as const;
     document.addEventListener('pointerdown', prime, opts);
     document.addEventListener('keydown', prime, opts);
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('pageshow', prime);
     return () => {
       document.removeEventListener('pointerdown', prime, opts);
       document.removeEventListener('keydown', prime, opts);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('pageshow', prime);
     };
   }, [isTeacher]);
 
@@ -1753,6 +1772,7 @@ function RoomInner({
     }
 
     shareStartRef.current = true;
+    setShareStarting(true);
     const controlsPromise = beginShareControls();
     const streamPromise = captureScreen(videoModeRef.current);
 
@@ -1761,6 +1781,7 @@ function RoomInner({
       stream = await streamPromise;
     } catch (e) {
       shareStartRef.current = false;
+      setShareStarting(false);
       const controls = await controlsPromise.catch(() => null);
       controls?.close();
       console.warn('screen share', e);
@@ -1799,6 +1820,7 @@ function RoomInner({
     if (!media || media.readyState === 'ended') {
       dropShareAudio();
       shareStartRef.current = false;
+      setShareStarting(false);
       try {
         media?.stop();
       } catch {
@@ -1940,6 +1962,7 @@ function RoomInner({
     } catch (e) {
       shareWantedRef.current = false;
       shareStartRef.current = false;
+      setShareStarting(false);
       dropShareAudio();
       try {
         media.stop();
@@ -2003,6 +2026,7 @@ function RoomInner({
     setChatOpen(false);
     setRosterOpen(false);
     shareStartRef.current = false;
+    setShareStarting(false);
     await postStage('screen');
 
     const onMediaEnded = () => {
@@ -2020,6 +2044,7 @@ function RoomInner({
   }, [localParticipant, screenOn, isTeacher, postStage, endShareSession, attachShareSurface, room, resumeParkedShare]);
 
   async function leave() {
+    void exitFullscreenIfActive();
     // Student: show "You left" first (the server's removal from LiveKit would
     // otherwise arrive first and read as "removed by the teacher").
     if (!isTeacher) onFinished('left');
@@ -2050,6 +2075,7 @@ function RoomInner({
         return;
       }
       setEndAsk(false);
+      void exitFullscreenIfActive();
       room?.disconnect();
       // Teacher: stay on the "Class finished" screen (it has a Dashboard button)
       // instead of jumping straight back to the dashboard.
@@ -2277,6 +2303,14 @@ function RoomInner({
     if (isTeacher) return;
     const next = !handRaised;
     setHandOverride(next);
+    if (next) {
+      void queryMediaPermission('microphone').then(async (q) => {
+        if (q.state === 'prompt') {
+          const res = await requestSeparatePermission('microphone');
+          if (!res.ok) setMicIssue(res.issue);
+        }
+      });
+    }
     try {
       const res = await roomFetch(code, '/hand', {
         method: 'POST',
@@ -2626,7 +2660,13 @@ function RoomInner({
       if ((effectiveMuted || micLockedNoTeacher) && !isTeacher) return;
       const turningOff = micOn;
       // In the click itself: Safari starts audio processing only from a tap.
-      if (!turningOff) primeVoiceAudio(isTeacher);
+      if (!turningOff) {
+        primeVoiceAudio(isTeacher);
+        setMicIssue(null);
+        setMicRetryTick((t) => t + 1);
+      } else {
+        setMicIssue(null);
+      }
       setMicOn((v) => !v);
       if (!isTeacher && micLimitOn && !effectiveMuted && turningOff) {
         void roomFetch(code, '/mic', {
@@ -2636,7 +2676,15 @@ function RoomInner({
         }).then(() => refresh());
       }
     },
-    onToggleCam: () => setCamOn((v) => !v),
+    onToggleCam: () => {
+      if (!camOn) {
+        setCamIssue(null);
+        setCamRetryTick((t) => t + 1);
+      } else {
+        setCamIssue(null);
+      }
+      setCamOn((v) => !v);
+    },
     onToggleScreen: () => {
       // Screen share and whiteboard are exclusive: starting a share closes the board.
       if (!screenOn && wbOpen) closeWhiteboard({ keepParkedShare: true });
@@ -2755,7 +2803,10 @@ function RoomInner({
           micDesired={micOn}
           localCamStream={localCamStream}
           setLocalCamStream={setLocalCamStream}
-          onCameraError={setCamError}
+          onCameraIssue={setCamIssue}
+          onMicIssue={setMicIssue}
+          camRetryTick={camRetryTick}
+          micRetryTick={micRetryTick}
         />
         <StudentMediaPrivacy
           teacherIdentities={teacherIdentities}
@@ -2786,9 +2837,25 @@ function RoomInner({
           )}
         </div>
 
-        {camError && camOn && (
-          <CameraErrorBanner message={camError} onDismiss={() => setCamError(null)} />
-        )}
+        <PermissionBanner
+          issues={[
+            camOn ? camIssue : null,
+            micOn || micIssue?.kind === 'denied' ? micIssue : null,
+          ].filter((x): x is MediaAccessIssue => !!x)}
+          onRetryCamera={() => {
+            setCamIssue(null);
+            setCamOn(true);
+            setCamRetryTick((t) => t + 1);
+          }}
+          onRetryMic={() => {
+            primeVoiceAudio(false);
+            setMicIssue(null);
+            setMicOn(true);
+            setMicRetryTick((t) => t + 1);
+          }}
+          onDismissCamera={() => setCamIssue(null)}
+          onDismissMic={() => setMicIssue(null)}
+        />
 
         {/* Left fullscreen or switched away: cover the class (audio keeps
             playing; teacher video and screen are not rendered underneath). */}
@@ -2999,11 +3066,25 @@ function RoomInner({
             onWaitingRoom={(on) => void setWaitingRoom(on)}
             teacherMicOn={micOn && !effectiveMuted}
             onToggleTeacherMic={() => {
-              if (!micOn) primeVoiceAudio(true);
+              if (!micOn) {
+                primeVoiceAudio(true);
+                setMicIssue(null);
+                setMicRetryTick((t) => t + 1);
+              } else {
+                setMicIssue(null);
+              }
               setMicOn((v) => !v);
             }}
             teacherCamOn={camOn}
-            onToggleTeacherCam={() => setCamOn((v) => !v)}
+            onToggleTeacherCam={() => {
+              if (!camOn) {
+                setCamIssue(null);
+                setCamRetryTick((t) => t + 1);
+              } else {
+                setCamIssue(null);
+              }
+              setCamOn((v) => !v);
+            }}
             sideWindowsAllowed={sideWindowsAllowed}
             sideWindowsNeedTrust={maskActive}
             videosOpen={sideWindowsAllowed ? !!videosWin : shareVideosOn}
@@ -3055,7 +3136,16 @@ function RoomInner({
         micDesired={micOn}
         localCamStream={localCamStream}
         setLocalCamStream={setLocalCamStream}
-        onCameraError={setCamError}
+        onCameraIssue={(issue) => {
+          setCamIssue(issue);
+          if (issue && screenOn) setHudNotice(`${issue.title}: ${issue.hint}`);
+        }}
+        onMicIssue={(issue) => {
+          setMicIssue(issue);
+          if (issue && screenOn) setHudNotice(`${issue.title}: ${issue.hint}`);
+        }}
+        camRetryTick={camRetryTick}
+        micRetryTick={micRetryTick}
       />
       <RoomAudioRenderer />
       <ClassAudioUnlock />
@@ -3235,8 +3325,103 @@ function RoomInner({
         </div>
       )}
 
-      {camError && camOn && (
-        <CameraErrorBanner message={camError} onDismiss={() => setCamError(null)} />
+      <PermissionBanner
+        issues={[
+          camOn ? camIssue : null,
+          micOn ? micIssue : null,
+        ].filter((x): x is MediaAccessIssue => !!x)}
+        onRetryCamera={() => {
+          setCamIssue(null);
+          setCamOn(true);
+          setCamRetryTick((t) => t + 1);
+        }}
+        onRetryMic={() => {
+          primeVoiceAudio(true);
+          setMicIssue(null);
+          setMicOn(true);
+          setMicRetryTick((t) => t + 1);
+        }}
+        onDismissCamera={() => setCamIssue(null)}
+        onDismissMic={() => setMicIssue(null)}
+      />
+
+      {teacherFs.gate === 'cover' && teacherFs.text && (
+        <div
+          data-testid="teacher-fullscreen-cover"
+          data-no-auto-fullscreen
+          className="fixed inset-0 z-[150] flex items-center justify-center bg-slate-950/85 px-6 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Return to full screen"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-white/15 bg-surface-1 p-7 text-center shadow-lift">
+            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-brand-500/20 text-brand-300">
+              <IconScreen size={24} />
+            </div>
+            <h2 className="font-display text-xl font-semibold text-white">
+              {teacherFs.text.title}
+            </h2>
+            <p className="mt-2 text-sm text-slate-300">
+              {teacherFs.text.body}
+            </p>
+            <div className="mt-5 flex flex-wrap justify-center gap-2.5">
+              <Button
+                data-no-auto-fullscreen
+                onClick={() => void teacherFs.returnToFullscreen()}
+              >
+                {teacherFs.text.buttonLabel}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {(teacherFs.gate === 'prompt' || teacherFs.gate === 'share-reminder' || teacherFs.gate === 'iphone-hint') && teacherFs.text && (
+        <div
+          data-testid={
+            teacherFs.gate === 'prompt'
+              ? 'teacher-fullscreen-prompt'
+              : teacherFs.gate === 'share-reminder'
+                ? 'teacher-fullscreen-share-reminder'
+                : 'teacher-fullscreen-iphone-hint'
+          }
+          data-no-auto-fullscreen
+          role="status"
+          className="fixed left-1/2 top-3 z-[140] flex max-w-lg -translate-x-1/2 flex-wrap items-center justify-center gap-2.5 rounded-xl border border-brand-400/35 bg-surface-1/95 px-3.5 py-2 text-xs text-slate-100 shadow-lift backdrop-blur"
+          style={wbOpen ? { marginRight: MEETING_BAR_PX / 2 } : undefined}
+        >
+          <span>{teacherFs.text.body}</span>
+          {teacherFs.gate !== 'iphone-hint' && (
+            <button
+              type="button"
+              data-no-auto-fullscreen
+              onClick={() => void teacherFs.returnToFullscreen()}
+              className="rounded-lg bg-brand-500 px-3 py-1 font-semibold text-white transition hover:bg-brand-400"
+            >
+              {teacherFs.text.buttonLabel}
+            </button>
+          )}
+          {teacherFs.gate === 'share-reminder' && (
+            <button
+              type="button"
+              data-no-auto-fullscreen
+              onClick={teacherFs.dismiss}
+              className="rounded px-2 py-1 text-slate-300 hover:underline"
+            >
+              Dismiss
+            </button>
+          )}
+          {teacherFs.gate === 'iphone-hint' && (
+            <button
+              type="button"
+              data-no-auto-fullscreen
+              onClick={teacherFs.dismiss}
+              className="rounded-lg bg-white/15 px-3 py-1 font-semibold text-white hover:bg-white/25"
+            >
+              {teacherFs.text.buttonLabel}
+            </button>
+          )}
+        </div>
       )}
 
       </div>
@@ -3679,11 +3864,25 @@ function RoomInner({
         <WhiteboardMeetingBar
           micOn={micOn && !effectiveMuted}
           onToggleMic={() => {
-            if (!micOn) primeVoiceAudio(isTeacher);
+            if (!micOn) {
+              primeVoiceAudio(isTeacher);
+              setMicIssue(null);
+              setMicRetryTick((t) => t + 1);
+            } else {
+              setMicIssue(null);
+            }
             setMicOn((v) => !v);
           }}
           camOn={camOn}
-          onToggleCam={() => setCamOn((v) => !v)}
+          onToggleCam={() => {
+            if (!camOn) {
+              setCamIssue(null);
+              setCamRetryTick((t) => t + 1);
+            } else {
+              setCamIssue(null);
+            }
+            setCamOn((v) => !v);
+          }}
           chatUnread={chatUnread}
           chatOpen={chatOpen}
           onToggleChat={() => setChatOpen((v) => !v)}
@@ -4223,6 +4422,10 @@ export function ClassroomRoom({ code }: { code: string }) {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (classEnded || finished) void exitFullscreenIfActive();
+  }, [classEnded, finished]);
 
   /** "Use this device instead": deliberately take the class back (kicks the other connection). */
   const takeBack = useCallback(async () => {

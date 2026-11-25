@@ -185,7 +185,7 @@ export function WhiteboardMeetingBar({
       <button type="button" style={barBtn(false, { background: '#b91c1c', width: 40 })} title="Stop whiteboard sharing" aria-label="Stop whiteboard sharing" data-testid="wbm-stop" onClick={onStopWhiteboard}>
         <IconScreen size={18} />
       </button>
-      <button type="button" style={barBtn(false, { width: 40, fontSize: 11 })} title="End the class for everyone" aria-label="End class" data-testid="wbm-end" onClick={onEndClass}>
+      <button type="button" data-no-auto-fullscreen style={barBtn(false, { width: 40, fontSize: 11 })} title="End the class for everyone" aria-label="End class" data-testid="wbm-end" onClick={onEndClass}>
         End
       </button>
     </>

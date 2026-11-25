@@ -21,6 +21,12 @@ import { cameraProfile, studentCamera, teacherCamera } from '@/lib/videoQuality'
 import { withNegotiationRetry } from '@/lib/joinPacingLogic';
 import { enqueueLocalPublish, safeStop, unpublishThenStop } from './localPublish';
 import { micPublishAllowed, ownMicCurrent } from '@/lib/audioPolicy';
+import {
+  buildMediaIssue,
+  queryMediaPermission,
+  withPermissionPrompt,
+  type MediaAccessIssue,
+} from '@/lib/permissions';
 
 /** Human-readable camera failure. Shown instead of publishing a fake camera. */
 export function cameraErrorMessage(err: unknown): string {
@@ -49,7 +55,7 @@ export function cameraErrorMessage(err: unknown): string {
  * published: cloning does not open the device a second time, so mobile
  * browsers and drivers that only allow one capture keep working, and stopping
  * the published clone never freezes the preview. If the camera cannot be
- * opened, nothing is published and `onCameraError` explains why.
+ * opened, nothing is published and `onCameraError` / `onCameraIssue` explain why.
  */
 export function SelectivePublisher({
   isTeacher,
@@ -61,6 +67,10 @@ export function SelectivePublisher({
   localCamStream,
   setLocalCamStream,
   onCameraError,
+  onCameraIssue,
+  onMicIssue,
+  camRetryTick = 0,
+  micRetryTick = 0,
 }: {
   /** Teacher: 720p simulcast camera; student: small single-layer camera. */
   isTeacher: boolean;
@@ -72,7 +82,11 @@ export function SelectivePublisher({
   micDesired: boolean;
   localCamStream: MediaStream | null;
   setLocalCamStream: (s: MediaStream | null) => void;
-  onCameraError: (message: string | null) => void;
+  onCameraError?: (message: string | null) => void;
+  onCameraIssue?: (issue: MediaAccessIssue | null) => void;
+  onMicIssue?: (issue: MediaAccessIssue | null) => void;
+  camRetryTick?: number;
+  micRetryTick?: number;
 }) {
   const { localParticipant } = useLocalParticipant();
   const room = useRoomContext();
@@ -81,27 +95,141 @@ export function SelectivePublisher({
   const camSourceRef = useRef<MediaStreamTrack | null>(null);
   const micTrackRef = useRef<LocalAudioTrack | null>(null);
   const videoGen = useRef(0);
+  const [camRecoveryTick, setCamRecoveryTick] = useState(0);
+  // A student can learn it entered the sample (server push) a moment before the
+  // SFU grants the camera; retry the publish when our permissions change.
+  const [permTick, setPermTick] = useState(0);
 
+  const camDesiredRef = useRef(camDesired);
+  camDesiredRef.current = camDesired;
+  const micDesiredRef = useRef(micDesired);
+  micDesiredRef.current = micDesired;
+  const mutedRef = useRef(mutedByTeacher);
+  mutedRef.current = mutedByTeacher;
+  const localCamRef = useRef(localCamStream);
+  localCamRef.current = localCamStream;
+  const onCameraIssueRef = useRef(onCameraIssue);
+  onCameraIssueRef.current = onCameraIssue;
+  const onMicIssueRef = useRef(onMicIssue);
+  onMicIssueRef.current = onMicIssue;
+  const onCameraErrorRef = useRef(onCameraError);
+  onCameraErrorRef.current = onCameraError;
+
+  // Explicit Retry button for microphone.
+  useEffect(() => {
+    if (micRetryTick > 0) setPermTick((n) => n + 1);
+  }, [micRetryTick]);
+
+  // Watch browser permission changes (late grant in site settings → publish without rejoin).
+  useEffect(() => {
+    let cancelled = false;
+    let camStatus: PermissionStatus | null = null;
+    let micStatus: PermissionStatus | null = null;
+    const onCamChange = () => {
+      if (cancelled || !camStatus) return;
+      if (camStatus.state === 'granted' && camDesiredRef.current) {
+        onCameraErrorRef.current?.(null);
+        onCameraIssueRef.current?.(null);
+        setCamRecoveryTick((n) => n + 1);
+      } else if (camStatus.state === 'denied' && camDesiredRef.current) {
+        onCameraIssueRef.current?.(buildMediaIssue({ media: 'camera', permState: 'denied' }));
+      }
+    };
+    const onMicChange = () => {
+      if (cancelled || !micStatus) return;
+      if (micStatus.state === 'granted' && micDesiredRef.current && !mutedRef.current) {
+        onMicIssueRef.current?.(null);
+        setPermTick((n) => n + 1);
+      } else if (micStatus.state === 'denied' && micDesiredRef.current && !mutedRef.current) {
+        onMicIssueRef.current?.(
+          buildMediaIssue({ media: 'microphone', permState: 'denied', unmutedPrompt: !isTeacher })
+        );
+      }
+    };
+    void queryMediaPermission('camera').then(({ status }) => {
+      if (cancelled || !status) return;
+      camStatus = status;
+      status.addEventListener?.('change', onCamChange);
+    });
+    void queryMediaPermission('microphone').then(({ status }) => {
+      if (cancelled || !status) return;
+      micStatus = status;
+      status.addEventListener?.('change', onMicChange);
+    });
+    return () => {
+      cancelled = true;
+      camStatus?.removeEventListener?.('change', onCamChange);
+      micStatus?.removeEventListener?.('change', onMicChange);
+    };
+  }, [isTeacher]);
+
+  // Camera capture (separate from microphone so denying one never blocks the other).
   useEffect(() => {
     let cancelled = false;
     let stream: MediaStream | null = null;
+    let recoverTimer: number | null = null;
 
     async function setupLocal() {
       if (!camDesired) {
-        localCamStream?.getTracks().forEach((t) => t.stop());
+        localCamRef.current?.getTracks().forEach((t) => t.stop());
         setLocalCamStream(null);
+        onCameraErrorRef.current?.(null);
+        onCameraIssueRef.current?.(null);
         return;
       }
+
+      // If we already have a live video track (e.g. a late permission event fired), keep it.
+      const existingLive = localCamRef.current?.getVideoTracks().some((t) => t.readyState === 'live');
+      if (existingLive) {
+        onCameraErrorRef.current?.(null);
+        onCameraIssueRef.current?.(null);
+        return;
+      }
+
+      // On iOS Safari, calling getUserMedia while backgrounded rejects; wait until visible.
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+
+      const secure = typeof window === 'undefined' ? true : window.isSecureContext !== false;
+      const hasDevices = typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
+      const pre = await queryMediaPermission('camera');
+      if (cancelled) return;
+      if (!secure || !hasDevices) {
+        setLocalCamStream(null);
+        onCameraErrorRef.current?.(cameraErrorMessage(null));
+        onCameraIssueRef.current?.(
+          buildMediaIssue({ media: 'camera', permState: pre.state, secureContext: secure, hasMediaDevices: hasDevices })
+        );
+        return;
+      }
+      if (pre.state === 'denied') {
+        setLocalCamStream(null);
+        onCameraErrorRef.current?.(cameraErrorMessage({ name: 'NotAllowedError' }));
+        onCameraIssueRef.current?.(buildMediaIssue({ media: 'camera', permState: 'denied' }));
+        return;
+      }
+
       try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: cameraProfile(isTeacher).capture,
-          audio: false,
-        });
+        stream = await withPermissionPrompt(() =>
+          navigator.mediaDevices.getUserMedia({
+            video: cameraProfile(isTeacher).capture,
+            audio: false,
+          })
+        );
       } catch (deviceErr) {
         console.warn('camera unavailable', deviceErr);
         if (!cancelled) {
           setLocalCamStream(null);
-          onCameraError(cameraErrorMessage(deviceErr));
+          const post = await queryMediaPermission('camera');
+          onCameraErrorRef.current?.(cameraErrorMessage(deviceErr));
+          onCameraIssueRef.current?.(
+            buildMediaIssue({
+              media: 'camera',
+              err: deviceErr,
+              permState: post.state === 'unknown' ? pre.state : post.state,
+              secureContext: secure,
+              hasMediaDevices: hasDevices,
+            })
+          );
         }
         return;
       }
@@ -109,24 +237,75 @@ export function SelectivePublisher({
         stream.getTracks().forEach((t) => t.stop());
         return;
       }
-      onCameraError(null);
+      onCameraErrorRef.current?.(null);
+      onCameraIssueRef.current?.(null);
       setLocalCamStream(stream);
+
+      // iOS Safari / device switch: if the OS ends the video track on backgrounding
+      // or device unplug, re-acquire cleanly once the tab is visible again.
+      const vTrack = stream.getVideoTracks()[0];
+      if (vTrack) {
+        vTrack.addEventListener(
+          'ended',
+          () => {
+            if (cancelled || !camDesiredRef.current) return;
+            if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+            if (recoverTimer) window.clearTimeout(recoverTimer);
+            recoverTimer = window.setTimeout(() => {
+              if (!cancelled && camDesiredRef.current) setCamRecoveryTick((n) => n + 1);
+            }, 300);
+          },
+          { once: true }
+        );
+      }
     }
 
     void setupLocal();
     return () => {
       cancelled = true;
+      if (recoverTimer) window.clearTimeout(recoverTimer);
       stream?.getTracks().forEach((t) => t.stop());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [camDesired]);
+  }, [camDesired, camRetryTick, camRecoveryTick]);
+
+  // Recover ended camera or mic tracks after backgrounding (iOS Safari) or hardware switch.
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    let visTimer: number | null = null;
+    const checkRecovery = () => {
+      if (document.visibilityState === 'hidden') return;
+      if (visTimer) window.clearTimeout(visTimer);
+      visTimer = window.setTimeout(() => {
+        visTimer = null;
+        if (document.visibilityState === 'hidden') return;
+        if (camDesiredRef.current) {
+          const live = localCamRef.current?.getVideoTracks().some((t) => t.readyState === 'live');
+          if (!live) setCamRecoveryTick((n) => n + 1);
+        }
+        if (micDesiredRef.current && !mutedRef.current && localParticipant) {
+          const pub = localParticipant.getTrackPublication(Track.Source.Microphone)?.track;
+          if (!ownMicCurrent(micTrackRef.current, pub)) {
+            setPermTick((n) => n + 1);
+          }
+        }
+      }, 300);
+    };
+    document.addEventListener('visibilitychange', checkRecovery);
+    window.addEventListener('pageshow', checkRecovery);
+    const md = typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined;
+    md?.addEventListener?.('devicechange', checkRecovery);
+    return () => {
+      if (visTimer) window.clearTimeout(visTimer);
+      document.removeEventListener('visibilitychange', checkRecovery);
+      window.removeEventListener('pageshow', checkRecovery);
+      md?.removeEventListener?.('devicechange', checkRecovery);
+    };
+  }, [localParticipant]);
 
   const previewTrack =
     localCamStream?.getVideoTracks().find((t) => t.readyState === 'live') ?? null;
 
-  // A student can learn it entered the sample (server push) a moment before the
-  // SFU grants the camera; retry the publish when our permissions change.
-  const [permTick, setPermTick] = useState(0);
   useEffect(() => {
     if (!room || isTeacher) return;
     const on = (_prev: unknown, p: Participant) => {
@@ -247,7 +426,7 @@ export function SelectivePublisher({
     let cancelled = false;
     const participant = localParticipant;
     if (!participant) return;
-    void permTick; // students: retry when the SFU grant arrives (unmute race)
+    void permTick; // students: retry when the SFU grant arrives (unmute race) or mic recovers
     void enqueueLocalPublish(async () => {
       if (cancelled) return;
       // Teacher mute is authoritative — never publish audio while mutedByTeacher
@@ -267,6 +446,7 @@ export function SelectivePublisher({
         if (cancelled) return;
       }
       if (!want) {
+        onMicIssueRef.current?.(null);
         const track = micTrackRef.current;
         micTrackRef.current = null;
         if (track) {
@@ -283,11 +463,31 @@ export function SelectivePublisher({
       // Not granted yet (teacher just unmuted us): wait for the grant
       // (ParticipantPermissionsChanged re-runs this) instead of a 403.
       if (!micTrackRef.current && !micPublishAllowed(participant.permissions)) return;
-      try {
-        if (!micTrackRef.current) {
+
+      if (!micTrackRef.current) {
+        // Wait until tab is visible before opening mic on iOS Safari.
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+        const secure = typeof window === 'undefined' ? true : window.isSecureContext !== false;
+        const hasDevices = typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
+        const pre = await queryMediaPermission('microphone');
+        if (cancelled || mutedByTeacher) return;
+        if (!secure || !hasDevices) {
+          onMicIssueRef.current?.(
+            buildMediaIssue({ media: 'microphone', permState: pre.state, secureContext: secure, hasMediaDevices: hasDevices })
+          );
+          return;
+        }
+        if (pre.state === 'denied') {
+          onMicIssueRef.current?.(
+            buildMediaIssue({ media: 'microphone', permState: 'denied', unmutedPrompt: !isTeacher })
+          );
+          return;
+        }
+
+        try {
           // Cleaned up (noise removal, teacher voice focus) where the device
           // can; otherwise the browser-processed mic. Never fails for that.
-          const track = await createVoiceTrack(isTeacher);
+          const track = await withPermissionPrompt(() => createVoiceTrack(isTeacher));
           if (cancelled || mutedByTeacher) {
             safeStop(track);
             return;
@@ -322,15 +522,43 @@ export function SelectivePublisher({
           }
           micTrackRef.current = track;
           micKeyRef.current = voiceKey;
+          onMicIssueRef.current?.(null);
+          track.mediaStreamTrack?.addEventListener(
+            'ended',
+            () => {
+              if (!cancelled && micDesiredRef.current && !mutedRef.current && typeof document !== 'undefined' && document.visibilityState !== 'hidden') {
+                setPermTick((n) => n + 1);
+              }
+            },
+            { once: true }
+          );
+        } catch (e) {
+          console.warn('mic', e);
+          if (!cancelled) {
+            const post = await queryMediaPermission('microphone');
+            onMicIssueRef.current?.(
+              buildMediaIssue({
+                media: 'microphone',
+                err: e,
+                permState: post.state === 'unknown' ? pre.state : post.state,
+                secureContext: secure,
+                hasMediaDevices: hasDevices,
+                unmutedPrompt: !isTeacher,
+              })
+            );
+          }
+          return;
         }
-        if (cancelled) return;
+      }
+      if (cancelled) return;
+      try {
         // Our own track only (never LiveKit's enable-microphone helper: with no
         // publication it would open a second, untracked mic). A server-side
         // mute (teacher muted, then allowed again) is undone here.
         const mine = micTrackRef.current;
         if (mine?.isMuted) await mine.unmute();
       } catch (e) {
-        console.warn('mic', e);
+        console.warn('mic unmute', e);
       }
     });
     return () => {

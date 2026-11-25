@@ -178,6 +178,7 @@ export function Controls({
         <span className="relative inline-flex items-center gap-1">
         <IconButton
           size={btn}
+          data-no-auto-fullscreen
           label={
             teacherMuted
               ? 'Muted by teacher'
@@ -204,6 +205,7 @@ export function Controls({
         <Tool caption="Camera" show={captions} wide={wide}>
         <IconButton
           size={btn}
+          data-no-auto-fullscreen
           label={camOn ? 'Turn camera off' : 'Turn camera on'}
           active={camOn}
           danger={!camOn}
@@ -241,6 +243,7 @@ export function Controls({
         {showScreenShare && (
           <Tool caption={screenOn ? 'Stop share' : 'Share'} show={captions} wide={wide}>
           <IconButton
+            data-no-auto-fullscreen
             label={screenOn ? 'Stop sharing screen' : 'Share screen'}
             active={screenOn}
             onPointerDown={() => {
@@ -269,6 +272,7 @@ export function Controls({
           <Tool caption={handRaised ? 'Lower' : 'Hand'} show={captions} wide={wide}>
           <IconButton
             size={btn}
+            data-no-auto-fullscreen
             label={handRaised ? 'Lower hand' : 'Raise hand'}
             active={!!handRaised}
             onClick={onToggleHand}
@@ -392,7 +396,7 @@ export function Controls({
         {/* Teacher: Leave (just me) is neutral and set apart from End class (everyone),
             so the two are not one mis-click apart. Students only have Leave. */}
         <Tool caption="Leave" show={captions} wide={wide}>
-          <IconButton size={btn} label="Leave class" danger={!isTeacher} onClick={onLeave}>
+          <IconButton size={btn} data-no-auto-fullscreen label="Leave class" danger={!isTeacher} onClick={onLeave}>
             <IconLeave />
           </IconButton>
         </Tool>
@@ -400,7 +404,7 @@ export function Controls({
         {isTeacher && onEnd && !isFloat && (
           <>
             <div className="mx-2 hidden h-8 w-px bg-white/10 sm:block" aria-hidden />
-            <Button variant="danger" size="sm" onClick={onEnd}>
+            <Button variant="danger" size="sm" data-no-auto-fullscreen onClick={onEnd}>
               End class
             </Button>
           </>

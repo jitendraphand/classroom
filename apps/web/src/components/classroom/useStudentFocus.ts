@@ -3,10 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { roomFetch } from '@/lib/classroomClient';
 import { computeFocusStatus, isIPhoneUA, type FocusStatus } from '@/lib/focusStatus';
+import { permissionGrace } from '@/lib/permissions';
 
 type WebkitDoc = Document & {
   webkitFullscreenEnabled?: boolean;
   webkitFullscreenElement?: Element | null;
+  webkitExitFullscreen?: () => Promise<void> | void;
 };
 type WebkitEl = HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | void };
 
@@ -16,7 +18,8 @@ export function fullscreenSupported(): boolean {
   return !!(d.fullscreenEnabled || d.webkitFullscreenEnabled);
 }
 
-function isFullscreenNow(): boolean {
+export function isFullscreenNow(): boolean {
+  if (typeof document === 'undefined') return false;
   const d = document as WebkitDoc;
   return !!(d.fullscreenElement || d.webkitFullscreenElement);
 }
@@ -31,6 +34,7 @@ function readStatus(): FocusStatus {
 
 /** requestFullscreen with the webkit fallback (older Safari, iPadOS). Needs a user gesture. */
 export async function enterFullscreen(): Promise<boolean> {
+  if (typeof document === 'undefined') return false;
   const el = document.documentElement as WebkitEl;
   try {
     if (isFullscreenNow()) return true;
@@ -45,6 +49,23 @@ export async function enterFullscreen(): Promise<boolean> {
   return isFullscreenNow();
 }
 
+export async function exitFullscreenIfActive(): Promise<void> {
+  if (typeof document === 'undefined' || !isFullscreenNow()) return;
+  const d = document as WebkitDoc;
+  try {
+    if (typeof document.exitFullscreen === 'function') {
+      await document.exitFullscreen();
+    } else if (typeof d.webkitExitFullscreen === 'function') {
+      await d.webkitExitFullscreen();
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Brief settle delay before treating a transient hidden event (e.g. OS dialog) as "away". */
+const AWAY_SETTLE_MS = 800;
+
 /**
  * Student fullscreen enforcement. Detects leaving fullscreen
  * (fullscreenchange / webkitfullscreenchange) and leaving the page
@@ -52,6 +73,10 @@ export async function enterFullscreen(): Promise<boolean> {
  * the page when to show the "Tap to return to fullscreen" cover. Browsers
  * without the Fullscreen API (iPhone Safari) get focus mode instead and are
  * reported as unsupported, not as having left.
+ *
+ * Permission dialogs (camera/mic) on Android Chrome & desktop can temporarily
+ * exit fullscreen or blur/hide the page; `permissionGrace` suppresses false
+ * "left"/"away" covers and teacher alerts while a prompt is open and settling.
  */
 export function useStudentFocus(code: string, enabled: boolean) {
   const [status, setStatus] = useState<FocusStatus>(() =>
@@ -62,6 +87,8 @@ export function useStudentFocus(code: string, enabled: boolean) {
   const [portrait, setPortrait] = useState(false);
   const lastSent = useRef<string>('');
   const sendTimer = useRef<number | null>(null);
+  const graceTimer = useRef<number | null>(null);
+  const awayTimer = useRef<number | null>(null);
 
   const report = useCallback(
     (next: FocusStatus, immediate: boolean) => {
@@ -90,23 +117,87 @@ export function useStudentFocus(code: string, enabled: boolean) {
 
   useEffect(() => {
     if (!enabled) return;
+
+    const clearTimers = () => {
+      if (graceTimer.current) {
+        window.clearTimeout(graceTimer.current);
+        graceTimer.current = null;
+      }
+      if (awayTimer.current) {
+        window.clearTimeout(awayTimer.current);
+        awayTimer.current = null;
+      }
+    };
+
+    const scheduleGraceRecheck = () => {
+      if (graceTimer.current) window.clearTimeout(graceTimer.current);
+      const rem = permissionGrace.remainingMs();
+      if (rem > 0) {
+        graceTimer.current = window.setTimeout(() => {
+          graceTimer.current = null;
+          update();
+        }, rem + 50);
+      }
+    };
+
+    const applyStatus = (next: FocusStatus, immediate: boolean) => {
+      setStatus(next);
+      report(next, immediate);
+    };
+
     const update = () => {
       if (isFullscreenNow()) setEverFullscreen(true);
       const next = readStatus();
-      setStatus(next);
-      report(next, next === 'away');
+
+      if (next !== 'away' && awayTimer.current) {
+        window.clearTimeout(awayTimer.current);
+        awayTimer.current = null;
+      }
+
+      // Permission prompt in flight or just closed: never alarm the teacher or
+      // cover the class while the student is allowing camera/mic.
+      if ((next === 'left' || next === 'away') && permissionGrace.isActive()) {
+        scheduleGraceRecheck();
+        return;
+      }
+
+      if (next === 'away') {
+        if (!awayTimer.current) {
+          awayTimer.current = window.setTimeout(() => {
+            awayTimer.current = null;
+            if (permissionGrace.isActive()) {
+              scheduleGraceRecheck();
+              return;
+            }
+            const cur = readStatus();
+            if (cur === 'away') applyStatus('away', true);
+          }, AWAY_SETTLE_MS);
+        }
+        return;
+      }
+
+      applyStatus(next, false);
     };
+
     update();
-    // Try once on join (browsers usually want a gesture), then on the first tap/key.
-    if (fullscreenSupported() && !isFullscreenNow()) {
+    // Try once on join unless a permission prompt is already open (Android
+    // Chrome exits fullscreen or collides when both fire together).
+    if (fullscreenSupported() && !isFullscreenNow() && !permissionGrace.isActive()) {
       void enterFullscreen().then((ok) => {
         if (ok) setEverFullscreen(true);
         update();
       });
     }
-    const onGesture = () => {
+    const onGesture = (ev: Event) => {
+      const target = ev.target as Element | null;
+      if (target?.closest?.('[data-no-auto-fullscreen]')) return;
+      if (permissionGrace.isActive()) return;
       if (fullscreenSupported() && !isFullscreenNow()) void enterFullscreen().then(update);
     };
+    const offGrace = permissionGrace.subscribe(() => {
+      if (permissionGrace.isActive()) scheduleGraceRecheck();
+      else update();
+    });
     document.addEventListener('fullscreenchange', update);
     document.addEventListener('webkitfullscreenchange', update);
     document.addEventListener('visibilitychange', update);
@@ -114,6 +205,8 @@ export function useStudentFocus(code: string, enabled: boolean) {
     document.addEventListener('pointerdown', onGesture, { once: true });
     document.addEventListener('keydown', onGesture, { once: true });
     return () => {
+      offGrace();
+      clearTimers();
       document.removeEventListener('fullscreenchange', update);
       document.removeEventListener('webkitfullscreenchange', update);
       document.removeEventListener('visibilitychange', update);

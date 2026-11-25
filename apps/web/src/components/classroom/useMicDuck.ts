@@ -43,6 +43,7 @@ export function useMicDuck(enabled: boolean, participant: LocalParticipant | und
         if (active && (!want || active.mic !== mic || active.share !== share)) await detach();
         if (want && !active && mic && share) {
           const ctx = new AudioContext({ latencyHint: 'interactive' });
+          if (ctx.state === 'suspended') await ctx.resume().catch(() => undefined);
           mic.setAudioContext(ctx);
           const proc = new MicDuckProcessor();
           await mic.setProcessor(proc as never);

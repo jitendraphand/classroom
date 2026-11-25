@@ -12,6 +12,7 @@ import { Card } from '@/components/ui/Card';
 import { markSchoolStudentTab, rememberClassroomRole } from '@/lib/classroomClient';
 import { PageLoading } from '@/components/ui/Skeleton';
 import { SchoolAppOnly } from '@/components/join/SchoolAppOnly';
+import { WaitingPermissionsCard } from '@/components/join/WaitingPermissionsCard';
 import { lobbyEndedFor } from '@/lib/lobbyState';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { formatTeacherName } from '@/lib/teacherSalutation';
@@ -276,6 +277,7 @@ export default function JoinRoomPage() {
               This class is full.
             </p>
           )}
+          <WaitingPermissionsCard />
           {!roomInfo?.me?.viaSchoolApp && (
             <Button type="button" variant="secondary" className="mt-6 w-full" onClick={joinAsDifferentStudent}>
               Not you? Join with a different name
