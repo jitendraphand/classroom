@@ -19,7 +19,7 @@ import { readMicBook, updateMicBook } from './micBook';
 import { idlePending, rebuildForLimit, studentSetMic, type MicBook } from './micSlots';
 import { getSchoolSettings } from './schoolSettings';
 import { livekitRoomName, pushStudentPermissions, roomServiceFor } from './livekit';
-import { getVisibleSample, unpinSpeaker } from './sample';
+import { getVisibleSample } from './sample';
 import { nudgeRoomState, pushMuteState } from './roomNudge';
 import { acquireLock, releaseLock } from './leaderLock';
 
@@ -52,7 +52,6 @@ export async function applyMicChanges(room: MicRoom, mute: string[], unmute: str
     live.map((r) => ({ identity: r.livekitIdentity, allowMic: unmuteSet.has(r.id), allowCamera: inSample.has(r.livekitIdentity) })),
     { room }
   );
-  for (const r of muted) await unpinSpeaker(room.code, r.livekitIdentity).catch(() => undefined);
   pushMuteState(room.code, room.sessionId, muted.filter((r) => r.status === 'ADMITTED').map((r) => r.livekitIdentity), true);
   pushMuteState(room.code, room.sessionId, opened.map((r) => r.livekitIdentity), false);
   nudgeRoomState(room.code, { participantIds: live.map((r) => r.id) });

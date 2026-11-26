@@ -41,15 +41,13 @@ curl -sI http://localhost:3000/favicon.ico | head -1
 ## 7. Faster sample rotation (~8s)
 1. Set `SAMPLE_ROTATION_SECONDS=8` (default) in `.env`.
 2. Admit more students than `maxVisibleVideos`.
-3. Poll `/api/rooms/{CODE}/state` every few seconds — `visibleIdentities` should change about every 8s (state polling ~4s triggers `ensureSampleFresh`).
+3. Poll `/api/rooms/{CODE}/state` as the teacher: `videoPage` shows `{ page, pages, total, order }`; `visibleIdentities` changes only after `POST /api/rooms/{CODE}/video-page {"delta":1}` (or a roster / camera change on the page).
 4. Student not in sample: local preview only; when identity enters sample, camera starts publishing without remount.
 
-## 8. Active speaker pin
-1. Teacher in classroom; student **not** in visible sample turns on mic and speaks.
-2. Teacher client hears ActiveSpeakers → `POST /api/rooms/{CODE}/sample/pin` with `{ identity }`.
-3. Expect that student to appear in `visibleIdentities` and start publishing video within one state refresh (~4s).
-4. Repeat pin for same identity within 2s should be rate-limited (no thrash).
-5. Manual **Rotate sample** should prefer keeping recently pinned speakers (~18s TTL).
+## 8. Speaking students
+1. Teacher unmutes a student who is **not** on the current video page.
+2. The student publishes camera video while unmuted and appears in the teacher's speaking pop-up.
+3. The page (`visibleIdentities`) does not change; muting them again stops their video.
 
 ## 9. Mute all / unmute all
 1. Teacher Controls or Roster → **Mute all students**.

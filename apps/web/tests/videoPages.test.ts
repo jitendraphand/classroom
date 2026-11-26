@@ -1,7 +1,7 @@
 /** Student-video pages replace the random 8-second rotation (lib/videoPages). */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { pagingOrder, stepPage, videoPageLayout, type PageCandidate } from '../src/lib/videoPages';
 
 const src = (p: string) => readFileSync(`src/${p}`, 'utf8');
@@ -71,9 +71,11 @@ test('no random rotation is left: server pages, client follows the server order'
   const sample = src('lib/sample.ts');
   assert.match(sample, /videoPageLayout\(/);
   assert.doesNotMatch(sample, /Math\.random|shuffle|allocateSample/);
-  // A speaker no longer evicts anyone from the page the teacher is looking at.
-  const pin = sample.slice(sample.indexOf('export async function pinSpeaker'), sample.indexOf('export async function unpinSpeakerByParticipant'));
-  assert.doesNotMatch(pin, /keys\.visible\(roomCode\), \.\.\.|pipe\.sadd/);
+  // Speaking no longer touches the page: the speaker-pin path is gone.
+  assert.doesNotMatch(sample, /pinSpeaker|pinnedSpeakers/);
+  assert.ok(!existsSync('src/app/api/rooms/[code]/sample/pin/route.ts'));
+  assert.ok(!existsSync('src/app/api/sample/rotate/route.ts'));
+  assert.doesNotMatch(src('components/classroom/ClassroomRoom.tsx'), /'\/sample\/pin'/);
   const panel = src('components/classroom/TeacherPeersFloat.tsx');
   assert.doesNotMatch(panel, /Math\.random|setRotationTick|rotationTick/);
   assert.match(panel, /videoPage\?\.order/);
@@ -85,8 +87,6 @@ test('no random rotation is left: server pages, client follows the server order'
   const api = src('app/api/rooms/[code]/video-page/route.ts');
   assert.match(api, /getTeacherSession/);
   assert.match(api, /room\.teacherId !== teacher\.id/);
-  // Older / native "rotate" buttons move to the next page.
-  assert.match(src('app/api/sample/rotate/route.ts'), /moveVideoPage\(code, \{ delta: 1 \}\)/);
   assert.match(src('app/api/rooms/[code]/state/route.ts'), /videoPage: isTeacher \? await getVideoPageInfo\(code\) : undefined/);
   // A camera turned on or off refreshes the page (coalesced per room).
   assert.match(src('lib/teacherMute.ts'), /schedulePageRefresh\(room\.code\)/);

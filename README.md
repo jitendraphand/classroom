@@ -355,7 +355,6 @@ See `.env.example`. Important:
 |----------|---------|---------|
 | `MAX_VISIBLE_STUDENT_VIDEOS` | `6` | Default sample size for new rooms (hard-capped at 6) |
 | `SAMPLE_ROTATION_SECONDS` | `8` | How often the current video page is recomputed from the roster and camera flags (pages never rotate on their own) |
-| `SPEAKER_PIN_TTL_SECONDS` | `18` | How long an active-speaker pin protects a student from random ejection |
 | `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | generated | Admin credential for the SFU. Generated into `.env` and the gitignored `infra/livekit.yaml` by `scripts/sync-livekit-keys.sh` |
 | `APP_URL` / `NEXT_PUBLIC_APP_URL` | `http://localhost:3000` | Browser-facing app origin — `http://PUBLIC_IP:3000` (bare IP) or `https://DOMAIN` (Caddy) |
 | `NEXT_PUBLIC_LIVEKIT_URL` | `ws://localhost:7880` | Browser-facing LiveKit — `ws://PUBLIC_IP:7880` or `wss://livekit.DOMAIN` |

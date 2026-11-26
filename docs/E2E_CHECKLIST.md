@@ -54,12 +54,13 @@ Use two browsers (or normal + incognito). Start from a healthy stack (`GET /api/
 - [ ] Mic off/on via dock; when **Muted by teacher**, mic control disabled + hint
 - [ ] Cam off shows avatar/initials fallback
 
-## G. Selective sample + rotate + speaker pin
+## G. Student-video pages
 
-- [ ] Admit more students than `maxVisibleVideos`
-- [ ] Only sample students publish; others stay local-only
-- [ ] Teacher **Rotate sample** (dock) changes who is in sample within a refresh
-- [ ] Student **not** in sample speaks → teacher pin path (`/sample/pin`) pulls them into sample (note: requires audible speech / LiveKit active speaker)
+- [ ] Admit more camera-on students than the panel's student tiles
+- [ ] Only the current page's students (and pinned ones) publish; others send no video
+- [ ] Panel header **‹ / ›** turns the page ("2/9"); tiles never change on their own
+- [ ] A student on the page turns the camera off → the next student moves up within ~2 s
+- [ ] Teacher unmutes a student who is not on the page → they appear in the speaking pop-up; the page is unchanged
 
 ## H. Mute all / unmute / per-student
 

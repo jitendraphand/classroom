@@ -9,7 +9,7 @@ import { getSchoolSettings } from './schoolSettings';
 import { updateMicBook } from './micBook';
 import { teacherSetMic } from './micSlots';
 import { setParticipantMicAllowed } from './livekit';
-import { getVisibleSample, rotateVisibleSample, unpinSpeaker } from './sample';
+import { getVisibleSample, rotateVisibleSample } from './sample';
 import { nudgeRoomState, pushMuteState } from './roomNudge';
 import { isStudentCamOn, setStudentCam } from './studentCamera';
 import { muteOnCameraOff } from './speakingRules';
@@ -25,7 +25,6 @@ async function applyOne(room: MuteRoom, p: MuteTarget, muted: boolean, visible: 
   // Camera: in the sample, or unmuted (speaking students may publish camera so
   // the teacher's pop-up can show them; subscribers are unchanged).
   await setParticipantMicAllowed(room.code, p.livekitIdentity, !muted, !muted || visible.includes(p.livekitIdentity));
-  if (muted) await unpinSpeaker(room.code, p.livekitIdentity);
   pushMuteState(room.code, room.sessionId, [p.livekitIdentity], muted);
 }
 

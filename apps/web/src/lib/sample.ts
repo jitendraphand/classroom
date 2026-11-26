@@ -26,10 +26,7 @@ const ROTATION_SECONDS = Number(process.env.SAMPLE_ROTATION_SECONDS || 8);
 /** Page state lives as long as a class can (same as the student camera flags). */
 const PAGE_TTL_S = 12 * 60 * 60;
 
-/** Do not re-pin the same identity more often than this. */
-const PIN_RATE_LIMIT_MS = 2000;
-
-/** Guard so a poll storm cannot trigger dozens of concurrent rotations. */
+/** Guard so a poll storm cannot trigger dozens of concurrent page recomputes. */
 const ROTATE_LOCK_MS = 3000;
 
 export function clampMaxVisible(n: number | undefined | null): number {
@@ -117,19 +114,6 @@ function sampleChanged(a: string[], b: string[]) {
   if (a.length !== b.length) return true;
   const set = new Set(a);
   return b.some((id) => !set.has(id));
-}
-
-/** Speaker pins expire this long after the student last spoke (pinSpeaker refreshes it). */
-const SPEAKER_PIN_TTL_MS = Math.max(5, Number(process.env.SPEAKER_PIN_TTL_SECONDS || 18)) * 1000;
-
-export async function unpinSpeaker(roomCode: string, identity: string) {
-  const redis = await ensureRedis();
-  await redis.hdel(keys.pinnedSpeakers(roomCode), identity);
-}
-
-export async function clearPinnedSpeakers(roomCode: string) {
-  const redis = await ensureRedis();
-  await redis.del(keys.pinnedSpeakers(roomCode));
 }
 
 /** Page summary the teacher's panel shows (Prev / Next, "Page 2 of 9"). */
@@ -256,62 +240,6 @@ export async function ensureSampleFresh(roomCode: string) {
 }
 
 /**
- * A student was heard speaking (teacher client, POST /sample/pin). With
- * pages the sample no longer changes for this: a teacher-unmuted student
- * already publishes camera outside the page for the teacher's speaking pop-up
- * (lib/speakingRules studentCameraAllowed), and evicting someone from the
- * page the teacher is looking at would be confusing. Only the "last spoke"
- * timestamp is kept (rate-limited per identity), for clients that read it.
- */
-export async function pinSpeaker(roomCode: string, identity: string) {
-  const redis = await ensureRedis();
-  const room = await prisma.room.findUnique({ where: { code: roomCode } });
-  if (!room || room.status === 'ENDED') {
-    return { ok: false as const, reason: 'room_ended' };
-  }
-
-  const participant = await prisma.participant.findFirst({
-    where: {
-      roomId: room.id,
-      livekitIdentity: identity,
-      role: 'STUDENT',
-      status: 'ADMITTED',
-    },
-    select: { livekitIdentity: true, mutedByTeacher: true, id: true },
-  });
-  if (!participant) {
-    return { ok: false as const, reason: 'not_student' };
-  }
-
-  // Teacher-muted students should not stick in the speak pool
-  if (participant.mutedByTeacher || (await redis.sismember(keys.muted(roomCode), participant.id)) === 1) {
-    await redis.hdel(keys.pinnedSpeakers(roomCode), identity);
-    return { ok: false as const, reason: 'muted' };
-  }
-
-  const acquired = await redis.set(keys.pinRate(roomCode, identity), '1', 'PX', PIN_RATE_LIMIT_MS, 'NX');
-  await redis.hset(keys.pinnedSpeakers(roomCode), identity, String(Date.now()));
-  await redis.pexpire(keys.pinnedSpeakers(roomCode), SPEAKER_PIN_TTL_MS * 10);
-  const visible = await redis.smembers(keys.visible(roomCode));
-  return { ok: true as const, alreadyVisible: visible.includes(identity), visible, rateLimited: !acquired };
-}
-
-/**
- * Drop a sticky speaker pin.
- *
- * Called when the teacher mutes a student, and when the teacher client sees that
- * student mute their own microphone — without this a student who speaks once and
- * then mutes holds a visible slot for the rest of the class.
- */
-export async function unpinSpeakerByParticipant(roomCode: string, identity: string) {
-  const redis = await ensureRedis();
-  const wasPinned = await redis.hexists(keys.pinnedSpeakers(roomCode), identity);
-  if (!wasPinned) return { ok: true as const, wasPinned: false };
-  await redis.hdel(keys.pinnedSpeakers(roomCode), identity);
-  return { ok: true as const, wasPinned: true };
-}
-
-/**
  * Teacher pins / unpins a student's video. Pinned students keep a visible slot
  * (bypassing rotation) for the rest of this class session; pins count toward
  * the room's video cap, so pinning beyond it is refused.
@@ -346,7 +274,6 @@ export function sampleConfig() {
   return {
     maxVisible: DEFAULT_MAX,
     hardMaxVisible: HARD_MAX_VISIBLE_STUDENT_VIDEOS,
-    rotationSeconds: ROTATION_SECONDS,
-    speakerPinTtlSeconds: SPEAKER_PIN_TTL_MS / 1000,
+    refreshSeconds: ROTATION_SECONDS,
   };
 }

@@ -45,7 +45,6 @@ import {
   type LocalTrackPublication,
   type Participant,
   type RemoteParticipant,
-  type TrackPublication,
 } from 'livekit-client';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
@@ -1246,61 +1245,6 @@ function RoomInner({
     }
   }, [state?.status, state?.ended, state?.classInfo?.classSessionId, state?.endedBy, room, onClassEnded, code]);
 
-  useEffect(() => {
-    if (!isTeacher || !room) return;
-    const pinnedRecently = new Map<string, number>();
-    const studentIdentities = new Set(
-      (state?.admitted ?? [])
-        .filter((a) => a.role === 'STUDENT')
-        .map((a) => a.livekitIdentity)
-    );
-    const visibleSet = new Set(state?.visibleIdentities ?? visibleIdentities);
-
-    const postPin = (identity: string, pinned: boolean) => {
-      // Rate-limit only the pinning direction; releases must always land so a
-      // muted student cannot hold a slot.
-      if (pinned) {
-        const last = pinnedRecently.get(identity) || 0;
-        if (Date.now() - last < 2000) return;
-      }
-      pinnedRecently.set(identity, Date.now());
-      void roomFetch(code, '/sample/pin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identity, pinned }),
-      }).then((res) => {
-        if (res.ok) refresh();
-      });
-    };
-
-    const onSpeakers = (speakers: Participant[]) => {
-      for (const s of speakers) {
-        if (s.isLocal) continue;
-        if (!studentIdentities.has(s.identity)) continue;
-        // A crashed student must not be pulled back into the visible sample.
-        if (videoHidden(s.identity, { dropped: droppedStudents, now: Date.now(), liveRoster })) continue;
-        if (visibleSet.has(s.identity)) continue;
-        postPin(s.identity, true);
-      }
-    };
-
-    // Sticky speak-pins last "until mute". A student who speaks once and then
-    // mutes their own microphone must release their reserved slot, otherwise they
-    // keep publishing (and holding a slot) for the rest of the class.
-    const onTrackMuted = (pub: TrackPublication, participant: Participant) => {
-      if (!pub || pub.source !== Track.Source.Microphone) return;
-      const identity = participant?.identity;
-      if (!identity || !studentIdentities.has(identity)) return;
-      postPin(identity, false);
-    };
-
-    room.on(RoomEvent.ActiveSpeakersChanged, onSpeakers);
-    room.on(RoomEvent.TrackMuted, onTrackMuted);
-    return () => {
-      room.off(RoomEvent.ActiveSpeakersChanged, onSpeakers);
-      room.off(RoomEvent.TrackMuted, onTrackMuted);
-    };
-  }, [isTeacher, room, code, refresh, state?.admitted, state?.visibleIdentities, visibleIdentities, droppedStudents, liveRoster]);
 
   /** Cameras on demand: tell the server whether the student-video panel is shown. */
   const panelReported = useRef<boolean | null>(null);
@@ -3974,7 +3918,7 @@ function RoomInner({
             if (!screenOn && canShareScreen()) preopenShareControls();
           }}
           onEnd={endClass}
-          onRotateSample={() => void turnVideoPage(1)}
+          onNextVideoPage={() => void turnVideoPage(1)}
           onMuteAll={() => muteAllStudents()}
           onToggleChat={screenOn ? undefined : toggleChat}
           chatOpen={chatOpen}

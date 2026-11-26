@@ -181,7 +181,6 @@ services:
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       MAX_VISIBLE_STUDENT_VIDEOS: ${MAX_VISIBLE_STUDENT_VIDEOS:-6}
       SAMPLE_ROTATION_SECONDS: ${SAMPLE_ROTATION_SECONDS:-8}
-      SPEAKER_PIN_TTL_SECONDS: ${SPEAKER_PIN_TTL_SECONDS:-18}
       NODE_ENV: production
       PORT: "3000"
       # 0.0.0.0 for bare-IP deploys (browsers reach :3000); 127.0.0.1 behind

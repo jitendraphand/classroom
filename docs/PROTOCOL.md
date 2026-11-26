@@ -99,7 +99,7 @@ browser sends them, so the apps' own HTTP clients pass as non-browser callers.
 | `POST /api/rooms/<code>/screen-token` | Windows sidecar token (`__screen`) |
 | `GET /api/rooms/<code>/state` | roster, waiting, hands, settings |
 | `/admit`, `/mute`, `/hand`, `/spotlight`, `/stage`, `/pin-student`, `/video-panel`, `/settings` | teacher actions |
-| `POST /api/rooms/<code>/video-page` `{delta: ±1}` or `{page}` | student-video pages (Prev / Next); answers `{page, pages, pageSize, total, order}`. `/state` carries the same as `videoPage` for the teacher. `POST /api/sample/rotate` now means "next page" |
+| `POST /api/rooms/<code>/video-page` `{delta: ±1}` or `{page}` | student-video pages (Prev / Next); answers `{page, pages, pageSize, total, order}`. `/state` carries the same as `videoPage` for the teacher |
 | `POST /api/rooms/<code>/snapshot` `{image: base64, type: image/webp\|image/jpeg}`, `DELETE` | teacher: the latest still of the share for audio-only students (≤350 KB, at most one per 4 s; send only when the picture changed). `GET` (teacher or admitted student, `If-None-Match`) returns it, 204 when none |
 | `/messages` (+ `/messages/stream`) | chat history and sending |
 | `/whiteboard`, `/draw` | board on/off, snapshots, student drawing permission |
@@ -120,8 +120,8 @@ of **camera-on** students in roster (natural name) order, at most
 changes only on `POST /video-page`, and its contents follow students joining,
 leaving and turning cameras on/off. Teacher clients show the tiles in
 `/state.videoPage.order` and must not shuffle or rotate them. A teacher-unmuted
-student publishes camera outside the page (speaking pop-up), and
-`/sample/pin` no longer changes the page. Students report camera on/off with
+student publishes camera outside the page (speaking pop-up). The old
+`/api/sample/rotate` and `/api/rooms/<code>/sample/pin` endpoints are gone. Students report camera on/off with
 `POST /camera`; a student camera in standby (device closed because nothing
 needs it) is still reported as on.
 

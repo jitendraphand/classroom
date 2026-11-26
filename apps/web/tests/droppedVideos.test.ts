@@ -79,7 +79,7 @@ test('teacher video surfaces use the same drop as the roster', () => {
   assert.match(room, /visibleIdentities=\{shownVisibles\}/);
   assert.match(room, /hiddenIdentities=\{hiddenVideoList\}/);
   assert.match(room, /if \(pub\.isSubscribed\) pub\.setSubscribed\(false\)/);
-  assert.match(room, /videoHidden\(s\.identity/);
+  // (The speaker-pin path that also skipped dropped students was removed with pages.)
   const spots = [...room.matchAll(/<SpotlightFloat\b[\s\S]*?\/>/g)].map((m) => m[0]);
   assert.equal(spots.length, 2, 'student classmate view and the teacher spotlight');
   assert.equal(spots.filter((s) => s.includes('hidden={')).length, 1);

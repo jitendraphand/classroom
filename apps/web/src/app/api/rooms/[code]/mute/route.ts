@@ -5,7 +5,7 @@ import { getTeacherSession } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
 import { ensureRedis, keys } from '@/lib/redis';
 import { setManyParticipantMics } from '@/lib/livekit';
-import { clearPinnedSpeakers, getVisibleSample } from '@/lib/sample';
+import { getVisibleSample } from '@/lib/sample';
 import { getSchoolSettings } from '@/lib/schoolSettings';
 import { updateMicBook } from '@/lib/micBook';
 import { isStudentCamOn } from '@/lib/studentCamera';
@@ -69,7 +69,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
       const { visible } = await getVisibleSample(code);
       const inSample = new Set(visible);
       await setManyParticipantMics(code, identities, false, (identity) => inSample.has(identity));
-      await clearPinnedSpeakers(code);
       pushMuteState(room.code, room.sessionId, identities, true);
       nudgeRoomState(room.code, 'all');
       return jsonOk({ ok: true, all: true, muted: true, count: ids.length, waiting: 0 });

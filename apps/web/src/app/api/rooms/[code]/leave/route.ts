@@ -3,7 +3,7 @@ import { nudgeRoomState } from '@/lib/roomNudge';
 import { getStudentParticipant, clearStudentCookie, getTeacherSession } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
 import { ensureRedis, keys } from '@/lib/redis';
-import { rotateVisibleSample, unpinSpeaker } from '@/lib/sample';
+import { rotateVisibleSample } from '@/lib/sample';
 import { livekitRoomName, removeLiveKitParticipant } from '@/lib/livekit';
 import { z } from 'zod';
 import { closeParticipantAttendance } from '@/lib/attendanceService';
@@ -89,10 +89,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
   if (target.role === 'STUDENT') {
     // Mic limit: free their slot (or queue place); the next approved waiter gets it.
     await releaseMicSlot(room, target.id, { mute: true }).catch((e) => console.error('mic slot leave', e));
-    // Frees the departing student's speaker pin along with their slot. Only a
-    // student who held a video slot needs a re-sample (2,000 students leaving
-    // at the bell used to re-read the whole roster 2,000 times).
-    await unpinSpeaker(code, target.livekitIdentity);
+    // Only a student who held a video slot needs a re-page (2,000 students
+    // leaving at the bell used to re-read the whole roster 2,000 times).
     if (wasVisible) await rotateVisibleSample(code);
   }
 

@@ -48,10 +48,8 @@ export const keys = {
   desktopInk: (code: string) => `room:${code}:desktop-ink`,
   /** '0' while the teacher's student-video panel is minimized/closed (cameras on demand). */
   videoPanel: (code: string) => `room:${code}:video-panel`,
-  /** Hash identity → pinnedAt ms for active-speaker pins */
+  /** Legacy (speaker pins, removed 2026-11-26): only cleared when a room reopens. */
   pinnedSpeakers: (code: string) => `room:${code}:pinned-speakers`,
-  /** Per-identity pin rate limit */
-  pinRate: (code: string, identity: string) => `room:${code}:pin-rate:${identity}`,
   /** Short-lived mutex so only one client rotates the visible sample */
   rotateLock: (code: string) => `room:${code}:rotate-lock`,
   /** Hash participant id → JSON focus status (fullscreen / left / away / unsupported) */

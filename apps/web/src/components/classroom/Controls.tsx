@@ -48,7 +48,7 @@ type Props = {
   onLeave: () => void;
   isTeacher?: boolean;
   onEnd?: () => void;
-  onRotateSample?: () => void;
+  onNextVideoPage?: () => void;
   /** Teacher: mute every student (no "allow all to unmute": unmute is per student, Nov 25). */
   onMuteAll?: () => void;
   canPublishVideo: boolean;
@@ -118,7 +118,7 @@ export function Controls({
   onLeave,
   isTeacher,
   onEnd,
-  onRotateSample,
+  onNextVideoPage,
   onMuteAll,
   canPublishVideo: _canPublishVideo,
   mutedByTeacher,
@@ -375,9 +375,9 @@ export function Controls({
           </Tool>
         )}
 
-        {isTeacher && onRotateSample && !isFloat && (
+        {isTeacher && onNextVideoPage && !isFloat && (
           <Tool caption="Next videos" show={captions} wide={wide}>
-          <IconButton label="Next page of student videos" onClick={onRotateSample}>
+          <IconButton label="Next page of student videos" onClick={onNextVideoPage}>
             <IconRotate />
           </IconButton>
           </Tool>
