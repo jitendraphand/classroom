@@ -5,7 +5,7 @@ import { prisma } from '@/lib/db';
 import { getAdminSession, resolveRoomAccess } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
 import { studentActionLimited } from '@/lib/rateLimit';
-import { ensureRedis, keys } from '@/lib/redis';
+import { ensureRedis } from '@/lib/redis';
 import { cleanPoints, isDrawColor, validStrokeId } from '@/lib/drawLogic';
 import {
   DrawError,
@@ -54,11 +54,16 @@ async function loadRoom(code: string) {
 }
 
 /** Screen share or whiteboard on (students may draw on either). */
-async function sharing(code: string) {
-  const r = await ensureRedis();
-  const [stage, wb] = await Promise.all([r.get(keys.stage(code)), r.get(wbKey(code))]);
-  return stage === 'screen' || wb === '1';
+/**
+ * Students draw only on the whiteboard (Nov 26): drawing on a screen share
+ * (and the teacher's annotation of it) was removed, so a request, an allow
+ * and stroke points all need the whiteboard to be open.
+ */
+async function whiteboardOpen(code: string) {
+  return (await (await ensureRedis()).get(wbKey(code))) === '1';
 }
+
+const DRAW_WHITEBOARD_ONLY = 'Students can draw on the whiteboard only.';
 
 function wantsStudent(req: Request) {
   return new URL(req.url).searchParams.get('as') === 'student' || req.headers.get('x-classroom-as') === 'student';
@@ -114,7 +119,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
         return jsonOk({ ok: true });
       }
       if (!body.participantId) return jsonError('participantId required');
-      if (!(await sharing(code))) return jsonError('Share your screen first: students draw on the shared screen.', 409);
+      if (!(await whiteboardOpen(code))) return jsonError(DRAW_WHITEBOARD_ONLY, 409);
       const p = await prisma.participant.findFirst({
         where: { id: body.participantId, roomId: room.id, role: 'STUDENT', status: 'ADMITTED' },
         select: { id: true, livekitIdentity: true, displayName: true },
@@ -132,7 +137,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
       if (await studentActionLimited('drawRequest', me.id)) {
         return jsonError('Too many requests. Wait a moment and try again.', 429);
       }
-      if (body.action === 'request' && !(await sharing(code))) return jsonError('You can ask to draw while your teacher shares the screen.', 409);
+      if (body.action === 'request' && !(await whiteboardOpen(code))) return jsonError(DRAW_WHITEBOARD_ONLY, 409);
       await setDrawRequest(code, me.id, body.action === 'request');
       return jsonOk({ ok: true });
     }
@@ -149,8 +154,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
       await deleteOwnStroke(code, holder.identity, body.id);
       return jsonOk({ ok: true });
     }
-    // pts
-    if (!(await sharing(code))) return jsonError('The share stopped', 409);
+    // pts: strokes on a screen share were removed (the whiteboard has its own ops).
+    if (!(await whiteboardOpen(code))) return jsonError(DRAW_WHITEBOARD_ONLY, 409);
     const pts = cleanPoints(body.pts);
     if (!validStrokeId(body.id) || !pts || !isDrawColor(body.color)) return jsonError('Bad stroke');
     // Always relayed by the server: students hold no LiveKit data grant, and

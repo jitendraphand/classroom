@@ -19,7 +19,6 @@ import {
 } from '@/lib/classEnded';
 import { distinctConnectedStudents } from '@/lib/connectedStudents';
 import { freshTakeovers, takeoverToastText } from '@/lib/deviceTakeover';
-import { drawPadLabel } from '@/lib/drawLogic';
 import { useMicDuck } from './useMicDuck';
 import { CLASS_FINISHED_EVENT } from '@/lib/classFinishEvent';
 import dynamic from 'next/dynamic';
@@ -64,8 +63,7 @@ import { compactViewport, studentChatBox, usePseudoFullscreen, useViewport } fro
 import { compactPersonLabel } from '@/lib/displayNames';
 import { Controls } from './Controls';
 import { LocalPreview } from './LocalPreview';
-import { DrawOverlay, ShareDrawingProvider, useDrawingActions, useShareDrawing } from './ShareDrawing';
-import { TeacherInkOverlay, TeacherInkProvider, useTeacherInk } from './TeacherInk';
+import { useDrawingActions } from './drawActions';
 import { WhiteboardMeetingBar } from './MeetingBar';
 import { MEETING_BAR_PX, SHARE_POSITION_NOTICE_KEY, inlineShareDockHint, sharePositionNoticeOpen } from '@/lib/shareChrome';
 import { ZoomPanSurface } from './ZoomPanSurface';
@@ -83,7 +81,7 @@ import { countFocusAlerts, focusLabel, fullscreenGate, fullscreenGateText, isFoc
 import { FloatingPanel } from './FloatingPanel';
 import { WB_TOOL_CLEAR_PX, shareControlsPlacement, showLocalSharePreview } from '@/lib/floatGeometry';
 import { isRosterDropped, selectTeacherVideos, videoHidden } from '@/lib/droppedVideos';
-import { candidateScreens, surfaceFromTrack, windowPositionsTrusted } from '@/lib/screenMask';
+import { candidateScreens, classTabOnCapturedScreen, surfaceFromTrack, windowPositionsTrusted } from '@/lib/screenMask';
 import { maskPipelineSupported, resolveScreenGeometry, startMaskPipeline, type MaskPipeline } from '@/lib/screenMaskPipeline';
 import {
   InlineShareDock,
@@ -398,62 +396,9 @@ export type EntireShareInfo = {
   /** Share controls (hands, chat, roster) are docked in this tab, not floating on the screen. */
   controlsInTab: boolean;
   hands: number;
+  /** Chrome/Edge: students see a frozen picture of the screen while this tab is in front. */
+  freeze?: boolean;
 };
-
-/**
- * Entire-screen share: the teacher's own picture cannot be shown here (it
- * would be captured again), so students' strokes are previewed on a dark box
- * of the screen's shape instead.
- */
-function EntireShareDrawingPreview() {
-  const d = useShareDrawing();
-  const ink = useTeacherInk();
-  const { localParticipant } = useLocalParticipant();
-  const capture = localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track?.mediaStreamTrack.getSettings();
-  const aspect = capture?.width && capture?.height ? capture.width / capture.height : 16 / 9;
-  if (!d || !ink) return null;
-  const showSurface = ink.annotating || ink.strokes.length > 0 || d.strokes.length > 0 || !!d.holder;
-  return (
-    <div className="mt-3 text-left">
-      <Button size="sm" variant="secondary" onClick={() => ink.setAnnotating(!ink.annotating)} aria-pressed={ink.annotating}>
-        <IconPen size={12} /> {ink.annotating ? 'Stop annotating' : 'Annotate entire-screen share'}
-      </Button>
-      {showSurface && <>
-      <p className="mb-1 mt-2 text-2xs text-slate-300">
-        Draw here to place marks over the shared screen. Use the same annotation tools in Share controls. This pad does not preview your desktop.
-      </p>
-      <p className="mb-1 inline-flex items-center gap-1 text-2xs font-semibold text-slate-300">
-        <IconPen size={12} />
-        {drawPadLabel(d.holder?.name)} (what students see over your screen)
-      </p>
-      <div className="draw-preview" style={{ aspectRatio: String(aspect) }}>
-        <DrawOverlay aspect={aspect} interactive={false} />
-        <TeacherInkOverlay interactive />
-      </div>
-      </>}
-      <div className="relative z-10 mt-2 flex flex-wrap justify-center gap-2" data-testid="share-draw-actions">
-        {d.strokes.length > 0 && (
-          <button
-            type="button"
-            className="rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-2xs font-semibold text-slate-100 hover:bg-white/10"
-            onClick={() => void d.post({ action: 'clear' })}
-          >
-            Clear drawing
-          </button>
-        )}
-        {d.holder && (
-          <button
-            type="button"
-            className="rounded-lg border border-red-400/30 bg-red-500/10 px-2.5 py-1 text-2xs font-semibold text-red-200 hover:bg-red-500/20"
-            onClick={() => void d.post({ action: 'revoke' })}
-          >
-            Revoke {d.holder.name.includes(', ') ? 'all' : d.holder.name}
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
 
 function EntireScreenShareCard({ onStop, info }: { onStop?: () => void; info?: EntireShareInfo }) {
   const controlsInTab = info?.controlsInTab ?? true;
@@ -471,6 +416,14 @@ function EntireScreenShareCard({ onStop, info }: { onStop?: () => void; info?: E
         <p className="mt-1.5 text-xs leading-relaxed text-slate-400">
           Students see your screen live. Your own preview is hidden here so it is not captured again.
         </p>
+        <p
+          className={cn('mt-2 rounded-lg px-3 py-2 text-xs font-semibold leading-relaxed', info?.freeze ? 'bg-sky-500/15 text-sky-100' : 'bg-amber-500/15 text-amber-100')}
+          data-testid="share-freeze-note"
+        >
+          {info?.freeze
+            ? 'While you are in this tab, students see the last picture of your screen, paused. It goes live again as soon as you switch back to what you are sharing.'
+            : 'Students can see this tab while it is on the shared screen. Switch back quickly, or keep this tab on another monitor. (Chrome and Edge pause the picture for students instead.)'}
+        </p>
         <p className="mt-2 text-xs leading-relaxed text-slate-400">
           {controlsInTab
             ? 'Raised hands, chat and the roster are in Share controls in this tab. Keep this tab where you can reach it (beside your slides or on a second monitor) instead of minimising it; the tab title shows new hands and messages.'
@@ -482,7 +435,6 @@ function EntireScreenShareCard({ onStop, info }: { onStop?: () => void; info?: E
             {hands} raised {hands === 1 ? 'hand' : 'hands'}
           </p>
         )}
-        <EntireShareDrawingPreview />
         {onStop && (
           <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
             <Button variant="danger" size="sm" onClick={onStop}>
@@ -508,9 +460,6 @@ function TeacherShareTile({ trackRef }: { trackRef: ReturnType<typeof useTracks>
             No screen
           </div>
         )}
-        {/* What students draw, over the teacher's in-page preview (never on the real desktop). */}
-        <DrawOverlay interactive={false} />
-        <TeacherInkOverlay interactive={t.participant.isLocal} />
       </div>
       <div className="pointer-events-none absolute bottom-2 left-2 z-20 flex items-center gap-2 rounded-lg bg-black/65 px-2.5 py-1 text-xs backdrop-blur">
         <Avatar
@@ -561,9 +510,6 @@ export function TeacherScreenStage({ teacherIdentities, zoomable = false, drawin
                 ) : (
                   <div className="flex h-full items-center justify-center text-slate-400">No screen</div>
                 )}
-                {/* Students' drawing (and the allowed student's drawing surface). */}
-                <DrawOverlay />
-                <TeacherInkOverlay interactive={false} />
               </div>
             );
             // Students: local pinch / wheel zoom (one finger draws while drawing is allowed).
@@ -1020,6 +966,8 @@ function RoomInner({
   // B1: duck the mic while the share's computer sound is loud (speaker bleed).
   useMicDuck(isTeacher, localParticipant, () => screenAudioRef.current?.track ?? null, (t) => setHudNotice(t));
   const [maskActive, setMaskActive] = useState(false);
+  /** Entire-screen share on Chrome/Edge: students see a frozen picture while this tab is in front. */
+  const [shareFreeze, setShareFreeze] = useState(false);
   const [maskFallback, setMaskFallback] = useState<MaskFallback>('');
   /** One-time Wayland position note. The yellow strip under the pill is not used. */
   const [positionToast, setPositionToast] = useState(false);
@@ -1352,6 +1300,7 @@ function RoomInner({
       safeStop(screenAudio.track);
     }
     setMaskActive(false);
+    setShareFreeze(false);
     setMaskFallback('');
   }, []);
 
@@ -1833,9 +1782,23 @@ function RoomInner({
       // anything is published.
       const early = await controlsPromise.catch(() => null);
       let fallback: MaskFallback = '';
+      // Freeze (Chrome/Edge): while the classroom tab is in front and focused
+      // on the captured screen, students keep the last picture of the screen
+      // instead of seeing the classroom page (lib/screenMask classTabOnCapturedScreen).
+      const shareScreens = maskPipelineSupported() ? await resolveScreenGeometry() : null;
+      const shouldFreeze = () => {
+        if (typeof document === 'undefined' || document.visibilityState !== 'visible' || !document.hasFocus()) return false;
+        const { width = 0, height = 0 } = media.getSettings();
+        return classTabOnCapturedScreen({
+          isExtended: (window.screen as Screen & { isExtended?: boolean }).isExtended,
+          screens: shareScreens,
+          tabCenter: { x: window.screenX + window.outerWidth / 2, y: window.screenY + window.outerHeight / 2 },
+          frame: { width, height },
+        });
+      };
       if (early) {
         const { width: fw, height: fh } = media.getSettings();
-        const screens = maskPipelineSupported() ? await resolveScreenGeometry() : null;
+        const screens = shareScreens;
         let pipPos = { x: 0, y: 0 };
         try {
           pipPos = { x: early.window.screenX, y: early.window.screenY };
@@ -1859,6 +1822,7 @@ function RoomInner({
             // The toolbar plus any chat / roster / video side windows.
             getWindows: () => [maskWindowRef.current, ...sideWindows()],
             screens,
+            frozen: shouldFreeze,
             onUnsafe: (win) => {
               // Frame already blacked out. A side window whose position can no
               // longer be read is closed on its own; the toolbar takes
@@ -1876,7 +1840,15 @@ function RoomInner({
           if (!mask) fallback = 'unsupported';
         }
       }
-      if (mask) {
+      // No floating controls to hide, but the freeze still needs the frame
+      // pipeline (Chrome/Edge). Firefox / Safari publish the raw capture.
+      let freezeOnly = false;
+      if (!mask && maskPipelineSupported()) {
+        mask = startMaskPipeline(media, { getWindows: () => [], screens: [], onUnsafe: () => undefined, frozen: shouldFreeze });
+        freezeOnly = !!mask;
+      }
+      setShareFreeze(!!mask);
+      if (mask && !freezeOnly) {
         maskRef.current = mask;
         setMaskActive(true);
         controlsReady = Promise.resolve(early);
@@ -1886,6 +1858,10 @@ function RoomInner({
         early?.close();
         controlsReady = Promise.resolve(null);
         setMaskFallback(fallback || 'unsupported');
+        if (mask) {
+          maskRef.current = mask;
+          await mask.ready;
+        }
       }
     }
 
@@ -1951,6 +1927,8 @@ function RoomInner({
       maskWindowRef.current = null;
       rawShareRef.current = null;
       setMaskActive(false);
+      setShareFreeze(false);
+    setShareFreeze(false);
       const controls = await controlsReady.catch(() => null);
       controls?.close();
       shareSurfaceRef.current = '';
@@ -2525,18 +2503,11 @@ function RoomInner({
     () => new Set((state?.admitted ?? []).filter((p) => p.role === 'STUDENT' && p.mutedByTeacher).map((p) => p.id)),
     [state?.admitted]
   );
-  // —— Student drawing on the shared screen (ShareDrawing.tsx, lib/drawLogic.ts) ——
+  // —— Student drawing permission: whiteboard only (drawActions.ts, lib/drawLogic.ts) ——
   const drawActions = useDrawingActions(code);
-  const drawHolders = state?.drawHolders ?? (state?.drawHolder ? [state.drawHolder] : []);
-  const drawHolderNames = drawHolders.map((h) => h.name);
-  // Teacher views label every drawer; a student keeps their own allow (timer).
-  const drawHolder =
-    isTeacher && drawHolders.length > 1 && drawHolders[0]
-      ? { ...drawHolders[0], name: drawHolderNames.join(', ') }
-      : (state?.drawHolder ?? null);
-  const sharingNow = isTeacher
-    ? screenOn || stageMode === 'screen' || wbOpen
-    : effectiveStage === 'screen' || !!state?.whiteboard;
+  // Students may ask to draw on the whiteboard only (drawing on a screen
+  // share was removed, Nov 26; the server refuses it too).
+  const sharingNow = isTeacher ? wbOpen : !!state?.whiteboard;
   const [drawOverride, setDrawOverride] = useState<'off' | 'requested' | 'drawing' | null>(null);
   const serverDrawState: 'off' | 'requested' | 'drawing' = state?.me?.canDraw
     ? 'drawing'
@@ -2584,10 +2555,6 @@ function RoomInner({
     const err = await drawActions.revoke(participantId);
     if (err) setHudNotice(err);
     refresh();
-  }
-  async function clearDrawing() {
-    const err = await drawActions.clear();
-    if (err) setHudNotice(err);
   }
   // Teacher: a toast for each new request to draw (in this tab and in share controls).
   const drawRequesters = useMemo(
@@ -2744,23 +2711,7 @@ function RoomInner({
     dataSaver: isTeacher ? undefined : dataSaver,
     onCycleDataSaver: isTeacher ? undefined : () => setDataSaver(nextDataSaver(dataSaver)),
   };
-  const withDrawing = (node: ReactNode) => (
-    <ShareDrawingProvider
-      code={code}
-      active={isTeacher ? screenOn || stageMode === 'screen' : effectiveStage === 'screen' && !state?.whiteboard}
-      holder={drawHolder}
-      myIdentity={state?.me?.livekitIdentity ?? localParticipant.identity}
-      canDraw={!isTeacher && myDrawState === 'drawing' && !!state?.me?.canDraw}
-      desktopInk={!!state?.desktopInk}
-    >
-      <TeacherInkProvider
-        active={isTeacher ? screenOn : effectiveStage === 'screen' && !state?.whiteboard}
-        publish={isTeacher}
-      >
-        {node}
-      </TeacherInkProvider>
-    </ShareDrawingProvider>
-  );
+  const withDrawing = (node: ReactNode) => node;
 
   // —— Student path: always fullscreen stage + floating teacher cam + float chrome ——
   if (!isTeacher) {
@@ -3096,11 +3047,6 @@ function RoomInner({
             onMuteAll={() => void muteAllStudents()}
             onLowerHand={(id) => void lowerHand(id)}
             onTogglePin={(id, on) => void togglePin(id, on)}
-            drawHolderName={drawHolder?.name ?? null}
-            onAllowDraw={(id) => void allowDrawing(id)}
-            onRevokeDraw={(id) => void revokeDrawing(id)}
-            onClearDrawing={() => void clearDrawing()}
-            drawPreview={sideWindowsAllowed && !!shareMount ? 'video' : 'strokes'}
             chatUnread={chatUnread}
             onChatOpenChange={setHudChatOpen}
             chat={
@@ -3117,6 +3063,7 @@ function RoomInner({
             }
             notice={hudNotice || undefined}
             toolbarTitle={maskFallback === 'position' ? MONITOR_POSITION_HINT : undefined}
+            mini={maskActive}
             {...over}
           />
   );
@@ -3468,6 +3415,7 @@ function RoomInner({
                 }}
                 onOpenWhiteboard={isTeacher ? controlsProps.onToggleWhiteboard : undefined}
                 entireShareInfo={{
+                  freeze: shareFreeze,
                   controlsInTab: !shareMount,
                   hands: raisedHands.length,
                 }}

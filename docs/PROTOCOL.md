@@ -53,8 +53,7 @@ Every packet is UTF-8 JSON with `v: 1`.
 | `chat` | server; teacher (`senderRole: TEACHER`) | stored chat message (scope everyone / private) | `lib/realtimePackets.ts` |
 | `cls-signal` | server | `hand` `{raised, participantId}`, `draw-req` `{on, participantId}`, `draw-allow` `{on, participantId, identity, name, until}` | `lib/realtimePackets.ts` |
 | `cls-state` | server | `state` `{spread}` (refetch `/state` within `spread` ms), `mute` `{muted}` (to the named students) | `lib/roomNudge.ts`, `lib/pollPolicy.ts` |
-| `draw` | server | student drawing on the shared screen: `pts` `{id, by, name, c, from, pts}`, `del`, `clear` | `lib/drawLogic.ts` |
-| `tink` | teacher | teacher marks on the shared picture: `up` `{stroke}`, `del` `{id}`, `clear`, `snap` `{strokes}` (coordinates 0..1 of the video box) | `lib/teacherInk.ts` |
+| `draw` | server | legacy stroke relay (`pts`, `del`, `clear`); since Nov 2026 `/draw` accepts strokes only while the whiteboard is open and no client draws them on a screen share | `lib/drawLogic.ts` |
 | `cls-snap` | server | `{v: 1, ver}`: a new slide snapshot exists (`ver` = its version, `0` = cleared); audio-only students then `GET /snapshot` | `lib/slideSnapshot.ts` |
 
 HTTP polls are a safety net only: while LiveKit is connected the teacher

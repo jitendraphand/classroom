@@ -196,10 +196,11 @@ teacher's video until the student is back; audio keeps playing.
   grade/division dropdown (timetable slots and one-off changes, teacher
   assignments, attendance and student filters, the teacher's ad-hoc start, and
   roster import validation). See **[docs/GRADES_DIVISIONS.md](docs/GRADES_DIVISIONS.md)**.
-- **Student drawing on the shared screen**: a student taps the pen ("Request to
-  draw"), the teacher Allows/Revokes in the roster (in-page or Share controls);
-  one student at a time, 3 minutes max, freehand strokes in red/yellow/blue are
-  shown to everyone with the drawer's name. **One student layout** on every
+- **Student drawing on the whiteboard**: a student taps the pen ("Request to
+  draw on the whiteboard"), the teacher Allows/Revokes in the roster. Only
+  while the whiteboard is open (Nov 2026): drawing and annotation on a screen
+  share (tab, window or entire screen) were removed for teacher and students,
+  and `/draw` answers 409 to a request or stroke during a share. **One student layout** on every
   device/OS/browser (right-side control panel, floating teacher video, floating
   chat). See **[docs/STUDENT_DRAWING_AND_LAYOUT.md](docs/STUDENT_DRAWING_AND_LAYOUT.md)**.
 - **Absent is only known for known students**: a student exists in the system

@@ -153,10 +153,9 @@ test('admin students search matches name or student ID case-insensitively', () =
   assert.match(page, /Search name or student ID/);
 });
 
-test('share/draw: request banner clears when the student is allowed; in-tab dock is top-left', () => {
+test('draw request banner clears when the student is allowed; in-tab dock is top-left', () => {
   const room = classroomViewSource();
   assert.match(room, /stillAsking/);
-  assert.match(room, /share-draw-actions/);
   const hud = src('components/classroom/TeacherShareHud.tsx');
   assert.match(hud, /share_controls_v2/);
   assert.match(hud, /data-testid="share-inline-dock"/);

@@ -15,9 +15,6 @@ import { floatInsets, useFloatDrag, type FloatPos } from './FloatingPanel';
 import { whiteboardShareDockPos } from '@/lib/floatGeometry';
 import { focusLabel } from '@/lib/focusStatus';
 import { controlUrl, copyParentStyles, mountIn, waitForWindow } from './shareWindowDom';
-import { DrawOverlay, useShareDrawing } from './ShareDrawing';
-import { AnnotateTools } from './AnnotateTools';
-import { useTeacherInk } from './TeacherInk';
 import {
   BADGE_AMBER,
   BADGE_TEXT,
@@ -26,11 +23,11 @@ import {
   admitLabel,
   badgeText,
   shareToolbarIds,
+  shareToolbarMiniIds,
   shareToolbarSeparators,
+  type ShareMiniId,
   type ShareToolbarId,
 } from '@/lib/shareChrome';
-import { useTracks, VideoTrack, type TrackReference } from '@livekit/components-react';
-import { Track } from 'livekit-client';
 
 /**
  * Teacher share controls.
@@ -51,7 +48,7 @@ import { Track } from 'livekit-client';
  * (`InlineShareDock`).
  *
  * Both are one horizontal pill: grip, Live, mic, camera, videos, then chat,
- * hands, roster, admit, annotate, and Stop. Eco and computer-sound are not
+ * hands, roster, admit, and Stop. Eco and computer-sound are not
  * on this bar (no teacher control for them in the browser).
  */
 
@@ -103,17 +100,9 @@ export type TeacherShareHudProps = {
   onLowerHand: (participantId: string) => void;
   /** Pin / unpin a student's video in the class panel. */
   onTogglePin?: (participantId: string, pinned: boolean) => void;
-  /** Student drawing on the share: who draws now, and the teacher's actions. */
-  drawHolderName?: string | null;
+  /** Student drawing (whiteboard only; never offered during a screen share). */
   onAllowDraw?: (participantId: string) => void;
   onRevokeDraw?: (participantId?: string) => void;
-  onClearDrawing?: () => void;
-  /**
-   * Drawing preview in the roster: `video` = the shared picture with the
-   * strokes (this window is not captured, or is masked); `strokes` = strokes on
-   * a dark box (a picture here would be captured again).
-   */
-  drawPreview?: 'video' | 'strokes';
   chatUnread: number;
   chat?: ReactNode;
   onChatOpenChange?: (open: boolean) => void;
@@ -153,6 +142,11 @@ export type TeacherShareHudProps = {
   onEndClass?: () => void;
   /** Tooltip on the pill itself (for example why controls stayed in this tab). */
   toolbarTitle?: string;
+  /**
+   * Entire-screen share with the controls floating on the shared screen
+   * (blacked out for students): a mini toolbar so the black patch stays small.
+   */
+  mini?: boolean;
 };
 
 type Panel = 'chat' | 'hands' | 'roster' | null;
@@ -387,11 +381,8 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     onMuteStudent,
     onMuteAll,
     onLowerHand,
-    drawHolderName,
     onAllowDraw,
     onRevokeDraw,
-    onClearDrawing,
-    drawPreview = 'strokes',
     onTogglePin,
     chatUnread,
     chat,
@@ -408,10 +399,10 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     videosOpen = false,
     onToggleVideos,
     toolbarTitle,
+    mini = false,
   } = props;
+  const [miniExpanded, setMiniExpanded] = useState(false);
   useSideWindows();
-  const ink = useTeacherInk();
-  const annotateOn = !!ink?.annotating;
   const chatWin = sideWindowsAllowed ? sideWindow('chat') : null;
   const rosterWin = sideWindowsAllowed ? sideWindow('roster') : null;
   const [sideNotice, setSideNotice] = useState('');
@@ -484,19 +475,10 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
       }
       // Just the row of controls (plus the in-toolbar panel only in the
       // fallback, when separate windows are not available): no empty band.
-      // Annotate tools are position:fixed, so they do not grow scrollHeight;
-      // the window is opened tall enough to hold the flyout bar.
-      const inPanel = !!panel || annotateOn;
+      const inPanel = !!panel;
       const contentW = inPanel ? Math.max(barW, root.scrollWidth) : barW;
       const contentH = inPanel || notice || sideNotice ? root.scrollHeight : barH || root.scrollHeight;
-      let size = toolbarInnerSize({ w: contentW, h: contentH }, { panel: inPanel || !!notice || !!sideNotice });
-      if (annotateOn) {
-        const verticalTools = ink?.orient === 'vertical';
-        size = {
-          w: Math.max(size.w, verticalTools ? 420 : 720),
-          h: Math.max(size.h, verticalTools ? 520 : 320),
-        };
-      }
+      const size = toolbarInnerSize({ w: contentW, h: contentH }, { panel: inPanel || !!notice || !!sideNotice });
       if (bar) bar.style.maxWidth = contentW > 980 ? '978px' : '';
       if (Math.abs(win.innerWidth - size.w) <= 1 && Math.abs(win.innerHeight - size.h) <= 1) return;
       const extraW = win.innerWidth > 0 ? Math.max(0, win.outerWidth - win.innerWidth) : 0;
@@ -520,7 +502,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
       win.removeEventListener('resize', applyZoom);
       win.document.removeEventListener('pointerdown', onPointer, true);
     };
-  }, [hostWindow, panel, videoMode, waitingCount, notice, sideNotice, annotateOn, ink?.orient]);
+  }, [hostWindow, panel, videoMode, waitingCount, notice, sideNotice, mini, miniExpanded]);
 
   // Raised hands first (earliest raise first), then by name.
   const students = useMemo(() => sortRoster(admitted.filter((a) => a.role === 'STUDENT')), [admitted]);
@@ -578,12 +560,6 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
 
   const rosterBody = (
           <div className="tsh-scroll">
-            <HudDrawing
-              holderName={drawHolderName ?? null}
-              preview={drawPreview}
-              onRevoke={onRevokeDraw}
-              onClear={onClearDrawing}
-            />
             <input
               type="search"
               className="tsh-search"
@@ -744,15 +720,35 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
   const toolbarIds = shareToolbarIds({
     video: !!onVideoModeChange,
     videos: !!onToggleVideos,
-    annotate: true,
   });
-  const sepBefore = new Set(shareToolbarSeparators(toolbarIds).map((s) => s.before));
+  const miniMode = mini && !inline;
+  const shownIds: Array<ShareToolbarId | ShareMiniId> = miniMode
+    ? miniExpanded
+      ? [...toolbarIds.filter((id) => id !== 'stop' && id !== 'grip'), 'more', 'stop']
+      : shareToolbarMiniIds({ waiting: waiting.length })
+    : toolbarIds;
+  const sepBefore = new Set<string>(miniMode ? [] : shareToolbarSeparators(toolbarIds).map((s) => s.before));
   const drawAsk = students.filter((s) => s.drawRequested && !s.drawing).length;
   const chatShown = panel === 'chat' || !!chatWin;
   const rosterShown = panel === 'roster' || !!rosterWin;
   const admitText = admitLabel(waiting.length, waiting[0]?.displayName);
-  const shareControl = (id: ShareToolbarId): ReactNode => {
+  const shareControl = (id: ShareToolbarId | ShareMiniId): ReactNode => {
     switch (id) {
+      case 'more':
+        return (
+          <button
+            type="button"
+            className="tsh-btn"
+            data-mini-toggle
+            data-testid="hud-more"
+            aria-expanded={miniExpanded}
+            onClick={() => setMiniExpanded((v) => !v)}
+            aria-label={miniExpanded ? 'Fewer controls' : 'More controls'}
+            title={miniExpanded ? 'Fewer controls (smaller black box for students)' : 'More controls'}
+          >
+            {miniExpanded ? '‹' : '⋯'}
+          </button>
+        );
       case 'grip':
         return (
           <span className="tsh-grip" title="Drag" aria-hidden>
@@ -888,23 +884,6 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
             <IconUserPlus size={14} />
           </button>
         );
-      case 'annotate':
-        return (
-          <button
-            type="button"
-            className="tsh-btn"
-            aria-pressed={annotateOn}
-            onClick={() => ink?.setAnnotating(!annotateOn)}
-            aria-label={annotateOn ? 'Stop annotating' : 'Annotate'}
-            title={
-              annotateOn
-                ? 'Stop annotating (removes your marks)'
-                : 'Annotate the shared picture. Students see the marks.'
-            }
-          >
-            <IconPen size={14} />
-          </button>
-        );
       case 'stop':
         return (
           <button
@@ -916,7 +895,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
             aria-label={props.stopLabel ?? 'Stop sharing screen'}
           >
             <IconScreen size={14} />
-            Stop
+            {miniMode ? null : 'Stop'}
           </button>
         );
       default:
@@ -927,7 +906,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
   const tree = (
     <div
       ref={rootRef}
-      className={props.vertical ? 'tsh tsh-inline tsh-vertical' : inline ? 'tsh tsh-inline' : !panel && !notice && !sideNotice && !annotateOn ? 'tsh tsh-fill' : 'tsh'}
+      className={props.vertical ? 'tsh tsh-inline tsh-vertical' : inline ? 'tsh tsh-inline' : !panel && !notice && !sideNotice ? 'tsh tsh-fill' : 'tsh'}
       role="region"
       aria-label="Share controls"
     >
@@ -935,8 +914,22 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
       <div className="tsh-sr" aria-live="polite">
         {waitingLabel}
       </div>
-      <div className="tsh-bar" role="toolbar" aria-label="Share tools" data-testid="share-toolbar" title={toolbarTitle}>
-        {toolbarIds.map((id) => (
+      <div
+        className="tsh-bar"
+        role="toolbar"
+        aria-label="Share tools"
+        data-testid="share-toolbar"
+        data-mini={miniMode ? (miniExpanded ? 'expanded' : 'mini') : undefined}
+        title={toolbarTitle}
+        onClickCapture={(e) => {
+          // Expanded mini row: a button acts and the row folds back in the
+          // same click, while the window may still be resized.
+          if (!miniMode || !miniExpanded) return;
+          const btn = (e.target as HTMLElement).closest('button');
+          if (btn && !btn.hasAttribute('data-mini-toggle')) setMiniExpanded(false);
+        }}
+      >
+        {shownIds.map((id) => (
           <Fragment key={id}>
             {sepBefore.has(id) ? <span className="tsh-sep" aria-hidden /> : null}
             {shareControl(id)}
@@ -1001,13 +994,6 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
         </div>
       )}
 
-      <AnnotateTools
-        requests={students.filter((s) => s.drawRequested && !s.drawing).map((s) => ({ id: s.id, displayName: s.displayName }))}
-        drawers={students.filter((s) => !!s.drawing).map((s) => ({ id: s.id, displayName: s.displayName }))}
-        onAllow={onAllowDraw}
-        onDeny={onRevokeDraw}
-        onClearStudents={onClearDrawing}
-      />
       {chatWin && (
         <SideWindowPortal win={chatWin} title="Class chat">
           <div style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: 8, boxSizing: 'border-box' }}>{chat}</div>
@@ -1103,48 +1089,3 @@ export function InlineShareDock({
 }
 
 
-/**
- * Share controls → Roster: what students draw, with Clear / Revoke. The
- * shared picture is shown only where this window is not captured (or masked).
- */
-function HudDrawing({
-  holderName,
-  preview,
-  onRevoke,
-  onClear,
-}: {
-  holderName: string | null;
-  preview: 'video' | 'strokes';
-  onRevoke?: (participantId?: string) => void;
-  onClear?: () => void;
-}) {
-  const d = useShareDrawing();
-  const tracks = useTracks([{ source: Track.Source.ScreenShare, withPlaceholder: false }], { onlySubscribed: false });
-  const mine = tracks.find((t) => t.participant.isLocal && t.publication?.track);
-  if (!d || (!d.strokes.length && !holderName)) return null;
-  const aspect = typeof window !== 'undefined' && window.screen?.height ? window.screen.width / window.screen.height : 16 / 9;
-  return (
-    <div className="tsh-draw" style={{ marginBottom: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-        <span className="tsh-panel-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-          <IconPen size={12} /> {holderName ? `${holderName} ${holderName.includes(', ') ? 'are' : 'is'} drawing` : 'Drawing'}
-        </span>
-        <span style={{ flex: 1 }} />
-        {onClear && d.strokes.length > 0 && (
-          <button type="button" className="tsh-btn" onClick={onClear}>
-            Clear drawing
-          </button>
-        )}
-        {holderName && onRevoke && (
-          <button type="button" className="tsh-btn is-warn" onClick={() => onRevoke()}>
-            Revoke
-          </button>
-        )}
-      </div>
-      <div className="draw-preview" style={{ aspectRatio: preview === 'video' && mine ? undefined : String(aspect) }}>
-        {preview === 'video' && mine ? <VideoTrack trackRef={mine as TrackReference} /> : null}
-        <DrawOverlay aspect={preview === 'video' && mine ? undefined : aspect} interactive={false} />
-      </div>
-    </div>
-  );
-}

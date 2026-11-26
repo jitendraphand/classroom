@@ -1,5 +1,5 @@
 /**
- * Server side of student drawing on the shared screen (see lib/drawLogic.ts
+ * Server side of student drawing permission (whiteboard only since Nov 26; see lib/drawLogic.ts
  * for the overview). Redis holds the requests, the holders (several at once) and the
  * strokes; packets to clients go out as server-originated LiveKit data.
  */

@@ -113,7 +113,7 @@ Rule (`shareControlsPlacement()` in `src/lib/floatGeometry.ts`):
   Same 1080p15 + 720p simulcast publish; driven by capture frames, so it keeps running
   while the classroom tab is in the background.
 - Mapping (`lib/screenMask.ts`, unit-tested): frame px = (window DIP − screen origin) ×
-  frame/screen size, +16 DIP margin, union of the window rects seen in the last 350 ms
+  frame/screen size, +8 DIP margin (16 until Nov 2026), union of the window rects seen in the last 350 ms
   (covers capture lag while dragging). Position is re-read on every frame.
 - Screens: single display (`screen.isExtended === false`) → primary at the origin. Several
   displays → only with the Window Management permission already granted
@@ -128,3 +128,22 @@ Rule (`shareControlsPlacement()` in `src/lib/floatGeometry.ts`):
 - Teacher stage keeps the static card for monitor shares: showing the capture on the
   captured screen recurses regardless of the mask.
 - Annotation (Oct 2026) was removed entirely.
+
+## Entire-screen share: smaller black patch and freeze (Nov 2026)
+
+- **Mini toolbar.** While the floating controls are blacked out (`maskActive`), the
+  HUD shows only Live, Mic, Hands, Chat, Admit (only while someone waits), ⋯ and an
+  icon-only Stop (`shareToolbarMiniIds`). Measured in Chromium: 202 × 36 px against
+  422 × 36 px for the full row (about half the black patch). ⋯ opens the full row;
+  any button there acts and folds the row back in the same click, because Document
+  PiP may only resize during a click (a timer could not shrink it again).
+- **Margin** around the window is 8 DIP instead of 16.
+- **Freeze** (Chrome/Edge, `frozen` option of the mask pipeline): while the class tab
+  is visible, focused and on the captured screen (`classTabOnCapturedScreen`: one
+  display → yes; several displays → only with known geometry), students get the last
+  picture of the screen from at least 250 ms before, re-sent once a second, instead of
+  the classroom page. It holds 300 ms after the teacher leaves the tab, then the live
+  picture resumes. With no earlier picture it sends black. Window and tab shares never
+  freeze. Firefox/Safari cannot process frames: the share card warns that students see
+  the class page while the teacher is in it.
+- Teacher annotation and student drawing on a share are gone (see README).

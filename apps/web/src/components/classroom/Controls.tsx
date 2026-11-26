@@ -289,7 +289,7 @@ export function Controls({
                 ? 'Stop drawing'
                 : drawState === 'requested'
                   ? 'Cancel request to draw'
-                  : 'Request to draw on the screen'
+                  : 'Request to draw on the whiteboard'
             }
             active={drawState !== 'off'}
             onClick={onToggleDraw}

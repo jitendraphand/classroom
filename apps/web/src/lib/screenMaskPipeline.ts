@@ -10,7 +10,16 @@
  * capture's own frames, not timers, so it keeps running while the classroom
  * tab is in the background.
  */
-import { planMask, RectTrail, surfaceFromTrack, type Rect, type ScreenGeom } from './screenMask';
+import {
+  FREEZE_LOOKBACK_MS,
+  FROZEN_RESEND_MS,
+  UNFREEZE_HOLD_MS,
+  planMask,
+  RectTrail,
+  surfaceFromTrack,
+  type Rect,
+  type ScreenGeom,
+} from './screenMask';
 
 type ProcessorCtor = new (init: { track: MediaStreamTrack }) => { readable: ReadableStream<VideoFrame> };
 type GeneratorCtor = new (init: { kind: 'video' }) => MediaStreamTrack & { writable: WritableStream<VideoFrame> };
@@ -83,6 +92,13 @@ export function startMaskPipeline(
     screens: ScreenGeom[];
     /** A window's geometry became unusable: the frame was blacked out; close that window. */
     onUnsafe: (win: Window) => void;
+    /**
+     * Entire-screen freeze: true while the classroom tab is in front on the
+     * captured screen. Students then keep the last picture of the screen
+     * from before the switch (never the classroom page), re-sent about once
+     * a second, until the teacher is back in the shared app.
+     */
+    frozen?: () => boolean;
   }
 ): MaskPipeline | null {
   const c = ctors();
@@ -104,6 +120,75 @@ export function startMaskPipeline(
   });
   const unsafeSent = new WeakSet<Window>();
 
+  // —— Freeze: two recent output frames kept as pictures, one 0–250 ms old and
+  // one 250–500 ms old, so a freeze shows a frame from before the switch.
+  type Slot = { canvas: OffscreenCanvas; ctx: OffscreenCanvasRenderingContext2D; t: number };
+  const slots: Slot[] = [];
+  let frozenSrc: Slot | null = null;
+  let frozenEmitAt = 0;
+  let freezeWantedAt = Number.NEGATIVE_INFINITY;
+  const sample = (f: VideoFrame, now: number) => {
+    const newest = slots.reduce<Slot | null>((a, b) => (!a || b.t > a.t ? b : a), null);
+    if (newest && now - newest.t < FREEZE_LOOKBACK_MS) return;
+    const w = f.displayWidth;
+    const h = f.displayHeight;
+    let slot = slots.length < 2 ? null : slots.reduce((a, b) => (b.t < a.t ? b : a));
+    if (!slot || slot.canvas.width !== w || slot.canvas.height !== h) {
+      const canvas = new OffscreenCanvas(w, h);
+      const c2 = canvas.getContext('2d', { alpha: false }) as OffscreenCanvasRenderingContext2D | null;
+      if (!c2) return;
+      if (slot) slots.splice(slots.indexOf(slot), 1);
+      slot = { canvas, ctx: c2, t: 0 };
+      slots.push(slot);
+    }
+    slot.ctx.drawImage(f, 0, 0, w, h);
+    slot.t = now;
+  };
+  const pickFrozen = (now: number): Slot | null => {
+    const old = slots.filter((s) => now - s.t >= FREEZE_LOOKBACK_MS).sort((a, b) => b.t - a.t)[0];
+    return old ?? slots.slice().sort((a, b) => a.t - b.t)[0] ?? null;
+  };
+  /** Pass a processed frame on, or hold the frozen picture instead. */
+  const emit = (controller: TransformStreamDefaultController<VideoFrame>, f: VideoFrame, surface: string) => {
+    const now = performance.now();
+    const wanted = surface !== 'window' && surface !== 'browser' && !!opts.frozen?.();
+    if (wanted) freezeWantedAt = now;
+    const holding = wanted || (frozenSrc !== null && now - freezeWantedAt < UNFREEZE_HOLD_MS);
+    if (!holding) {
+      frozenSrc = null;
+      try {
+        sample(f, now);
+      } catch {
+        /* a missed sample only makes a later freeze use an older picture */
+      }
+      controller.enqueue(f);
+      return;
+    }
+    if (!frozenSrc) {
+      frozenSrc = pickFrozen(now);
+      frozenEmitAt = 0;
+      if (!frozenSrc) {
+        // Nothing seen yet (frozen from the very first frame): send black,
+        // never the classroom page.
+        const canvas = new OffscreenCanvas(f.displayWidth, f.displayHeight);
+        const c2 = canvas.getContext('2d', { alpha: false }) as OffscreenCanvasRenderingContext2D | null;
+        if (c2) {
+          c2.fillStyle = '#000';
+          c2.fillRect(0, 0, canvas.width, canvas.height);
+          frozenSrc = { canvas, ctx: c2, t: now };
+        }
+      }
+    }
+    if (frozenSrc && now - frozenEmitAt >= FROZEN_RESEND_MS) {
+      frozenEmitAt = now;
+      const out = new VideoFrame(frozenSrc.canvas, { timestamp: f.timestamp });
+      f.close();
+      controller.enqueue(out);
+      return;
+    }
+    f.close();
+  };
+
   const transform = new TransformStream<VideoFrame, VideoFrame>({
     transform(frame, controller) {
       firstFrame();
@@ -122,7 +207,7 @@ export function startMaskPipeline(
       // Window/tab capture (after "Share this instead") or no floating window: pass through.
       if (surface === 'window' || surface === 'browser' || wins.length === 0) {
         trail.clear();
-        controller.enqueue(frame);
+        emit(controller, frame, surface);
         return;
       }
       let rects: Rect[] = [];
@@ -143,7 +228,7 @@ export function startMaskPipeline(
       }
       if (!blackout) rects = trail.push(performance.now(), now);
       if (!blackout && rects.length === 0) {
-        controller.enqueue(frame);
+        emit(controller, frame, surface);
         return;
       }
       try {
@@ -164,7 +249,7 @@ export function startMaskPipeline(
           duration: frame.duration ?? undefined,
         });
         frame.close();
-        controller.enqueue(out);
+        emit(controller, out, surface);
       } catch (e) {
         // Never leak: drop the frame (students keep the previous masked one).
         console.warn('screen mask frame', e);

@@ -51,7 +51,3 @@ test('auto recovery is bounded', () => {
   assert.ok(shouldAutoRecover(Array(AUTO_RECOVER_MAX).fill(now - 120_000), now));
 });
 
-test('render-time stroke updaters cannot throw into the boundary', () => {
-  assert.match(read('../src/components/classroom/ShareDrawing.tsx'), /try \{\s*return applyPacket\(s, p\);\s*\} catch \{\s*return s;/);
-  assert.match(read('../src/components/classroom/TeacherInk.tsx'), /try \{\s*return applyInk\(s, msg\);\s*\} catch \{\s*return s;/);
-});

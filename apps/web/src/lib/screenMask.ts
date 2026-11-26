@@ -16,8 +16,13 @@ export type Rect = { x: number; y: number; w: number; h: number };
 export type ScreenGeom = { left: number; top: number; width: number; height: number };
 export type FrameSize = { width: number; height: number };
 
-/** Extra DIPs blacked out around the window (shadow, title bar, capture lag). */
-export const MASK_MARGIN_DIP = 16;
+/**
+ * Extra DIPs blacked out around the window (rounding, the window border).
+ * 8, not 16 (Nov 26): the black region students see should be as small as
+ * possible; the outer rect already includes the title bar, a moving window
+ * is covered by MASK_TRAIL_MS, and the OS drop shadow is not content.
+ */
+export const MASK_MARGIN_DIP = 8;
 /** Recent window rects stay masked this long, so a fast drag cannot outrun the capture. */
 export const MASK_TRAIL_MS = 350;
 
@@ -165,3 +170,38 @@ export class RectTrail {
     this.items = [];
   }
 }
+
+/**
+ * Entire-screen share freeze (2026-11-26): is the classroom tab on the
+ * captured screen, so that showing it would put the classroom page (names,
+ * chat) into the share? One display: yes. Several: only when the window's
+ * centre is on a screen that can be the captured one (same aspect as the
+ * frame; with two identical monitors both count). Unknown layout (no Window
+ * Management permission): no, so a class page kept on a second monitor never
+ * freezes the share.
+ */
+export function classTabOnCapturedScreen(opts: {
+  isExtended: boolean | undefined;
+  screens: ScreenGeom[] | null;
+  tabCenter: { x: number; y: number };
+  frame: FrameSize;
+}): boolean {
+  if (opts.isExtended === false) return true;
+  if (!opts.screens || !opts.screens.length || !opts.frame.width || !opts.frame.height) return false;
+  const here = opts.screens.find(
+    (s) =>
+      opts.tabCenter.x >= s.left &&
+      opts.tabCenter.x < s.left + s.width &&
+      opts.tabCenter.y >= s.top &&
+      opts.tabCenter.y < s.top + s.height
+  );
+  if (!here) return false;
+  return candidateScreens(opts.screens, opts.frame).includes(here);
+}
+
+/** Freeze timing: show a frame at least this old when freezing (it predates the switch). */
+export const FREEZE_LOOKBACK_MS = 250;
+/** Keep the freeze this long after the teacher leaves the tab (the switch takes a moment to show). */
+export const UNFREEZE_HOLD_MS = 300;
+/** While frozen, re-send the frozen picture this often (new viewers, keyframes). */
+export const FROZEN_RESEND_MS = 1000;

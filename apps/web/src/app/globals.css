@@ -920,19 +920,6 @@ input[type='time'].input {
   padding: 4px 10px;
   pointer-events: none;
 }
-.draw-preview {
-  position: relative;
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  overflow: hidden;
-  border-radius: 8px;
-  background: #05060a;
-}
-.draw-preview video {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
 .teacher-toast {
   position: fixed;
   /* Clear of the whiteboard meeting bar on the right (Nov 25: Dismiss was under it). */
