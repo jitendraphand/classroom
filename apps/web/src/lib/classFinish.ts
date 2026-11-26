@@ -21,7 +21,7 @@ export function finishCopy(r: FinishReason): { title: string; body: string } {
     case 'replaced':
       return { title: 'You joined from another device', body: 'This class is open on your other device, so this one was disconnected. You can close this tab.' };
     case 'removed':
-      return { title: 'You were removed from the class', body: 'Your teacher removed you from this class. You can close this tab.' };
+      return { title: 'You were removed from the class', body: 'Your teacher removed you from this class. You can join again while it is still on.' };
     case 'left':
       return { title: 'You left the class', body: 'You can rejoin while the class is still on, or close this tab.' };
     default:

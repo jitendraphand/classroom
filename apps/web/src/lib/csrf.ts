@@ -61,6 +61,24 @@ export function allowsFormPost(pathname: string): boolean {
   return FORM_POST_PATHS.has(pathname.replace(/\/+$/, ''));
 }
 
+/**
+ * Paths that take a raw image body (whiteboard pictures and PDF pages,
+ * lib/whiteboardAssets). image/jpeg, png and webp are not CORS-safelisted
+ * types and no HTML form can send them, so another site cannot post one
+ * without a preflight; Origin must still be present and allowed.
+ */
+export const IMAGE_POST_PATHS: RegExp[] = [/^\/api\/rooms\/[^/]+\/whiteboard\/asset$/];
+
+export function allowsImagePost(pathname: string): boolean {
+  const p = pathname.replace(/\/+$/, '');
+  return IMAGE_POST_PATHS.some((re) => re.test(p));
+}
+
+const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+function isImageContentType(value: string | null): boolean {
+  return !!value && IMAGE_TYPES.has(value.split(';')[0]!.trim().toLowerCase());
+}
+
 function isFormContentType(value: string | null): boolean {
   if (!value) return false;
   return value.split(';')[0]!.trim().toLowerCase() === 'application/x-www-form-urlencoded';
@@ -71,6 +89,8 @@ export type CsrfInput = {
   allowForm?: boolean;
   /** Accept a cross-site GET (see CROSS_SITE_GET_PATHS). */
   allowCrossSiteGet?: boolean;
+  /** Accept a same-origin raw image body (see IMAGE_POST_PATHS). */
+  allowImage?: boolean;
   method: string;
   headers: { get(name: string): string | null };
   /** Extra origins allowed besides the request host (APP_URL etc.). */
@@ -143,6 +163,10 @@ export function checkCsrf(input: CsrfInput): CsrfResult {
 
   const ct = input.headers.get('content-type');
   if (input.allowForm && isFormContentType(ct)) {
+    if (origin == null) return { ok: false, status: 403, reason: 'Cross-site request blocked' };
+    return { ok: true };
+  }
+  if (input.allowImage && isImageContentType(ct)) {
     if (origin == null) return { ok: false, status: 403, reason: 'Cross-site request blocked' };
     return { ok: true };
   }

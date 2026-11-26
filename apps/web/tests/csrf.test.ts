@@ -94,3 +94,20 @@ test('GETs that say they come from another site are refused (side-effecting GETs
   assert.equal(allowsCrossSiteGet('/api/student/join'), true);
   assert.equal(allowsCrossSiteGet('/api/rooms/ABC/token'), false);
 });
+
+test('whiteboard picture upload: raw image body only on its path, same origin only', async () => {
+  const { allowsImagePost, checkCsrf: check } = await import('../src/lib/csrf');
+  const h = (o: Record<string, string>) => ({ get: (k: string) => o[k.toLowerCase()] ?? null });
+  const path = '/api/rooms/ABC123/whiteboard/asset';
+  assert.equal(allowsImagePost(path), true);
+  assert.equal(allowsImagePost('/api/rooms/ABC123/whiteboard'), false);
+  assert.equal(allowsImagePost('/api/rooms/ABC123/chat'), false);
+  const base = { host: 'school.test', 'content-length': '100', 'content-type': 'image/jpeg' };
+  assert.deepEqual(check({ method: 'POST', allowImage: true, headers: h({ ...base, origin: 'https://school.test' }) }), { ok: true });
+  // No Origin, or another site: refused.
+  assert.equal(check({ method: 'POST', allowImage: true, headers: h(base) }).ok, false);
+  assert.equal(check({ method: 'POST', allowImage: true, headers: h({ ...base, origin: 'https://evil.test' }) }).ok, false);
+  // Other routes still need JSON; other types still refused here.
+  assert.equal(check({ method: 'POST', headers: h({ ...base, origin: 'https://school.test' }) }).ok, false);
+  assert.equal(check({ method: 'POST', allowImage: true, headers: h({ ...base, 'content-type': 'text/plain', origin: 'https://school.test' }) }).ok, false);
+});

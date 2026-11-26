@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { allowsCrossSiteGet, allowsFormPost, checkCsrf, isCsrfExempt } from '@/lib/csrf';
+import { allowsCrossSiteGet, allowsFormPost, allowsImagePost, checkCsrf, isCsrfExempt } from '@/lib/csrf';
 import { hasUnsignedJoinParams } from '@/lib/joinParams';
 import { bodyTooLarge } from '@/lib/bodyLimit';
 
@@ -38,6 +38,7 @@ export function middleware(req: NextRequest) {
     method: req.method,
     allowForm: allowsFormPost(pathname),
     allowCrossSiteGet: allowsCrossSiteGet(pathname),
+    allowImage: allowsImagePost(pathname),
     headers: req.headers,
     configuredOrigins: [process.env.APP_URL, process.env.NEXT_PUBLIC_APP_URL],
   });

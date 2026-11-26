@@ -4513,8 +4513,8 @@ function StudentFinished({
     window.dispatchEvent(new Event(CLASS_FINISHED_EVENT));
   }, []);
   useEffect(() => {
-    // A student who left can rejoin, so that screen stays open.
-    if ((showForm && !formDone) || eligible === null || reason === 'left') return;
+    // A student who left or was removed can rejoin, so that screen stays open.
+    if ((showForm && !formDone) || eligible === null || reason === 'left' || reason === 'removed') return;
     try {
       window.close();
     } catch {
@@ -4528,13 +4528,13 @@ function StudentFinished({
         <p className="font-display text-2xl font-semibold tracking-tight">{copy.title}</p>
         <p className="mt-2 text-sm text-slate-400">{copy.body}</p>
         {showForm && !formDone && <FeedbackForm code={code} onDone={() => setFormDone(true)} />}
-        {reason === 'left' && (
+        {(reason === 'left' || reason === 'removed') && (
           <a
             href={schoolStudent ? '/student' : `/join/${code}`}
             className="btn-primary mt-5 inline-flex px-4 py-2 text-sm"
             data-testid="rejoin-class"
           >
-            Rejoin class
+            {reason === 'removed' ? 'Join again' : 'Rejoin class'}
           </a>
         )}
       </div>
