@@ -49,3 +49,57 @@ test('retention removes only old LEFT student rows', { skip }, async () => {
   assert.equal(await prisma.participant.count({ where: { roomId: room.id } }), 2);
   assert.equal(await pruneOldParticipants(new Date(), 0), 0);
 });
+
+test('direct entry: a student who pressed Leave comes back in; a removed one waits until the teacher admits', { skip }, async () => {
+  const { prisma } = await import('../../src/lib/db');
+  const { randomUUID } = await import('node:crypto');
+  const { admitIfDirectEntry, admitWaiting } = await import('../../src/lib/admission');
+  const { room, cs, students } = await seedRoom({ students: 2 });
+  const open = await prisma.room.update({ where: { id: room.id }, data: { waitingRoomOn: false } });
+  const newSeat = (s: (typeof students)[number]) =>
+    prisma.participant.create({
+      data: {
+        roomId: room.id,
+        displayName: s.student.name,
+        role: 'STUDENT',
+        status: 'WAITING',
+        livekitIdentity: `student_${randomUUID().replace(/-/g, '').slice(0, 12)}`,
+        sessionToken: randomUUID(),
+        studentId: s.student.id,
+        classSessionId: cs.id,
+        mutedByTeacher: true,
+      },
+    });
+
+  // Student 0 pressed Leave (no teacher flag), then rejoins.
+  const [self, removed] = students;
+  await prisma.participant.update({ where: { id: self!.participant.id }, data: { status: 'LEFT', leftAt: new Date() } });
+  const back = await newSeat(self!);
+  assert.equal(await admitIfDirectEntry(open, back), true);
+  assert.equal((await prisma.participant.findUniqueOrThrow({ where: { id: back.id } })).status, 'ADMITTED');
+
+  // Student 1 was removed by the teacher, then rejoins: waits.
+  await prisma.participant.update({
+    where: { id: removed!.participant.id },
+    data: { status: 'LEFT', leftAt: new Date(), removedByTeacher: true },
+  });
+  const again = await newSeat(removed!);
+  assert.equal(await admitIfDirectEntry(open, again), false);
+  assert.equal((await prisma.participant.findUniqueOrThrow({ where: { id: again.id } })).status, 'WAITING');
+
+  // The teacher admits them: the removal no longer blocks direct entry.
+  assert.equal(await admitWaiting(open, { ids: [again.id] }), 1);
+  assert.equal(
+    await prisma.participant.count({ where: { roomId: room.id, studentId: removed!.student.id, removedByTeacher: true } }),
+    0,
+  );
+  await prisma.participant.update({ where: { id: again.id }, data: { status: 'LEFT', leftAt: new Date() } });
+  const third = await newSeat(removed!);
+  assert.equal(await admitIfDirectEntry(open, third), true);
+
+  // Waiting room on: nobody is admitted by direct entry.
+  const closed = await prisma.room.update({ where: { id: room.id }, data: { waitingRoomOn: true } });
+  await prisma.participant.update({ where: { id: back.id }, data: { status: 'LEFT', leftAt: new Date() } });
+  const fourth = await newSeat(self!);
+  assert.equal(await admitIfDirectEntry(closed, fourth), false);
+});

@@ -23,6 +23,8 @@ import { readMicBook, micQueueView } from '@/lib/micBook';
 import { memo, roomVersion, stateCacheMs } from '@/lib/roomStateCache';
 import { listActiveObservers } from '@/lib/adminObservers';
 import { syncObserverCameras } from '@/lib/observerSync';
+import { admitIfDirectEntry } from '@/lib/admission';
+import { nudgeRoomState } from '@/lib/roomNudge';
 
 function teacherGenderOf(g: string | null | undefined) {
   return g === 'male' || g === 'female' ? g : null;
@@ -130,6 +132,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       stageRaw === 'screen' ? 'screen' : 'idle';
 
     if (me?.status !== 'ADMITTED') {
+      // Direct entry (waiting room off): let a still-waiting seat in now, e.g.
+      // one that arrived during the toggle or while the class was full.
+      let myStatus: string | undefined = me?.status;
+      if (me && access.student && access.student.id === me.id && (await admitIfDirectEntry(room, access.student))) {
+        myStatus = 'ADMITTED';
+        nudgeRoomState(room.code, 'teacher');
+      }
       const myHand = me ? (await redis.sismember(keys.hands(code), me.id)) === 1 : false;
       const settings = await getSchoolSettings();
       const cap = classCapacity(settings.maxStudentsPerClass);
@@ -149,7 +158,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
               id: me.id,
               displayName: me.displayName,
               role: me.role,
-              status: me.status,
+              status: myStatus ?? me.status,
               viaSchoolApp: !!me.studentId,
               livekitIdentity: me.livekitIdentity,
               mutedByTeacher: false,

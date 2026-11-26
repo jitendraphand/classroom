@@ -53,9 +53,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
 
   if (!target || target.roomId !== room.id) return jsonError('Not in room', 403);
 
+  // Teacher-issued (Deny / Remove): this student must wait for the teacher
+  // next time, even with direct entry on. A student pressing Leave is not
+  // marked, so they can come straight back (lib/admissionLogic directEntryAllowed).
+  const removedByTeacher = !!participantId && target.role === 'STUDENT';
   await prisma.participant.update({
     where: { id: target.id },
-    data: { status: 'LEFT', leftAt: new Date() },
+    data: { status: 'LEFT', leftAt: new Date(), ...(removedByTeacher ? { removedByTeacher: true } : {}) },
   });
   if (target.role === 'STUDENT') {
     await closeParticipantAttendance(target).catch((e) => console.error('attendance leave', e));

@@ -38,11 +38,18 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ code: 
     let admitted = 0;
     if (body.waitingRoomOn === false && updated.status !== 'ENDED') {
       // Waiting room off: everyone already waiting comes in now.
-      const waiting = await prisma.participant.findMany({
-        where: { roomId: room.id, role: 'STUDENT', status: 'WAITING' },
-        select: { id: true, role: true, status: true },
-      });
-      const ids = idsToAdmitOnToggle(false, waiting);
+      // ...except students the teacher denied or removed this session.
+      const [waiting, removed] = await Promise.all([
+        prisma.participant.findMany({
+          where: { roomId: room.id, role: 'STUDENT', status: 'WAITING' },
+          select: { id: true, role: true, status: true, studentId: true, classSessionId: true, displayName: true },
+        }),
+        prisma.participant.findMany({
+          where: { roomId: room.id, role: 'STUDENT', removedByTeacher: true },
+          select: { studentId: true, classSessionId: true, displayName: true },
+        }),
+      ]);
+      const ids = idsToAdmitOnToggle(false, waiting, removed);
       if (ids.length) admitted = await admitWaiting(updated, { ids });
     }
     if (body.maxVisibleVideos !== undefined) await rotateVisibleSample(code, updated.maxVisibleVideos);

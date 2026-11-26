@@ -146,6 +146,10 @@ model Participant {
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   leftAt           DateTime?
+  /// The teacher denied or removed this seat (as opposed to the student pressing
+  /// Leave). Blocks direct entry for this student in this class session until
+  /// the teacher admits them again (lib/admissionLogic.ts).
+  removedByTeacher Boolean           @default(false)
   /// Set for students who came through the signed school-app link.
   studentId        String?
   student          Student?          @relation(fields: [studentId], references: [id], onDelete: SetNull)

@@ -19,7 +19,7 @@ import { appTimeZone, earlyWindowMinutes } from './schoolConfig';
 import { decideRoute, routeSignature, type SessionState } from './studentRouting';
 import { memo } from './roomStateCache';
 import { admitWaiting, ClassFullError } from './admission';
-import { shouldAutoAdmit } from './admissionLogic';
+import { directEntryAllowed, shouldAutoAdmit } from './admissionLogic';
 import type { JoinClaims } from './schoolJwt';
 
 type StudentStore = {
@@ -139,17 +139,19 @@ export async function ensureStudentParticipant(student: Student, room: Room, cs:
     where: { roomId: room.id, studentId: student.id, classSessionId: cs.id, status: { not: 'LEFT' } },
     orderBy: { createdAt: 'desc' },
   });
-  let firstArrival = false;
+  // Earlier seats of this student in this class session (left, dropped,
+  // replaced, denied or removed). Read only when they matter: a new seat, or a
+  // seat still waiting while direct entry is on.
+  const needHistory = !participant || (participant.status === 'WAITING' && !room.waitingRoomOn);
+  const earlier = needHistory
+    ? await prisma.participant.findMany({
+        where: { roomId: room.id, studentId: student.id, classSessionId: cs.id },
+        orderBy: { createdAt: 'desc' },
+        select: { pinnedAt: true, removedByTeacher: true },
+      })
+    : [];
   if (!participant) {
     const id = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
-    // A student re-joining the same class on another device keeps the
-    // teacher's pin on their video.
-    const previous = await prisma.participant.findFirst({
-      where: { roomId: room.id, studentId: student.id, classSessionId: cs.id },
-      orderBy: { createdAt: 'desc' },
-      select: { pinnedAt: true, id: true },
-    });
-    firstArrival = !previous;
     participant = await prisma.participant.create({
       data: {
         roomId: room.id,
@@ -162,7 +164,9 @@ export async function ensureStudentParticipant(student: Student, room: Room, cs:
         classSessionId: cs.id,
         // Students join muted; the teacher unmutes one by one or with Allow unmute.
         mutedByTeacher: true,
-        pinnedAt: previous?.pinnedAt ?? null,
+        // A student re-joining the same class (another device, or after Leave)
+        // keeps the teacher's pin on their video.
+        pinnedAt: earlier[0]?.pinnedAt ?? null,
       },
     });
     const redis = await ensureRedis();
@@ -177,11 +181,11 @@ export async function ensureStudentParticipant(student: Student, room: Room, cs:
       participant = await takeOverSeat(room, participant);
     }
   }
-  // Waiting room switched off by the teacher: admit on arrival (still muted,
-  // still only this class).
-  // Re-entry (including a previously denied/removed seat) always waits for
-  // the teacher, even if first-time arrivals use direct entry.
-  if (firstArrival && shouldAutoAdmit(room, participant)) {
+  // Waiting room switched off by the teacher (direct entry): in on arrival,
+  // still muted and only this class. That includes coming back after pressing
+  // Leave, and a seat left waiting by a race with the toggle. Only a student
+  // the teacher denied or removed in this session waits for the teacher again.
+  if (directEntryAllowed(earlier) && shouldAutoAdmit(room, participant)) {
     try {
       await admitWaiting(room, { ids: [participant.id] });
       participant = { ...participant, status: 'ADMITTED' };

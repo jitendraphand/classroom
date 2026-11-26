@@ -144,10 +144,22 @@ teacher's video until the student is back; audio keeps playing.
   The school's student ID is the identity key; roll number is display only.
   The student is routed to the class open now for their grade-division
   (combined / all-division and ad-hoc classes included), a countdown for a
-  later class today, or "no class right now". They still wait for the teacher
-  to admit them; the roster shows name, roll no, grade-division, timetable and
-  late badges. A student session cannot enter another grade-division's class.
+  later class today, or "no class right now". They wait for the teacher to
+  admit them (unless direct entry is on, below); the roster shows name, roll
+  no, grade-division, timetable and late badges. A student session cannot
+  enter another grade-division's class.
   Manual code + name join is off (`ALLOW_MANUAL_STUDENT_JOIN=false`; dev only).
+- **Direct entry** (the teacher switches the waiting room off in the roster or
+  the share controls; remembered for their next class, `WAITING_ROOM_DEFAULT`
+  for teachers who never chose): students go straight into the class with no
+  approval, still muted and only into their own class. That covers late
+  arrivals (no time cut-off while the class runs; they are marked late),
+  students who pressed **Leave** and come back, dropped connections and
+  device switches. Switching it on admits everyone already waiting, and a
+  waiting student who arrived during the switch, or found the class full,
+  is let in by the lobby's next check once there is room. The one exception:
+  a student the teacher **denied or removed** in this class waits for the
+  teacher again, until the teacher admits them once.
 - **Attendance** per student per class: first joined, admitted, left, total
   connected time (LiveKit webhook joins/leaves, union across reconnects and
   duplicate tabs), late (after start + `LATE_GRACE_MINUTES`), status

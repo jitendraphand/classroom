@@ -5,6 +5,7 @@ import { clampMaxVisible, rotateVisibleSample } from './sample';
 import { markAdmitted } from './attendanceService';
 import { CLASS_FULL_MESSAGE, classCapacity, seatsLeft } from './capacity';
 import { getSchoolSettings } from './schoolSettings';
+import { directEntryAllowed, shouldAutoAdmit } from './admissionLogic';
 
 export class ClassFullError extends Error {
   constructor() {
@@ -38,6 +39,29 @@ async function flipToAdmitted(tx: Tx, where: WaitingWhere, limit: number | null)
  *
  * Admitted students keep `mutedByTeacher` (they join muted).
  */
+/**
+ * The teacher admitted these students: an earlier Deny / Remove in this class
+ * session no longer blocks their direct entry (lib/admissionLogic
+ * directEntryAllowed). School-app students are matched by student and class
+ * session; manual/test joins (no student record) by name in the room.
+ */
+async function clearRemovals(roomId: string, admittedIds: string[]): Promise<void> {
+  const rows = await prisma.participant.findMany({
+    where: { id: { in: admittedIds } },
+    select: { studentId: true, classSessionId: true, displayName: true },
+  });
+  const ors: Prisma.ParticipantWhereInput[] = rows.map((r) =>
+    r.studentId
+      ? { studentId: r.studentId, classSessionId: r.classSessionId }
+      : { studentId: null, displayName: r.displayName }
+  );
+  if (!ors.length) return;
+  await prisma.participant.updateMany({
+    where: { roomId, removedByTeacher: true, OR: ors },
+    data: { removedByTeacher: false },
+  });
+}
+
 export async function admitWaiting(
   room: Pick<Room, 'id' | 'code' | 'status'> & Partial<Pick<Room, 'maxVisibleVideos'>>,
   opts: { ids?: string[]; all?: boolean }
@@ -68,6 +92,7 @@ export async function admitWaiting(
   }
   if (ids.length === 0) return 0;
 
+  await clearRemovals(room.id, ids).catch((e) => console.error('admit: clear removals', e));
   await markAdmitted(ids).catch((e) => console.error('attendance admit', e));
 
   if (room.status === 'WAITING') {
@@ -86,4 +111,44 @@ export async function admitWaiting(
   const max = clampMaxVisible(room.maxVisibleVideos);
   if ((await redis.scard(keys.visible(room.code))) < max) await rotateVisibleSample(room.code);
   return ids.length;
+}
+
+/** Lobby polls retry direct entry for one seat at most this often (class full, races). */
+export const DIRECT_ENTRY_RETRY_S = 10;
+
+/**
+ * Direct entry for a seat that is still waiting (called from the lobby's
+ * /state poll). Catches the cases arrival alone misses: the student arrived
+ * while the teacher was switching the waiting room off (the toggle's
+ * "admit everyone waiting" did not see the new seat yet), or the class was
+ * full and a place has since freed up. Same rule as on arrival: never for a
+ * student the teacher denied or removed in this session. Returns true when
+ * this call admitted the seat.
+ */
+export async function admitIfDirectEntry(
+  room: Pick<Room, 'id' | 'code' | 'status' | 'waitingRoomOn'> & Partial<Pick<Room, 'maxVisibleVideos'>>,
+  seat: { id: string; roomId: string; role: string; status: string; studentId: string | null; classSessionId: string | null; displayName: string },
+): Promise<boolean> {
+  if (seat.roomId !== room.id || !shouldAutoAdmit(room, seat)) return false;
+  try {
+    const redis = await ensureRedis();
+    // Throttle per seat: a full class with many waiting students must not run
+    // an admit transaction on every 3-second lobby poll.
+    if ((await redis.set(`directentry:try:${seat.id}`, '1', 'EX', DIRECT_ENTRY_RETRY_S, 'NX')) !== 'OK') return false;
+  } catch {
+    return false; // Redis down: arrival-time direct entry still applies
+  }
+  const earlier = await prisma.participant.findMany({
+    where: seat.studentId
+      ? { roomId: room.id, studentId: seat.studentId, classSessionId: seat.classSessionId }
+      : { roomId: room.id, role: 'STUDENT', studentId: null, displayName: seat.displayName },
+    select: { removedByTeacher: true },
+  });
+  if (!directEntryAllowed(earlier)) return false;
+  try {
+    return (await admitWaiting(room, { ids: [seat.id] })) > 0;
+  } catch (e) {
+    if (e instanceof ClassFullError) return false;
+    throw e;
+  }
 }
