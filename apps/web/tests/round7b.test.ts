@@ -136,7 +136,8 @@ test('whiteboard is full width; class videos float instead of embedding in a sid
   assert.doesNotMatch(host, /wb-video-slot/);
   const room = classroomViewSource();
   assert.doesNotMatch(room, /embedHost=\{wbOpen/);
-  assert.match(room, /dock=\{wbOpen \? null : dockArea\}/);
+  // Class home fills the stage; share and whiteboard float (no docking).
+  assert.match(room, /dock=\{videoOverlay \? null : dockArea\}/);
 });
 
 test('admin students search matches name or student ID case-insensitively', () => {

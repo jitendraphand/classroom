@@ -105,7 +105,8 @@ test('whiteboard mode: meeting bar stops the board; roster chips can allow and d
   assert.match(room, /!wbOpen && \(/);
   const bar = src('components/classroom/MeetingBar.tsx');
   assert.match(bar, /aria-label="Stop whiteboard sharing"/);
-  assert.match(bar, /aria-label="End class"/);
+  // Leave and End class share one menu (LeaveEndMenu).
+  assert.match(bar, /<LeaveEndMenu onLeave=\{onLeave\} onEnd=\{onEndClass\}/);
   assert.match(bar, /wbm-draw-allow/);
   assert.match(bar, /wbm-draw-deny/);
   const hud = src('components/classroom/TeacherShareHud.tsx');

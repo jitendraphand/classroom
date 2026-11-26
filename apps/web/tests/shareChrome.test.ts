@@ -216,11 +216,15 @@ test('share pill, meeting bar, and video header are wired without dropping the o
   assert.doesNotMatch(hud, /Send computer sound/);
   const room = classroomViewSource();
   assert.match(room, /minLeft=\{wbOpen \? WB_TOOL_CLEAR_PX : 0\}/);
-  assert.match(room, /dock=\{wbOpen \? null : dockArea\}/);
+  // Class home fills the stage; share and whiteboard float (no docking).
+  assert.match(room, /dock=\{videoOverlay \? null : dockArea\}/);
   assert.match(room, /data-testid="video-panel-resize"/);
   assert.match(src('components/classroom/Controls.tsx'), /aria-label="Video panel"/);
   assert.match(room, /TeacherInkProvider/);
-  assert.match(room, /videos-layout-/);
+  // One button cycles 2 → 4 → 6 tiles, one closes the window; no minimize.
+  assert.match(room, /data-testid="videos-slots"/);
+  assert.match(room, /data-testid="videos-close"/);
+  assert.doesNotMatch(room, /videos-min|videos-layout-/);
   assert.match(room, /!wbOpen && \(/);
   const host = src('components/classroom/Whiteboard.tsx');
   assert.match(host, /right: MEETING_BAR_PX/);

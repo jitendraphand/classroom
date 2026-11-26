@@ -35,8 +35,9 @@ import {
 import { selectTeacherVideos, videoHidden } from '@/lib/droppedVideos';
 import { Avatar } from '@/components/ui/Avatar';
 import { IconPin } from '@/components/ui/Icons';
-import { pickTiles, studentCapForSlots, type PanelSlots } from '@/lib/classSlots';
+import { pickTiles, type PanelSlots } from '@/lib/classSlots';
 import { naturalCompare } from '@/lib/naturalSort';
+import { FILL_GRID_HEADER, fillGridLayout } from '@/lib/videoGrid';
 import { cn } from '@/lib/cn';
 import { SideWindowPortal } from './shareSideWindows';
 import {
@@ -122,13 +123,15 @@ export function whiteboardVideoBoard(vw: number, vh: number): FloatRect {
 export const EMPTY_DROPPED: ReadonlyMap<string, number> = new Map();
 
 export function TeacherPeersFloat({
-  roomCode,
+  roomCode: _roomCode,
   teacherIdentities,
   visibleIdentities,
   selfName,
   selfStream,
-  onSlotsChange,
   slots: slotsProp,
+  fill = false,
+  onCycleSlots,
+  onClose,
   videoPage,
   onVideoPage,
   dock = null,
@@ -184,10 +187,21 @@ export function TeacherPeersFloat({
   spotlightIdentity?: string | null;
   /** Also keep these cameras subscribed (teacher-unmuted students in the speaking pop-up, Nov 25). */
   keepIdentities?: readonly string[];
-  /** Student-camera count that fills this window (tiles minus the teacher). */
-  onSlotsChange?: (studentSlots: number) => void;
-  /** Panel size chosen by the room (synced with the server student cap). */
+  /**
+   * Share / whiteboard window size (tiles, the teacher included), chosen by
+   * the room and synced with the server's student-camera cap. Ignored in fill.
+   */
   slots?: PanelSlots | null;
+  /**
+   * Class home (no share, no whiteboard): the panel fills the stage (`dock`)
+   * as one grid of the teacher and this page's students. No header buttons
+   * except the pager; not draggable, resizable or minimizable.
+   */
+  fill?: boolean;
+  /** Share / whiteboard window: one button cycling 2 → 4 → 6 tiles. */
+  onCycleSlots?: () => void;
+  /** Share / whiteboard window: close it (reopened from the right-hand toolbar). */
+  onClose?: () => void;
   /**
    * Student-video page from the server (lib/videoPages): `order` is the tile
    * order (teacher pins, then this page in roster order). Replaces the old
@@ -232,53 +246,15 @@ export function TeacherPeersFloat({
   /** identity → last time heard speaking (sticky pins expire, see activeStickySpeakers). */
   const lastSpokeRef = useRef<Map<string, number>>(new Map());
   const seenCamsRef = useRef<Set<string>>(new Set());
-  const [slotCount, setSlotCount] = useState<2 | 4 | 6>(() => {
-    try {
-      const v = sessionStorage.getItem(`peers_slots_${roomCode.toUpperCase()}`);
-      if (v === '2' || v === '4' || v === '6') return Number(v) as 2 | 4 | 6;
-    } catch {
-      /* ignore */
-    }
-    return 4;
-  });
-  useEffect(() => {
-    if (slotsProp && slotsProp !== slotCount) setSlotCount(slotsProp);
-    // Only follow the room's value when it changes. Does not touch the
-    // whiteboard's own tile count.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slotsProp]);
-  // Whiteboard opens at 2 tiles. Growing to 4/6 is for this open only; the
-  // next open starts compact again and does not rewrite the docked panel.
-  const [wbSlots, setWbSlots] = useState<2 | 4 | 6>(2);
-  const [wbEpoch, setWbEpoch] = useState(whiteboard);
-  if (whiteboard !== wbEpoch) {
-    setWbEpoch(whiteboard);
-    if (whiteboard) setWbSlots(2);
-  }
-  const activeSlots: 2 | 4 | 6 = whiteboard ? wbSlots : slotCount;
-  const [minimized, setMinimized] = useState(() => {
-    try {
-      return sessionStorage.getItem(`peers_min_${roomCode.toUpperCase()}`) === '1';
-    } catch {
-      return false;
-    }
-  });
-  // Docked in the stage corner by default (the stage reserves its space).
-  // Dragging the header floats it anywhere; Dock / double-click re-docks.
-  const [floating, setFloating] = useState(() => readFloatPref('class_panel.floating') === '1');
-  useEffect(() => {
-    writeFloatPref('class_panel.floating', floating ? '1' : '0');
-  }, [floating]);
+  // Fill grid: the teacher + up to 5 students (the server cap is 5 then).
+  const activeSlots: 2 | 4 | 6 = fill ? 6 : (slotsProp ?? 2);
+  // No minimize and no docking any more: the class home fills the stage, and
+  // during a share / whiteboard the panel is a floating window with a close
+  // button (reopened from the right-hand toolbar).
   const portal = !!portalWindow && !portalWindow.closed;
-  const docked = !!dock && !floating && !portal;
-  const sharingDock = docked && sharing;
-  // Minimized state during a share. Starts collapsed at every share; the
-  // teacher's saved (non-share) minimized preference is untouched.
-  const [shareMinimized, setShareMinimized] = useState(true);
-  useEffect(() => {
-    if (sharingDock) setShareMinimized(true);
-  }, [sharingDock]);
-  const isMin = portal ? false : sharingDock ? shareMinimized : minimized;
+  const floating = !fill;
+  const docked = false;
+  const isMin = false;
   const narrowDock = !!dock && dock.width < PEER_DOCK_NARROW_W;
   // Cameras on demand: report shown / minimized (incl. an OS-minimized popup).
   const [portalHidden, setPortalHidden] = useState(false);
@@ -342,7 +318,7 @@ export function TeacherPeersFloat({
   // Floating panel in whiteboard, share (docked, floated, or the videos window)
   // and whenever the class panel itself is undocked. The docked class grid
   // keeps the 2/4/6 preset until the teacher floats it.
-  const allowResize = !isMin && !embedLayout && (whiteboard || sharing || floating || portal);
+  const allowResize = !fill && !isMin && !embedLayout && (whiteboard || sharing || floating || portal);
   const panelClampOpts: VideoPanelClampOpts = {
     minW: PEER_HEADER_MIN_W,
     insets: (() => {
@@ -385,40 +361,14 @@ export function TeacherPeersFloat({
     return { x: 12, y: Math.max(PEER_TOP_RESERVE, window.innerHeight - h - PEER_BOTTOM_RESERVE) };
   }, [whiteboard]);
 
-  const { pos, reclamp, moveTo, handleProps } = useFloatDrag({
-    // Separate key so the docked panel's left-side position is not reused on the board.
+  const { pos, reclamp, handleProps } = useFloatDrag({
+    // Separate key so the share window's position is not reused on the board.
     id: whiteboard ? 'class_panel_wb' : 'class_panel',
     paneRef,
     defaultPos,
-    // Dragging the docked panel pulls it out to float (the hook starts the
-    // drag from where it is drawn, so it does not jump).
-    onDragStart: () => setFloating(true),
     extraInsets: whiteboard ? () => ({ left: WB_TOOL_CLEAR_PX, right: MEETING_BAR_PX }) : undefined,
     insetKey: whiteboard ? 'wb' : 'dock',
   });
-  const dock_ = useCallback(() => setFloating(false), []);
-  const undock = useCallback(() => {
-    const r = paneRef.current?.getBoundingClientRect();
-    if (r) moveTo({ x: r.left + 24, y: r.top + 24 });
-    setFloating(true);
-  }, [moveTo]);
-
-  useEffect(() => {
-    try {
-      sessionStorage.setItem(`peers_slots_${roomCode.toUpperCase()}`, String(slotCount));
-    } catch {
-      /* ignore */
-    }
-  }, [slotCount, roomCode]);
-
-  useEffect(() => {
-    try {
-      sessionStorage.setItem(`peers_min_${roomCode.toUpperCase()}`, minimized ? '1' : '0');
-    } catch {
-      /* ignore */
-    }
-  }, [minimized, roomCode]);
-
   // A 4/6-tile whiteboard pane is remembered so the next open can clamp it
   // back down. The compact 2-tile size is not written (opening always reclamps).
   useEffect(() => {
@@ -782,21 +732,25 @@ export function TeacherPeersFloat({
     };
   }, [portal, portalWindow, paneEl, winGrid.paneW, winGrid.paneH, winCount]);
   if (videosHidden && !portal) return null;
-  const L = portal && !clampedManual ? winGrid : view;
   const rawCells = portal ? cells.slice(0, winCount) : cells;
   // No students in the room: drop the empty slots so they never say "Off camera".
-  const shownCells = studentsInRoom > 0 ? rawCells : rawCells.filter((id) => id != null);
+  // The class-home grid only ever shows real tiles (it resizes as cameras come).
+  const shownCells = fill || studentsInRoom === 0 ? rawCells.filter((id) => id != null) : rawCells;
+  const fillGrid = fill && dock ? fillGridLayout(shownCells.length, dock.width, dock.height) : null;
+  const L = fillGrid ?? (portal && !clampedManual ? winGrid : view);
   const shownStudents = rawCells.filter((id) => id != null && id !== '__self__').length;
   let blankCursor = 0;
 
-  const style: CSSProperties = portal
+  const style: CSSProperties = fillGrid && dock
+    ? { left: dock.left, top: dock.top, width: dock.width, height: dock.height, borderRadius: 0, border: 0 }
+    : portal
     ? { position: 'relative', left: 0, top: 0, width: 'max-content', height: 'auto', borderRadius: 0, border: 0 }
     : docked && dock
       ? { left: dock.left + PEER_DOCK_MARGIN, top: dock.top + PEER_DOCK_MARGIN }
       : pos
         ? { left: Math.max(minLeft, pos.x), top: pos.y }
         : { left: Math.max(12, minLeft), top: PEER_TOP_RESERVE };
-  if (!isMin && !portal) {
+  if (!isMin && !portal && !fillGrid) {
     // Preset (2/4/6) or the teacher's dragged size, even when some tiles are blank.
     style.width = view.paneW;
     style.height = view.paneH;
@@ -845,58 +799,29 @@ export function TeacherPeersFloat({
       data-slots={activeSlots}
       data-minimized={isMin ? '1' : '0'}
       data-docked={docked ? '1' : '0'}
+      data-fill={fill ? '1' : '0'}
       style={style}
-      aria-label={portal ? 'Student videos' : 'Class videos — drag the top bar to move'}
+      aria-label={fill ? 'Class videos' : portal ? 'Student videos' : 'Student videos, drag the top bar to move'}
     >
       <div
         className="peers-float-header"
-        {...(portal ? {} : handleProps)}
-        onDoubleClick={(e) => {
-          if ((e.target as HTMLElement).closest('button')) return;
-          if (floating && dock) dock_();
-        }}
-        title={docked ? 'Drag to float this panel' : 'Drag to move · double-click to dock'}
+        {...(portal || fill ? {} : handleProps)}
+        title={fill || portal ? undefined : 'Drag to move'}
       >
-        <span className="peers-float-grip" aria-hidden>
-          ⋮⋮
-        </span>
+        {!fill && !portal && (
+          <span className="peers-float-grip" aria-hidden>
+            ⋮⋮
+          </span>
+        )}
         <div className="flex min-w-0 flex-1 items-center gap-1" data-no-drag>
-          {!portal && (
-            <button
-              type="button"
-              className="peers-float-slot"
-              data-testid="videos-min"
-              onClick={() => (sharingDock ? setShareMinimized((v) => !v) : setMinimized((v) => !v))}
-              aria-label={isMin ? 'Expand class videos' : 'Minimize class videos'}
-              title={isMin ? 'Show student videos' : 'Minimise student videos'}
-            >
-              {isMin ? `▢ ${peerIds.length + 1}` : '—'}
-            </button>
+          {fill && (
+            <span className="mr-1 truncate text-[11px] font-semibold text-slate-200" data-testid="videos-fill-title">
+              {videoPage && videoPage.total > 0
+                ? `${videoPage.total} student camera${videoPage.total === 1 ? '' : 's'} on`
+                : 'Class videos'}
+            </span>
           )}
-          {!isMin &&
-            ([2, 4, 6] as const).map((n) => (
-              <button
-                key={n}
-                type="button"
-                data-testid={`videos-layout-${n}`}
-                className={cn('peers-float-slot', activeSlots === n && 'is-on')}
-                aria-pressed={activeSlots === n}
-                onClick={() => {
-                  if (whiteboard) setWbSlots(n);
-                  else setSlotCount(n);
-                  // A 2/4/6 pick is a preset: drop the dragged size so the
-                  // button visibly changes the panel again.
-                  setManualSize(null);
-                  writeFloatPref(manualKey, null);
-                  onSlotsChange?.(studentCapForSlots(n));
-                }}
-                aria-label={`Show ${n} videos`}
-                title={`Show ${n} videos: you + ${n - 1} student${n - 1 === 1 ? '' : 's'}`}
-              >
-                {n}
-              </button>
-            ))}
-          {!isMin && videoPage && onVideoPage && videoPage.pages > 1 && (
+          {videoPage && onVideoPage && videoPage.pages > 1 && (
             <span
               className="inline-flex items-center gap-0.5"
               role="group"
@@ -932,18 +857,32 @@ export function TeacherPeersFloat({
               </button>
             </span>
           )}
-          {dock && !portal && (
+          {!fill && onCycleSlots && (
             <button
               type="button"
-              className="peers-float-slot"
-              onClick={floating ? dock_ : undock}
-              aria-label={floating ? 'Dock class videos beside the stage' : 'Float class videos'}
-              title={floating ? 'Dock beside the stage' : 'Float (drag anywhere)'}
+              className="peers-float-slot is-on"
+              data-testid="videos-slots"
+              onClick={onCycleSlots}
+              aria-label={`Showing ${activeSlots} videos. Show ${activeSlots === 6 ? 2 : activeSlots + 2}`}
+              title={`${activeSlots} videos (you + ${activeSlots - 1} student${activeSlots - 1 === 1 ? '' : 's'}). Click for ${activeSlots === 6 ? 2 : activeSlots + 2}.`}
             >
-              {floating ? 'Dock' : 'Float'}
+              {activeSlots}
             </button>
           )}
         </div>
+        {!fill && onClose && (
+          <button
+            type="button"
+            className="peers-float-slot"
+            data-testid="videos-close"
+            data-no-drag
+            onClick={onClose}
+            aria-label="Close student videos"
+            title="Close (reopen it from the toolbar on the right)"
+          >
+            ✕
+          </button>
+        )}
       </div>
       {!isMin && (
         <div
@@ -952,7 +891,8 @@ export function TeacherPeersFloat({
           style={{
             justifyContent: 'center',
             gridTemplateRows: `repeat(${L.rows}, ${L.tileH}px)`,
-            ...(portal ? { gridTemplateColumns: `repeat(${L.cols}, ${L.tileW}px)` } : {}),
+            ...(portal || fillGrid ? { gridTemplateColumns: `repeat(${L.cols}, ${L.tileW}px)` } : {}),
+            ...(fillGrid ? { gap: fillGrid.gap, alignContent: 'center', height: `calc(100% - ${FILL_GRID_HEADER}px)` } : {}),
           }}
         >
           {shownCells.map((identity, i) => {
@@ -1154,7 +1094,7 @@ export function PeerCamTile({
         </div>
       )}
       <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-1 bg-gradient-to-t from-black/75 to-transparent px-1.5 pb-1 pt-4">
-        <span className="flex min-w-0 items-center gap-1 truncate text-[10px] font-medium text-white">
+        <span className={cn('flex min-w-0 items-center gap-1 truncate font-medium text-white', tileW >= 360 ? 'text-sm' : 'text-[10px]')}>
           {teacherPinned && (
             <span className="shrink-0 text-amber-300" aria-label="Pinned" title="Pinned: stays in the panel">
               <IconPin size={10} />

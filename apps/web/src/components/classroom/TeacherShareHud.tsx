@@ -8,6 +8,7 @@ import { IconCam, IconCamOff, IconChat, IconFilm, IconHand, IconHandDown, IconMi
 import { toolbarInnerSize } from '@/lib/sideWindowGeometry';
 import { closeSideWindow, openSideWindow, sideWindow, SideWindowPortal, useSideWindows } from './shareSideWindows';
 import { sortRoster } from '@/lib/classSlots';
+import { handOrder, ordinal } from '@/lib/handOrder';
 import { filterPeople } from '@/lib/peopleSearch';
 import { ROSTER_PAGE, rosterWindow } from '@/lib/rosterWindow';
 import { floatInsets, useFloatDrag, type FloatPos } from './FloatingPanel';
@@ -337,7 +338,7 @@ background:${BADGE_AMBER};color:${BADGE_TEXT};font-size:9px;font-weight:800;disp
 .tsh-mic-locked{color:#94a3b8;background:rgba(100,116,139,.18)}
 .tsh-mic-allowed{color:#fcd34d;border-color:#f59e0b;background:transparent}
 .tsh-mic-live{color:#6ee7b7;border-color:#10b981;background:rgba(16,185,129,.2)}
-.tsh-person.is-raised{background:rgba(245,158,11,.12)}
+.tsh-person.is-raised{background:rgba(245,158,11,.18);box-shadow:inset 4px 0 0 #fbbf24}.tsh-hand-badge{display:inline-flex;align-items:center;gap:2px;flex:none;border-radius:999px;background:#fbbf24;color:#1c1917;font-size:10px;font-weight:800;line-height:1;padding:2px 6px}
 .tsh-person .tsh-chip{max-width:84px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0}
 .tsh-chat{height:220px;min-height:160px}
 .tsh-admit{max-width:140px;overflow:hidden;text-overflow:ellipsis}
@@ -524,6 +525,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
   // Raised hands first (earliest raise first), then by name.
   const students = useMemo(() => sortRoster(admitted.filter((a) => a.role === 'STUDENT')), [admitted]);
   const hands = useMemo(() => students.filter((s) => s.handRaised), [students]);
+  const handRank = useMemo(() => handOrder(students), [students]);
   const [rosterQuery, setRosterQuery] = useState('');
   // Large classes: a page of rows at a time, like the main roster (lib/rosterWindow).
   const [rosterLimit, setRosterLimit] = useState(ROSTER_PAGE);
@@ -660,8 +662,9 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                       </span>
                     )}
                     {s.handRaised && (
-                      <span className="tsh-hand" title="Hand raised" aria-label="Hand raised">
-                        <IconHand size={12} />
+                      <span className="tsh-hand-badge" title={`Hand raised (${ordinal(handRank.get(s.id) ?? 1)})`} aria-label={`Hand raised, ${ordinal(handRank.get(s.id) ?? 1)}`}>
+                        <IconHand size={11} />
+                        {handRank.get(s.id) ?? ''}
                       </span>
                     )}
                     <Avatar name={s.displayName} size="xs" />
@@ -792,7 +795,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
             aria-pressed={videosOpen}
             onClick={onToggleVideos}
             aria-label={videosOpen ? 'Close student videos window' : 'Show student videos'}
-            title={videosOpen ? 'Close student videos window' : 'Student videos (2/4/6, pins, rotation)'}
+            title={videosOpen ? 'Close student videos window' : 'Student videos (2 / 4 / 6, pages)'}
           >
             <IconVideo size={14} />
           </button>

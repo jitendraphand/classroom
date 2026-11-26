@@ -115,7 +115,6 @@ import {
   IconVideo,
 } from '@/components/ui/Icons';
 import {
-  panelSlotsForCap,
   sortRoster,
   studentCapForSlots,
   teacherTabTitle,
@@ -164,6 +163,8 @@ import { usePageHidden } from '@/hooks/usePageHidden';
 import { BACKGROUND_VIDEO_PAUSE_MS, nextDataSaver, spotlightCameraWanted } from '@/lib/dataSaver';
 import { useHiddenFor } from '@/hooks/useHiddenFor';
 import { useShareSnapshots } from './useShareSnapshots';
+import { nextOverlaySlots } from '@/lib/videoGrid';
+import { handOrder, ordinal } from '@/lib/handOrder';
 import { SlideSnapshotStage } from './SlideSnapshotStage';
 import { useDataSaver } from '@/hooks/useDataSaver';
 import { TeacherMediaDemand } from './TeacherMediaDemand';
@@ -1043,17 +1044,14 @@ function RoomInner({
   /** Student-camera cap chosen from the float, shown before the next poll confirms it. */
   const [sampleCap, setSampleCap] = useState<number | null>(null);
   const capQueue = useRef(Promise.resolve());
-  /** Class panel size (2/4/6 tiles, teacher included); student cap = slots − 1. */
-  const [panelSlots, setPanelSlots] = useState<PanelSlots | null>(() => {
-    try {
-      const v = sessionStorage.getItem(`peers_slots_${code.toUpperCase()}`);
-      if (v === '2' || v === '4' || v === '6') return Number(v) as PanelSlots;
-    } catch {
-      /* ignore */
-    }
-    return null;
-  });
-  const panelCapSynced = useRef(false);
+  /**
+   * Teacher video layout: on the class home the videos fill the stage (the
+   * teacher + 5 students); during a share or the whiteboard they are a
+   * floating window of 2 / 4 / 6 tiles (one button cycles; 2 at every start).
+   * The server's student-camera cap follows (tiles − 1), so only what is on
+   * screen is sent.
+   */
+  const [overlaySlots, setOverlaySlots] = useState<PanelSlots>(2);
   const chatStopped = state?.status === 'ENDED' || !!state?.ended;
   const chatActive = (isTeacher ? chatOpen && !screenOn : chatOpen) || hudChatOpen;
   const myParticipantId = state?.me?.id ?? null;
@@ -2178,13 +2176,7 @@ function RoomInner({
       closeSideWindow('videos');
       return;
     }
-    let slots: 2 | 4 | 6 = 4;
-    try {
-      const v = sessionStorage.getItem(`peers_slots_${code.toUpperCase()}`);
-      if (v === '2' || v === '6') slots = Number(v) as 2 | 6;
-    } catch {
-      /* ignore */
-    }
+    const slots = overlaySlots;
     const r = openSideWindow('videos', {
       anchor: shareWindowRef.current,
       requireTrustedPosition: !!maskRef.current,
@@ -2246,19 +2238,7 @@ function RoomInner({
     refresh();
   }
 
-  // One unit for the panel buttons and the header: on entry, size the panel
-  // from the room's student cap (dashboard value) unless this tab already
-  // chose one, then make the server cap match the panel (slots − 1) once.
   const serverCap = state?.maxVisibleVideos;
-  useEffect(() => {
-    if (!isTeacher || !serverCap) return;
-    const slots = panelSlots ?? panelSlotsForCap(serverCap);
-    if (!panelSlots) setPanelSlots(slots);
-    if (panelCapSynced.current) return;
-    panelCapSynced.current = true;
-    if (serverCap !== studentCapForSlots(slots)) setStudentCameraCap(studentCapForSlots(slots));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isTeacher, serverCap, panelSlots]);
 
   function setStudentCameraCap(studentSlots: number) {
     const maxVisibleVideos = Math.min(6, Math.max(1, studentSlots));
@@ -2355,6 +2335,7 @@ function RoomInner({
         name: p.displayName,
       }))
     : [];
+  const handRank = handOrder(rosterStudents);
   const rosterWin = rosterWindow(filterPeople(rosterStudents, rosterQuery), rosterLimit);
   const waitingWin = rosterWindow(filterPeople(state?.waiting ?? [], rosterQuery), waitingLimit);
   const shownRoster = rosterWin.shown;
@@ -2436,6 +2417,32 @@ function RoomInner({
       window.removeEventListener('resize', read);
     };
   }, [isTeacher]);
+
+  // Teacher video layout (see overlaySlots): fill the stage on the class
+  // home, a floating 2 / 4 / 6 window while sharing or on the whiteboard.
+  const videoOverlay = isTeacher && (shareLayout || wbOpen);
+  const teacherSlots: PanelSlots = videoOverlay ? overlaySlots : 6;
+  const wasOverlay = useRef(false);
+  useEffect(() => {
+    if (videoOverlay && !wasOverlay.current) {
+      // Every share / whiteboard starts with the small window, open.
+      setOverlaySlots(2);
+      setShareVideosOn(true);
+      setWbVideosOn(true);
+    }
+    wasOverlay.current = videoOverlay;
+  }, [videoOverlay]);
+  useEffect(() => {
+    if (!isTeacher || !serverCap) return;
+    const want = studentCapForSlots(teacherSlots);
+    if (serverCap !== want && sampleCap !== want) setStudentCameraCap(want);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTeacher, serverCap, teacherSlots]);
+  const closeVideoWindow = () => {
+    if (sideWindow('videos')) closeSideWindow('videos');
+    else if (wbOpen) setWbVideosOn(false);
+    else setShareVideosOn(false);
+  };
 
   /** One spotlighted student at a time. Null clears it. */
   async function setSpotlight(participantId: string | null) {
@@ -2997,7 +3004,7 @@ function RoomInner({
 
   /** Teacher (i): class details on hover / tap, replacing the header (Nov 25). */
   const teacherInfoEl = (placement: 'left' | 'up') => {
-    const slots = panelSlots ?? panelSlotsForCap(sampleCap ?? state?.maxVisibleVideos ?? 5);
+    const slots = teacherSlots;
     const v = videosShown(shownVisibles.length, slots);
     const live = [
       'Live',
@@ -3224,7 +3231,7 @@ function RoomInner({
                   <span title="Tiles in the Class panel, including you (the 2 / 4 / 6 buttons use the same count)">
                     {(() => {
                       const slots =
-                        panelSlots ?? panelSlotsForCap(sampleCap ?? state?.maxVisibleVideos ?? 5);
+                        teacherSlots;
                       const v = videosShown(shownVisibles.length, slots);
                       return `${v.shown}/${v.total} videos shown`;
                     })()}
@@ -3632,8 +3639,14 @@ function RoomInner({
                       </span>
                     )}
                     {raised && (
-                      <span className="roster-hand" title="Hand raised" aria-label="Hand raised">
-                        <IconHand size={13} />
+                      <span
+                        className="roster-hand-badge"
+                        data-testid="roster-hand"
+                        title={`Hand raised (${ordinal(handRank.get(p.id) ?? 1)})`}
+                        aria-label={`Hand raised, ${ordinal(handRank.get(p.id) ?? 1)}`}
+                      >
+                        <IconHand size={12} />
+                        {handRank.get(p.id) ?? ''}
                       </span>
                     )}
                     <Avatar name={p.displayName} size="xs" />
@@ -3792,16 +3805,15 @@ function RoomInner({
         }
         selfName={displayName}
         selfStream={localCamStream}
-        slots={panelSlots}
+        fill={!videoOverlay}
+        slots={overlaySlots}
+        onCycleSlots={() => setOverlaySlots((n) => nextOverlaySlots(n))}
+        onClose={closeVideoWindow}
         videoPage={state?.videoPage ?? null}
         onVideoPage={(delta) => void turnVideoPage(delta)}
-        onSlotsChange={(studentSlots) => {
-          setPanelSlots(panelSlotsForCap(studentSlots));
-          void setStudentCameraCap(studentSlots);
-        }}
         // Whiteboard: floating, draggable panel like share mode — the board
         // keeps full width instead of docking videos in a right-hand column.
-        dock={wbOpen ? null : dockArea}
+        dock={videoOverlay ? null : dockArea}
         minLeft={wbOpen ? WB_TOOL_CLEAR_PX : 0}
         videosHidden={(wbOpen && !wbVideosOn) || (screenOn && !wbOpen && !sideWindowsAllowed && !shareVideosOn)}
         whiteboard={wbOpen}
@@ -3904,6 +3916,7 @@ function RoomInner({
             else closeWhiteboard();
           }}
           onEndClass={() => void endClass()}
+          onLeave={() => void leave()}
         />
       )}
 
@@ -3918,7 +3931,6 @@ function RoomInner({
             if (!screenOn && canShareScreen()) preopenShareControls();
           }}
           onEnd={endClass}
-          onNextVideoPage={() => void turnVideoPage(1)}
           onMuteAll={() => muteAllStudents()}
           onToggleChat={screenOn ? undefined : toggleChat}
           chatOpen={chatOpen}

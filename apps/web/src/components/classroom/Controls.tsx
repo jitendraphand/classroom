@@ -10,7 +10,6 @@ import {
   IconCamOff,
   IconScreen,
   IconLeave,
-  IconRotate,
   IconChat,
   IconHand,
   IconUsers,
@@ -19,6 +18,7 @@ import {
   IconVideo,
 } from '@/components/ui/Icons';
 import { cn } from '@/lib/cn';
+import { LeaveEndMenu } from './LeaveEndMenu';
 import { MicOptions } from './MicOptions';
 import type { ReactNode } from 'react';
 
@@ -48,7 +48,6 @@ type Props = {
   onLeave: () => void;
   isTeacher?: boolean;
   onEnd?: () => void;
-  onNextVideoPage?: () => void;
   /** Teacher: mute every student (no "allow all to unmute": unmute is per student, Nov 25). */
   onMuteAll?: () => void;
   canPublishVideo: boolean;
@@ -118,7 +117,6 @@ export function Controls({
   onLeave,
   isTeacher,
   onEnd,
-  onNextVideoPage,
   onMuteAll,
   canPublishVideo: _canPublishVideo,
   mutedByTeacher,
@@ -342,7 +340,7 @@ export function Controls({
         )}
 
         {isTeacher && onToggleRoster && (
-          <Tool caption="People" show={captions} wide={wide}>
+          <Tool caption="Roster" show={captions} wide={wide}>
           <IconButton
             label={
               rosterOpen
@@ -375,14 +373,6 @@ export function Controls({
           </Tool>
         )}
 
-        {isTeacher && onNextVideoPage && !isFloat && (
-          <Tool caption="Next videos" show={captions} wide={wide}>
-          <IconButton label="Next page of student videos" onClick={onNextVideoPage}>
-            <IconRotate />
-          </IconButton>
-          </Tool>
-        )}
-
         {!isFloat && (
           <div className="mx-1 hidden h-8 w-px bg-white/10 sm:block" aria-hidden />
         )}
@@ -393,22 +383,23 @@ export function Controls({
           </Button>
         )}
 
-        {/* Teacher: Leave (just me) is neutral and set apart from End class (everyone),
-            so the two are not one mis-click apart. Students only have Leave. */}
+        {/* Teacher: one button, both choices (Leave: just me; End class: everyone).
+            Students only have Leave. */}
         <Tool caption="Leave" show={captions} wide={wide}>
-          <IconButton size={btn} data-no-auto-fullscreen label="Leave class" danger={!isTeacher} onClick={onLeave}>
-            <IconLeave />
-          </IconButton>
+          {isTeacher && onEnd ? (
+            <LeaveEndMenu
+              onLeave={onLeave}
+              onEnd={onEnd}
+              triggerClassName="inline-flex h-11 w-11 items-center justify-center rounded-full border border-red-400/40 bg-red-500/80 text-white hover:bg-red-500"
+            >
+              <IconLeave />
+            </LeaveEndMenu>
+          ) : (
+            <IconButton size={btn} data-no-auto-fullscreen label="Leave class" danger onClick={onLeave}>
+              <IconLeave />
+            </IconButton>
+          )}
         </Tool>
-
-        {isTeacher && onEnd && !isFloat && (
-          <>
-            <div className="mx-2 hidden h-8 w-px bg-white/10 sm:block" aria-hidden />
-            <Button variant="danger" size="sm" data-no-auto-fullscreen onClick={onEnd}>
-              End class
-            </Button>
-          </>
-        )}
       </div>
 
       {micLocked && !rail && (

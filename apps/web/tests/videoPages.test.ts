@@ -91,3 +91,67 @@ test('no random rotation is left: server pages, client follows the server order'
   // A camera turned on or off refreshes the page (coalesced per room).
   assert.match(src('lib/teacherMute.ts'), /schedulePageRefresh\(room\.code\)/);
 });
+
+// ---------------------------------------------------------------- teacher video layout (Nov 26)
+import { fillGridLayout, nextOverlaySlots } from '../src/lib/videoGrid';
+import { handOrder, ordinal } from '../src/lib/handOrder';
+
+test('class home grid: biggest 16:9 tiles that fit the stage, every tile the same size', () => {
+  const one = fillGridLayout(1, 1280, 720);
+  assert.equal(one.cols, 1);
+  assert.ok(one.tileW > 1000);
+  const two = fillGridLayout(2, 1280, 720);
+  assert.equal(two.cols, 2); // side by side on a wide stage
+  const six = fillGridLayout(6, 1280, 720);
+  assert.equal(six.cols, 3);
+  assert.equal(six.rows, 2);
+  const tall = fillGridLayout(6, 400, 900); // portrait / narrow
+  assert.equal(tall.cols, 1);
+  for (const g of [one, two, six, tall]) {
+    assert.ok(Math.abs(g.tileH - (g.tileW * 9) / 16) <= 1);
+    assert.ok(g.cols * g.tileW + (g.cols - 1) * g.gap <= g.paneW);
+  }
+  assert.equal(fillGridLayout(0, 0, 0).tileW, 0);
+});
+
+test('share / whiteboard window cycles 2 → 4 → 6 → 2', () => {
+  assert.equal(nextOverlaySlots(2), 4);
+  assert.equal(nextOverlaySlots(4), 6);
+  assert.equal(nextOverlaySlots(6), 2);
+});
+
+test('roster hand badges number raises in order', () => {
+  const m = handOrder([
+    { id: 'a', handRaised: true, handRaisedAt: 30 },
+    { id: 'b', handRaised: false },
+    { id: 'c', handRaised: true, handRaisedAt: 10 },
+    { id: 'd', handRaised: true, handRaisedAt: null },
+  ]);
+  assert.deepEqual([...m.entries()], [['c', 1], ['a', 2], ['d', 3]]);
+  assert.deepEqual([1, 2, 3, 4, 11, 12, 13, 21, 22, 101].map(ordinal), ['1st', '2nd', '3rd', '4th', '11th', '12th', '13th', '21st', '22nd', '101st']);
+});
+
+test('teacher layout wiring: fill on the class home, 2/4/6 window + close while sharing, one Leave/End menu, Roster label', () => {
+  const room = src('components/classroom/ClassroomRoom.tsx');
+  assert.match(room, /const videoOverlay = isTeacher && \(shareLayout \|\| wbOpen\)/);
+  assert.match(room, /fill=\{!videoOverlay\}/);
+  assert.match(room, /onCycleSlots=\{\(\) => setOverlaySlots\(\(n\) => nextOverlaySlots\(n\)\)\}/);
+  assert.match(room, /onClose=\{closeVideoWindow\}/);
+  assert.match(room, /setOverlaySlots\(2\)/); // every share / whiteboard starts at 2
+  assert.match(room, /studentCapForSlots\(teacherSlots\)/); // server cap follows what is on screen
+  const panel = src('components/classroom/TeacherPeersFloat.tsx');
+  assert.match(panel, /const isMin = false;/);
+  assert.doesNotMatch(panel, /data-testid="videos-min"|videos-layout-/);
+  const controls = src('components/classroom/Controls.tsx');
+  assert.match(controls, /caption="Roster"/);
+  assert.doesNotMatch(controls, /caption="People"|Next videos/);
+  assert.match(controls, /<LeaveEndMenu/);
+  assert.doesNotMatch(controls, />\s*End class\s*</);
+  const bar = src('components/classroom/MeetingBar.tsx');
+  assert.match(bar, /<LeaveEndMenu onLeave=\{onLeave\} onEnd=\{onEndClass\}/);
+  assert.match(bar, /icon: ic\(<IconUsers size=\{18\} \/>\)/);
+  assert.match(src('components/classroom/TeacherShareHud.tsx'), /aria-label=\{rosterShown \? 'Close roster' : 'Open roster'\}/);
+  // Roster: hands first (sortRoster) with a numbered badge in both rosters.
+  assert.match(room, /data-testid="roster-hand"/);
+  assert.match(src('components/classroom/TeacherShareHud.tsx'), /tsh-hand-badge/);
+});

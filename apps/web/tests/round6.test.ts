@@ -111,7 +111,8 @@ test('B5: portrait phones get the student controls in a bottom row', () => {
 
 test('item 3: whiteboard uses the same floating video panel as a screen share', () => {
   const room = classroomViewSource();
-  assert.match(room, /dock=\{wbOpen \? null : dockArea\}/);
+  // Class home fills the stage; share and whiteboard float (no docking).
+  assert.match(room, /dock=\{videoOverlay \? null : dockArea\}/);
   assert.match(room, /minLeft=\{wbOpen \? WB_TOOL_CLEAR_PX : 0\}/);
   assert.match(room, /whiteboard=\{wbOpen\}/);
   assert.match(room, /useMicDuck\(isTeacher/);

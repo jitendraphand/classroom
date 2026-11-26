@@ -9,7 +9,8 @@
  */
 import { useEffect, type ReactNode } from 'react';
 import { notifyFloatBounds } from './FloatingPanel';
-import { IconCam, IconCamOff, IconChat, IconHand, IconMic, IconMicOff, IconPen, IconScreen, IconSpeakerOff, IconUserPlus, IconUsers, IconVideo } from '@/components/ui/Icons';
+import { IconCam, IconCamOff, IconChat, IconLeave, IconMic, IconMicOff, IconPen, IconScreen, IconSpeakerOff, IconUserPlus, IconUsers, IconVideo } from '@/components/ui/Icons';
+import { LeaveEndMenu } from './LeaveEndMenu';
 import { FlyoutBar, barBtn, type FlyoutGroup } from '@/lib/whiteboard/FlyoutBar';
 import { ALLOW_GREEN, MEETING_BAR_PX, admitLabel, focusAlertDanger, peopleBadgeCount } from '@/lib/shareChrome';
 
@@ -40,6 +41,7 @@ export function WhiteboardMeetingBar({
   onToggleVideos,
   onStopWhiteboard,
   onEndClass,
+  onLeave,
 }: {
   micOn: boolean;
   onToggleMic: () => void;
@@ -67,6 +69,8 @@ export function WhiteboardMeetingBar({
   onToggleVideos: () => void;
   onStopWhiteboard: () => void;
   onEndClass: () => void;
+  /** Teacher leaves; the class keeps running (with End, in one menu). */
+  onLeave: () => void;
 }) {
   // Floats (roster, chat, videos, spotlight) re-clamp left of this bar when it
   // appears and spread back when it goes (Nov 25).
@@ -107,7 +111,9 @@ export function WhiteboardMeetingBar({
     {
       id: 'people',
       label: rosterOpen ? 'Close roster' : 'Open roster',
-      icon: ic(hands > 0 ? <IconHand size={18} /> : <IconUsers size={18} />),
+      // Same icon and name as the class toolbar and share controls ("Roster");
+      // raised hands and fullscreen alerts are the badge.
+      icon: ic(<IconUsers size={18} />),
       badge: peopleBadgeCount(hands, focusAlerts),
       danger: focusAlertDanger(focusAlerts),
       active: rosterOpen,
@@ -185,9 +191,9 @@ export function WhiteboardMeetingBar({
       <button type="button" style={barBtn(false, { background: '#b91c1c', width: 40 })} title="Stop whiteboard sharing" aria-label="Stop whiteboard sharing" data-testid="wbm-stop" onClick={onStopWhiteboard}>
         <IconScreen size={18} />
       </button>
-      <button type="button" data-no-auto-fullscreen style={barBtn(false, { width: 40, fontSize: 11 })} title="End the class for everyone" aria-label="End class" data-testid="wbm-end" onClick={onEndClass}>
-        End
-      </button>
+      <LeaveEndMenu onLeave={onLeave} onEnd={onEndClass} placement="left" testId="wbm-end" triggerStyle={barBtn(false, { width: 40, background: '#b91c1c' })}>
+        <IconLeave size={18} />
+      </LeaveEndMenu>
     </>
   );
   return (

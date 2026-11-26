@@ -445,6 +445,32 @@ input[type='time'].input {
   .peers-float-pane {
     @apply fixed z-[34] overflow-hidden rounded-2xl border border-white/20 bg-surface-1/95 shadow-lift backdrop-blur-xl;
   }
+  /* Teacher Leave / End menu (LeaveEndMenu). */
+  .leave-end-menu {
+    @apply flex w-64 flex-col gap-1 rounded-xl border border-white/15 bg-surface-1 p-1.5 shadow-lift;
+  }
+  .leave-end-item {
+    @apply flex flex-col items-start rounded-lg px-3 py-2 text-left hover:bg-white/[0.08] focus-visible:bg-white/[0.08] focus-visible:outline-none;
+  }
+  .leave-end-item.is-danger {
+    @apply hover:bg-red-500/20 focus-visible:bg-red-500/20;
+  }
+  .leave-end-item.is-danger .leave-end-title {
+    @apply text-red-300;
+  }
+  .leave-end-title {
+    @apply text-sm font-semibold text-white;
+  }
+  .leave-end-sub {
+    @apply text-[11px] text-slate-400;
+  }
+  /* Class home: the grid IS the stage (no floating-window look). */
+  .peers-float-pane[data-fill='1'] {
+    @apply rounded-none border-0 bg-ink-950 shadow-none backdrop-blur-none;
+  }
+  .peers-float-pane[data-fill='1'] .peers-float-header {
+    @apply h-9 border-white/[0.06] bg-transparent px-3;
+  }
   .peers-float-pane[data-minimized='1'] {
     width: auto !important;
     min-width: 140px;
@@ -529,8 +555,14 @@ input[type='time'].input {
   .roster-row {
     @apply flex min-h-[30px] items-center gap-1.5 rounded-lg border border-transparent px-1.5 py-1 text-xs hover:bg-white/[0.04];
   }
+  /* Raised hand (or a draw request): listed first, with a solid amber bar,
+     a stronger tint and a numbered hand badge (1 = raised first). */
   .roster-row-raised {
-    @apply border-amber-400/30 bg-amber-500/10;
+    @apply border-amber-400/60 bg-amber-400/[0.16];
+    box-shadow: inset 4px 0 0 #fbbf24;
+  }
+  .roster-hand-badge {
+    @apply inline-flex shrink-0 items-center gap-0.5 rounded-full bg-amber-400 px-1.5 py-0.5 text-[10px] font-extrabold leading-none text-ink-950;
   }
   /* The name wraps instead of being cut off; the campus/division meta gives way first. */
   .roster-name {

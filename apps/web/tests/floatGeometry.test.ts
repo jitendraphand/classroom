@@ -160,8 +160,8 @@ test('the floating video handle resizes with pointer capture in whiteboard and s
   assert.match(room, /setPointerCapture\(e\.pointerId\)/);
   assert.match(room, /class_panel_wb_manual/);
   assert.match(room, /class_panel_share_manual/);
-  assert.match(room, /setManualSize\(null\)/);
-  assert.match(room, /allowResize = !isMin && !embedLayout && \(whiteboard \|\| sharing \|\| floating \|\| portal\)/);
+  // The class-home grid fills the stage and is never resized by hand.
+  assert.match(room, /allowResize = !fill && !isMin && !embedLayout && \(whiteboard \|\| sharing \|\| floating \|\| portal\)/);
   const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
   assert.match(css, /\.peers-float-resize \{[\s\S]*touch-action: none;/);
 });
