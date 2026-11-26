@@ -72,3 +72,18 @@ test('arrival, the lobby poll and the manual join all use the same rule', () => 
   const settings = src('app/api/rooms/[code]/settings/route.ts');
   assert.match(settings, /idsToAdmitOnToggle\(false, waiting, removed\)/);
 });
+
+test('classes have no size limit: no cap in admission, settings, lobby or API', () => {
+  const admission = src('lib/admission.ts');
+  assert.doesNotMatch(admission, /ClassFullError|classCapacity|seatsLeft|maxStudentsPerClass|advisory_xact_lock/);
+  assert.doesNotMatch(src('lib/capacity.ts'), /export function (classCapacity|seatsLeft)|CLASS_FULL_MESSAGE/);
+  assert.doesNotMatch(src('lib/schoolSettings.ts'), /maxStudentsPerClass: /);
+  const api = src('app/api/admin/settings/route.ts');
+  assert.doesNotMatch(api, /patch\.maxStudentsPerClass/); // an old page sending it is ignored
+  assert.doesNotMatch(src('app/admin/system/settings/page.tsx'), /Students per class|maxStudentsPerClass/);
+  const state = src('app/api/rooms/[code]/state/route.ts');
+  assert.doesNotMatch(state, /classFull/);
+  for (const f of ['app/api/rooms/[code]/admit/route.ts', 'app/api/rooms/[code]/settings/route.ts', 'app/api/rooms/[code]/join/route.ts', 'lib/studentService.ts']) {
+    assert.doesNotMatch(src(f), /ClassFullError|CLASS_FULL_MESSAGE/, f);
+  }
+});

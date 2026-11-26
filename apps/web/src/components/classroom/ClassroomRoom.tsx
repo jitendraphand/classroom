@@ -2149,7 +2149,7 @@ function RoomInner({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setHudNotice(data.error || (res.status === 409 ? 'This class is full. Students remain in the waiting room.' : 'Could not admit students. Please retry.'));
+        setHudNotice(data.error || 'Could not admit students. Please retry.');
       } else {
         setHudNotice(`${data.admitted ?? 0} student(s) admitted. Any remaining students are still waiting.`);
       }

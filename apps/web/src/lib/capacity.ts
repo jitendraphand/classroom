@@ -1,23 +1,8 @@
 /**
- * Class size. There is no built-in cap. "This class is full." is returned
- * only when the school has set a positive maxStudentsPerClass.
+ * Class timetable tones and today's board tags. (Classes have no size
+ * limit: the optional "students per class" cap that used to live here was
+ * removed; every student of the class can be admitted.)
  */
-
-export function classCapacity(limit: number | null | undefined): number | null {
-  if (limit == null || !Number.isFinite(limit)) return null;
-  const n = Math.floor(limit);
-  return n > 0 ? n : null;
-}
-
-export const CLASS_FULL_MESSAGE = 'This class is full.';
-
-/** How many of `requested` waiting students may still be admitted. */
-export function seatsLeft(limit: number | null | undefined, admitted: number, requested: number): { admit: number; full: boolean } {
-  const cap = classCapacity(limit);
-  if (cap == null) return { admit: requested, full: false };
-  const room = Math.max(0, cap - Math.max(0, admitted));
-  return { admit: Math.min(requested, room), full: requested > 0 && room === 0 };
-}
 
 /**
  * Calendar / table tone for one class occurrence.

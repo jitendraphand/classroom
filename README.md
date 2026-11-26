@@ -156,8 +156,8 @@ teacher's video until the student is back; audio keeps playing.
   arrivals (no time cut-off while the class runs; they are marked late),
   students who pressed **Leave** and come back, dropped connections and
   device switches. Switching it on admits everyone already waiting, and a
-  waiting student who arrived during the switch, or found the class full,
-  is let in by the lobby's next check once there is room. The one exception:
+  waiting student who arrived during the switch is let in by the lobby's next
+  check. Classes have no size limit. The one exception:
   a student the teacher **denied or removed** in this class waits for the
   teacher again, until the teacher admits them once.
 - **Attendance** per student per class: first joined, admitted, left, total

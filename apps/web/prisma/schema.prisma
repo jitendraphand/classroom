@@ -467,6 +467,7 @@ model SchoolSetting {
   /// 0 = no cap. Otherwise at most this many student microphones open at once.
   maxOpenStudentMics  Int      @default(0)
   /// Null or 0 = no cap on students in one class.
+  /// Unused: classes have no size limit (the optional cap was removed 2026-11-26).
   maxStudentsPerClass Int?
   updatedAt           DateTime @updatedAt
 }

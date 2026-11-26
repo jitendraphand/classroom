@@ -18,7 +18,7 @@ import { addDays, forAudience, formatHHMM, localDateOf, type Occurrence } from '
 import { appTimeZone, earlyWindowMinutes } from './schoolConfig';
 import { decideRoute, routeSignature, type SessionState } from './studentRouting';
 import { memo } from './roomStateCache';
-import { admitWaiting, ClassFullError } from './admission';
+import { admitWaiting } from './admission';
 import { directEntryAllowed, shouldAutoAdmit } from './admissionLogic';
 import type { JoinClaims } from './schoolJwt';
 
@@ -186,12 +186,8 @@ export async function ensureStudentParticipant(student: Student, room: Room, cs:
   // Leave, and a seat left waiting by a race with the toggle. Only a student
   // the teacher denied or removed in this session waits for the teacher again.
   if (directEntryAllowed(earlier) && shouldAutoAdmit(room, participant)) {
-    try {
-      await admitWaiting(room, { ids: [participant.id] });
-      participant = { ...participant, status: 'ADMITTED' };
-    } catch (e) {
-      if (!(e instanceof ClassFullError)) throw e;
-    }
+    await admitWaiting(room, { ids: [participant.id] });
+    participant = { ...participant, status: 'ADMITTED' };
   }
   await setStudentCookie(participant.sessionToken);
   await setActAsStudent();

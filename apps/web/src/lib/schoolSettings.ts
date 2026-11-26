@@ -1,10 +1,13 @@
 import { prisma } from './db';
 import { normalizeMicLimit } from './micSlots';
-import { classCapacity } from './capacity';
 
+/**
+ * School-wide settings. Classes have no size limit: the old optional
+ * "students per class" cap was removed (its SchoolSetting.maxStudentsPerClass
+ * column is no longer read or written).
+ */
 export type SchoolSettings = {
   maxOpenStudentMics: number;
-  maxStudentsPerClass: number | null;
 };
 
 const TTL_MS = 15_000;
@@ -23,21 +26,14 @@ export async function getSchoolSettings(): Promise<SchoolSettings> {
     (await prisma.schoolSetting.upsert({ where: { id: 'default' }, update: {}, create: { id: 'default' } }));
   const next: SchoolSettings = {
     maxOpenStudentMics: normalizeMicLimit(row.maxOpenStudentMics),
-    maxStudentsPerClass: classCapacity(row.maxStudentsPerClass),
   };
   cache = { at: Date.now(), row: next };
   return next;
 }
 
-export async function updateSchoolSettings(input: {
-  maxOpenStudentMics?: number;
-  maxStudentsPerClass?: number | null;
-}): Promise<SchoolSettings> {
-  const data: { maxOpenStudentMics?: number; maxStudentsPerClass?: number | null } = {};
+export async function updateSchoolSettings(input: { maxOpenStudentMics?: number }): Promise<SchoolSettings> {
+  const data: { maxOpenStudentMics?: number } = {};
   if (input.maxOpenStudentMics !== undefined) data.maxOpenStudentMics = normalizeMicLimit(input.maxOpenStudentMics);
-  if (input.maxStudentsPerClass !== undefined) {
-    data.maxStudentsPerClass = classCapacity(input.maxStudentsPerClass);
-  }
   await prisma.schoolSetting.upsert({
     where: { id: 'default' },
     update: data,

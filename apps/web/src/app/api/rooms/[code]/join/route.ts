@@ -7,7 +7,7 @@ import { arriveAtSession, studentMayEnterRoom } from '@/lib/studentService';
 import { generateIdentity, generateSessionToken } from '@/lib/codes';
 import { jsonError, jsonOk } from '@/lib/response';
 import { ensureRedis, keys } from '@/lib/redis';
-import { admitWaiting, ClassFullError } from '@/lib/admission';
+import { admitWaiting } from '@/lib/admission';
 import { directEntryAllowed, shouldAutoAdmit } from '@/lib/admissionLogic';
 
 const schema = z.object({
@@ -76,12 +76,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     // Waiting room switched off by the teacher: straight into the class.
     let status: string = participant.status;
     if (directEntryAllowed(previous) && shouldAutoAdmit(room, participant)) {
-      try {
-        await admitWaiting(room, { ids: [participant.id] });
-        status = 'ADMITTED';
-      } catch (e) {
-        if (!(e instanceof ClassFullError)) throw e;
-      }
+      await admitWaiting(room, { ids: [participant.id] });
+      status = 'ADMITTED';
     }
 
     nudgeRoomState(room.code, 'teacher');

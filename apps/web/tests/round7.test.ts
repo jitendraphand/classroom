@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { academicYearForDate, academicYearProblem, formatAcademicYear, isAcademicYearLabel } from '../src/lib/academicYear';
-import { CLASS_FULL_MESSAGE, classCapacity, classTone, seatsLeft, todayTag } from '../src/lib/capacity';
+import { classTone, todayTag } from '../src/lib/capacity';
 import { averageStars, feedbackProblem, normalizeFeedbackComment, presentStars } from '../src/lib/feedbackText';
 import { normalizeMicLimit, studentSetMic, teacherSetMic } from '../src/lib/micSlots';
 import { hasPrivilege, parsePrivilegeBody, privilegeSetFrom } from '../src/lib/privileges';
@@ -119,14 +119,7 @@ test('mic cap queues students and only auto-promotes teacher-approved waiters', 
   assert.deepEqual(underCap.open, []);
 });
 
-test('class full only when a positive limit is configured', () => {
-  assert.equal(classCapacity(null), null);
-  assert.equal(classCapacity(0), null);
-  assert.equal(classCapacity(40), 40);
-  assert.deepEqual(seatsLeft(null, 100, 5), { admit: 5, full: false });
-  assert.deepEqual(seatsLeft(10, 10, 2), { admit: 0, full: true });
-  assert.deepEqual(seatsLeft(10, 8, 5), { admit: 2, full: false });
-  assert.equal(CLASS_FULL_MESSAGE, 'This class is full.');
+test('class tones and today tags', () => {
   assert.equal(classTone({ date: '2026-10-20', today: '2026-10-20', nowMinute: 600, startMinute: 540, endMinute: 600, started: true, ended: false }), 'today');
   assert.equal(classTone({ date: '2026-10-19', today: '2026-10-20', nowMinute: 600, startMinute: 540, endMinute: 600, started: false, ended: false }), 'skipped');
   assert.equal(todayTag({ nowMinute: 500, startMinute: 540, endMinute: 585, started: false, ended: false, live: false }), 'starts');

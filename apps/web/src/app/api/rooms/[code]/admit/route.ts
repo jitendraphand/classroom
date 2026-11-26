@@ -3,8 +3,7 @@ import { nudgeRoomState } from '@/lib/roomNudge';
 import { prisma } from '@/lib/db';
 import { getTeacherSession } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
-import { admitWaiting, ClassFullError } from '@/lib/admission';
-import { CLASS_FULL_MESSAGE } from '@/lib/capacity';
+import { admitWaiting } from '@/lib/admission';
 
 const schema = z.object({
   participantIds: z.array(z.string()).optional(),
@@ -30,7 +29,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     return jsonOk({ admitted: count, roomStatus: 'LIVE' });
   } catch (e) {
     if (e instanceof z.ZodError) return jsonError(e.errors[0]?.message || 'Invalid input');
-    if (e instanceof ClassFullError) return jsonError(CLASS_FULL_MESSAGE, 409);
     console.error(e);
     return jsonError('Admit failed', 500);
   }

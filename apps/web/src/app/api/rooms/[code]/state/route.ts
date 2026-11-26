@@ -18,7 +18,6 @@ import { currentHolders, drawRequests } from '@/lib/drawServer';
 import { studentRosterPresence } from '@/lib/studentPresence';
 import { selectTeacherVideos } from '@/lib/droppedVideos';
 import { getSchoolSettings } from '@/lib/schoolSettings';
-import { classCapacity } from '@/lib/capacity';
 import { readMicBook, micQueueView } from '@/lib/micBook';
 import { memo, roomVersion, stateCacheMs } from '@/lib/roomStateCache';
 import { listActiveObservers } from '@/lib/adminObservers';
@@ -140,9 +139,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
         nudgeRoomState(room.code, 'teacher');
       }
       const myHand = me ? (await redis.sismember(keys.hands(code), me.id)) === 1 : false;
-      const settings = await getSchoolSettings();
-      const cap = classCapacity(settings.maxStudentsPerClass);
-      const admittedCount = room.participants.filter((p) => p.role === 'STUDENT' && p.status === 'ADMITTED').length;
       return jsonOk({
         code: room.code,
         name: room.name,
@@ -172,7 +168,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
         visibleCount: 0,
         raisedHands: [],
         stageMode,
-        classFull: cap != null && admittedCount >= cap,
       });
     }
   }
@@ -471,7 +466,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     takeovers: isTeacher ? await recentTakeovers(code) : undefined,
     sampleNote:
       'Only a rotating sample of students publish video to the teacher. Everyone keeps a local preview and may appear visible.',
-    classFull: false,
     spotlight,
     micLimit: settings.maxOpenStudentMics,
     micQueue: isTeacher ? micQueue : undefined,

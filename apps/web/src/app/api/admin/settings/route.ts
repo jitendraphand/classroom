@@ -16,21 +16,16 @@ export async function PUT(req: Request) {
   if (res) return res;
   const body = (await req.json().catch(() => null)) as {
     maxOpenStudentMics?: unknown;
-    maxStudentsPerClass?: unknown;
   } | null;
   if (!body) return jsonError('Invalid JSON');
-  const patch: { maxOpenStudentMics?: number; maxStudentsPerClass?: number | null } = {};
+  // Classes have no size limit; an old admin page may still send
+  // maxStudentsPerClass, which is ignored.
+  const patch: { maxOpenStudentMics?: number } = {};
   if (body.maxOpenStudentMics !== undefined) {
     if (typeof body.maxOpenStudentMics !== 'number' || !Number.isFinite(body.maxOpenStudentMics)) {
       return jsonError('maxOpenStudentMics must be a number (0 = no cap)');
     }
     patch.maxOpenStudentMics = body.maxOpenStudentMics;
-  }
-  if (body.maxStudentsPerClass !== undefined) {
-    if (body.maxStudentsPerClass === null) patch.maxStudentsPerClass = null;
-    else if (typeof body.maxStudentsPerClass !== 'number' || !Number.isFinite(body.maxStudentsPerClass)) {
-      return jsonError('maxStudentsPerClass must be a number or null (empty = no cap)');
-    } else patch.maxStudentsPerClass = body.maxStudentsPerClass;
   }
   clearSchoolSettingsCache();
   const before = await getSchoolSettings();

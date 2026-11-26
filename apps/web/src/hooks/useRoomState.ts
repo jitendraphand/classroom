@@ -124,7 +124,6 @@ export type RoomState = {
   /** Teacher: students waiting for a speaking slot. */
   micQueue?: { id: string; name: string; source: 'teacher' | 'student'; position: number }[];
   /** Waiting room: the class cannot take another student. */
-  classFull?: boolean;
   visibleIdentities: string[];
   visibleCount: number;
   raisedHands?: string[];
