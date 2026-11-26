@@ -255,8 +255,15 @@ export function drawItem(ctx: CanvasRenderingContext2D, it: Item, onImage?: () =
     }
     case 'img': {
       const img = imageFor(it.src, onImage);
-      if (img) ctx.drawImage(img, it.x, it.y, it.w, it.h);
-      else {
+      if (img) {
+        ctx.drawImage(img, it.x, it.y, it.w, it.h);
+        if (it.bd) {
+          // PDF page: a thin grey edge so consecutive white pages stay apart.
+          ctx.strokeStyle = '#94a3b8';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(it.x - 1, it.y - 1, it.w + 2, it.h + 2);
+        }
+      } else {
         ctx.strokeStyle = '#94a3b8';
         ctx.setLineDash([12, 8]);
         ctx.strokeRect(it.x, it.y, it.w, it.h);

@@ -109,6 +109,12 @@ test('board pictures: uploaded once as assets, referenced by id', () => {
 
 test('PDF import: pages rendered as pictures, capped, stacked below the content', () => {
   assert.equal(PDF_MAX_PAGES, 40);
+  // Imported pages carry a thin outline; it survives the network clean-up.
+  const page = cleanItem({ k: 'img', id: 'p1', by: 't', src: 'asset:0123456789abcdef0123456789abcdef', x: 0, y: 0, w: 10, h: 10, bd: 1 });
+  assert.equal(page && page.k === 'img' ? page.bd : null, 1);
+  const pic = cleanItem({ k: 'img', id: 'p2', by: 't', src: 'asset:0123456789abcdef0123456789abcdef', x: 0, y: 0, w: 10, h: 10, bd: 'x' });
+  assert.equal(pic && pic.k === 'img' ? pic.bd : 'missing', undefined);
+  assert.match(src('lib/whiteboard/render.ts'), /if \(it\.bd\) \{/);
   assert.equal(pdfScale(800), 2); // A4 width ~595 pt / letter 612 pt render ~1600 px
   assert.equal(pdfScale(100), 3); // never more than 3×
   const board = src('lib/whiteboard/WhiteboardBoard.tsx');

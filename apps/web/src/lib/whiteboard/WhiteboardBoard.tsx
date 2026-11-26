@@ -880,7 +880,7 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
         const src = await uploadImage(pic.blob).catch(() => null);
         if (!src) throw new Error('upload');
         const w = PDF_PAGE_W, h = Math.round((pic.h * PDF_PAGE_W) / pic.w);
-        const op: Op = { k: 'add', p: pg.id, item: { k: 'img', id: newId('t'), by: identity, src, x: Math.round((PAGE_W - w) / 2), y, w, h } };
+        const op: Op = { k: 'add', p: pg.id, item: { k: 'img', id: newId('t'), by: identity, src, x: Math.round((PAGE_W - w) / 2), y, w, h, bd: 1 } };
         send([op]);
         ops.push(op);
         y += h + 40;

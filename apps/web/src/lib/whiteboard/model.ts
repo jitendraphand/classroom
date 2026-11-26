@@ -64,7 +64,7 @@ export type TextItem = { k: 'text'; id: string; by: string; c: string; size: num
  * teacher uploaded to the class (`/whiteboard/asset`), fetched over HTTP by
  * each viewer so pictures and PDF pages never ride in data packets or snapshots.
  */
-export type ImageItem = { k: 'img'; id: string; by: string; x: number; y: number; w: number; h: number; src: string };
+export type ImageItem = { k: 'img'; id: string; by: string; x: number; y: number; w: number; h: number; src: string; /** 1 = thin outline (imported PDF pages). */ bd?: 1 };
 export const ASSET_SRC_RE = /^asset:[a-f0-9]{32}$/;
 export type Item = StrokeItem | ShapeItem | TextItem | ImageItem;
 
@@ -188,6 +188,7 @@ export function cleanItem(raw: unknown): Item | null {
         id,
         by,
         src,
+        ...(o.bd === 1 ? { bd: 1 as const } : {}),
         x: clampN(o.x, -PAGE_W, PAGE_W * 2),
         y: clampN(o.y, -PAGE_H, BOARD_MAX_H),
         w: clampN(o.w, 1, PAGE_W * 3),
