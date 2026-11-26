@@ -156,6 +156,8 @@ model Participant {
 
   @@index([roomId, status])
   @@index([studentId])
+  /// Retention sweep (lib/retention.ts): LEFT students whose leftAt passed the cutoff.
+  @@index([status, leftAt])
 }
 
 enum MessageScope {

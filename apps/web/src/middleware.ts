@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { allowsCrossSiteGet, allowsFormPost, checkCsrf, isCsrfExempt } from '@/lib/csrf';
 import { hasUnsignedJoinParams } from '@/lib/joinParams';
+import { bodyTooLarge } from '@/lib/bodyLimit';
 
 /**
  * - `/join?t=<jwt>` (signed) or `/join?FirstName=…&SID=…&Grade=…&Division=…`
@@ -10,6 +11,8 @@ import { hasUnsignedJoinParams } from '@/lib/joinParams';
  * - Origin + content-type guard for every state-changing API call, and a
  *   Sec-Fetch-Site guard for every API call (GETs included). See `lib/csrf.ts`
  *   for the rules and why SameSite cookies are not enough on sslip.io deploys.
+ * - A Content-Length cap per route (`lib/bodyLimit.ts`), before any handler
+ *   buffers the body.
  */
 export function middleware(req: NextRequest) {
   const { pathname, searchParams } = req.nextUrl;
@@ -27,6 +30,9 @@ export function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
+  if (bodyTooLarge(pathname, req.headers.get('content-length'))) {
+    return NextResponse.json({ error: 'Request body too large' }, { status: 413 });
+  }
   if (isCsrfExempt(pathname)) return NextResponse.next();
   const result = checkCsrf({
     method: req.method,

@@ -92,16 +92,21 @@ Defined in `apps/web/src/lib/videoQuality.ts`:
 
 | Track | Capture | Encoding |
 |---|---|---|
-| Teacher camera | 1280×720, 30 fps | simulcast 320×180 @15 fps ≤140 kbps · 640×360 @24 fps ≤500 kbps · 720p @30 fps ≤1.5 Mbps |
-| Student camera | 320×180, 15 fps | single layer ≤200 kbps |
-| Screen share | up to 1920×1080, 15 fps | simulcast 1280×720 @10 fps ≤500 kbps · captured size (≤1080p) @15 fps ≤1.5 Mbps; single layer when the capture's short side is under 900 px, on Firefox publishers, or if the layered publish fails |
+| Teacher camera | 640×360, 15 fps | simulcast 640×360 ≤300 kbps · 320×180 @12 fps ≤90 kbps (students take the small layer while a share is on) |
+| Student camera | 320×180, 15 fps | single layer ≤200 kbps, sent only while the teacher shows it |
+| Screen share, slides | up to 1920×1080, 15 fps | Chromium: VP9 `L2T3_KEY` (full + half resolution, 3 temporal layers) ≤2.5 Mbps with a VP8 backup; other browsers: VP8 simulcast 1280×720 ≤1.2 Mbps + captured size |
+| Screen share, video mode | ≤1280×720, 24 fps | ≤1.5 Mbps top / ≤1 Mbps low |
 
-Subscribers use `adaptiveStream` (the SFU forwards the layer that fits the
-element, kept playing in background tabs) and publishers use `dynacast`
-(unreceived layers are not encoded).
-The screen share's low layer stays at 720p (not 540p) so slide text remains
-legible on phones and small windows; full-screen students on ≥1080-line
-displays (or HiDPI) receive the 1080p layer, the admin tiles the 720p one.
+All values are in `apps/web/src/lib/videoQuality.ts` (`MEDIA_PROFILE=low` lowers
+them; see docs/CONSTRAINED-DEPLOY.md). Subscribers use `adaptiveStream` (the
+SFU forwards the layer that fits the element) and publishers use `dynacast`
+(unreceived layers are not encoded). Phones get the half-resolution share layer.
+
+Students save data with the **Quality** button (Full → Low → Share → Audio:
+audio only, no teacher camera and no screen share). A device that reports
+Save-Data or a 2G link starts in Audio only, 3G in Low. A student page hidden
+for 20 s (another app, minimised browser, locked phone) stops receiving the
+teacher's video until the student is back; audio keeps playing.
 
 ## School management
 
@@ -277,6 +282,20 @@ docker compose --profile tls up --build -d
 Opens `https://…` and `wss://livekit.…`. Firewall: **80/443**, **7881/tcp**, **50000–60000/udp**; do **not** expose **3000** or **7880** publicly. Full steps: [docs/DEPLOY-CADDY.md](docs/DEPLOY-CADDY.md).
 
 
+## Backups
+
+Attendance, students, timetable and staff accounts live in Postgres only.
+Back it up every night and keep a copy off the server:
+
+```bash
+./scripts/backup-db.sh                     # dump to ./backups (newest 14 kept)
+BACKUP_COPY_CMD='rclone copy "$1" remote:classroom-backups' ./scripts/backup-db.sh
+./scripts/backup-db.sh --restore backups/classroom-<stamp>.dump   # asks first
+```
+
+Cron (as root): `17 2 * * * cd /path/to/classroom && ./scripts/backup-db.sh >> /var/log/classroom-backup.log 2>&1`.
+Try a restore on a scratch server now and then; a backup nobody has restored is a guess.
+
 ## URLs & ports
 
 | URL | Purpose |
@@ -391,7 +410,7 @@ DATABASE_URL=postgresql://… REDIS_URL=redis://…/1 npm run test:integration
 ## Versions
 
 - **LiveKit server:** `livekit/livekit-server:v1.13.9` (aligned with `livekit-client` 2.x)
-- **Next.js:** 15.5, **Prisma:** 5.22, **Node:** 20
+- **Next.js:** 15.5, **Prisma:** 5.22, **Node:** 22
 - **livekit-client:** `^2.6` (resolves to 2.22.x in lockfile)
 
 ## Known limitations (MVP)

@@ -69,3 +69,27 @@ export async function overRateLimit(key: string, limit: number, windowS: number)
     return false;
   }
 }
+
+/**
+ * Per-student limits for actions that each push a signal to the teacher's
+ * client (SEC-04): a raised-hand toggle, a draw request / cancel. A real
+ * student does a handful a minute; a loop would flood the teacher's UI.
+ * Stroke points are not limited (the drawer is a single, teacher-approved
+ * student with a 3-minute window).
+ */
+export const STUDENT_ACTION_LIMITS = {
+  hand: { limit: 30, windowS: 60 },
+  drawRequest: { limit: 20, windowS: 60 },
+} as const;
+
+export type StudentAction = keyof typeof STUDENT_ACTION_LIMITS;
+
+export function studentActionKey(action: StudentAction, participantId: string): string {
+  return `ratelimit:student:${action}:${participantId}`;
+}
+
+/** True when this student is over the limit for `action` (fails open like overRateLimit). */
+export async function studentActionLimited(action: StudentAction, participantId: string): Promise<boolean> {
+  const { limit, windowS } = STUDENT_ACTION_LIMITS[action];
+  return overRateLimit(studentActionKey(action, participantId), limit, windowS);
+}

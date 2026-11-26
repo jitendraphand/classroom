@@ -53,3 +53,20 @@ export async function ensureJoinAudience(): Promise<JoinAudiencePlan> {
 
   return plan;
 }
+
+/** Once the master lists are complete, re-check at most this often per worker. */
+const SEED_RECHECK_MS = 10 * 60 * 1000;
+let seededAt = 0;
+
+/**
+ * ensureJoinAudience for request paths (the join page and API): after a
+ * check that found nothing to add, skip it for SEED_RECHECK_MS instead of
+ * re-reading grades and campuses on every page view and every join (PERF-07).
+ * Boot still runs the full ensureJoinAudience.
+ */
+export async function ensureJoinAudienceCached(now: number = Date.now()): Promise<void> {
+  if (seededAt && now - seededAt < SEED_RECHECK_MS) return;
+  const plan = await ensureJoinAudience();
+  // Rows were just added: the next request re-checks (cheap) to confirm.
+  seededAt = planAddsAnything(plan) ? 0 : now;
+}

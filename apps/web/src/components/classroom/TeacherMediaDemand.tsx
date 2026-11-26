@@ -3,7 +3,9 @@
 import { useEffect, useState } from 'react';
 import { useRoomContext } from '@livekit/components-react';
 import { RoomEvent, Track, VideoQuality, type RemoteTrackPublication } from 'livekit-client';
-import { teacherVideoDemand, type DataSaverMode } from '@/lib/dataSaver';
+import { BACKGROUND_VIDEO_PAUSE_MS, teacherVideoDemand, type DataSaverMode } from '@/lib/dataSaver';
+import { setVideoWanted } from '@/lib/videoEnable';
+import { useHiddenFor } from '@/hooks/useHiddenFor';
 import { createStepUp, type LinkPhase } from '@/lib/reconnectQuality';
 import { SMALL_SCREEN_SHARE_DIMENSIONS, isSmallScreen, shareLayerFor } from '@/lib/subscriberCodecs';
 import { isTeacherParticipant } from './participantRoles';
@@ -14,6 +16,9 @@ import { isTeacherParticipant } from './participantRoles';
  * or the student picked "Audio + share only" (stays subscribed, so the
  * privacy sync is untouched and resume is instant). Low quality: LOW layer
  * for camera and share (combined with adaptiveStream, the smaller wins).
+ * Audio only: the share is disabled at the SFU too. A page hidden for
+ * BACKGROUND_VIDEO_PAUSE_MS disables both until the student is back; audio
+ * is never touched here.
  */
 export function TeacherMediaDemand({
   teacherIdentities,
@@ -54,10 +59,11 @@ export function TeacherMediaDemand({
     };
   }, [room]);
   const recovering = phase === 'recovering';
+  const backgroundPaused = useHiddenFor(BACKGROUND_VIDEO_PAUSE_MS);
   useEffect(() => {
     if (!room) return;
     const teacherSet = new Set(key ? key.split(',') : []);
-    const base = teacherVideoDemand({ mode, camPaneMinimized });
+    const base = teacherVideoDemand({ mode, camPaneMinimized, backgroundPaused });
     const screen = {
       coarse: !!window.matchMedia?.('(pointer: coarse)').matches,
       screenW: window.screen?.width || 0,
@@ -79,7 +85,13 @@ export function TeacherMediaDemand({
             if (pub.source === Track.Source.Camera) {
               if (pub.isEnabled !== want.cameraEnabled) pub.setEnabled(want.cameraEnabled);
               pub.setVideoQuality(want.cameraLow ? VideoQuality.LOW : VideoQuality.HIGH);
-            } else if (pub.source === Track.Source.ScreenShare) {
+            } else if (
+              pub.source === Track.Source.ScreenShare ||
+              // Windows share sidecar (teacher_…__screen) may leave the source unset.
+              (p.identity.endsWith('__screen') && pub.kind === Track.Kind.Video)
+            ) {
+              setVideoWanted(pub, want.shareEnabled);
+              if (!want.shareEnabled) continue;
               if (small) {
                 // Explicit 720p request: takes precedence over adaptive stream,
                 // which reports 0x0 (paused) until the first frame sizes the
@@ -102,6 +114,6 @@ export function TeacherMediaDemand({
       room.off(RoomEvent.TrackSubscribed, apply);
       room.off(RoomEvent.TrackPublished, apply);
     };
-  }, [room, key, mode, camPaneMinimized, recovering]);
+  }, [room, key, mode, camPaneMinimized, recovering, backgroundPaused]);
   return null;
 }

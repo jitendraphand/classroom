@@ -1209,7 +1209,7 @@ function RoomInner({
       }
       onClassEnded(state?.classInfo?.classSessionId ?? classSessionIdRef.current, state?.endedBy);
     }
-  }, [state?.status, state?.ended, state?.classInfo?.classSessionId, room, onClassEnded, code]);
+  }, [state?.status, state?.ended, state?.classInfo?.classSessionId, state?.endedBy, room, onClassEnded, code]);
 
   useEffect(() => {
     if (!isTeacher || !room) return;
@@ -2917,7 +2917,14 @@ function RoomInner({
                 return j?.packets ?? [];
               }}
             />
-          ) : covered ? null : showTeacherScreen ? (
+          ) : covered ? null : showTeacherScreen && dataSaver === 'audio-only' ? (
+            <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-ink-950 px-6 text-center text-slate-300" data-testid="audio-only-stage">
+              <IconScreen size={32} />
+              <p className="max-w-sm text-sm">
+                Your teacher is sharing their screen. Audio only is on to save data: tap <strong>Quality</strong> to see the screen.
+              </p>
+            </div>
+          ) : showTeacherScreen ? (
             <TeacherScreenStage teacherIdentities={teacherIdentities} zoomable drawing={myDrawState === 'drawing'} />
           ) : teacherOnStage ? (
             <TeacherStageCamera

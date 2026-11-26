@@ -9,6 +9,7 @@ import { Track, RoomEvent } from 'livekit-client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFloatDrag, type FloatPos } from './FloatingPanel';
 import { useDataSaver } from '@/hooks/useDataSaver';
+import { teacherCameraOff } from '@/lib/dataSaver';
 import { TeacherMediaDemand } from './TeacherMediaDemand';
 import { type StudentVideoMode } from '@/lib/studentVideoMode';
 import { isTeacherParticipant } from './participantRoles';
@@ -255,7 +256,7 @@ export function TeacherStageCamera({ teacherIdentities, fallback }: { teacherIde
   const [dataSaver] = useDataSaver();
   const { mediaTrack, teacherName } = useTeacherCamera(teacherIdentities);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const live = dataSaver !== 'share-only' ? mediaTrack : null;
+  const live = !teacherCameraOff(dataSaver) ? mediaTrack : null;
   useEffect(() => {
     const el = videoRef.current;
     if (!el || !live) return;
@@ -270,7 +271,7 @@ export function TeacherStageCamera({ teacherIdentities, fallback }: { teacherIde
       <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-ink-950 px-6 text-center text-slate-400">
         <p className="font-display text-lg font-semibold text-slate-200">{teacherName}</p>
         <p className="max-w-sm text-sm">
-          {dataSaver === 'share-only' ? 'Teacher camera is off to save data. ' : 'Camera is off. '}
+          {teacherCameraOff(dataSaver) ? 'Teacher camera is off to save data. ' : 'Camera is off. '}
           {fallback}
         </p>
       </div>

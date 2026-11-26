@@ -3,6 +3,7 @@ import { pushSignal } from '@/lib/roomNudge';
 import { prisma } from '@/lib/db';
 import { resolveRoomAccess, getTeacherSession } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
+import { studentActionLimited } from '@/lib/rateLimit';
 import { ensureRedis, keys } from '@/lib/redis';
 
 /**
@@ -75,6 +76,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
       return jsonError('Not admitted', 403);
     }
 
+    if (await studentActionLimited('hand', me.id)) {
+      return jsonError('Too many hand changes. Wait a moment and try again.', 429);
+    }
     await setHand(redis, code, me.id, body.raised);
     pushSignal(room.code, room.sessionId, { v: 1, type: 'hand', raised: body.raised, participantId: me.id });
     return jsonOk({ ok: true, raised: body.raised, participantId: me.id });

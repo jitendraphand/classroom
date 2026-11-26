@@ -34,6 +34,9 @@ export async function register() {
       const { schoolJwtConfigFromEnv } = await import('./lib/schoolJwt');
       const problem = signedModeProblem(schoolJoinModeFromEnv(), schoolJwtConfigFromEnv());
       if (problem) console.error(`[school-join] ${problem}`);
+      const { unauthenticatedJoinWarning } = await import('./lib/schoolJoin');
+      const warn = unauthenticatedJoinWarning();
+      if (warn) console.warn(`[school-join] WARNING: ${warn}`);
     } catch (e) {
       console.error('[school-join] could not read the signed-link config:', e instanceof Error ? e.message : e);
     }

@@ -52,6 +52,10 @@ webhook:
       - room_finished
 logging:
   level: info
+# Metrics (participants, tracks, packet loss, bytes in/out) for Prometheus or
+# VictoriaMetrics. Listens on every interface: open it only to your metrics
+# host, never to the internet.
+# prometheus_port: 6789
 room:
   # Screen share publishes VP9 (L1T3 simulcast, needs server >= 1.13.6 for SVC
   # simulcast) with a VP8 backup codec for subscribers that cannot decode VP9

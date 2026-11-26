@@ -1,7 +1,6 @@
 import { prisma } from '@/lib/db';
 import { hashPassword } from '@/lib/auth';
 import { requireAdminApi } from '@/lib/adminGuard';
-import { generatePassword } from '@/lib/passwords';
 import { parsePrivilegeBody, privilegeSetFrom } from '@/lib/privileges';
 import { jsonError, jsonOk } from '@/lib/response';
 import { mutateSubAdminDenied, rejectedKindChange, resolveNewSubAdminPassword } from '@/lib/subAdminAccounts';

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { getAdminSession, resolveRoomAccess } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
+import { studentActionLimited } from '@/lib/rateLimit';
 import { ensureRedis, keys } from '@/lib/redis';
 import { cleanPoints, isDrawColor, validStrokeId } from '@/lib/drawLogic';
 import {
@@ -128,6 +129,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     if (!me || me.roomId !== room.id || me.role !== 'STUDENT' || me.status !== 'ADMITTED') return jsonError('Not admitted', 403);
 
     if (body.action === 'request' || body.action === 'cancel') {
+      if (await studentActionLimited('drawRequest', me.id)) {
+        return jsonError('Too many requests. Wait a moment and try again.', 429);
+      }
       if (body.action === 'request' && !(await sharing(code))) return jsonError('You can ask to draw while your teacher shares the screen.', 409);
       await setDrawRequest(code, me.id, body.action === 'request');
       return jsonOk({ ok: true });

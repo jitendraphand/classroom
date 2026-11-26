@@ -32,6 +32,11 @@ example.com {
 	# HTTPS only from now on (this host is always served over TLS by Caddy).
 	header Strict-Transport-Security "max-age=31536000"
 	header -Server
+	# Largest legitimate request is a whiteboard snapshot (~6 MB of base64);
+	# the app caps other routes at 1 MiB itself (apps/web/src/lib/bodyLimit.ts).
+	request_body {
+		max_size 8MB
+	}
 	# Never compress SSE: the encoder buffers it and Caddy logs an
 	# incomplete response when the stream ends mid-chunk.
 	@compressible not path */messages/stream

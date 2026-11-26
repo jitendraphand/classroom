@@ -3,7 +3,9 @@ import { JoinClassForm } from '@/components/joinClass/JoinClassForm';
 import { loadCampuses } from '@/lib/campusMaster';
 import { loadMaster } from '@/lib/gradeMaster';
 import { joinFormModel } from '@/lib/joinClassForm';
-import { ensureJoinAudience } from '@/lib/joinClassSeed';
+import { ensureJoinAudienceCached } from '@/lib/joinClassSeed';
+import { nameJoinAllowedFromEnv } from '@/lib/schoolJoin';
+import { notFound } from 'next/navigation';
 import { readUnsignedFields } from '@/lib/joinParams';
 
 export const dynamic = 'force-dynamic';
@@ -14,10 +16,12 @@ export default async function JoinClassPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  // ALLOW_NAME_JOIN=false: students join only from the school app.
+  if (!nameJoinAllowedFromEnv()) notFound();
   let options = null;
   let prefill = null;
   try {
-    await ensureJoinAudience();
+    await ensureJoinAudienceCached();
     const sp = await searchParams;
     const params = new URLSearchParams();
     for (const [k, v] of Object.entries(sp)) {

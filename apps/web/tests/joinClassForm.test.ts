@@ -363,10 +363,12 @@ test('handleJoinForm: friendly errors', async () => {
   assert.doesNotMatch(r.error, /db down/);
 });
 
-test('feature stays self-contained: no toggle, homepage button, form page, endpoint', () => {
+test('feature stays self-contained: ALLOW_NAME_JOIN toggle, homepage button, form page, endpoint', () => {
   const root = new URL('../src/', import.meta.url);
   const home = readFileSync(new URL('app/page.tsx', root), 'utf8');
   assert.match(home, /href="\/join-class"[\s\S]*Join the class/);
+  // One switch turns the whole feature off (SEC-02): button, page and API.
+  assert.match(home, /nameJoin && \(/);
   assert.ok(existsSync(new URL('app/join-class/page.tsx', root)));
   assert.ok(existsSync(new URL('app/api/join-class/route.ts', root)));
   assert.ok(existsSync(new URL('lib/joinClassSeed.ts', root)));
@@ -393,9 +395,13 @@ test('feature stays self-contained: no toggle, homepage button, form page, endpo
   const link = readFileSync(new URL('app/api/student/join/route.ts', root), 'utf8');
   const api = readFileSync(new URL('app/api/join-class/route.ts', root), 'utf8');
   assert.match(link, /finishStudentJoin\(claims, signed\)/);
-  assert.match(api, /finish: finishStudentJoin/);
+  // Same finishing step, behind the per-class cap on new names (SEC-03).
+  assert.match(api, /finish: finishWithNewNameCap/);
+  assert.match(api, /await finishStudentJoin\(claims, signed\)/);
+  assert.match(api, /if \(!nameJoinAllowedFromEnv\(\)\) return jsonError/);
   const page = readFileSync(new URL('app/join-class/page.tsx', root), 'utf8');
   assert.match(page, /ensureJoinAudience/);
+  assert.match(page, /if \(!nameJoinAllowedFromEnv\(\)\) notFound\(\)/);
   const inst = readFileSync(new URL('instrumentation.ts', root), 'utf8');
   assert.match(inst, /ensureJoinAudience/);
 });

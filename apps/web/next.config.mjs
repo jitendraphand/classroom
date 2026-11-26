@@ -20,6 +20,9 @@ const nextConfig = {
   output: 'standalone',
   reactStrictMode: true,
   poweredByHeader: false,
+  // next/image is not used. Turning the optimizer off removes the /_next/image
+  // endpoint (and its SVG advisories) from the attack surface.
+  images: { unoptimized: true },
   // Bound the per-worker in-memory ISR/fetch cache (default 50 MB × N workers;
   // routes here are dynamic so it buys little).
   cacheMaxMemorySize: 16 * 1024 * 1024,

@@ -40,10 +40,13 @@ test('data saver cycles and maps to subscriptions', () => {
   assert.equal(parseDataSaver('x'), 'off');
   assert.equal(nextDataSaver('off'), 'low');
   assert.equal(nextDataSaver('low'), 'share-only');
-  assert.equal(nextDataSaver('share-only'), 'off');
-  assert.deepEqual(teacherVideoDemand({ mode: 'off', camPaneMinimized: false }), { cameraEnabled: true, cameraLow: false, shareLow: false });
-  assert.deepEqual(teacherVideoDemand({ mode: 'low', camPaneMinimized: false }), { cameraEnabled: true, cameraLow: true, shareLow: true });
+  assert.equal(nextDataSaver('share-only'), 'audio-only');
+  assert.equal(nextDataSaver('audio-only'), 'off');
+  assert.equal(parseDataSaver('audio-only'), 'audio-only');
+  assert.deepEqual(teacherVideoDemand({ mode: 'off', camPaneMinimized: false }), { cameraEnabled: true, cameraLow: false, shareEnabled: true, shareLow: false });
+  assert.deepEqual(teacherVideoDemand({ mode: 'low', camPaneMinimized: false }), { cameraEnabled: true, cameraLow: true, shareEnabled: true, shareLow: true });
   assert.equal(teacherVideoDemand({ mode: 'share-only', camPaneMinimized: false }).cameraEnabled, false);
+  assert.equal(teacherVideoDemand({ mode: 'share-only', camPaneMinimized: false }).shareEnabled, true);
   assert.equal(teacherVideoDemand({ mode: 'off', camPaneMinimized: true }).cameraEnabled, false);
   assert.match(src('components/classroom/Controls.tsx'), /onCycleDataSaver/);
 });

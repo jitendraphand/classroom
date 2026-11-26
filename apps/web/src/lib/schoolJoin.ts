@@ -183,3 +183,45 @@ export function signedModeProblem(mode: SchoolJoinMode, cfg: SchoolJwtConfig): s
   if (!cfg.publicKeyPem && cfg.secret && cfg.secret.length < 32) return 'SCHOOL_APP_JWT_SECRET is shorter than 32 characters; use a longer random secret.';
   return null;
 }
+
+/**
+ * Startup warning (SEC-02): unsigned links and the name form let anyone who
+ * knows a student ID, or a classmate's name, join as that student (the
+ * teacher still admits). Kept as the default so an existing school's joining
+ * keeps working; production should set SCHOOL_JOIN_MODE=signed and
+ * ALLOW_NAME_JOIN=false once the school app signs its links.
+ */
+export function unauthenticatedJoinWarning(env: Record<string, string | undefined> = process.env): string | null {
+  if (env.NODE_ENV !== 'production') return null;
+  const parts: string[] = [];
+  if (schoolJoinModeFromEnv(env) === 'unsigned') parts.push('SCHOOL_JOIN_MODE is unsigned (a plain link with a student ID signs in as that student)');
+  if (nameJoinAllowedFromEnv(env)) parts.push('the "Join the class" name form is on (ALLOW_NAME_JOIN)');
+  if (!parts.length) return null;
+  return `Students are not authenticated: ${parts.join('; ')}. Set SCHOOL_JOIN_MODE=signed and ALLOW_NAME_JOIN=false when the school app signs its links (docs/SCHOOL_APP_INTEGRATION.md).`;
+}
+
+/**
+ * The temporary homepage "Join the class" form (lib/joinClassForm.ts).
+ * ALLOW_NAME_JOIN=false turns it off (page, API and homepage button). On by
+ * default until the school app is integrated, so current joining is unchanged.
+ */
+export function nameJoinAllowedFromEnv(env: Record<string, string | undefined> = process.env): boolean {
+  return !/^(0|false|no|off)$/i.test(env.ALLOW_NAME_JOIN?.trim() ?? '');
+}
+
+/**
+ * Most new name-form students (`WEB-…` records) one class (campus, grade and
+ * division) may gain per day (SEC-03), so a script cannot fill the student
+ * list and reports with junk names. A real class is far smaller; per class,
+ * not per IP, because a school's pupils share one NAT address.
+ * NEW_NAME_JOINS_PER_CLASS_PER_DAY, 0 = no cap.
+ */
+export function newNameJoinsPerClassFromEnv(env: Record<string, string | undefined> = process.env): number {
+  const raw = env.NEW_NAME_JOINS_PER_CLASS_PER_DAY?.trim();
+  const n = Number(raw);
+  return raw && Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 150;
+}
+
+export function newNameJoinKey(claims: { campus: string | null; grade: string; division: string }): string {
+  return `ratelimit:join:newname:${(claims.campus ?? '').toLowerCase()}|${claims.grade.toLowerCase()}|${claims.division.toLowerCase()}`;
+}

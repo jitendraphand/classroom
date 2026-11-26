@@ -2,11 +2,11 @@
  * Camera / screen-share capture and encoding settings, in one place.
  * Plain data (no livekit-client import) so it is unit-tested and shared.
  *
- * Teacher camera: 360p single layer. Student camera: small single layer, and
- * only published while the teacher actually shows it (see camWanted in /state).
- * Screen share: VP9 L1T3 (frame rate degrades, resolution never) with a VP8
- * 720p-floor simulcast backup; default capture is 24 fps (max 30) so motion
- * stays readable, video mode is 720p24. Subscribers
+ * Teacher camera: 360p15 plus a 180p simulcast layer. Student camera: small
+ * single layer, only published while the teacher actually shows it (see
+ * camWanted in /state). Screen share: VP9 L2T3_KEY (two spatial layers; frame
+ * rate degrades before resolution) with a VP8 720p-floor simulcast backup;
+ * slides mode is capped at 15 fps (SLIDES_MAX_FPS), video mode is 720p24. Subscribers
  * use adaptiveStream + dynacast (ClassroomRoom), so the SFU forwards what fits
  * the element and publishers stop encoding layers nobody receives.
  */

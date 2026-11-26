@@ -1049,3 +1049,20 @@ html.has-draw-toolbar .control-status-pill {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/*
+ * Reduced motion: people who ask their OS for less motion get no pulsing
+ * badges, sliding panels or animated pop-ups (also less GPU work on low-end
+ * devices). Video, the whiteboard and the laser pointer are content, not
+ * decoration, and are unaffected.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

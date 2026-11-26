@@ -126,5 +126,6 @@ test('waiting room Leave leaves (no reload into the same page) and shows Rejoin'
 test('fullscreen cover keeps the whiteboard mounted underneath', () => {
   const room = classroomViewSource();
   assert.match(room, /\{state\?\.whiteboard && !teacherGone \? \(/);
-  assert.match(room, /\) : covered \? null : showTeacherScreen \? \(/);
+  // Audio only (data saver) shows a placeholder instead of the share; the cover still wins.
+  assert.match(room, /\) : covered \? null : showTeacherScreen && dataSaver === 'audio-only' \? \(/);
 });
