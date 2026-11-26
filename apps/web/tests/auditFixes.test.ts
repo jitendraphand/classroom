@@ -126,7 +126,8 @@ test('the student video demand covers the share (incl. the Windows sidecar) and 
   // Audio is never touched by the data saver.
   assert.doesNotMatch(demand, /Track\.Source\.Microphone/);
   const room = src('components/classroom/ClassroomRoom.tsx');
-  assert.match(room, /data-testid="audio-only-stage"/);
+  assert.match(room, /<SlideSnapshotStage code=\{code\} \/>/);
+  assert.match(src('components/classroom/SlideSnapshotStage.tsx'), /data-testid="audio-only-stage"/);
   const hook = src('hooks/useDataSaver.ts');
   assert.match(hook, /initialDataSaver\(mediaProfile\(\), conn\)/);
 });

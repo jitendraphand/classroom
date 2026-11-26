@@ -159,7 +159,13 @@ import {
   shareUsesVp9,
 } from '@/lib/videoQuality';
 import { effectiveCamWanted } from '@/lib/camOnDemand';
-import { nextDataSaver } from '@/lib/dataSaver';
+import { CAMERA_STANDBY_GRACE_MS, cameraDeviceNeeded, cameraReportedOn } from '@/lib/cameraStandby';
+import { useTrueWithGrace } from '@/hooks/useTrueWithGrace';
+import { usePageHidden } from '@/hooks/usePageHidden';
+import { BACKGROUND_VIDEO_PAUSE_MS, nextDataSaver, spotlightCameraWanted } from '@/lib/dataSaver';
+import { useHiddenFor } from '@/hooks/useHiddenFor';
+import { useShareSnapshots } from './useShareSnapshots';
+import { SlideSnapshotStage } from './SlideSnapshotStage';
 import { useDataSaver } from '@/hooks/useDataSaver';
 import { TeacherMediaDemand } from './TeacherMediaDemand';
 import { ClassInfoButton } from './ClassInfoButton';
@@ -934,26 +940,10 @@ function RoomInner({
   // previous default. Nothing is captured or published until camOn is true.
   const [camOn, setCamOn] = useState(() => !isTeacher);
   const [screenOn, setScreenOn] = useState(false);
+  // Slide snapshots for students in "Audio only" (lib/slideSnapshot).
+  useShareSnapshots({ room, code, active: isTeacher && screenOn });
   const [chatUnread, setChatUnread] = useState(0);
   const [localCamStream, setLocalCamStream] = useState<MediaStream | null>(null);
-  // Student: report camera on/off so the teacher can only unmute students
-  // whose camera is on, and the server mutes a student whose camera goes off.
-  const camLive = !isTeacher && camOn && !!localCamStream?.getVideoTracks().some((t) => t.readyState === 'live');
-  useEffect(() => {
-    camReportRef.current = camLive;
-    if (isTeacher || !room) return;
-    const report = () =>
-      void roomFetch(code, '/camera', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ on: camLive }),
-      }).catch(() => undefined);
-    report();
-    room.on(RoomEvent.Reconnected, report);
-    return () => {
-      room.off(RoomEvent.Reconnected, report);
-    };
-  }, [camLive, isTeacher, room, code]);
   const [chatOpen, setChatOpen] = useState(false);
   const [hudChatOpen, setHudChatOpen] = useState(false);
   const [rosterOpen, setRosterOpen] = useState(false);
@@ -988,6 +978,10 @@ function RoomInner({
   const [hudNotice, setHudNotice] = useState('');
   /** Share tuned for a playing video (30 fps, motion) instead of slides. Remembered in this tab. */
   const [dataSaver, setDataSaver] = useDataSaver();
+  // Student: the spotlighted classmate's camera follows data saving like the
+  // teacher's camera (Share / Audio mode, or a page hidden for 20 s).
+  const pageLongHidden = useHiddenFor(BACKGROUND_VIDEO_PAUSE_MS);
+  const spotlightVideoOn = isTeacher || spotlightCameraWanted({ mode: dataSaver, backgroundPaused: pageLongHidden });
   // Video mode is manual and starts OFF for every share (slides by default).
   const [videoMode, setVideoModeState] = useState(false);
   const videoModeRef = useRef(videoMode);
@@ -1107,6 +1101,47 @@ function RoomInner({
     onVisibilityChange(!!state?.me?.canPublishVideo);
   }, [state?.me?.canPublishVideo, onVisibilityChange]);
 
+  // Student camera standby (lib/cameraStandby): close the camera device while
+  // nothing needs it (not on the teacher's page / speaking / spotlighted /
+  // observed, and the self-view is not on screen), after a short grace.
+  const pageHiddenNow = usePageHidden();
+  const camServerWants = !isTeacher && (effectiveCamWanted(state?.me) || (!state?.me && (state?.me?.canPublishVideo ?? canPublishVideo)));
+  const camStreamLive = !!localCamStream?.getVideoTracks().some((t) => t.readyState === 'live');
+  // The camera opened fine at least once since the student switched it on.
+  const camWorkedRef = useRef(false);
+  if (!camOn) camWorkedRef.current = false;
+  else if (camStreamLive) camWorkedRef.current = true;
+  const camNeededNow = isTeacher
+    ? camOn
+    : cameraDeviceNeeded({
+        camOn,
+        serverWantsVideo: camServerWants,
+        selfPreviewShown: studentVideoMode === 'both' && !pageHiddenNow,
+      }) ||
+      // Open it once to confirm it works (permission, device), so standby can count it as on.
+      (camOn && !camWorkedRef.current);
+  const camDeviceNeeded = useTrueWithGrace(camNeededNow, CAMERA_STANDBY_GRACE_MS);
+  // Student: report camera on/off so the teacher can only unmute students
+  // whose camera is on, and the server mutes a student whose camera goes off.
+  // A camera in standby counts as on (it reopens the moment it is needed).
+  const camLive =
+    !isTeacher &&
+    cameraReportedOn({ camOn, live: camStreamLive, standby: !camDeviceNeeded, workedBefore: camWorkedRef.current });
+  useEffect(() => {
+    camReportRef.current = camLive;
+    if (isTeacher || !room) return;
+    const report = () =>
+      void roomFetch(code, '/camera', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ on: camLive }),
+      }).catch(() => undefined);
+    report();
+    room.on(RoomEvent.Reconnected, report);
+    return () => {
+      room.off(RoomEvent.Reconnected, report);
+    };
+  }, [camLive, isTeacher, room, code]);
   const effectiveCanPublish = state?.me?.canPublishVideo ?? canPublishVideo;
   const effectiveMuted = state?.me?.mutedByTeacher ?? mutedByTeacher;
   // Students are force-muted while the teacher is not connected (enforced by
@@ -2087,12 +2122,21 @@ function RoomInner({
     }
   }
 
-  async function rotateSample() {
-    await fetch('/api/sample/rotate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code }),
-    });
+  /**
+   * Student-video pages (lib/videoPages): Prev (-1) / Next (+1). Only the
+   * new page's students then send camera video. Replaces the random rotation.
+   */
+  async function turnVideoPage(delta: number) {
+    try {
+      const res = await roomFetch(code, '/video-page', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ delta }),
+      });
+      if (!res.ok) setHudNotice('Could not change the page of student videos. Please retry.');
+    } catch {
+      setHudNotice('Could not reach the server. Please retry.');
+    }
     refresh();
   }
 
@@ -2800,6 +2844,7 @@ function RoomInner({
           camWanted={effectiveCamWanted(state?.me) || (!state?.me && effectiveCanPublish)}
           mutedByTeacher={effectiveMuted || micLockedNoTeacher}
           camDesired={camOn}
+          camDeviceNeeded={camDeviceNeeded}
           micDesired={micOn}
           localCamStream={localCamStream}
           setLocalCamStream={setLocalCamStream}
@@ -2814,6 +2859,7 @@ function RoomInner({
           spotlightIdentity={state?.spotlight?.identity ?? null}
           observerIdentities={state?.observerIdentities}
           allowTeacherCam={state?.me?.camForTeacher ?? true}
+          spotlightCamWanted={spotlightVideoOn}
         />
         <RoomAudioRenderer />
         <ClassAudioUnlock />
@@ -2918,12 +2964,7 @@ function RoomInner({
               }}
             />
           ) : covered ? null : showTeacherScreen && dataSaver === 'audio-only' ? (
-            <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-ink-950 px-6 text-center text-slate-300" data-testid="audio-only-stage">
-              <IconScreen size={32} />
-              <p className="max-w-sm text-sm">
-                Your teacher is sharing their screen. Audio only is on to save data: tap <strong>Quality</strong> to see the screen.
-              </p>
-            </div>
+            <SlideSnapshotStage code={code} />
           ) : showTeacherScreen ? (
             <TeacherScreenStage teacherIdentities={teacherIdentities} zoomable drawing={myDrawState === 'drawing'} />
           ) : teacherOnStage ? (
@@ -2958,7 +2999,7 @@ function RoomInner({
           />
         )}
         {!covered && state?.spotlight && state.spotlight.identity !== state.me?.livekitIdentity && (
-          <SpotlightFloat identity={state.spotlight.identity} name={state.spotlight.name} />
+          <SpotlightFloat identity={state.spotlight.identity} name={state.spotlight.name} videoOff={!spotlightVideoOn} />
         )}
 
         {/* Student controls: a vertical panel on the right edge, on every device. */}
@@ -3808,6 +3849,8 @@ function RoomInner({
         selfName={displayName}
         selfStream={localCamStream}
         slots={panelSlots}
+        videoPage={state?.videoPage ?? null}
+        onVideoPage={(delta) => void turnVideoPage(delta)}
         onSlotsChange={(studentSlots) => {
           setPanelSlots(panelSlotsForCap(studentSlots));
           void setStudentCameraCap(studentSlots);
@@ -3931,7 +3974,7 @@ function RoomInner({
             if (!screenOn && canShareScreen()) preopenShareControls();
           }}
           onEnd={endClass}
-          onRotateSample={rotateSample}
+          onRotateSample={() => void turnVideoPage(1)}
           onMuteAll={() => muteAllStudents()}
           onToggleChat={screenOn ? undefined : toggleChat}
           chatOpen={chatOpen}

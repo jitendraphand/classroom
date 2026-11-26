@@ -63,6 +63,7 @@ export function SelectivePublisher({
   camWanted = true,
   mutedByTeacher,
   camDesired,
+  camDeviceNeeded = true,
   micDesired,
   localCamStream,
   setLocalCamStream,
@@ -79,6 +80,12 @@ export function SelectivePublisher({
   camWanted?: boolean;
   mutedByTeacher: boolean;
   camDesired: boolean;
+  /**
+   * Student camera standby (lib/cameraStandby): false while nothing needs the
+   * camera. The device is then closed but the camera stays "on" (camDesired);
+   * it reopens as soon as this turns true. Teachers always pass true.
+   */
+  camDeviceNeeded?: boolean;
   micDesired: boolean;
   localCamStream: MediaStream | null;
   setLocalCamStream: (s: MediaStream | null) => void;
@@ -102,6 +109,8 @@ export function SelectivePublisher({
 
   const camDesiredRef = useRef(camDesired);
   camDesiredRef.current = camDesired;
+  const camNeededRef = useRef(camDeviceNeeded);
+  camNeededRef.current = camDeviceNeeded;
   const micDesiredRef = useRef(micDesired);
   micDesiredRef.current = micDesired;
   const mutedRef = useRef(mutedByTeacher);
@@ -170,7 +179,8 @@ export function SelectivePublisher({
     let recoverTimer: number | null = null;
 
     async function setupLocal() {
-      if (!camDesired) {
+      if (!camDesired || !camDeviceNeeded) {
+        // Off, or on but in standby: release the device (camera light off).
         localCamRef.current?.getTracks().forEach((t) => t.stop());
         setLocalCamStream(null);
         onCameraErrorRef.current?.(null);
@@ -248,11 +258,11 @@ export function SelectivePublisher({
         vTrack.addEventListener(
           'ended',
           () => {
-            if (cancelled || !camDesiredRef.current) return;
+            if (cancelled || !camDesiredRef.current || !camNeededRef.current) return;
             if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
             if (recoverTimer) window.clearTimeout(recoverTimer);
             recoverTimer = window.setTimeout(() => {
-              if (!cancelled && camDesiredRef.current) setCamRecoveryTick((n) => n + 1);
+              if (!cancelled && camDesiredRef.current && camNeededRef.current) setCamRecoveryTick((n) => n + 1);
             }, 300);
           },
           { once: true }
@@ -267,7 +277,7 @@ export function SelectivePublisher({
       stream?.getTracks().forEach((t) => t.stop());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [camDesired, camRetryTick, camRecoveryTick]);
+  }, [camDesired, camDeviceNeeded, camRetryTick, camRecoveryTick]);
 
   // Recover ended camera or mic tracks after backgrounding (iOS Safari) or hardware switch.
   useEffect(() => {
@@ -279,7 +289,7 @@ export function SelectivePublisher({
       visTimer = window.setTimeout(() => {
         visTimer = null;
         if (document.visibilityState === 'hidden') return;
-        if (camDesiredRef.current) {
+        if (camDesiredRef.current && camNeededRef.current) {
           const live = localCamRef.current?.getVideoTracks().some((t) => t.readyState === 'live');
           if (!live) setCamRecoveryTick((n) => n + 1);
         }

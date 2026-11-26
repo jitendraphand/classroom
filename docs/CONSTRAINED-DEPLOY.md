@@ -45,7 +45,7 @@ handed to every browser with its LiveKit token) sets what publishers send:
 | Teacher camera | 360p15 ≤ 300 kbps + 180p layer | one 180p12 layer ≤ 120 kbps |
 | Slides share | 15 fps, ≤ 2.5 Mbps top / 720p ≤ 1.2 Mbps | 10 fps, ≤ 1 Mbps / 720p ≤ 600 kbps |
 | Video-mode share | 720p24 ≤ 1.5 Mbps | 720p15 ≤ 800 kbps |
-| Student cameras | 320×180 ≤ 200 kbps | ≤ 100 kbps, 10 fps |
+| Student cameras | 320×180, 12 fps ≤ 120 kbps | ≤ 80 kbps, 10 fps |
 | Students start in | data saver off | data saver "Low quality" (they can change it) |
 
 Resolution is never lowered for slides (text stays legible); frame rate and

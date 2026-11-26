@@ -75,6 +75,7 @@ export function StudentMediaPrivacy({
   spotlightIdentity = null,
   observerIdentities = [],
   allowTeacherCam = true,
+  spotlightCamWanted = true,
 }: {
   teacherIdentities: string[];
   studentIdentities: string[];
@@ -84,6 +85,11 @@ export function StudentMediaPrivacy({
   observerIdentities?: string[];
   /** False when camera is published solely because an admin observer is active. */
   allowTeacherCam?: boolean;
+  /**
+   * Receive the spotlighted classmate's camera (lib/dataSaver
+   * spotlightCameraWanted): false in Share / Audio mode or a long-hidden page.
+   */
+  spotlightCamWanted?: boolean;
 }) {
   const room = useRoomContext();
   const teacherKey = teacherIdentities.join(',');
@@ -122,7 +128,8 @@ export function StudentMediaPrivacy({
           }
         }
         for (const pub of Array.from(p.trackPublications.values())) {
-          const spotlightCam = !!spotlightIdentity && p.identity === spotlightIdentity && pub.source === Track.Source.Camera;
+          const spotlightCam =
+            spotlightCamWanted && !!spotlightIdentity && p.identity === spotlightIdentity && pub.source === Track.Source.Camera;
           const want = isTeacherP || pub.source === Track.Source.Microphone || spotlightCam;
           if (pub.isSubscribed !== want) {
             try {
@@ -188,7 +195,7 @@ export function StudentMediaPrivacy({
       room.off(RoomEvent.LocalTrackUnpublished, sync);
       window.clearInterval(iv);
     };
-  }, [room, teacherKey, studentKey, observerKey, spotlightIdentity, allowTeacherCam]);
+  }, [room, teacherKey, studentKey, observerKey, spotlightIdentity, allowTeacherCam, spotlightCamWanted]);
 
   return null;
 }

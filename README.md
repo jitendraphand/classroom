@@ -1,6 +1,6 @@
 # Classroom — Live Online Teaching (MVP)
 
-Privacy-minded live classes: teachers sign in, students join with a room code, waiting-room admit, **selective student video** (only a rotating sample publishes to LiveKit), **in-class chat** (student→teacher + teacher broadcast/DM), screen share, mute controls. **No recording.**
+Privacy-minded live classes: teachers sign in, students join with a room code, waiting-room admit, **selective student video** (only the students on the teacher's current video page publish to LiveKit), **in-class chat** (student→teacher + teacher broadcast/DM), screen share, mute controls. **No recording.**
 
 ## Architecture
 
@@ -22,20 +22,30 @@ flowchart LR
 
 | Service | Role |
 |---------|------|
-| **web** | Next.js 15 App Router (Node cluster) — teacher/student UI, auth, room APIs, sample rotation |
+| **web** | Next.js 15 App Router (Node cluster) — teacher/student UI, auth, room APIs, student-video pages |
 | **livekit** | Open-source WebRTC SFU |
 | **postgres** | Teachers, rooms, participants, chat messages |
 | **redis** | Waiting/admitted sets, visible-sample identities, stage, hands |
 
 > **Networking:** `docker-compose.yml` uses `network_mode: host` on a single Linux VM so LiveKit WebRTC UDP/TCP bind on the host NICs and services talk over `127.0.0.1`. Ideal for local demos **and** bare public-IP VPS deploys (see [docs/DEPLOY-VPS.md](docs/DEPLOY-VPS.md)). Optional **Caddy** TLS uses the same host networking via Compose profile `tls` ([docs/DEPLOY-CADDY.md](docs/DEPLOY-CADDY.md)).
 
-### How sampled video works
+### How student video works (pages)
 
-1. Every admitted student may keep **camera on locally** (preview on their device).
-2. Redis holds a **visible sample** of size `N` (`MAX_VISIBLE_STUDENT_VIDEOS`, default **6** (hard max **6**), overridable per room).
-3. Only students whose LiveKit identity is in that set **publish** camera tracks to LiveKit.
-4. The server **rotates** the sample every `SAMPLE_ROTATION_SECONDS` (default **8**), or when the teacher clicks **Rotate sample**.
-5. When a **student speaks**, the teacher client pins them into the visible sample (`POST /api/rooms/{code}/sample/pin`) so their camera publishes; pins last ~18s and are preferred during random rotation.
+1. Every admitted student may keep the **camera on**. The device itself is
+   closed while nothing needs it (camera standby, below), but the camera still
+   counts as on.
+2. The teacher's video panel shows up to **N** students (`MAX_VISIBLE_STUDENT_VIDEOS`,
+   hard max **6**; the panel's 2 / 4 / 6 size sets it, one tile is the teacher).
+   Students with their camera on are listed in roster order and split into
+   **pages**; the teacher moves with **‹ / ›** in the panel header ("2/9").
+3. Only the students on the current page (plus any the teacher **pinned**, who
+   keep a tile on every page) **publish** camera video, and only while the panel
+   is shown. Everyone else sends no video at all. The SFU grant enforces it.
+4. There is **no random rotation**: a page changes only when the teacher turns
+   it, or when a student on it joins, leaves or turns their camera on/off
+   (picked up within a couple of seconds).
+5. A **student the teacher unmutes** sends camera video while unmuted (the
+   speaking pop-up), wherever they are in the pages.
 6. Teachers can **Mute all students** / **Unmute all**; students muted by the teacher cannot unmute themselves.
 7. **Chat** (sidebar): students message the teacher only; teachers broadcast to everyone or DM one student. History lives in Postgres for the life of the class (cleared from API when room is ENDED). Delivered as a server LiveKit data packet (+ SSE fallback and a slow safety poll). Students cannot publish LiveKit data at all: their messages, hands and drawing go through the API, which checks permissions and relays them.
 8. UI always shows **“In class · may be visible”** so students feel present even when not in the sample.
@@ -93,7 +103,7 @@ Defined in `apps/web/src/lib/videoQuality.ts`:
 | Track | Capture | Encoding |
 |---|---|---|
 | Teacher camera | 640×360, 15 fps | simulcast 640×360 ≤300 kbps · 320×180 @12 fps ≤90 kbps (students take the small layer while a share is on) |
-| Student camera | 320×180, 15 fps | single layer ≤200 kbps, sent only while the teacher shows it |
+| Student camera | 320×180, 12 fps | single layer ≤120 kbps, sent only while the teacher shows it (its page in the video panel, speaking, or spotlighted) |
 | Screen share, slides | up to 1920×1080, 15 fps | Chromium: VP9 `L2T3_KEY` (full + half resolution, 3 temporal layers) ≤2.5 Mbps with a VP8 backup; other browsers: VP8 simulcast 1280×720 ≤1.2 Mbps + captured size |
 | Screen share, video mode | ≤1280×720, 24 fps | ≤1.5 Mbps top / ≤1 Mbps low |
 
@@ -103,7 +113,21 @@ SFU forwards the layer that fits the element) and publishers use `dynacast`
 (unreceived layers are not encoded). Phones get the half-resolution share layer.
 
 Students save data with the **Quality** button (Full → Low → Share → Audio:
-audio only, no teacher camera and no screen share). A device that reports
+audio only, no teacher camera and no live screen share). In Audio, a student
+whose teacher is sharing sees a **still picture of the share** that updates
+when the screen changes: the teacher's browser sends a small WebP/JPEG (a text
+slide measured ~66 KB at 1280×720) only when the picture changed, at most
+every 10 s, and audio-only students download it when told it changed. The
+spotlighted classmate's camera follows the same data-saver rules as the
+teacher's camera.
+
+**Camera standby (students):** a student's camera device is closed when
+nothing needs it, that is when they are not on the teacher's current video
+page (or the panel is hidden), not unmuted, not spotlighted or observed, and
+their own self-view is not on screen. It closes after 10 s and reopens the
+moment it is needed (about a second to reopen). The camera still counts as on
+(pages, unmute), so the student does nothing; phones save the battery and heat
+of a camera nobody sees. A device that reports
 Save-Data or a 2G link starts in Audio only, 3G in Low. A student page hidden
 for 20 s (another app, minimised browser, locked phone) stops receiving the
 teacher's video until the student is back; audio keeps playing.
@@ -244,7 +268,7 @@ curl -s http://localhost:3000/api/health
    `node apps/web/scripts/make-join-link.mjs …` (see docs/SCHOOL_APP_INTEGRATION.md §6) → waiting room.
    (Or set `ALLOW_MANUAL_STUDENT_JOIN=true` for the old http://localhost:3000/join/{CODE} → name flow.)
 5. Teacher **N waiting · Admit** (or Roster → Admit / Admit all) → student enters class (floating teacher cam + float controls)
-6. Try **Chat**, mute / mute-all, screen share (+ Video mode), **Rotate sample**, speak as a student to force pin into sample
+6. Try **Chat**, mute / mute-all, screen share (+ Video mode), the video panel's **‹ / ›** pages, unmute a student to see them in the speaking pop-up
 
 ### Stop
 
@@ -330,7 +354,7 @@ See `.env.example`. Important:
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `MAX_VISIBLE_STUDENT_VIDEOS` | `6` | Default sample size for new rooms (hard-capped at 6) |
-| `SAMPLE_ROTATION_SECONDS` | `8` | Auto-rotation interval for visible student cameras (5–10s recommended) |
+| `SAMPLE_ROTATION_SECONDS` | `8` | How often the current video page is recomputed from the roster and camera flags (pages never rotate on their own) |
 | `SPEAKER_PIN_TTL_SECONDS` | `18` | How long an active-speaker pin protects a student from random ejection |
 | `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | generated | Admin credential for the SFU. Generated into `.env` and the gitignored `infra/livekit.yaml` by `scripts/sync-livekit-keys.sh` |
 | `APP_URL` / `NEXT_PUBLIC_APP_URL` | `http://localhost:3000` | Browser-facing app origin — `http://PUBLIC_IP:3000` (bare IP) or `https://DOMAIN` (Caddy) |
@@ -397,7 +421,7 @@ See `.env.example`. Important:
 
 | File | Purpose |
 |------|---------|
-| `apps/web/src/lib/sample.ts` | Visible-sample rotation in Redis |
+| `apps/web/src/lib/sample.ts`, `lib/videoPages.ts` | Student-video pages (who may publish camera) in Redis |
 | `apps/web/src/components/classroom/ClassroomRoom.tsx` | LiveKit room, selective publish, student float UI |
 | `apps/web/src/app/api/auth/clear-student/route.ts` | Clear student cookie for rejoin |
 | `apps/web/src/app/api/rooms/[code]/*/route.ts` | Join, admit, token, mute, state, end |

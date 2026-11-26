@@ -55,6 +55,7 @@ Every packet is UTF-8 JSON with `v: 1`.
 | `cls-state` | server | `state` `{spread}` (refetch `/state` within `spread` ms), `mute` `{muted}` (to the named students) | `lib/roomNudge.ts`, `lib/pollPolicy.ts` |
 | `draw` | server | student drawing on the shared screen: `pts` `{id, by, name, c, from, pts}`, `del`, `clear` | `lib/drawLogic.ts` |
 | `tink` | teacher | teacher marks on the shared picture: `up` `{stroke}`, `del` `{id}`, `clear`, `snap` `{strokes}` (coordinates 0..1 of the video box) | `lib/teacherInk.ts` |
+| `cls-snap` | server | `{v: 1, ver}`: a new slide snapshot exists (`ver` = its version, `0` = cleared); audio-only students then `GET /snapshot` | `lib/slideSnapshot.ts` |
 
 HTTP polls are a safety net only: while LiveKit is connected the teacher
 polls `/state` every 60 s and students every 60-120 s; pushes do the rest
@@ -98,6 +99,8 @@ browser sends them, so the apps' own HTTP clients pass as non-browser callers.
 | `POST /api/rooms/<code>/screen-token` | Windows sidecar token (`__screen`) |
 | `GET /api/rooms/<code>/state` | roster, waiting, hands, settings |
 | `/admit`, `/mute`, `/hand`, `/spotlight`, `/stage`, `/pin-student`, `/video-panel`, `/settings` | teacher actions |
+| `POST /api/rooms/<code>/video-page` `{delta: ±1}` or `{page}` | student-video pages (Prev / Next); answers `{page, pages, pageSize, total, order}`. `/state` carries the same as `videoPage` for the teacher. `POST /api/sample/rotate` now means "next page" |
+| `POST /api/rooms/<code>/snapshot` `{image: base64, type: image/webp\|image/jpeg}`, `DELETE` | teacher: the latest still of the share for audio-only students (≤350 KB, at most one per 4 s; send only when the picture changed). `GET` (teacher or admitted student, `If-None-Match`) returns it, 204 when none |
 | `/messages` (+ `/messages/stream`) | chat history and sending |
 | `/whiteboard`, `/draw` | board on/off, snapshots, student drawing permission |
 | `/end`, `/leave` | end the class / leave it running |
@@ -107,6 +110,20 @@ browser sends them, so the apps' own HTTP clients pass as non-browser callers.
 The update endpoints let a school roll out a new app version from its own
 server: the apps show "update available" (or "update required" below the
 minimum) with the school's download link.
+
+## Student videos: pages, not rotation (2026-11-26)
+
+The server decides who may publish camera video (`lib/sample.ts`,
+`lib/videoPages.ts`): the students the teacher pinned, then the current page
+of **camera-on** students in roster (natural name) order, at most
+`maxVisibleVideos` (≤ 6) in all. Nothing rotates on its own any more; the page
+changes only on `POST /video-page`, and its contents follow students joining,
+leaving and turning cameras on/off. Teacher clients show the tiles in
+`/state.videoPage.order` and must not shuffle or rotate them. A teacher-unmuted
+student publishes camera outside the page (speaking pop-up), and
+`/sample/pin` no longer changes the page. Students report camera on/off with
+`POST /camera`; a student camera in standby (device closed because nothing
+needs it) is still reported as on.
 
 ## Shared behaviour
 

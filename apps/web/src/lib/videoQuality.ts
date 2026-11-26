@@ -32,9 +32,16 @@ export const TEACHER_CAMERA = {
   layers: [{ width: 320, height: 180, maxBitrate: 90_000, maxFramerate: 12 }] as Layer[],
 } as const;
 
+/**
+ * Student camera (2026-11-26): 320×180 at 12 fps, ≤120 kbps, one layer. It is
+ * only ever seen as a small tile in the teacher's video panel (or the
+ * speaking pop-up / a spotlight), where 12 fps reads the same as 15 and the
+ * old 200 kbps cap bought nothing visible. About 40% less student upload and
+ * teacher download per tile shown.
+ */
 export const STUDENT_CAMERA = {
-  capture: { width: { ideal: 320 }, height: { ideal: 180 }, frameRate: { ideal: 15 } },
-  encoding: { maxBitrate: 200_000, maxFramerate: 15 },
+  capture: { width: { ideal: 320 }, height: { ideal: 180 }, frameRate: { ideal: 12, max: 15 } },
+  encoding: { maxBitrate: 120_000, maxFramerate: 12 },
   simulcast: false,
 } as const;
 
@@ -210,8 +217,8 @@ export const LOW_TEACHER_CAMERA = {
 } as const;
 
 export const LOW_STUDENT_CAMERA = {
-  capture: { width: { ideal: 320 }, height: { ideal: 180 }, frameRate: { ideal: 10 } },
-  encoding: { maxBitrate: 100_000, maxFramerate: 10 },
+  capture: { width: { ideal: 320 }, height: { ideal: 180 }, frameRate: { ideal: 10, max: 10 } },
+  encoding: { maxBitrate: 80_000, maxFramerate: 10 },
   simulcast: false,
 } as const;
 

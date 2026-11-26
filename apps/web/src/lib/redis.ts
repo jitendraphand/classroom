@@ -32,6 +32,16 @@ export const keys = {
   visible: (code: string) => `room:${code}:visible`,
   muted: (code: string) => `room:${code}:muted`,
   rotation: (code: string) => `room:${code}:rotation`,
+  /** Teacher's current student-video page (0-based; lib/videoPages). */
+  videoPage: (code: string) => `room:${code}:video-page`,
+  /** JSON page summary for the teacher's panel ({ page, pages, total, order }). */
+  videoPageInfo: (code: string) => `room:${code}:video-page-info`,
+  /** Latest slide snapshot (binary image) for audio-only students (lib/slideSnapshot). */
+  snapshot: (code: string) => `room:${code}:snapshot`,
+  /** JSON { ver, type } of the latest snapshot. */
+  snapshotMeta: (code: string) => `room:${code}:snapshot-meta`,
+  /** Short coalescing marker: a page recompute after camera changes is already scheduled. */
+  videoPageRefresh: (code: string) => `room:${code}:video-page-refresh`,
   /** Exclusive presentation stage: idle | screen */
   stage: (code: string) => `room:${code}:stage`,
   /** '1' while the teacher's share draws student ink on the real desktop (Windows app). */

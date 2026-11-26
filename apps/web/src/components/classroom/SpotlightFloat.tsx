@@ -10,11 +10,17 @@ export function SpotlightFloat({
   identity,
   name,
   hidden = false,
+  videoOff = false,
 }: {
   identity: string;
   name: string;
   /** Same drop as the roster: unsubscribe and show nothing until they return. */
   hidden?: boolean;
+  /**
+   * Data saving (Share / Audio mode, or a page hidden for a while): keep the
+   * float with the name, but receive no video (lib/dataSaver spotlightCameraWanted).
+   */
+  videoOff?: boolean;
 }) {
   const room = useRoomContext();
   const paneRef = useRef<HTMLDivElement | null>(null);
@@ -25,11 +31,13 @@ export function SpotlightFloat({
 
   useEffect(() => {
     if (!room) return;
-    if (hidden) {
+    if (hidden || videoOff) {
       const p = room.remoteParticipants.get(identity);
       if (p) {
         for (const pub of Array.from(p.trackPublications.values())) {
           if (!pub.isSubscribed) continue;
+          // Data saving: drop the camera only; the classmate's voice stays.
+          if (!hidden && pub.source !== Track.Source.Camera) continue;
           try {
             pub.setSubscribed(false);
           } catch {
@@ -69,11 +77,11 @@ export function SpotlightFloat({
       room.off(RoomEvent.ParticipantConnected, subscribe);
       room.off(RoomEvent.ParticipantDisconnected, bump);
     };
-  }, [room, identity, hidden]);
+  }, [room, identity, hidden, videoOff]);
 
   void tick;
   const participant = hidden ? undefined : room?.remoteParticipants.get(identity);
-  const media = participant?.getTrackPublication(Track.Source.Camera)?.track?.mediaStreamTrack ?? null;
+  const media = videoOff ? null : (participant?.getTrackPublication(Track.Source.Camera)?.track?.mediaStreamTrack ?? null);
   const label = name || participant?.name || 'Student';
 
   useEffect(() => {
@@ -116,7 +124,7 @@ export function SpotlightFloat({
             <video ref={videoRef} className="pointer-events-none h-full w-full object-cover" autoPlay playsInline muted />
           ) : (
             <div className="flex h-full items-center justify-center px-2 text-center text-[10px] text-slate-300">
-              Camera off
+              {videoOff ? 'Video off to save data' : 'Camera off'}
             </div>
           )}
         </div>

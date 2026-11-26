@@ -377,7 +377,7 @@ export function Controls({
 
         {isTeacher && onRotateSample && !isFloat && (
           <Tool caption="Next videos" show={captions} wide={wide}>
-          <IconButton label="Rotate video sample" onClick={onRotateSample}>
+          <IconButton label="Next page of student videos" onClick={onRotateSample}>
             <IconRotate />
           </IconButton>
           </Tool>

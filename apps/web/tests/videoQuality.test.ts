@@ -21,11 +21,11 @@ test('teacher camera: 360p top, 180p small layer, 15 fps, ≤300 kbps', () => {
   assert.ok(TEACHER_CAMERA.encoding.maxBitrate <= 300_000);
 });
 
-test('student camera: small, ~15 fps, low bitrate, single layer', () => {
+test('student camera: small, 12 fps, ≤120 kbps, single layer (tile-sized)', () => {
   assert.ok(STUDENT_CAMERA.capture.width.ideal <= 320);
   assert.ok(STUDENT_CAMERA.capture.height.ideal <= 240);
-  assert.equal(STUDENT_CAMERA.encoding.maxFramerate, 15);
-  assert.ok(STUDENT_CAMERA.encoding.maxBitrate >= 150_000 && STUDENT_CAMERA.encoding.maxBitrate <= 250_000);
+  assert.equal(STUDENT_CAMERA.encoding.maxFramerate, 12);
+  assert.ok(STUDENT_CAMERA.encoding.maxBitrate >= 80_000 && STUDENT_CAMERA.encoding.maxBitrate <= 120_000);
   assert.equal(STUDENT_CAMERA.simulcast, false);
 });
 

@@ -1,10 +1,11 @@
-import type Redis from 'ioredis';
 import { ensureRedis, keys } from './redis';
 import { prisma } from './db';
 import { pushStudentPermissions } from './livekit';
 import { LOCK_RELEASE_LUA, newLockToken } from './leaderLock';
 import { nudgeRoomState } from './roomNudge';
-import { allocateSample, freshSpeakerPins, type PinnedStudent } from './classSlots';
+import { type PinnedStudent } from './classSlots';
+import { studentCamMap } from './studentCamera';
+import { videoPageLayout, type VideoPageLayout } from './videoPages';
 
 /** Hard ceiling: server never selects/publishes more than this many student videos. */
 export const HARD_MAX_VISIBLE_STUDENT_VIDEOS = 6;
@@ -14,18 +15,19 @@ const DEFAULT_MAX = Math.min(
   HARD_MAX_VISIBLE_STUDENT_VIDEOS
 );
 
-/** Auto-rotate mosaic pool among non-pinned students (default 8s). */
+/**
+ * How often the current page is recomputed (default 8 s): picks up students
+ * who joined, left or turned their camera on/off. The page itself only
+ * changes when the teacher presses Prev / Next (lib/videoPages); there is no
+ * random rotation any more.
+ */
 const ROTATION_SECONDS = Number(process.env.SAMPLE_ROTATION_SECONDS || 8);
+
+/** Page state lives as long as a class can (same as the student camera flags). */
+const PAGE_TTL_S = 12 * 60 * 60;
 
 /** Do not re-pin the same identity more often than this. */
 const PIN_RATE_LIMIT_MS = 2000;
-
-/**
- * Cap on remembered speaker pins. Pins expire SPEAKER_PIN_TTL_SECONDS after the
- * student last spoke (and on mute); the ceiling stops a burst of chatty
- * students from holding every slot meanwhile.
- */
-const MAX_STICKY_PINS = 12;
 
 /** Guard so a poll storm cannot trigger dozens of concurrent rotations. */
 const ROTATE_LOCK_MS = 3000;
@@ -117,28 +119,8 @@ function sampleChanged(a: string[], b: string[]) {
   return b.some((id) => !set.has(id));
 }
 
-function shuffle<T>(arr: T[]): T[] {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
-/**
- * Speaker pins: identity -> last time they spoke. An unmuted speaker stays in
- * the visible pool until muted, leaving, or SPEAKER_PIN_TTL_MS of silence.
- */
-async function getPinnedSpeakers(roomCode: string): Promise<Set<string>> {
-  const redis = await ensureRedis();
-  const raw = await redis.hgetall(keys.pinnedSpeakers(roomCode));
-  return new Set(Object.keys(raw));
-}
-
 /** Speaker pins expire this long after the student last spoke (pinSpeaker refreshes it). */
 const SPEAKER_PIN_TTL_MS = Math.max(5, Number(process.env.SPEAKER_PIN_TTL_SECONDS || 18)) * 1000;
-
 
 export async function unpinSpeaker(roomCode: string, identity: string) {
   const redis = await ensureRedis();
@@ -150,32 +132,27 @@ export async function clearPinnedSpeakers(roomCode: string) {
   await redis.del(keys.pinnedSpeakers(roomCode));
 }
 
-/**
- * Trim the sticky-speaker hash to the MAX_STICKY_PINS most recent entries.
- * The hash stores `identity -> pinnedAt ms`, so recency is recoverable.
- */
-async function pruneStickyPins(redis: Redis, roomCode: string, keep: Set<string>) {
-  const raw = await redis.hgetall(keys.pinnedSpeakers(roomCode));
-  const entries = Object.entries(raw);
-  if (entries.length <= MAX_STICKY_PINS) return;
-  entries.sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0));
-  const drop = entries
-    .slice(MAX_STICKY_PINS)
-    .map(([id]) => id)
-    .filter((id) => !keep.has(id));
-  if (drop.length) {
-    await redis.hdel(keys.pinnedSpeakers(roomCode), ...drop);
-    for (const id of drop) keep.delete(id);
+/** Page summary the teacher's panel shows (Prev / Next, "Page 2 of 9"). */
+export type VideoPageInfo = Pick<VideoPageLayout, 'page' | 'pages' | 'pageSize' | 'total' | 'order'>;
+
+export async function getVideoPageInfo(roomCode: string): Promise<VideoPageInfo | null> {
+  const redis = await ensureRedis();
+  try {
+    const raw = await redis.get(keys.videoPageInfo(roomCode));
+    return raw ? (JSON.parse(raw) as VideoPageInfo) : null;
+  } catch {
+    return null;
   }
 }
 
 /**
- * Rotate which admitted students may publish camera video to LiveKit.
- * Only identities in the visible sample should publish video tracks.
- * Audio can still be published by all unmuted students.
- * Sticky unmuted-speaker pins are never rotated out.
+ * Recompute which admitted students may publish camera video: the students
+ * the teacher pinned, then the current page of camera-on students in roster
+ * order (lib/videoPages). Deterministic, so recomputing without a change
+ * keeps the same students and pushes no SFU permission changes. `page`
+ * moves to another page (clamped to the pages that exist).
  */
-export async function rotateVisibleSample(roomCode: string, maxVisible?: number) {
+export async function rotateVisibleSample(roomCode: string, maxVisible?: number, page?: number) {
   const redis = await ensureRedis();
   const room = await prisma.room.findUnique({ where: { code: roomCode } });
   if (!room || room.status === 'ENDED') {
@@ -184,44 +161,26 @@ export async function rotateVisibleSample(roomCode: string, maxVisible?: number)
 
   const n = clampMaxVisible(maxVisible ?? room.maxVisibleVideos ?? DEFAULT_MAX);
 
-  const admitted = await prisma.participant.findMany({
-    where: { roomId: room.id, role: 'STUDENT', status: 'ADMITTED' },
-    select: { livekitIdentity: true, pinnedAt: true },
-  });
+  const [admitted, cams, storedPage] = await Promise.all([
+    prisma.participant.findMany({
+      where: { roomId: room.id, role: 'STUDENT', status: 'ADMITTED' },
+      select: { livekitIdentity: true, pinnedAt: true, displayName: true },
+    }),
+    studentCamMap(roomCode),
+    page === undefined ? redis.get(keys.videoPage(roomCode)) : Promise.resolve(null),
+  ]);
   const teacherPins: PinnedStudent[] = admitted
     .filter((p) => p.pinnedAt)
     .map((p) => ({ identity: p.livekitIdentity, pinnedAt: p.pinnedAt!.getTime() }));
 
-  const identities = admitted.map((p) => p.livekitIdentity);
-  const identitySet = new Set(identities);
-  const pinned = await getPinnedSpeakers(roomCode);
-
-  // Drop pins for students who left
-  const stalePins = Array.from(pinned).filter((id) => !identitySet.has(id));
-  if (stalePins.length) {
-    await redis.hdel(keys.pinnedSpeakers(roomCode), ...stalePins);
-    for (const id of stalePins) pinned.delete(id);
-  }
-
-  // Keep the most recently pinned MAX_STICKY_PINS so stale pins can never
-  // accumulate across a long class and monopolise every slot.
-  await pruneStickyPins(redis, roomCode, pinned);
-
-  // Teacher-pinned students first (oldest pin first), then sticky speakers
-  // (random subset if more than fit), then random rotation among the rest.
-  const pinTimes = await redis.hgetall(keys.pinnedSpeakers(roomCode));
-  const expired = Object.entries(pinTimes)
-    .filter(([, at]) => Date.now() - Number(at || 0) > SPEAKER_PIN_TTL_MS)
-    .map(([id]) => id);
-  if (expired.length) {
-    await redis.hdel(keys.pinnedSpeakers(roomCode), ...expired);
-    for (const id of expired) delete pinTimes[id];
-  }
-  const speakerPins = freshSpeakerPins(
-    Object.fromEntries(Object.entries(pinTimes).filter(([id]) => pinned.has(id))),
-    { now: Date.now(), ttlMs: SPEAKER_PIN_TTL_MS, max: n, admitted: identities.length, teacherPinned: teacherPins.length }
-  );
-  const sample = allocateSample({ identities, teacherPins, speakerPins, max: n, shuffle });
+  const layout = videoPageLayout({
+    candidates: admitted.map((p) => ({ identity: p.livekitIdentity, name: p.displayName, camOn: cams.get(p.livekitIdentity) === true })),
+    teacherPins,
+    max: n,
+    page: page ?? Number(storedPage || 0),
+  });
+  const sample = layout.visible;
+  const info: VideoPageInfo = { page: layout.page, pages: layout.pages, pageSize: layout.pageSize, total: layout.total, order: layout.order };
 
   const previous = await redis.smembers(keys.visible(roomCode));
 
@@ -229,13 +188,26 @@ export async function rotateVisibleSample(roomCode: string, maxVisible?: number)
   pipe.del(keys.visible(roomCode));
   if (sample.length) pipe.sadd(keys.visible(roomCode), ...sample);
   pipe.set(keys.rotation(roomCode), String(Date.now()), 'EX', ROTATION_SECONDS * 3);
+  pipe.set(keys.videoPage(roomCode), String(layout.page), 'EX', PAGE_TTL_S);
+  pipe.set(keys.videoPageInfo(roomCode), JSON.stringify(info), 'EX', PAGE_TTL_S);
   await pipe.exec();
 
   // Permission updates run after the response. The Redis sample is already the
   // source of truth for the next /state poll.
   enqueueSampleSync(roomCode, previous, sample);
 
-  return { visible: sample, max: n, rotatedAt: Date.now(), nextIn: ROTATION_SECONDS };
+  return { visible: sample, max: n, rotatedAt: Date.now(), nextIn: ROTATION_SECONDS, ...info };
+}
+
+/** Teacher pressed Prev / Next (delta) or picked a page: move there now. */
+export async function moveVideoPage(roomCode: string, target: { page?: number; delta?: number }) {
+  const { stepPage } = await import('./videoPages');
+  const current = await getVideoPageInfo(roomCode);
+  const page =
+    target.page !== undefined
+      ? target.page
+      : stepPage(current?.page ?? 0, current?.pages ?? 1, target.delta ?? 1);
+  return rotateVisibleSample(roomCode, undefined, page);
 }
 
 export async function getVisibleSample(roomCode: string) {
@@ -284,9 +256,12 @@ export async function ensureSampleFresh(roomCode: string) {
 }
 
 /**
- * Force a speaking (unmuted) student into the visible sample so the teacher sees them.
- * Held while they keep speaking (expires SPEAKER_PIN_TTL_MS after the last
- * pin, dropped on mute) — rate-limited per identity; no-op if already visible.
+ * A student was heard speaking (teacher client, POST /sample/pin). With
+ * pages the sample no longer changes for this: a teacher-unmuted student
+ * already publishes camera outside the page for the teacher's speaking pop-up
+ * (lib/speakingRules studentCameraAllowed), and evicting someone from the
+ * page the teacher is looking at would be confusing. Only the "last spoke"
+ * timestamp is kept (rate-limited per identity), for clients that read it.
  */
 export async function pinSpeaker(roomCode: string, identity: string) {
   const redis = await ensureRedis();
@@ -309,71 +284,16 @@ export async function pinSpeaker(roomCode: string, identity: string) {
   }
 
   // Teacher-muted students should not stick in the speak pool
-  const mutedIds = await redis.smembers(keys.muted(roomCode));
-  if (participant.mutedByTeacher || mutedIds.includes(participant.id)) {
+  if (participant.mutedByTeacher || (await redis.sismember(keys.muted(roomCode), participant.id)) === 1) {
     await redis.hdel(keys.pinnedSpeakers(roomCode), identity);
     return { ok: false as const, reason: 'muted' };
   }
 
-  const rateKey = keys.pinRate(roomCode, identity);
-  const acquired = await redis.set(rateKey, '1', 'PX', PIN_RATE_LIMIT_MS, 'NX');
-  if (!acquired) {
-    // Still refresh sticky pin timestamp while speaking
-    await redis.hset(keys.pinnedSpeakers(roomCode), identity, String(Date.now()));
-    return { ok: true as const, alreadyVisible: true, rateLimited: true };
-  }
-
-  const max = clampMaxVisible(room.maxVisibleVideos ?? DEFAULT_MAX);
+  const acquired = await redis.set(keys.pinRate(roomCode, identity), '1', 'PX', PIN_RATE_LIMIT_MS, 'NX');
+  await redis.hset(keys.pinnedSpeakers(roomCode), identity, String(Date.now()));
+  await redis.pexpire(keys.pinnedSpeakers(roomCode), SPEAKER_PIN_TTL_MS * 10);
   const visible = await redis.smembers(keys.visible(roomCode));
-
-  if (visible.includes(identity)) {
-    await redis.hset(keys.pinnedSpeakers(roomCode), identity, String(Date.now()));
-    return { ok: true as const, alreadyVisible: true, visible };
-  }
-
-  const pinned = await getPinnedSpeakers(roomCode);
-  const teacherPinned = new Set(
-    (
-      await prisma.participant.findMany({
-        where: { roomId: room.id, role: 'STUDENT', status: 'ADMITTED', pinnedAt: { not: null } },
-        select: { livekitIdentity: true },
-      })
-    ).map((p) => p.livekitIdentity)
-  );
-  let next = [...visible];
-
-  if (next.length >= max) {
-    // Never eject teacher-pinned students; avoid ejecting other sticky speakers.
-    const notTeacherPinned = next.filter((id) => id !== identity && !teacherPinned.has(id));
-    if (!notTeacherPinned.length) {
-      // Every slot is pinned by the teacher: the speaker waits (the teacher
-      // still hears them; their video joins when a pin is released).
-      await redis.hset(keys.pinnedSpeakers(roomCode), identity, String(Date.now()));
-      return { ok: true as const, alreadyVisible: false, visible: next, slotsPinned: true };
-    }
-    const ejectable = notTeacherPinned.filter((id) => !pinned.has(id));
-    const pool = ejectable.length ? ejectable : notTeacherPinned;
-    const victim = pool[Math.floor(Math.random() * pool.length)];
-    next = next.filter((id) => id !== victim);
-  }
-
-  if (!next.includes(identity)) next.push(identity);
-  next = next.slice(0, max);
-
-  const previous = await redis.smembers(keys.visible(roomCode));
-
-  const pipe = redis.multi();
-  pipe.del(keys.visible(roomCode));
-  if (next.length) pipe.sadd(keys.visible(roomCode), ...next);
-  pipe.hset(keys.pinnedSpeakers(roomCode), identity, String(Date.now()));
-  await pipe.exec();
-
-  // The pinned student may now publish camera — enforce that on the SFU, and
-  // revoke it from whoever was pushed out of the sample. Do not block the pin
-  // response (or the teacher's next state poll) on the SFU round-trip.
-  enqueueSampleSync(roomCode, previous, next);
-
-  return { ok: true as const, alreadyVisible: false, visible: next, pinned: identity };
+  return { ok: true as const, alreadyVisible: visible.includes(identity), visible, rateLimited: !acquired };
 }
 
 /**

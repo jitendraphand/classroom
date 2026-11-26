@@ -144,6 +144,8 @@ export type RoomState = {
   meLeft?: boolean;
   /** Teacher: recent device takeovers (toast). */
   takeovers?: import('@/lib/deviceTakeover').TakeoverNotice[];
+  /** Teacher: student-video page (lib/videoPages). `order` = tile order (pins first). */
+  videoPage?: { page: number; pages: number; pageSize: number; total: number; order: string[] } | null;
   /** Active hidden admin observers (for StudentMediaPrivacy SFU permissions only). */
   observerIdentities?: string[];
 };

@@ -35,7 +35,8 @@ import {
 import { selectTeacherVideos, videoHidden } from '@/lib/droppedVideos';
 import { Avatar } from '@/components/ui/Avatar';
 import { IconPin } from '@/components/ui/Icons';
-import { pickTiles, activeStickySpeakers, studentCapForSlots, type PanelSlots } from '@/lib/classSlots';
+import { pickTiles, studentCapForSlots, type PanelSlots } from '@/lib/classSlots';
+import { naturalCompare } from '@/lib/naturalSort';
 import { cn } from '@/lib/cn';
 import { SideWindowPortal } from './shareSideWindows';
 import {
@@ -128,6 +129,8 @@ export function TeacherPeersFloat({
   selfStream,
   onSlotsChange,
   slots: slotsProp,
+  videoPage,
+  onVideoPage,
   dock = null,
   minLeft = 0,
   whiteboard = false,
@@ -186,6 +189,14 @@ export function TeacherPeersFloat({
   /** Panel size chosen by the room (synced with the server student cap). */
   slots?: PanelSlots | null;
   /**
+   * Student-video page from the server (lib/videoPages): `order` is the tile
+   * order (teacher pins, then this page in roster order). Replaces the old
+   * random rotation.
+   */
+  videoPage?: { page: number; pages: number; total: number; order: string[] } | null;
+  /** Prev (-1) / Next (+1) page. */
+  onVideoPage?: (delta: number) => void;
+  /**
    * Stage rectangle (viewport px). The panel docks to the stage's top-left
    * corner (no dragging) and reports the room it needs via onDockSpace so the
    * stage makes space instead of being covered: a top band when minimized, a
@@ -221,8 +232,6 @@ export function TeacherPeersFloat({
   /** identity → last time heard speaking (sticky pins expire, see activeStickySpeakers). */
   const lastSpokeRef = useRef<Map<string, number>>(new Map());
   const seenCamsRef = useRef<Set<string>>(new Set());
-  const mosaicPoolRef = useRef<string[]>([]);
-  const lastRotationTickRef = useRef(0);
   const [slotCount, setSlotCount] = useState<2 | 4 | 6>(() => {
     try {
       const v = sessionStorage.getItem(`peers_slots_${roomCode.toUpperCase()}`);
@@ -292,7 +301,6 @@ export function TeacherPeersFloat({
     const t = window.setTimeout(() => onShownRef.current?.(shown), shown ? 0 : 1500);
     return () => window.clearTimeout(t);
   }, [shown]);
-  const [rotationTick, setRotationTick] = useState(0);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [stickyVersion, setStickyVersion] = useState(0);
   const [tick, setTick] = useState(0);
@@ -458,12 +466,6 @@ export function TeacherPeersFloat({
     if (!docked) onDockSpace?.({ left: 0, top: 0 });
   }, [docked, onDockSpace]);
 
-  // Random mosaic rotation ~8s among non-sticky students
-  useEffect(() => {
-    const iv = window.setInterval(() => setRotationTick((n) => n + 1), 8000);
-    return () => window.clearInterval(iv);
-  }, []);
-
   const isMicMuted = useCallback((p: Participant) => {
     try {
       if (!p.isMicrophoneEnabled) return true;
@@ -590,68 +592,31 @@ export function TeacherPeersFloat({
     );
     const pins = pinnedIdentities.filter((id) => pool.includes(id));
     const studentSlots = Math.max(0, activeSlots - 1);
-    for (const id of Array.from(lastSpokeRef.current.keys())) {
-      if (!stickySpeakersRef.current.has(id)) lastSpokeRef.current.delete(id);
-    }
-    const sticky = activeStickySpeakers({
-      lastSpoke: lastSpokeRef.current,
-      now: Date.now(),
-      pool,
-      pins,
-      speakingId,
-      studentSlots,
-    });
-
-    // Rotation runs among everyone who is not pinned / speaking. Pinned
-    // students (teacher), then the active speaker, then sticky speakers take
-    // tiles first (see pickTiles in lib/classSlots).
-    const rest = pool.filter((id) => !pins.includes(id) && id !== speakingId && !sticky.includes(id));
-    const prevMosaic = mosaicPoolRef.current.filter((id) => rest.includes(id));
-    const needSlots = Math.max(0, studentSlots - pins.length - sticky.length);
-    const membershipChanged =
-      prevMosaic.length !== rest.length || prevMosaic.some((id) => !rest.includes(id));
-    let mosaic = prevMosaic;
-    if (membershipChanged || mosaic.length === 0 || mosaic.length < Math.min(rest.length, needSlots)) {
-      const shuffled = [...rest];
-      for (let i = shuffled.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-      }
-      mosaic = shuffled;
-      mosaicPoolRef.current = mosaic;
-    }
-    if (lastRotationTickRef.current !== rotationTick) {
-      lastRotationTickRef.current = rotationTick;
-      const rotating = mosaic.filter((id) => rest.includes(id));
-      for (const id of rest) {
-        if (!rotating.includes(id)) rotating.push(id);
-      }
-      mosaic = rotating.length > 1 ? [...rotating.slice(1), rotating[0]] : rotating;
-      mosaicPoolRef.current = mosaic;
-    }
-
+    // Tile order = the server's page order (teacher pins, then this page in
+    // roster order; lib/videoPages). Nothing rotates or reshuffles on the
+    // client: a tile changes only when the teacher turns the page or a
+    // student on this page joins, leaves or turns their camera on/off.
+    const serverOrder = (videoPage?.order ?? []).filter((id) => pool.includes(id));
+    const unordered = pool
+      .filter((id) => !serverOrder.includes(id))
+      .sort((a, b) => naturalCompare(room?.remoteParticipants.get(a)?.name || a, room?.remoteParticipants.get(b)?.name || b));
     // Never backfill with students who are not publishing a sample camera.
     // The grid still paints `activeSlots` cells; the rest stay blank.
     return pickTiles({
-      pool: [...pins, ...(speakingId ? [speakingId] : []), ...sticky, ...mosaic].filter((id) => pool.includes(id)),
+      pool,
       teacherPins: pins,
-      speakingId,
-      sticky,
-      rotation: mosaic,
+      rotation: [...serverOrder, ...unordered],
       studentSlots,
     });
-    // `tick` and `stickyVersion` are recompute triggers: the rotation and sticky
-    // speakers live in refs this memo reads.
+    // `tick` is a recompute trigger (cameras appearing / going away).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     visibleIdentities,
     teacherIdentities,
     room,
-    speakingId,
-    rotationTick,
     activeSlots,
     tick,
-    stickyVersion,
+    videoPage,
     pinnedIdentities,
     droppedStudents,
     liveRoster,
@@ -931,6 +896,42 @@ export function TeacherPeersFloat({
                 {n}
               </button>
             ))}
+          {!isMin && videoPage && onVideoPage && videoPage.pages > 1 && (
+            <span
+              className="inline-flex items-center gap-0.5"
+              role="group"
+              aria-label={`Student videos, page ${videoPage.page + 1} of ${videoPage.pages}`}
+              data-testid="videos-pager"
+            >
+              <button
+                type="button"
+                className="peers-float-slot"
+                data-testid="videos-prev"
+                onClick={() => onVideoPage(-1)}
+                aria-label="Previous page of student videos"
+                title="Previous students"
+              >
+                ‹
+              </button>
+              <span
+                className="min-w-[2.6rem] text-center text-[11px] font-semibold tabular-nums text-slate-200"
+                title={`Page ${videoPage.page + 1} of ${videoPage.pages} · ${videoPage.total} camera${videoPage.total === 1 ? '' : 's'} on`}
+                aria-live="polite"
+              >
+                {videoPage.page + 1}/{videoPage.pages}
+              </span>
+              <button
+                type="button"
+                className="peers-float-slot"
+                data-testid="videos-next"
+                onClick={() => onVideoPage(1)}
+                aria-label="Next page of student videos"
+                title="Next students"
+              >
+                ›
+              </button>
+            </span>
+          )}
           {dock && !portal && (
             <button
               type="button"

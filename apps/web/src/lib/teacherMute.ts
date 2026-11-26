@@ -9,7 +9,7 @@ import { getSchoolSettings } from './schoolSettings';
 import { updateMicBook } from './micBook';
 import { teacherSetMic } from './micSlots';
 import { setParticipantMicAllowed } from './livekit';
-import { getVisibleSample, unpinSpeaker } from './sample';
+import { getVisibleSample, rotateVisibleSample, unpinSpeaker } from './sample';
 import { nudgeRoomState, pushMuteState } from './roomNudge';
 import { isStudentCamOn, setStudentCam } from './studentCamera';
 import { muteOnCameraOff } from './speakingRules';
@@ -92,5 +92,28 @@ export async function applyCameraReport(
     }
   }
   if (was !== on && !autoMuted) nudgeRoomState(room.code, 'teacher');
+  // Video pages list only camera-on students: refresh the current page.
+  if (was !== on && me.status === 'ADMITTED') void schedulePageRefresh(room.code);
   return { autoMuted };
+}
+
+/** Coalesce window for page refreshes after camera changes (many students at once). */
+export const PAGE_REFRESH_COALESCE_MS = 1500;
+
+/**
+ * One page recompute per room per window: the first camera change in the
+ * window schedules it (on this worker), later ones in the window are covered
+ * because the recompute reads every camera flag when it runs.
+ */
+async function schedulePageRefresh(code: string): Promise<void> {
+  try {
+    const r = await ensureRedis();
+    const first = await r.set(keys.videoPageRefresh(code), '1', 'PX', PAGE_REFRESH_COALESCE_MS, 'NX');
+    if (first !== 'OK') return;
+    setTimeout(() => {
+      void rotateVisibleSample(code).catch((e) => console.warn('video page refresh', code, e instanceof Error ? e.message : e));
+    }, PAGE_REFRESH_COALESCE_MS - 250).unref?.();
+  } catch {
+    /* Redis down: the periodic refresh (ensureSampleFresh) catches up */
+  }
 }

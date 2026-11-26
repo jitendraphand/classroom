@@ -85,3 +85,13 @@ export function initialDataSaver(
   if (t === '3g' || profile === 'low') return 'low';
   return 'off';
 }
+
+/**
+ * The teacher spotlights a classmate: does this student receive that camera?
+ * Same rule as the teacher's camera: not in "Share" or "Audio", and not while
+ * the page has been hidden for BACKGROUND_VIDEO_PAUSE_MS. (Their voice is a
+ * microphone track and is unaffected.)
+ */
+export function spotlightCameraWanted(opts: { mode: DataSaverMode; backgroundPaused?: boolean }): boolean {
+  return !teacherCameraOff(opts.mode) && !opts.backgroundPaused;
+}

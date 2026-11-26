@@ -7,7 +7,7 @@ import { endedSessionReason, getStudentSessionToken, resolveRoomAccess } from '@
 import { recentTakeovers, wasReplaced } from '@/lib/deviceTakeoverServer';
 import { readClassEndedBy } from '@/lib/auditLog';
 import { jsonError, jsonOk } from '@/lib/response';
-import { clampMaxVisible, ensureSampleFresh, getVisibleSample } from '@/lib/sample';
+import { clampMaxVisible, ensureSampleFresh, getVideoPageInfo, getVisibleSample } from '@/lib/sample';
 import { ensureRedis, keys } from '@/lib/redis';
 import { audienceIncludes } from '@/lib/grades';
 import { formatStudentAudienceOf, studentPlaceLabel } from '@/lib/audienceLabels';
@@ -464,6 +464,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     drawRequestCount: isTeacher ? drawReqs.length : undefined,
     /** Teacher: students whose newer device took over their seat (toast). */
     takeovers: isTeacher ? await recentTakeovers(code) : undefined,
+    /** Teacher: student-video page (Prev / Next, "Page 2 of 9"); `order` = tile order. */
+    videoPage: isTeacher ? await getVideoPageInfo(code) : undefined,
     sampleNote:
       'Only a rotating sample of students publish video to the teacher. Everyone keeps a local preview and may appear visible.',
     spotlight,
