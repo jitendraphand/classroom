@@ -2,7 +2,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { activeStickySpeakers, freshSpeakerPins, STICKY_SPEAKER_TTL_MS } from '../src/lib/classSlots';
 import { classroomReconnectPolicy, isOwnStaleDuplicate, rejoinDelayMs, rejoinOutcome, shouldAutoRejoin, NO_REJOIN_REASONS } from '../src/lib/rejoinPolicy';
-import { envWaitingRoomDefault, resolveWaitingRoomDefault } from '../src/lib/waitingRoomPref';
 import { parseMediaServers, pickLeastLoaded } from '../src/lib/mediaServers';
 
 test('mosaic: sticky speakers expire after the TTL', () => {
@@ -56,15 +55,6 @@ test('rejoin: only real drops rejoin, with capped backoff', () => {
   assert.equal(rejoinOutcome(403), 'stop');
   assert.equal(rejoinOutcome(502), 'retry');
   assert.equal(rejoinOutcome(0), 'retry');
-});
-
-test('waiting room default: remembered teacher choice, else env', () => {
-  assert.equal(resolveWaitingRoomDefault('1', false), true);
-  assert.equal(resolveWaitingRoomDefault('0', true), false);
-  assert.equal(resolveWaitingRoomDefault(null, true), true);
-  assert.equal(envWaitingRoomDefault(undefined), true);
-  assert.equal(envWaitingRoomDefault('off'), false);
-  assert.equal(envWaitingRoomDefault('on'), true);
 });
 
 test('media servers: N=1 default from the existing env, unchanged', () => {

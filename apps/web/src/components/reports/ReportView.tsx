@@ -411,7 +411,7 @@ export function ReportView({
       </Card>
       <p className="text-xs text-slate-500">
         Absent counts only students the classroom knows (they joined once from the school app, or were imported on the
-        Students page). “Waited” = in the waiting room but never admitted. Late = arrived after the class start (the later
+        Students page). “Waited” = arrived but never got into the class (classes before Nov 2026 had a waiting room). Late = arrived after the class start (the later
         of the scheduled and actual start) plus the grace period. <Button variant="ghost" size="sm" onClick={() => void load()}>Refresh</Button>
       </p>
     </div>

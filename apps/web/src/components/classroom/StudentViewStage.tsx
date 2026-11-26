@@ -171,6 +171,7 @@ export function StudentViewStage({
           canAnnotate={false}
           requestSnapshot={ask}
           fetchStored={fetchStored}
+          assetUrl={(id) => `/api/rooms/${encodeURIComponent(code)}/whiteboard/asset/${id}`}
           disableZoom={disableZoom}
         />
       </div>

@@ -1,6 +1,6 @@
+import { clearAssets } from './whiteboardAssets';
 import { releaseRoom } from './mediaServers';
 import { roomServiceFor } from './livekit';
-import { waitingRoomDefaultFor } from './waitingRoomPref';
 import { prisma } from '@/lib/db';
 import { generateRoomCode, generateIdentity, generateSessionToken } from '@/lib/codes';
 import { ensureRedis, keys, legacyKeys } from '@/lib/redis';
@@ -89,8 +89,11 @@ export async function clearRoomRedis(code: string) {
     keys.teacherPresent(code),
     keys.micBook(code),
     keys.spotlight(code),
+    `room:${code}:wbsnap`,
     ...legacyKeys(code)
   );
+  // Whiteboard images of the class (lib/whiteboardAssets).
+  await clearAssets(code).catch(() => undefined);
 }
 
 /**
@@ -143,8 +146,8 @@ export async function startOrReopenTeacherRoom(
         // New LiveKit room name for the new session: tokens minted for the last
         // class (same permanent code) no longer name this room.
         sessionId: newSessionId(),
-        // Every class starts with the waiting room on.
-        waitingRoomOn: await waitingRoomDefaultFor(teacher.id),
+        // No waiting room (Nov 26): the column stays false.
+        waitingRoomOn: false,
         name: opts.name?.trim() || room.name,
         maxVisibleVideos: clampMaxVisible(opts.maxVisibleVideos ?? room.maxVisibleVideos),
       },
@@ -183,7 +186,7 @@ export async function startOrReopenTeacherRoom(
       });
     }
 
-    // Mark leftover students as LEFT so waiting room starts clean
+    // Mark leftover students as LEFT so the class starts clean
     await prisma.participant.updateMany({
       where: { roomId: room.id, role: 'STUDENT', status: { not: 'LEFT' } },
       data: { status: 'LEFT', leftAt: new Date() },

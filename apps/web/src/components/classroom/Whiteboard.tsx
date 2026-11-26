@@ -12,15 +12,25 @@
  *   after every reconnect; students allowed to draw publish ops on `wb`
  *   (HTTP `/whiteboard` ops remains a fallback).
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useRoomContext } from '@livekit/components-react';
 import { ConnectionState, RoomEvent, type RemoteParticipant } from 'livekit-client';
 import { MEETING_BAR_PX } from '@/lib/shareChrome';
 import { WhiteboardBoard } from '@/lib/whiteboard/WhiteboardBoard';
+import { setAssetUrlResolver } from '@/lib/whiteboard/render';
 import { SNAP_STORE_MS, WhiteboardSession, b64ToPackets, laserPacket, opsPackets, packetsToB64 } from '@/lib/whiteboard/session';
 import { WB_TOPIC, cleanDoc, encodePacket, isOwnRelayEcho, studentOpAllowed, type Op, type Packet } from '@/lib/whiteboard/model';
 import { canPublishRoomData } from '@/lib/dataPublish';
-import { roomFetch } from '@/lib/classroomClient';
+import { roomApiUrl, roomFetch } from '@/lib/classroomClient';
+
+/** Board pictures (`asset:<id>`) of this class, fetched over HTTP by every viewer. */
+export function useAssetUrls(assetUrl: ((id: string) => string) | undefined) {
+  useEffect(() => {
+    if (!assetUrl) return;
+    setAssetUrlResolver(assetUrl);
+    return () => setAssetUrlResolver(null);
+  }, [assetUrl]);
+}
 
 export const wbStoreKey = (code: string) => `wb_doc_${code.toUpperCase()}`;
 /** A board saved by this tab (reload / rejoin while the whiteboard was open). */
@@ -53,19 +63,16 @@ export function WhiteboardHost({
   stopRef?: { current: (() => void) | null };
 }) {
   const room = useRoomContext();
-  const [chromeBottom, setChromeBottom] = useState(0);
-  useLayoutEffect(() => {
-    const chrome = document.querySelector<HTMLElement>('[data-whiteboard-chrome]');
-    if (!chrome) return;
-    // Header, admit/hands bars and error notices can wrap or appear at any
-    // time. Reserve their actual height instead of covering the board tools.
-    const measure = () => setChromeBottom(Math.max(0, Math.ceil(chrome.getBoundingClientRect().bottom)));
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(chrome);
-    window.addEventListener('resize', measure);
-    return () => { observer.disconnect(); window.removeEventListener('resize', measure); };
-  }, []);
+  useAssetUrls(useCallback((id: string) => roomApiUrl(code, `/whiteboard/asset/${id}`), [code]));
+  // Pictures and PDF pages: uploaded once, then referenced by id (lib/whiteboardAssets).
+  const uploadImage = useCallback(
+    async (blob: Blob) => {
+      const res = await roomFetch(code, '/whiteboard/asset', { method: 'POST', headers: { 'Content-Type': blob.type || 'image/jpeg' }, body: blob });
+      const j = res.ok ? ((await res.json().catch(() => null)) as { id?: string } | null) : null;
+      return j?.id ? `asset:${j.id}` : null;
+    },
+    [code]
+  );
   const session = useMemo(() => {
     // Survive a reload / rejoin of the teacher tab (the board lives here).
     try {
@@ -207,9 +214,9 @@ export function WhiteboardHost({
   // Full-height board. The meeting bar owns the right 54px (Stop, End, mic).
   // The teacher footer is hidden while this is open.
   return (
-    <div className="fixed bottom-0 left-0 top-0 z-40 flex bg-[#0b0f14]" style={{ right: MEETING_BAR_PX, top: chromeBottom }} data-testid="wb-host">
+    <div className="fixed bottom-0 left-0 top-0 z-40 flex bg-[#0b0f14]" style={{ right: MEETING_BAR_PX, top: 0 }} data-testid="wb-host">
       <div className="relative min-w-0 flex-1">
-        <WhiteboardBoard session={session} mode="edit" identity={identity} onSend={(ops) => void publish(opsPackets(ops))} onLaser={publishLaser} onClose={stop} hideStop />
+        <WhiteboardBoard session={session} mode="edit" identity={identity} onSend={(ops) => void publish(opsPackets(ops))} onLaser={publishLaser} onClose={stop} hideStop uploadImage={uploadImage} />
       </div>
     </div>
   );
@@ -226,8 +233,11 @@ export function WhiteboardViewer({
   fetchStored,
   sendOps,
   disableZoom = false,
+  assetUrl,
 }: {
   identity: string;
+  /** URL of a board picture `asset:<id>` for this viewer (stable function). */
+  assetUrl?: (id: string) => string;
   canAnnotate: boolean;
   requestSnapshot: () => void;
   /** Server-kept snapshot (base64 packets) when the teacher's device does not answer. */
@@ -236,6 +246,7 @@ export function WhiteboardViewer({
   disableZoom?: boolean;
 }) {
   const room = useRoomContext();
+  useAssetUrls(assetUrl);
   const session = useMemo(() => new WhiteboardSession(), []);
   const reqRef = useRef(requestSnapshot);
   reqRef.current = requestSnapshot;

@@ -40,9 +40,9 @@ test('chat shows at most 40 raised-hand chips and counts the rest', async () => 
   assert.match(html, /aria-label="300 raised hands"/);
 });
 
-test('share HUD pages its roster, waiting list and hands like the main roster', () => {
+test('share HUD pages its roster and hands like the main roster', () => {
   const hud = readFileSync(new URL('../src/components/classroom/TeacherShareHud.tsx', import.meta.url), 'utf8');
-  for (const list of ['filterPeople(students, rosterQuery), rosterLimit', 'filterPeople(waiting, rosterQuery), waitingLimit', 'rosterWindow(hands, handsLimit)']) {
+  for (const list of ['filterPeople(students, rosterQuery), rosterLimit', 'rosterWindow(hands, handsLimit)']) {
     assert.ok(hud.includes(list), list);
   }
   assert.doesNotMatch(hud, /\bhands\.map\(/);

@@ -6,14 +6,19 @@
  * Transport is NOT video: the teacher sends small vector ops over LiveKit
  * data channels (reliable, topic `wb`), batched (~30 ms of pen points per
  * packet) and only when something changes. Late joiners / rejoiners ask for a
- * snapshot (compressed, see codec.ts). Coordinates are integers on a fixed
- * logical page of PAGE_W x PAGE_H, so every device renders the same picture,
- * scaled to its viewport.
+ * snapshot (compressed, see codec.ts). Coordinates are integers on a page
+ * PAGE_W wide with a fixed top edge (y = 0) that runs down to BOARD_MAX_H
+ * (Nov 2026: one long page instead of a 16:9 sheet). The teacher scrolls; the
+ * `view` op tells students which band (y, h) the teacher is looking at, and
+ * every device shows that band scaled to its own width.
  */
 
 export const WB_TOPIC = 'wb';
 export const PAGE_W = 1920;
+/** One screen of the board: the default visible band and the export slice height. */
 export const PAGE_H = 1080;
+/** How far down the page runs: 200 screens, practically endless for a lesson. */
+export const BOARD_MAX_H = PAGE_H * 200;
 export const MAX_PAGES = 50;
 export const MAX_ITEMS_PER_PAGE = 4000;
 export const MAX_POINTS_PER_STROKE = 4000; // x,y pairs
@@ -54,10 +59,17 @@ export type ShapeItem = {
   fl?: 1;
 };
 export type TextItem = { k: 'text'; id: string; by: string; c: string; size: number; x: number; y: number; text: string };
+/**
+ * `src`: a small `data:` image (older boards), or `asset:<id>`, an image the
+ * teacher uploaded to the class (`/whiteboard/asset`), fetched over HTTP by
+ * each viewer so pictures and PDF pages never ride in data packets or snapshots.
+ */
 export type ImageItem = { k: 'img'; id: string; by: string; x: number; y: number; w: number; h: number; src: string };
+export const ASSET_SRC_RE = /^asset:[a-f0-9]{32}$/;
 export type Item = StrokeItem | ShapeItem | TextItem | ImageItem;
 
-export type Page = { id: string; bg: Background; items: Item[] };
+/** `y`/`vh`: the band the teacher is looking at (page units); students follow it. */
+export type Page = { id: string; bg: Background; items: Item[]; y?: number; vh?: number };
 export type Doc = { v: 1; pages: Page[]; cur: number };
 
 export type Op =
@@ -70,6 +82,8 @@ export type Op =
   | { k: 'delpage'; p: string }
   | { k: 'go'; cur: number }
   | { k: 'delBy'; by: string }
+  /** Teacher scrolled: the visible band of page `p` is now y..y+h. Not undoable. */
+  | { k: 'view'; p: string; y: number; h: number }
   /**
    * Move / resize items (teacher selection): every point becomes
    * (pt - o) * s + o + d. s = 1 is a plain move.
@@ -117,7 +131,7 @@ function cleanPts(raw: unknown, max = MAX_POINTS_PER_STROKE * 2): number[] | nul
   if (!Array.isArray(raw)) return null;
   const out: number[] = [];
   for (let i = 0; i + 1 < raw.length && out.length < max; i += 2) {
-    out.push(clampN(raw[i], -PAGE_W, PAGE_W * 2), clampN(raw[i + 1], -PAGE_H, PAGE_H * 2));
+    out.push(clampN(raw[i], -PAGE_W, PAGE_W * 2), clampN(raw[i + 1], -PAGE_H, BOARD_MAX_H));
   }
   return out;
 }
@@ -153,9 +167,9 @@ export function cleanItem(raw: unknown): Item | null {
         c,
         w: clampN(o.w, 1, 80),
         x1: clampN(o.x1, -PAGE_W, PAGE_W * 2),
-        y1: clampN(o.y1, -PAGE_H, PAGE_H * 2),
+        y1: clampN(o.y1, -PAGE_H, BOARD_MAX_H),
         x2: clampN(o.x2, -PAGE_W, PAGE_W * 2),
-        y2: clampN(o.y2, -PAGE_H, PAGE_H * 2),
+        y2: clampN(o.y2, -PAGE_H, BOARD_MAX_H),
       };
       if (o.fl === 1 && (o.k === 'rect' || o.k === 'ellipse' || o.k === 'tri')) out.fl = 1;
       return out;
@@ -163,18 +177,19 @@ export function cleanItem(raw: unknown): Item | null {
     case 'text': {
       const text = String(o.text ?? '').slice(0, 2000);
       if (!text) return null;
-      return { k: 'text', id, by, c, size: clampN(o.size, 8, 400), x: clampN(o.x, -PAGE_W, PAGE_W * 2), y: clampN(o.y, -PAGE_H, PAGE_H * 2), text };
+      return { k: 'text', id, by, c, size: clampN(o.size, 8, 400), x: clampN(o.x, -PAGE_W, PAGE_W * 2), y: clampN(o.y, -PAGE_H, BOARD_MAX_H), text };
     }
     case 'img': {
       const src = String(o.src ?? '');
-      if (!/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(src) || src.length > 3_000_000) return null;
+      const dataOk = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(src) && src.length <= 3_000_000;
+      if (!dataOk && !ASSET_SRC_RE.test(src)) return null;
       return {
         k: 'img',
         id,
         by,
         src,
         x: clampN(o.x, -PAGE_W, PAGE_W * 2),
-        y: clampN(o.y, -PAGE_H, PAGE_H * 2),
+        y: clampN(o.y, -PAGE_H, BOARD_MAX_H),
         w: clampN(o.w, 1, PAGE_W * 3),
         h: clampN(o.h, 1, PAGE_H * 3),
       };
@@ -274,6 +289,16 @@ export function applyOp(doc: Doc, op: Op): boolean {
       doc.cur = cur;
       return true;
     }
+    case 'view': {
+      const page = pageById(doc, op.p);
+      if (!page) return false;
+      const h = clampN(op.h, 100, PAGE_H * 20);
+      const y = clampScroll(op.y, h);
+      if (page.y === y && page.vh === h) return false;
+      page.y = y;
+      page.vh = h;
+      return true;
+    }
     case 'delBy': {
       let changed = false;
       for (const p of doc.pages) {
@@ -290,7 +315,7 @@ export function applyOp(doc: Doc, op: Op): boolean {
 /** Move / scale one item (new object): every point becomes (pt - o) * s + o + d. */
 export function transformItem(it: Item, t: { s: number; ox: number; oy: number; dx: number; dy: number }): Item {
   const X = (x: number) => clampN((x - t.ox) * t.s + t.ox + t.dx, -PAGE_W, PAGE_W * 2);
-  const Y = (y: number) => clampN((y - t.oy) * t.s + t.oy + t.dy, -PAGE_H, PAGE_H * 2);
+  const Y = (y: number) => clampN((y - t.oy) * t.s + t.oy + t.dy, -PAGE_H, BOARD_MAX_H);
   switch (it.k) {
     case 'stroke': {
       const pts = it.pts.map((v, i) => (i % 2 ? Y(v) : X(v)));
@@ -316,7 +341,12 @@ export function cleanDoc(raw: unknown): Doc | null {
     if (!ID_RE.test(id)) continue;
     const bg = BACKGROUNDS.includes(p.bg as Background) ? (p.bg as Background) : 'white';
     const items = (Array.isArray(p.items) ? p.items : []).slice(0, MAX_ITEMS_PER_PAGE).map(cleanItem).filter((x): x is Item => !!x);
-    pages.push({ id, bg, items });
+    const page: Page = { id, bg, items };
+    if (p.y !== undefined || p.vh !== undefined) {
+      page.vh = clampN(p.vh ?? PAGE_H, 100, PAGE_H * 20);
+      page.y = clampScroll(p.y, page.vh);
+    }
+    pages.push(page);
   }
   if (!pages.length) return null;
   return { v: 1, pages, cur: clampN(o.cur, 0, pages.length - 1) };
@@ -508,7 +538,7 @@ export class LaserTrail {
   add(flat: number[], now = Date.now()) {
     for (let i = 0; i + 1 < flat.length; i += 2) {
       const x = Number(flat[i]), y = Number(flat[i + 1]);
-      if (Number.isFinite(x) && Number.isFinite(y)) this.pts.push({ x: clampN(x, 0, PAGE_W), y: clampN(y, 0, PAGE_H), t: now });
+      if (Number.isFinite(x) && Number.isFinite(y)) this.pts.push({ x: clampN(x, 0, PAGE_W), y: clampN(y, 0, BOARD_MAX_H), t: now });
     }
     if (this.pts.length > 400) this.pts.splice(0, this.pts.length - 400);
   }
@@ -584,4 +614,25 @@ export const PALETTE = ['#111111', '#ffffff', '#e53935', '#fb8c00', '#fdd835', '
  */
 export function isOwnRelayEcho(p: { t?: string; by?: string } | null | undefined, me: string | null | undefined): boolean {
   return !!p && p.t === 'ops' && !!p.by && !!me && p.by === me;
+}
+
+/** Scroll top for a band `h` high: never above the top edge, never past the end. */
+export function clampScroll(y: unknown, h: number = PAGE_H): number {
+  return clampN(y, 0, Math.max(0, BOARD_MAX_H - h));
+}
+
+/** The band (page units) the teacher shows: students follow it. */
+export function pageBand(page: Page): { y: number; h: number } {
+  const h = page.vh ?? PAGE_H;
+  return { y: clampScroll(page.y ?? 0, h), h };
+}
+
+/** Lowest point anything on the page reaches (0 when empty). */
+export function contentBottom(page: Page): number {
+  let b = 0;
+  for (const it of page.items) {
+    const r = itemBounds(it);
+    if (Number.isFinite(r.y + r.h)) b = Math.max(b, r.y + r.h);
+  }
+  return Math.min(BOARD_MAX_H, Math.ceil(b));
 }

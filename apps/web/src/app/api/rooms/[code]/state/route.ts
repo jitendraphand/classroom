@@ -90,7 +90,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   const access = await resolveRoomAccess(room, { forceStudent });
   const isTeacher = access.isTeacher;
   const isStudent = access.mode === 'student';
-  // The teacher always gets a fresh read (roster, waiting list, presence).
+  // The teacher always gets a fresh read (roster, presence).
   if (isTeacher && cacheMs > 0) room = (await loadRoom()) ?? room;
 
   if (!isTeacher && !isStudent) {
@@ -131,8 +131,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
       stageRaw === 'screen' ? 'screen' : 'idle';
 
     if (me?.status !== 'ADMITTED') {
-      // Direct entry (waiting room off): let a still-waiting seat in now, e.g.
-      // one that arrived during the toggle or while the class was full.
+      // Not in yet (admitting on arrival failed or raced): let the seat in now.
       let myStatus: string | undefined = me?.status;
       if (me && access.student && access.student.id === me.id && (await admitIfDirectEntry(room, access.student))) {
         myStatus = 'ADMITTED';
@@ -217,8 +216,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     const f = decodeFocus(focusRaw[p.id]);
     return f ? { focus: f.focus, focusIphone: f.iphone } : {};
   };
-
-  const waiting = room.participants.filter((p) => p.status === 'WAITING' && p.role === 'STUDENT');
 
   // Roster details for the teacher: roll number, grade-division, late flag and
   // whether the student belongs to this class's timetabled audience.
@@ -421,21 +418,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     name: classInfo ? [classInfo.subject, classInfo.audience].filter(Boolean).join(' · ') || room.name : room.name,
     status: room.status,
     maxVisibleVideos: clampMaxVisible(room.maxVisibleVideos),
-    waitingRoomOn: room.waitingRoomOn,
     teacherName: room.teacher.name,
     teacherGender: teacherGenderOf(room.teacher.gender),
     isTeacher,
     actingAsStudent: forceStudent || (access.mode === 'student' && !!access.teacherOwns),
     teacherSessionActive: !!access.teacher,
     me: mePayload,
-    waiting: isTeacher
-      ? waiting.map((p) => ({
-          id: p.id,
-          displayName: p.displayName,
-          createdAt: p.createdAt,
-          ...rosterInfo(p),
-        }))
-      : undefined,
     classSession: classSession
       ? {
           subject: classSession.subject,

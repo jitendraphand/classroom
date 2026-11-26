@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
 
 /**
  * Where should the signed-in school-app student go now? Checks them in to an
- * open class (attendance + waiting room). POST because it records arrival;
+ * open class (attendance + admission). POST because it records arrival;
  * called by /student on load and whenever /api/student/check reports a change.
  */
 export async function POST() {

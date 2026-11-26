@@ -33,6 +33,7 @@ OPENCODE_*.txt
 
 # Noise-suppression worklets/models copied from node_modules at dev/build time
 apps/web/public/audio/vendor/
+apps/web/public/pdfjs/
 
 # AI teacher audit logs (per run)
 apps/ai-teacher/*.jsonl

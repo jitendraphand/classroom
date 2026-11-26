@@ -19,7 +19,7 @@ import { appTimeZone, earlyWindowMinutes } from './schoolConfig';
 import { decideRoute, routeSignature, type SessionState } from './studentRouting';
 import { memo } from './roomStateCache';
 import { admitWaiting } from './admission';
-import { directEntryAllowed, shouldAutoAdmit } from './admissionLogic';
+import { shouldAutoAdmit } from './admissionLogic';
 import type { JoinClaims } from './schoolJwt';
 
 type StudentStore = {
@@ -131,23 +131,21 @@ function roomRuns(room: Room | null | undefined, cs: { id: string }): room is Ro
 }
 
 /**
- * Put the student in the class's waiting room (or reuse their open seat) and
- * give this browser the per-class participant cookie.
+ * Seat the student in their class (or reuse their open seat), admitted on
+ * arrival, and give this browser the per-class participant cookie.
  */
 export async function ensureStudentParticipant(student: Student, room: Room, cs: ClassSession) {
   let participant = await prisma.participant.findFirst({
     where: { roomId: room.id, studentId: student.id, classSessionId: cs.id, status: { not: 'LEFT' } },
     orderBy: { createdAt: 'desc' },
   });
-  // Earlier seats of this student in this class session (left, dropped,
-  // replaced, denied or removed). Read only when they matter: a new seat, or a
-  // seat still waiting while direct entry is on.
-  const needHistory = !participant || (participant.status === 'WAITING' && !room.waitingRoomOn);
-  const earlier = needHistory
+  // Earlier seats of this student in this class session: a new seat keeps
+  // the teacher's pin.
+  const earlier = !participant
     ? await prisma.participant.findMany({
         where: { roomId: room.id, studentId: student.id, classSessionId: cs.id },
         orderBy: { createdAt: 'desc' },
-        select: { pinnedAt: true, removedByTeacher: true },
+        select: { pinnedAt: true },
       })
     : [];
   if (!participant) {
@@ -181,24 +179,22 @@ export async function ensureStudentParticipant(student: Student, room: Room, cs:
       participant = await takeOverSeat(room, participant);
     }
   }
-  // Waiting room switched off by the teacher (direct entry): in on arrival,
-  // still muted and only this class. That includes coming back after pressing
-  // Leave, and a seat left waiting by a race with the toggle. Only a student
-  // the teacher denied or removed in this session waits for the teacher again.
-  if (directEntryAllowed(earlier) && shouldAutoAdmit(room, participant)) {
+  // No waiting room (Nov 26): in on arrival, still muted and only this class,
+  // including coming back after Leave or after the teacher's Remove.
+  if (shouldAutoAdmit(room, participant)) {
     await admitWaiting(room, { ids: [participant.id] });
     participant = { ...participant, status: 'ADMITTED' };
   }
   await setStudentCookie(participant.sessionToken);
   await setActAsStudent();
-  // Teacher's roster / waiting list: refetch now instead of at the next poll.
+  // Teacher's roster: refetch now instead of at the next poll.
   nudgeRoomState(room.code, 'teacher');
   return participant;
 }
 
 /**
- * Where a school-app student goes once the class is open: straight into the
- * classroom when already admitted (waiting room off / readmitted), else the lobby.
+ * Where a school-app student goes once the class is open: the classroom, or
+ * the joining page for the moment admission is still in flight.
  */
 export function roomEntryUrl(code: string, status: string | null | undefined) {
   return status === 'ADMITTED' ? `/classroom/${code}` : `/join/${code}?waiting=1&as=student`;

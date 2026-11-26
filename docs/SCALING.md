@@ -8,8 +8,8 @@ Written after the 2026-10-24 trial (1,500 students, 64 vCPU / 48 GB): 1,390 HTTP
 - Students refetch after a random delay within `spread`, so 1,500 clients don't hit `/state` at once.
 - The student path of `/state` memoizes the room row (by version), shared Redis/settings/whiteboard reads, and the admitted list for `STATE_CACHE_MS`.
 - The teacher always gets fresh data. `me` and admission are computed per request.
-- The token route reads participant status from the DB, so rejoining students still go through the waiting room.
-- Fallback poll when push isn't live: 5 s (15 s when the tab is hidden). Waiting room: 3 s / 8 s. Both are jittered.
+- The token route reads participant status from the DB; rejoining students are admitted again on arrival (no waiting room).
+- Fallback poll when push isn't live: 5 s (15 s when the tab is hidden). Joining page: 3 s / 8 s. Both are jittered.
 
 ## 2. Batched attendance writes
 - The LiveKit webhook appends events to the Redis list `att:events` and returns immediately. If Redis is down, it writes directly.

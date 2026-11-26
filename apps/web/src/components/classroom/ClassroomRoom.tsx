@@ -98,7 +98,6 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { pageTitle, useTabTitle } from '@/hooks/useDocumentTitle';
 import { PageLoading } from '@/components/ui/Skeleton';
 import {
-  IconDoor,
   IconHand,
   IconHandDown,
   IconMic,
@@ -108,7 +107,6 @@ import {
   IconStar,
   IconScreen,
   IconSearch,
-  IconUserPlus,
   IconUsers,
   IconVideo,
 } from '@/components/ui/Icons';
@@ -131,6 +129,7 @@ import {
 } from './shareSideWindows';
 import { MIC_LOCKED_NO_TEACHER } from '@/lib/teacherPresenceLogic';
 import {
+  roomApiUrl,
   roomFetch,
   rememberClassroomRole,
   getClassroomRole,
@@ -933,12 +932,10 @@ function RoomInner({
   const videoModeRef = useRef(videoMode);
   /** Teacher roster search (name / SID). */
   const [rosterQuery, setRosterQuery] = useState('');
-  // Large classes: render the roster / waiting list a page at a time (lib/rosterWindow).
+  // Large classes: render the roster a page at a time (lib/rosterWindow).
   const [rosterLimit, setRosterLimit] = useState(ROSTER_PAGE);
-  const [waitingLimit, setWaitingLimit] = useState(ROSTER_PAGE);
   useEffect(() => {
     setRosterLimit(ROSTER_PAGE);
-    setWaitingLimit(ROSTER_PAGE);
   }, [rosterQuery]);
   /** True while we intentionally change presentation stage (avoids teardown races). */
   const stageSwitchRef = useRef(false);
@@ -968,6 +965,7 @@ function RoomInner({
   const [maskActive, setMaskActive] = useState(false);
   /** Entire-screen share on Chrome/Edge: students see a frozen picture while this tab is in front. */
   const [shareFreeze, setShareFreeze] = useState(false);
+  const wbAssetUrl = useCallback((id: string) => roomApiUrl(code, `/whiteboard/asset/${id}`), [code]);
   const [maskFallback, setMaskFallback] = useState<MaskFallback>('');
   /** One-time Wayland position note. The yellow strip under the pill is not used. */
   const [positionToast, setPositionToast] = useState(false);
@@ -2104,26 +2102,7 @@ function RoomInner({
     refresh();
   }
 
-  async function admitStudents(ids?: string[], all?: boolean) {
-    try {
-      const res = await roomFetch(code, '/admit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(all ? { all: true } : { participantIds: ids }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setHudNotice(data.error || 'Could not admit students. Please retry.');
-      } else {
-        setHudNotice(`${data.admitted ?? 0} student(s) admitted. Any remaining students are still waiting.`);
-      }
-    } catch {
-      setHudNotice('Could not reach the server. Students remain in the waiting room; please retry.');
-    }
-    refresh();
-  }
-
-  async function removeStudent(participantId: string, waiting = false) {
+  async function removeStudent(participantId: string) {
     try {
       const res = await roomFetch(code, '/leave', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2131,7 +2110,7 @@ function RoomInner({
       });
       const data = await res.json().catch(() => ({}));
       setHudNotice(res.ok
-        ? (waiting ? 'Waiting request denied.' : 'Student removed. They must rejoin through the waiting room.')
+        ? 'Student removed from the class. They can join again from the school app.'
         : data.error || 'Could not remove student. Please retry.');
     } catch {
       setHudNotice('Could not reach the server. Please retry.');
@@ -2191,30 +2170,6 @@ function RoomInner({
     if (!opts?.keepParkedShare) void releaseParkedShare();
     void roomFetch(code, '/whiteboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'off' }) });
   }, [code, releaseParkedShare]);
-
-  // Waiting room toggle (per class session, saved on the server). Off admits
-  // everyone waiting and lets new students straight in (still muted).
-  const [waitingRoomOverride, setWaitingRoomOverride] = useState<boolean | null>(null);
-  const waitingRoomOn = waitingRoomOverride ?? state?.waitingRoomOn ?? true;
-  useEffect(() => {
-    if (waitingRoomOverride !== null && state?.waitingRoomOn === waitingRoomOverride) setWaitingRoomOverride(null);
-  }, [waitingRoomOverride, state?.waitingRoomOn]);
-  async function setWaitingRoom(on: boolean) {
-    setWaitingRoomOverride(on);
-    const res = await roomFetch(code, '/settings', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ waitingRoomOn: on }),
-    }).catch(() => null);
-    if (!res?.ok) {
-      setWaitingRoomOverride(null);
-      const data = await res?.json().catch(() => ({}));
-      setHudNotice(data?.error || 'Could not change the waiting room.');
-    } else {
-      setHudNotice(on ? 'Waiting room on: you admit each student.' : 'Waiting room off: students enter directly (muted).');
-    }
-    refresh();
-  }
 
   const serverCap = state?.maxVisibleVideos;
 
@@ -2285,7 +2240,6 @@ function RoomInner({
       return Object.keys(next).length === ids.length ? cur : next;
     });
   }, [state?.admitted]);
-  const waitingCount = state?.waiting?.length ?? 0;
   // Roster panel: students only (the teacher is not listed), raised hands
   // first by raise time, then pinned, then by name. Two devices of one
   // student count once, same rule as admin "Students connected".
@@ -2315,9 +2269,7 @@ function RoomInner({
     : [];
   const handRank = handOrder(rosterStudents);
   const rosterWin = rosterWindow(filterPeople(rosterStudents, rosterQuery), rosterLimit);
-  const waitingWin = rosterWindow(filterPeople(state?.waiting ?? [], rosterQuery), waitingLimit);
   const shownRoster = rosterWin.shown;
-  const shownWaiting = waitingWin.shown;
   /** Raised hands, earliest first: shown in the chat panel so they stay in
    * sight while the roster is closed. */
   const raisedHands = rosterStudents
@@ -2853,6 +2805,7 @@ function RoomInner({
             <WhiteboardViewer
               identity={state?.me?.livekitIdentity ?? localParticipant.identity}
               canAnnotate={myDrawState === 'drawing' && !!state?.me?.canDraw}
+              assetUrl={wbAssetUrl}
               requestSnapshot={() =>
                 void roomFetch(code, '/whiteboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'req' }) })
               }
@@ -2976,7 +2929,7 @@ function RoomInner({
         extra={[
           { k: 'Class code', v: code },
           { k: 'Videos shown', v: `${v.shown}/${v.total}` },
-          { k: 'Students', v: `${studentCount}${waitingCount > 0 ? ` · ${waitingCount} waiting` : ''}` },
+          { k: 'Students', v: `${studentCount}` },
           { k: 'Status', v: live },
         ]}
       />
@@ -3001,19 +2954,7 @@ function RoomInner({
               micLive: micLive.has(p.livekitIdentity),
               reconnecting: !!p.reconnecting || reconnectingIds.has(p.livekitIdentity),
             }))}
-            waiting={(state?.waiting ?? []).map((w) => ({
-              id: w.id,
-              displayName: w.displayName,
-              gradeDivision: w.gradeDivision,
-              role: 'STUDENT',
-              sid: w.sid ?? null,
-            }))}
-            waitingCount={waitingCount}
-            onAdmit={(id) => void admitStudents([id])}
-            onAdmitAll={() => void admitStudents(undefined, true)}
-            onRemove={(id, waiting) => void removeStudent(id, waiting)}
-            waitingRoomOn={waitingRoomOn}
-            onWaitingRoom={(on) => void setWaitingRoom(on)}
+            onRemove={(id) => void removeStudent(id)}
             teacherMicOn={micOn && !effectiveMuted}
             onToggleTeacherMic={() => {
               if (!micOn) {
@@ -3118,28 +3059,28 @@ function RoomInner({
 
       {/* Top bar */}
       {/* Above every floating panel (z-60 > floats 34–55) and marked as the top
-          bound, so panels are clamped below it and never cover Admit. */}
-      <div data-whiteboard-chrome data-float-bound="top" className="relative z-[60] shrink-0">
+          bound, so panels are clamped below it and never cover the hands bar. */}
+      {/* Teacher whiteboard (Nov 26): raised hands and notices float at the
+          bottom right instead of sitting above the board, so the writing area
+          never jumps up or down while the teacher writes. */}
+      <div
+        data-whiteboard-chrome
+        data-float-bound={isTeacher && wbOpen ? undefined : 'top'}
+        data-wb-notices={isTeacher && wbOpen ? 'float' : undefined}
+        className={isTeacher && wbOpen ? 'wb-notice-stack' : 'relative z-[60] shrink-0'}
+        style={isTeacher && wbOpen ? { right: MEETING_BAR_PX + 26 } : undefined}
+      >
       {/* Teacher (Nov 25): no title/badges block, so the whiteboard gets the
           height. Class details live in the (i) button (meeting bar / dock);
-          the header only appears for the waiting-room and raised-hands bars. */}
-      {(!isTeacher || waitingCount > 0 || raisedHands.length > 0) && (
+          the header only appears for the raised-hands bar. */}
+      {(!isTeacher || raisedHands.length > 0) && (
       <header
         className={cn(
           'relative z-[60] flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-b border-white/[0.06] bg-surface-1/95 backdrop-blur-xl',
           isTeacher ? 'px-2 py-1' : 'px-3 py-2 sm:px-4 sm:py-2.5'
         )}
-        style={isTeacher && wbOpen ? { marginRight: MEETING_BAR_PX } : undefined}
         data-testid="classroom-header"
       >
-        {isTeacher && waitingCount > 0 && (
-          <WaitingAdmitBar
-            waiting={state?.waiting ?? []}
-            onAdmit={(id) => void admitStudents([id])}
-            onAdmitAll={() => void admitStudents(undefined, true)}
-            onOpenRoster={screenOn ? undefined : openRoster}
-          />
-        )}
         {isTeacher && raisedHands.length > 0 && (
           <RaisedHandsBar
             hands={raisedHands}
@@ -3185,7 +3126,6 @@ function RoomInner({
                   </span>
                   {' · '}
                   {studentCount} student{studentCount === 1 ? '' : 's'}
-                  {waitingCount > 0 ? ` · ${waitingCount} waiting` : ''}
                 </>
               ) : (
                 <>
@@ -3197,13 +3137,6 @@ function RoomInner({
           </div>
         )}
       </header>
-      )}
-      {isTeacher && (
-        <span className="sr-only" aria-live="polite">
-          {waitingCount > 0
-            ? `${waitingCount} ${waitingCount === 1 ? 'student is' : 'students are'} waiting to join`
-            : ''}
-        </span>
       )}
 
       {isTeacher && takeoverToast && (
@@ -3441,83 +3374,12 @@ function RoomInner({
           width={320}
           height={480}
           defaultPos={() => ({ x: Math.max(8, window.innerWidth - 340), y: 72 })}
-          badge={
-            waitingCount > 0 ? (
-              <span className="rounded-full bg-amber-500 px-1.5 text-[9px] font-bold text-white">
-                {waitingCount}
-              </span>
-            ) : null
-          }
         >
           <div className="flex h-full min-h-0 flex-col space-y-3 overflow-hidden">
-            {/* Waiting students first, so Admit is the first thing in the roster. */}
-            {waitingCount > 0 && (
-              <div className="shrink-0 rounded-xl border border-amber-400/30 bg-amber-500/10 p-1.5" data-no-drag>
-                <div className="flex items-center justify-between gap-2 px-1">
-                  <h3 className="text-2xs font-semibold uppercase tracking-wider text-amber-200">
-                    Waiting ({waitingCount})
-                  </h3>
-                  {waitingCount > 1 && (
-                    <button
-                      type="button"
-                      className="roster-admit-all"
-                      onClick={() => void admitStudents(undefined, true)}
-                      aria-label={`Admit all ${waitingCount} waiting students`}
-                      title="Admit everyone waiting"
-                    >
-                      <IconUserPlus size={12} />
-                      All
-                    </button>
-                  )}
-                </div>
-                <ul className="mt-1 max-h-40 space-y-0.5 overflow-y-auto">
-                  {shownWaiting.map((p) => (
-                    <li key={p.id} className="roster-row" title={rosterLabel(p)}>
-                      <Avatar name={p.displayName} size="xs" />
-                      <span className="roster-name" title={p.displayName}>{p.displayName}</span>
-                      {p.late && <span className="roster-chip roster-chip-red">Late</span>}
-                      <span className="roster-actions">
-                        <button type="button" className="text-xs text-red-300" onClick={() => void removeStudent(p.id, true)} aria-label={`Deny ${p.displayName}`}>Deny</button>
-                        <RosterIconButton
-                          label={`Admit ${p.displayName}`}
-                          tone="warn"
-                          onClick={() => void admitStudents([p.id])}
-                        >
-                          <IconUserPlus size={14} />
-                        </RosterIconButton>
-                      </span>
-                    </li>
-                  ))}
-                  {waitingWin.hidden > 0 && (
-                    <li>
-                      <button type="button" className="roster-more" onClick={() => setWaitingLimit((n) => n + ROSTER_PAGE)}>
-                        Show {waitingWin.next} more ({waitingWin.hidden} not shown; search finds anyone)
-                      </button>
-                    </li>
-                  )}
-                </ul>
-              </div>
-            )}
             <div className="flex shrink-0 flex-wrap items-center gap-2" data-no-drag>
               <Button size="sm" variant="warning" onClick={() => muteAllStudents()}>
                 Mute all
               </Button>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={waitingRoomOn}
-                className={cn('waiting-toggle ml-auto', waitingRoomOn ? 'is-on' : 'is-off')}
-                onClick={() => void setWaitingRoom(!waitingRoomOn)}
-                aria-label={waitingRoomOn ? 'Waiting room on. Turn off to let students in directly' : 'Waiting room off. Turn on to admit students yourself'}
-                title={
-                  waitingRoomOn
-                    ? 'Waiting room on: you admit each student. Click to turn off (admits everyone waiting).'
-                    : 'Waiting room off: students enter directly, muted. Click to turn on.'
-                }
-              >
-                <IconDoor size={13} />
-                <span>{waitingRoomOn ? 'Waiting room' : 'Direct entry'}</span>
-              </button>
             </div>
             <label className="roster-search shrink-0" data-no-drag>
               <IconSearch size={13} aria-hidden />
@@ -3844,9 +3706,6 @@ function RoomInner({
           focusAlerts={focusAlertCount}
           rosterOpen={rosterOpen}
           onToggleRoster={() => setRosterOpen((v) => !v)}
-          waiting={(state?.waiting ?? []).map((w) => ({ id: w.id, displayName: rosterLabel(w) }))}
-          onAdmit={(id) => void admitStudents([id])}
-          onAdmitAll={() => void admitStudents(undefined, true)}
           requests={(state?.admitted ?? [])
             .filter((p) => p.role === 'STUDENT' && p.drawRequested && !p.drawing && !isRosterDropped(p.livekitIdentity, droppedStudents, Date.now()))
             .map((p) => ({ id: p.id, displayName: rosterLabel(p) }))}
@@ -3885,7 +3744,6 @@ function RoomInner({
           chatUnread={chatUnread}
           onToggleRoster={screenOn ? undefined : toggleRoster}
           rosterOpen={rosterOpen}
-          rosterBadge={waitingCount}
           handsCount={raisedHands.length}
         />
         </div>
@@ -3929,52 +3787,6 @@ async function requestScreenDetails() {
   } catch {
     /* denied */
   }
-}
-
-/**
- * Waiting students, pinned first in the teacher header (always visible, above
- * every floating panel, also while sharing). Admits directly; "Roster" opens
- * the full list.
- */
-function WaitingAdmitBar({
-  waiting,
-  onAdmit,
-  onAdmitAll,
-  onOpenRoster,
-}: {
-  waiting: Array<{ id: string; displayName: string } & RosterInfo>;
-  onAdmit: (id: string) => void;
-  onAdmitAll: () => void;
-  onOpenRoster?: () => void;
-}) {
-  const first = waiting[0];
-  if (!first) return null;
-  const n = waiting.length;
-  return (
-    <div
-      role="status"
-      aria-live="polite"
-      className="order-first flex w-full min-w-0 items-center gap-1.5 rounded-xl border border-amber-400/40 bg-amber-500/15 px-2 py-1 text-xs text-amber-50"
-    >
-      <IconUsers size={14} className="shrink-0 text-amber-300" />
-      <span className="min-w-0 flex-1 truncate font-semibold">
-        {n === 1 ? `${first.displayName} is waiting` : `${n} students waiting`}
-      </span>
-      <Button variant="warning" size="sm" onClick={() => onAdmit(first.id)} title={`Admit ${rosterLabel(first)}`}>
-        {n === 1 ? 'Admit' : `Admit ${compactPersonLabel(first, waiting)}`}
-      </Button>
-      {n > 1 && (
-        <Button variant="warning" size="sm" onClick={onAdmitAll}>
-          Admit all ({n})
-        </Button>
-      )}
-      {onOpenRoster && (
-        <Button variant="ghost" size="sm" onClick={onOpenRoster} aria-label="Open roster">
-          Roster
-        </Button>
-      )}
-    </div>
-  );
 }
 
 /** Raised hands in the header: give the first student the floor, or lower the hand. */

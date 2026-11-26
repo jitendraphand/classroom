@@ -18,9 +18,9 @@ Use two browsers (or normal + incognito). Start from a healthy stack (`GET /api/
 
 ## C0. School-app join (default)
 
-- [ ] Signed link (`apps/web/scripts/make-join-link.mjs`) for a grade-division with a class open now → that class's waiting room; roster shows name, roll no, grade-division, **On timetable**
+- [ ] Signed link (`apps/web/scripts/make-join-link.mjs`) for a grade-division with a class open now → straight into that class; roster shows name, roll no, grade-division, **On timetable**
 - [ ] Same link opened again → "This link was already used"; link older than its `exp` → "This link has expired"
-- [ ] Class later today → countdown, moves on by itself when the waiting room opens; no class → "No class right now" + next class
+- [ ] Class later today → countdown, moves on by itself when the class opens; no class → "No class right now" + next class
 - [ ] Student of another grade-division cannot enter the class via the teacher's code (`/join/CODE`)
 - [ ] `/join/CODE` shows "Join from the school app" (no name form) while `ALLOW_MANUAL_STUDENT_JOIN=false`
 - [ ] Join > grace minutes after the start → **Late** badge; admin Attendance shows the student late with connected minutes after leaving
@@ -29,15 +29,14 @@ Use two browsers (or normal + incognito). Start from a healthy stack (`GET /api/
 
 - [ ] Open join link in **same** profile while teacher-signed-in
 - [ ] Banner: signed in as teacher → **Continue as student for this tab**
-- [ ] Enter display name → Waiting room (not teacher classroom)
-- [ ] Incognito join with another name also reaches waiting room
+- [ ] Enter display name → straight into the class (not teacher classroom)
+- [ ] Incognito join with another name also enters directly
 
-## D. Admit / waiting room
+## D. Entry (no waiting room)
 
-- [ ] Classroom header shows **N waiting · Admit**; Roster lists waiters with avatars
-- [ ] **Admit** one → student auto-enters `/classroom/CODE`
-- [ ] **Admit all** works with multiple waiters
-- [ ] Grammar: "1 student admitted" vs "N students"
+- [ ] A student opening the link enters the class at once, muted; no Admit anywhere for the teacher
+- [ ] Teacher **Remove** takes the student out; they can join again from the school app
+- [ ] Late student (after start + grace) enters directly and is marked Late
 
 ## E. Classroom shell (layout)
 

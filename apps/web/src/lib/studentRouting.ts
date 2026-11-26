@@ -46,7 +46,7 @@ export type RouteDecision =
  *     When several are live, the most specific audience wins: the student's own
  *     division (ad-hoc or timetabled) before an all-divisions class. Ties keep
  *     timetabled before ad-hoc, then the earlier one;
- *  2. a timetabled class whose waiting room is open (start − early … end) and not ended;
+ *  2. a timetabled class that students can join (start − early … end) and not ended;
  *  3. later today → countdown;
  *  4. a class that ended early today → "ended" (+ next);
  *  5. nothing → next scheduled class (if any).

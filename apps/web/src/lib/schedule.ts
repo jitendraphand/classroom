@@ -1,6 +1,6 @@
 /**
  * Timetable maths: weekly recurrence, one-off overrides, time zones, the
- * early waiting-room window and overlap checks. Pure (no Prisma) so every rule
+ * early joining window and overlap checks. Pure (no Prisma) so every rule
  * is unit-tested; lib/scheduleService.ts feeds it database rows.
  *
  * Conventions
@@ -292,8 +292,8 @@ export function occurrencesBetween(
 export type OccurrencePhase = 'upcoming' | 'open' | 'past';
 
 /**
- * upcoming: before the waiting room opens (start − early);
- * open: waiting room open, through the whole class (late joining allowed until the end);
+ * upcoming: before joining opens (start − early);
+ * open: students can join, through the whole class (late joining allowed until the end);
  * past: at/after the scheduled end.
  */
 export function phaseOf(occ: { start: Date; end: Date }, now: Date, earlyMinutes: number): OccurrencePhase {

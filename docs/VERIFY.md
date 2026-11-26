@@ -19,7 +19,7 @@ curl -sI http://localhost:3000/favicon.ico | head -1
 1. Sign in as teacher, copy join link `/join/CODE`.
 2. Open that link in the **same** browser profile.
 3. Expect student join form + banner “signed in as a teacher… Continue as student”.
-4. Click continue → enter name → waiting room as student (not teacher classroom).
+4. Click continue → enter name → straight into the class as student (not teacher classroom).
 5. Teacher lobby in another tab should still work after visiting dashboard (clears act-as).
 
 ## 3. Screen-share layout

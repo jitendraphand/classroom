@@ -1,5 +1,4 @@
 import { academicYearForDate } from './academicYear';
-import { waitingRoomDefaultFor } from './waitingRoomPref';
 import type { ClassSession, Room } from '@prisma/client';
 import { prisma } from './db';
 import { audienceUnknownMessage } from './gradeMaster';
@@ -107,7 +106,7 @@ async function openRoomForSession(
     { name: opts.name || sessionTitle(cs), maxVisibleVideos: opts.maxVisibleVideos }
   );
   if (room.classSessionId !== cs.id) {
-    room = await prisma.room.update({ where: { id: room.id }, data: { classSessionId: cs.id, waitingRoomOn: await waitingRoomDefaultFor(teacher.id) } });
+    room = await prisma.room.update({ where: { id: room.id }, data: { classSessionId: cs.id, waitingRoomOn: false } });
   }
   const classSession = await prisma.classSession.update({
     where: { id: cs.id },

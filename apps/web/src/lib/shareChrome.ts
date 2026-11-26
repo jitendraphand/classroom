@@ -37,7 +37,6 @@ export const SHARE_TOOLBAR_ORDER = [
   'chat',
   'hands',
   'people',
-  'admit',
   'stop',
 ] as const;
 
@@ -71,19 +70,8 @@ export function badgeText(n: number): string {
   return n > 9 ? '9+' : String(Math.floor(n));
 }
 
-export function admitLabel(waiting: number, oldestName?: string | null): string {
-  if (waiting > 1) return `Admit all ${waiting} waiting`;
-  if (waiting === 1 && oldestName) return `Admit ${oldestName}`;
-  return 'Nobody waiting';
-}
-
-/** Amber outline when someone is waiting. */
-export function admitTone(waiting: number): 'warn' | 'idle' {
-  return waiting > 0 ? 'warn' : 'idle';
-}
-
 /** Whiteboard meeting bar, top to bottom. Stop and End sit after the spacer. */
-export const MEETING_BAR_ORDER = ['mic', 'cam', 'chat', 'people', 'admit', 'perm', 'muteall', 'videos', 'stop', 'end'] as const;
+export const MEETING_BAR_ORDER = ['mic', 'cam', 'chat', 'people', 'perm', 'muteall', 'videos', 'stop', 'end'] as const;
 
 export type MeetingBarId = (typeof MEETING_BAR_ORDER)[number];
 
@@ -130,10 +118,10 @@ export function sharePositionNoticeOpen(seen: string | null): boolean {
  * smallest useful set, so the black patch stays small. "more" opens the full
  * row; any button there acts and folds it back in the same click (Document
  * Picture-in-Picture resizes only during a click, so a timer could not shrink
- * the window again). Admit only appears while someone is waiting.
+ * the window again).
  */
-export type ShareMiniId = 'live' | 'mic' | 'hands' | 'chat' | 'admit' | 'more' | 'stop';
+export type ShareMiniId = 'live' | 'mic' | 'hands' | 'chat' | 'more' | 'stop';
 
-export function shareToolbarMiniIds(opts: { waiting: number }): ShareMiniId[] {
-  return ['live', 'mic', 'hands', 'chat', ...(opts.waiting > 0 ? (['admit'] as const) : []), 'more', 'stop'];
+export function shareToolbarMiniIds(): ShareMiniId[] {
+  return ['live', 'mic', 'hands', 'chat', 'more', 'stop'];
 }

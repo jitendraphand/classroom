@@ -649,18 +649,6 @@ input[type='time'].input {
   .roster-icon-btn-on {
     @apply bg-amber-500 text-ink-950 hover:bg-amber-400 hover:text-ink-950;
   }
-  .waiting-toggle {
-    @apply inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold transition;
-  }
-  .waiting-toggle.is-on {
-    @apply border-amber-400/40 bg-amber-500/15 text-amber-100 hover:bg-amber-500/25;
-  }
-  .waiting-toggle.is-off {
-    @apply border-emerald-400/40 bg-emerald-500/15 text-emerald-100 hover:bg-emerald-500/25;
-  }
-  .roster-admit-all {
-    @apply inline-flex items-center gap-1 rounded-md bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-100 hover:bg-amber-500/30;
-  }
   .peer-pin-btn {
     @apply absolute right-1 top-1 grid h-6 w-6 place-items-center rounded-full bg-black/60 text-slate-200 opacity-50 transition hover:bg-black/80 focus-visible:opacity-100;
   }
@@ -966,8 +954,7 @@ input[type='time'].input {
   left: 16px;
   z-index: 60;
 }
-/* Raised hands: an in-flow bar in the classroom header, under the waiting-room
-   bar. It pushes content down instead of covering the class title or videos. */
+/* Raised hands: an in-flow bar in the classroom header. It pushes content down instead of covering the class title or videos. */
 .raised-hands-toast {
   @apply flex w-full min-w-0 items-center gap-1.5 rounded-xl border border-violet-400/40 bg-violet-500/15 px-2 py-1 text-xs text-violet-50;
 }
@@ -1084,4 +1071,27 @@ html.has-draw-toolbar .control-status-pill {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* Teacher whiteboard: hands bar, permission and other notices stack at the
+   bottom right over the board (fixed: they never move the writing area).
+   Right edge set inline to clear the meeting bar and the board's scroll bar. */
+.wb-notice-stack {
+  position: fixed;
+  bottom: 16px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  width: min(440px, calc(100vw - 140px));
+  pointer-events: none;
+}
+.wb-notice-stack > * {
+  pointer-events: auto;
+}
+.wb-notice-stack > header {
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
 }

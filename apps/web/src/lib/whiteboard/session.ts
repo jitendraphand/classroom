@@ -60,7 +60,8 @@ export class WhiteboardSession {
       if (!applyOp(this.doc, op)) continue;
       changed = true;
       if (op.k === 'pts') this.hot.set(op.id, now);
-      else structural = true;
+      // Scrolling moves the view, not the drawing: the cached layer is keyed by the view anyway.
+      else if (op.k !== 'view') structural = true;
     }
     if (structural) this.structVersion++;
     if (changed) this.emit();

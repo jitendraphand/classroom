@@ -4,7 +4,7 @@ import { rosterMicState } from '@/lib/speakingRules';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Avatar } from '@/components/ui/Avatar';
-import { IconCam, IconCamOff, IconChat, IconFilm, IconHand, IconHandDown, IconMic, IconMicLock, IconMicOff, IconPen, IconPin, IconScreen, IconUserPlus, IconUsers, IconVideo } from '@/components/ui/Icons';
+import { IconCam, IconCamOff, IconChat, IconFilm, IconHand, IconHandDown, IconMic, IconMicLock, IconMicOff, IconPen, IconPin, IconScreen, IconUsers, IconVideo } from '@/components/ui/Icons';
 import { toolbarInnerSize } from '@/lib/sideWindowGeometry';
 import { closeSideWindow, openSideWindow, sideWindow, SideWindowPortal, useSideWindows } from './shareSideWindows';
 import { sortRoster } from '@/lib/classSlots';
@@ -20,7 +20,6 @@ import {
   BADGE_TEXT,
   FOCUS_BADGE_TEXT,
   FOCUS_RED,
-  admitLabel,
   badgeText,
   shareToolbarIds,
   shareToolbarMiniIds,
@@ -48,7 +47,7 @@ import {
  * (`InlineShareDock`).
  *
  * Both are one horizontal pill: grip, Live, mic, camera, videos, then chat,
- * hands, roster, admit, and Stop. Eco and computer-sound are not
+ * hands, roster, and Stop. Eco and computer-sound are not
  * on this bar (no teacher control for them in the browser).
  */
 
@@ -83,14 +82,7 @@ export type TeacherShareHudProps = {
   host: HTMLElement | null;
   hostWindow: Window | null;
   admitted: RosterEntry[];
-  waiting?: RosterEntry[];
-  waitingCount?: number;
-  onAdmit?: (participantId: string) => void;
-  onAdmitAll?: () => void;
-  onRemove?: (participantId: string, waiting?: boolean) => void;
-  /** Waiting room switch (same setting as the roster and the Windows app). */
-  waitingRoomOn?: boolean;
-  onWaitingRoom?: (on: boolean) => void;
+  onRemove?: (participantId: string) => void;
   teacherMicOn: boolean;
   onToggleTeacherMic: () => void;
   onStopSharing: () => void;
@@ -335,7 +327,6 @@ background:${BADGE_AMBER};color:${BADGE_TEXT};font-size:9px;font-weight:800;disp
 .tsh-person.is-raised{background:rgba(245,158,11,.18);box-shadow:inset 4px 0 0 #fbbf24}.tsh-hand-badge{display:inline-flex;align-items:center;gap:2px;flex:none;border-radius:999px;background:#fbbf24;color:#1c1917;font-size:10px;font-weight:800;line-height:1;padding:2px 6px}
 .tsh-person .tsh-chip{max-width:84px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0}
 .tsh-chat{height:220px;min-height:160px}
-.tsh-admit{max-width:140px;overflow:hidden;text-overflow:ellipsis}
 .tsh-pill{gap:2px;padding:3px 4px}
 .tsh-pill-main{gap:5px;padding:0 6px}
 .tsh-dot{width:8px;height:8px;border-radius:999px;background:#ef4444;box-shadow:0 0 0 3px rgba(239,68,68,.25);flex:0 0 auto}
@@ -357,7 +348,6 @@ background:${BADGE_AMBER};color:${BADGE_TEXT};font-size:9px;font-weight:800;disp
 .tsh-vertical .tsh-bar{flex-direction:column;flex-wrap:nowrap;width:auto;min-width:0;height:100%;overflow-y:auto;overflow-x:hidden;position:static;padding:6px 4px;gap:4px}
 .tsh-vertical .tsh-btn{height:34px;min-width:34px}
 .tsh-vertical .tsh-sep{width:20px;height:1px}
-.tsh-vertical .tsh-admit{max-width:34px}
 .tsh-vertical .tsh-panel{width:min(340px,40vw);max-height:none;height:100%;border-top:0;border-right:1px solid var(--line)}
 .tsh-vertical .tsh-chat{height:auto;flex:1 1 auto;min-height:0}
 .tsh-vertical .tsh-tip{white-space:normal;max-width:200px}
@@ -368,13 +358,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     host,
     hostWindow,
     admitted,
-    waiting = [],
-    waitingCount = 0,
-    onAdmit,
-    onAdmitAll,
     onRemove,
-    waitingRoomOn,
-    onWaitingRoom,
     teacherMicOn,
     onToggleTeacherMic,
     onStopSharing,
@@ -410,10 +394,9 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
   const [panel, setPanel] = useState<Panel>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const lastFit = useRef<{ w: number; h: number } | null>(null);
-  // A new waiting student does NOT open the roster by itself. Document PiP and
-  // pop-ups refuse resizeTo() without a user gesture, so an auto-opened panel
-  // could not grow the window. The bar already shows a waiting badge and an
-  // "Admit <name>" button; the teacher opens the roster with a click.
+  // Nothing opens the roster by itself: Document PiP and pop-ups refuse
+  // resizeTo() without a user gesture, so an auto-opened panel could not grow
+  // the window. The teacher opens the roster with a click.
 
   useEffect(() => {
     onChatOpenChange?.(panel === 'chat' || !!chatWin);
@@ -502,7 +485,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
       win.removeEventListener('resize', applyZoom);
       win.document.removeEventListener('pointerdown', onPointer, true);
     };
-  }, [hostWindow, panel, videoMode, waitingCount, notice, sideNotice, mini, miniExpanded]);
+  }, [hostWindow, panel, videoMode, notice, sideNotice, mini, miniExpanded]);
 
   // Raised hands first (earliest raise first), then by name.
   const students = useMemo(() => sortRoster(admitted.filter((a) => a.role === 'STUDENT')), [admitted]);
@@ -511,13 +494,10 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
   const [rosterQuery, setRosterQuery] = useState('');
   // Large classes: a page of rows at a time, like the main roster (lib/rosterWindow).
   const [rosterLimit, setRosterLimit] = useState(ROSTER_PAGE);
-  const [waitingLimit, setWaitingLimit] = useState(ROSTER_PAGE);
   const [handsLimit, setHandsLimit] = useState(ROSTER_PAGE);
   const studentsPage = useMemo(() => rosterWindow(filterPeople(students, rosterQuery), rosterLimit), [students, rosterQuery, rosterLimit]);
-  const waitingPage = useMemo(() => rosterWindow(filterPeople(waiting, rosterQuery), waitingLimit), [waiting, rosterQuery, waitingLimit]);
   const handsPage = useMemo(() => rosterWindow(hands, handsLimit), [hands, handsLimit]);
   const shownStudents = studentsPage.shown;
-  const shownWaiting = waitingPage.shown;
 
   const togglePanel = (next: Exclude<Panel, null>) => {
     setPanel((cur) => (cur === next ? null : next));
@@ -551,13 +531,6 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
 
   if (!host && !inline) return null;
 
-  const waitingLabel =
-    waitingCount === 1
-      ? `${waiting[0]?.displayName || 'A student'} is waiting`
-      : waitingCount > 1
-        ? `${waitingCount} students are waiting`
-        : '';
-
   const rosterBody = (
           <div className="tsh-scroll">
             <input
@@ -568,56 +541,10 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
               onChange={(e) => setRosterQuery(e.target.value)}
               aria-label="Search students"
             />
-            {shownWaiting.length > 0 && (
-              <div style={{ marginBottom: 8 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                  <span className="tsh-panel-title">Waiting</span>
-                  {waiting.length > 1 && (
-                    <button type="button" className="tsh-btn" onClick={() => onAdmitAll?.()}>
-                      Admit all
-                    </button>
-                  )}
-                </div>
-                {shownWaiting.map((w) => (
-                  <div className="tsh-person" key={w.id} title={w.displayName}>
-                    <Avatar name={w.displayName} size="xs" />
-                    <span className="tsh-person-name" title={w.displayName}>{w.displayName}</span>
-                    {onRemove && <button type="button" className="tsh-btn" onClick={() => onRemove(w.id, true)} aria-label={`Deny ${w.displayName}`}>Deny</button>}
-                    <button
-                      type="button"
-                      className="tsh-btn tsh-icon is-warn"
-                      onClick={() => onAdmit?.(w.id)}
-                      aria-label={`Admit ${w.displayName}`}
-                      title={`Admit ${w.displayName}`}
-                    >
-                      <IconUserPlus size={13} />
-                    </button>
-                  </div>
-                ))}
-                {waitingPage.hidden > 0 && (
-                  <button type="button" className="tsh-btn tsh-more" onClick={() => setWaitingLimit((n) => n + ROSTER_PAGE)}>
-                    Show {waitingPage.next} more ({waitingPage.hidden} not shown; search finds anyone)
-                  </button>
-                )}
-              </div>
-            )}
             <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
               <button type="button" className="tsh-btn" onClick={() => onMuteAll()}>
                 Mute all
               </button>
-              {onWaitingRoom && (
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={waitingRoomOn !== false}
-                  data-testid="hud-waiting-toggle"
-                  className={waitingRoomOn !== false ? 'tsh-btn is-warn' : 'tsh-btn'}
-                  onClick={() => onWaitingRoom(waitingRoomOn === false)}
-                  title={waitingRoomOn !== false ? 'Waiting room on: click to let students in directly' : 'Direct entry: click to turn the waiting room on'}
-                >
-                  {waitingRoomOn !== false ? 'Waiting room' : 'Direct entry'}
-                </button>
-              )}
             </div>
             {students.length === 0 ? (
               <p className="tsh-empty">No students yet.</p>
@@ -725,13 +652,12 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
   const shownIds: Array<ShareToolbarId | ShareMiniId> = miniMode
     ? miniExpanded
       ? [...toolbarIds.filter((id) => id !== 'stop' && id !== 'grip'), 'more', 'stop']
-      : shareToolbarMiniIds({ waiting: waiting.length })
+      : shareToolbarMiniIds()
     : toolbarIds;
   const sepBefore = new Set<string>(miniMode ? [] : shareToolbarSeparators(toolbarIds).map((s) => s.before));
   const drawAsk = students.filter((s) => s.drawRequested && !s.drawing).length;
   const chatShown = panel === 'chat' || !!chatWin;
   const rosterShown = panel === 'roster' || !!rosterWin;
-  const admitText = admitLabel(waiting.length, waiting[0]?.displayName);
   const shareControl = (id: ShareToolbarId | ShareMiniId): ReactNode => {
     switch (id) {
       case 'more':
@@ -853,11 +779,6 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
             title={drawAsk ? `Roster: ${drawAsk} asking to draw` : 'Roster'}
           >
             <IconUsers size={14} />
-            {waitingCount > 0 && !rosterShown ? (
-              <span className="tsh-count" data-testid="tsh-people-count" style={{ background: BADGE_AMBER, color: BADGE_TEXT }}>
-                {badgeText(waitingCount)}
-              </span>
-            ) : null}
             {focusAlertCount > 0 ? (
               <span
                 className="tsh-count tsh-focus"
@@ -869,19 +790,6 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
               </span>
             ) : null}
             {drawAsk > 0 ? <span className="tsh-pen-dot" aria-hidden /> : null}
-          </button>
-        );
-      case 'admit':
-        return (
-          <button
-            type="button"
-            className={waiting.length > 0 ? 'tsh-btn tsh-icon is-warn' : 'tsh-btn tsh-icon'}
-            disabled={waiting.length === 0}
-            onClick={() => (waiting.length > 1 ? onAdmitAll?.() : waiting[0] && onAdmit?.(waiting[0].id))}
-            aria-label={admitText}
-            title={admitText}
-          >
-            <IconUserPlus size={14} />
           </button>
         );
       case 'stop':
@@ -911,9 +819,6 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
       aria-label="Share controls"
     >
       <style>{HUD_CSS}</style>
-      <div className="tsh-sr" aria-live="polite">
-        {waitingLabel}
-      </div>
       <div
         className="tsh-bar"
         role="toolbar"
@@ -985,7 +890,6 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
         <div className="tsh-panel">
           <div className="tsh-panel-head">
             <span className="tsh-panel-title">Roster</span>
-            {waitingCount > 0 && <span className="tsh-chip">{waitingCount} waiting</span>}
             <button type="button" className="tsh-btn" onClick={() => setPanel(null)} aria-label="Close roster">
               Close
             </button>
@@ -1000,7 +904,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
         </SideWindowPortal>
       )}
       {rosterWin && (
-        <SideWindowPortal win={rosterWin} title={waitingCount > 0 ? `Roster · ${waitingCount} waiting` : 'Roster'}>
+        <SideWindowPortal win={rosterWin} title="Roster">
           <div className="tsh tsh-side" role="region" aria-label="Roster">
             <style>{HUD_CSS}</style>
             {rosterBody}

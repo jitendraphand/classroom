@@ -8,7 +8,7 @@ import { generateIdentity, generateSessionToken } from '@/lib/codes';
 import { jsonError, jsonOk } from '@/lib/response';
 import { ensureRedis, keys } from '@/lib/redis';
 import { admitWaiting } from '@/lib/admission';
-import { directEntryAllowed, shouldAutoAdmit } from '@/lib/admissionLogic';
+import { shouldAutoAdmit } from '@/lib/admissionLogic';
 
 const schema = z.object({
   // Ignored for school-app students (their name comes from the signed token).
@@ -48,13 +48,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     }
 
     if (!body.displayName) return jsonError('Enter your name');
-    // Manual/test joins have no school SID: earlier seats are matched by name.
-    // Same rule as school-app students: a student who left comes back in
-    // directly; one the teacher denied or removed waits for the teacher.
-    const previous = await prisma.participant.findMany({
-      where: { roomId: room.id, role: 'STUDENT', displayName: body.displayName, studentId: null },
-      select: { removedByTeacher: true },
-    });
     const sessionToken = generateSessionToken();
     const id = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
 
@@ -73,9 +66,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
 
     const redis = await ensureRedis();
     await redis.sadd(keys.waiting(code), participant.id);
-    // Waiting room switched off by the teacher: straight into the class.
+    // No waiting room: straight into the class.
     let status: string = participant.status;
-    if (directEntryAllowed(previous) && shouldAutoAdmit(room, participant)) {
+    if (shouldAutoAdmit(room, participant)) {
       await admitWaiting(room, { ids: [participant.id] });
       status = 'ADMITTED';
     }

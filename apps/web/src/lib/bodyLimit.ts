@@ -12,6 +12,7 @@ export const LARGE_BODY_LIMIT = 8 * 1024 * 1024; // whiteboard snapshots, roster
 /** Routes whose bodies may legitimately be large (see the zod caps in each). */
 const LARGE_BODY_PATHS: RegExp[] = [
   /^\/api\/rooms\/[^/]+\/whiteboard\/?$/, // WB_SNAP_MAX_PACKETS × WB_SNAP_MAX_B64 ≈ 6 MB
+  /^\/api\/rooms\/[^/]+\/whiteboard\/asset\/?$/, // one image ≤ ASSET_MAX_BYTES (2 MB), also capped while reading
   /^\/api\/admin\/live\/[^/]+\/whiteboard\/?$/,
   /^\/api\/admin\/students\/import\/?$/, // csv ≤ 2,000,000 chars
 ];

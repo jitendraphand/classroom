@@ -283,7 +283,7 @@ export default function TeacherDashboard() {
             </p>
             <p className="mt-0.5 text-sm text-slate-300">
               {formatTime(focus.startLabel)}–{formatTime(focus.endLabel)}
-              {focus.phase === 'upcoming' ? ` · waiting room opens at ${formatTime(focus.opensAt, tz)}` : ''}
+              {focus.phase === 'upcoming' ? ` · students can join from ${formatTime(focus.opensAt, tz)}` : ''}
               {focus.substituteFor ? ` · substituting for ${focus.substituteFor}` : ''}
             </p>
           </div>
@@ -301,7 +301,7 @@ export default function TeacherDashboard() {
       <Card className="mb-6 scroll-mt-4" id="today">
         <CardHeader
           title="Today"
-          subtitle={schedule ? `The waiting room opens ${schedule.earlyMinutes} min before each class. Times are school time.` : 'Loading…'}
+          subtitle={schedule ? `Students can join ${schedule.earlyMinutes} min before each class. Times are school time.` : 'Loading…'}
         />
         {!schedule ? null : today.length === 0 ? (
           <p className="text-sm text-slate-400">No timetabled classes today. You can start an extra class below.</p>

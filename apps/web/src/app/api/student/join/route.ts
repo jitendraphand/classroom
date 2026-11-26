@@ -39,7 +39,7 @@ function errorPath(code: string, field?: string) {
  * GET /join?… (rewritten here by middleware). Signed: `t=<jwt>`. Unsigned
  * (SCHOOL_JOIN_MODE=unsigned): `FirstName, LastName, SID, Grade, Division[, Campus]`.
  * Upserts the student by SID, starts their session and redirects to /student
- * (which drops the query from the address bar) — routing, waiting room,
+ * (which drops the query from the address bar) — routing, admission,
  * attendance and admission are unchanged. Any failure → friendly page.
  */
 export async function GET(req: Request) {

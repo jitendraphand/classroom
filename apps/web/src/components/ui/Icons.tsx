@@ -198,26 +198,6 @@ export function IconHandDown(p: P) {
   );
 }
 
-/** Admit: a person with a plus. */
-export function IconUserPlus(p: P) {
-  return (
-    <svg {...base(p)}>
-      <circle cx="9" cy="8" r="3.5" stroke="currentColor" strokeWidth="1.8" />
-      <path d="M2.5 20a6.5 6.5 0 0 1 13 0M19 8v6M16 11h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-/** Waiting room: a door. */
-export function IconDoor(p: P) {
-  return (
-    <svg {...base(p)}>
-      <path d="M5 21V4.5A1.5 1.5 0 0 1 6.5 3h8A1.5 1.5 0 0 1 16 4.5V21M3 21h18M16 6h2.5A1.5 1.5 0 0 1 20 7.5V21" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx="12.5" cy="12.5" r="1" fill="currentColor" />
-    </svg>
-  );
-}
-
 /** Reply: a curved arrow pointing back. */
 export function IconReply(p: P) {
   return (

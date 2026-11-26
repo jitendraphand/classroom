@@ -11,8 +11,6 @@ import {
   MEETING_BAR_PX,
   OMITTED_SHARE_CONTROLS,
   SHARE_TOOLBAR_ORDER,
-  admitLabel,
-  admitTone,
   badgeText,
   focusAlertDanger,
   inlineShareDockHint,
@@ -38,7 +36,6 @@ test('share toolbar order matches the Windows pill and omits controls with no we
     'chat',
     'hands',
     'people',
-    'admit',
     'stop',
   ]);
   assert.deepEqual(shareToolbarIds({}), SHARE_TOOLBAR_ORDER.filter((id) => id !== 'video'));
@@ -51,20 +48,17 @@ test('share toolbar order matches the Windows pill and omits controls with no we
   assert.deepEqual(shareToolbarSeparators(shareToolbarIds({ video: true })), [{ before: 'chat' }, { before: 'stop' }]);
 });
 
-test('badges and admit follow the Windows rules', () => {
+test('badges follow the Windows rules; no Admit anywhere (no waiting room)', () => {
   assert.equal(badgeText(0), '');
   assert.equal(badgeText(9), '9');
   assert.equal(badgeText(10), '9+');
-  assert.equal(admitLabel(0), 'Nobody waiting');
-  assert.equal(admitLabel(1, 'Ava'), 'Admit Ava');
-  assert.equal(admitLabel(3), 'Admit all 3 waiting');
-  assert.equal(admitTone(0), 'idle');
-  assert.equal(admitTone(2), 'warn');
+  assert.ok(!(SHARE_TOOLBAR_ORDER as readonly string[]).includes('admit'));
+  assert.ok(!(MEETING_BAR_ORDER as readonly string[]).includes('admit'));
 });
 
 test('meeting bar order and focus badge', () => {
   assert.deepEqual(meetingBarIds(), [...MEETING_BAR_ORDER]);
-  assert.deepEqual(MEETING_BAR_ORDER, ['mic', 'cam', 'chat', 'people', 'admit', 'perm', 'muteall', 'videos', 'stop', 'end']);
+  assert.deepEqual(MEETING_BAR_ORDER, ['mic', 'cam', 'chat', 'people', 'perm', 'muteall', 'videos', 'stop', 'end']);
   assert.equal(MEETING_BAR_PX, 54);
   assert.equal(peopleBadgeCount(2, 1), 3);
   assert.equal(peopleBadgeCount(-1, 4), 4);
@@ -78,8 +72,6 @@ test('people count is amber with dark text; red is only the fullscreen badge', (
   assert.equal(FOCUS_RED, '#dc2626');
   assert.equal(FOCUS_BADGE_TEXT, '#ffffff');
   const hud = src('components/classroom/TeacherShareHud.tsx');
-  assert.match(hud, /data-testid="tsh-people-count"/);
-  assert.match(hud, /background: BADGE_AMBER, color: BADGE_TEXT/);
   assert.match(hud, /data-testid="tsh-focus-alert"/);
   assert.match(hud, /background: FOCUS_RED, color: FOCUS_BADGE_TEXT, left: -4, right: 'auto'/);
 });

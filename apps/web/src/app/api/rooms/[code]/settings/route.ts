@@ -1,18 +1,13 @@
-import { rememberWaitingRoomChoice } from '@/lib/waitingRoomPref';
 import { z } from 'zod';
 import { nudgeRoomState } from '@/lib/roomNudge';
 import { prisma } from '@/lib/db';
 import { getTeacherSession } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
 import { clampMaxVisible, rotateVisibleSample } from '@/lib/sample';
-import { admitWaiting } from '@/lib/admission';
-import { idsToAdmitOnToggle } from '@/lib/admissionLogic';
 
 const schema = z.object({
   maxVisibleVideos: z.number().int().min(1).max(6).optional(),
   name: z.string().min(1).max(120).optional(),
-  /** Waiting room for this class session (off: students enter directly). */
-  waitingRoomOn: z.boolean().optional(),
 });
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ code: string }> }) {
@@ -30,34 +25,13 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ code: 
       data: {
         ...(body.maxVisibleVideos !== undefined ? { maxVisibleVideos: clampMaxVisible(body.maxVisibleVideos) } : {}),
         ...(body.name ? { name: body.name.trim() } : {}),
-        ...(body.waitingRoomOn !== undefined ? { waitingRoomOn: body.waitingRoomOn } : {}),
       },
     });
-    if (body.waitingRoomOn !== undefined) await rememberWaitingRoomChoice(teacher.id, body.waitingRoomOn);
-    let admitted = 0;
-    if (body.waitingRoomOn === false && updated.status !== 'ENDED') {
-      // Waiting room off: everyone already waiting comes in now.
-      // ...except students the teacher denied or removed this session.
-      const [waiting, removed] = await Promise.all([
-        prisma.participant.findMany({
-          where: { roomId: room.id, role: 'STUDENT', status: 'WAITING' },
-          select: { id: true, role: true, status: true, studentId: true, classSessionId: true, displayName: true },
-        }),
-        prisma.participant.findMany({
-          where: { roomId: room.id, role: 'STUDENT', removedByTeacher: true },
-          select: { studentId: true, classSessionId: true, displayName: true },
-        }),
-      ]);
-      const ids = idsToAdmitOnToggle(false, waiting, removed);
-      if (ids.length) admitted = await admitWaiting(updated, { ids });
-    }
     if (body.maxVisibleVideos !== undefined) await rotateVisibleSample(code, updated.maxVisibleVideos);
     nudgeRoomState(room.code, 'all');
     return jsonOk({
       maxVisibleVideos: updated.maxVisibleVideos,
       name: updated.name,
-      waitingRoomOn: updated.waitingRoomOn,
-      admitted,
     });
   } catch (e) {
     if (e instanceof z.ZodError) return jsonError(e.errors[0]?.message || 'Invalid input');

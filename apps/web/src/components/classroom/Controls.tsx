@@ -74,7 +74,6 @@ type Props = {
   /** Teacher: toggle roster floating panel (open ↔ close) */
   onToggleRoster?: () => void;
   rosterOpen?: boolean;
-  rosterBadge?: number;
   /** Teacher: raised hands, badged on the roster button while it is closed. */
   handsCount?: number;
   /** Student raise-hand */
@@ -129,7 +128,6 @@ export function Controls({
   chatUnread = 0,
   onToggleRoster,
   rosterOpen = false,
-  rosterBadge = 0,
   handsCount = 0,
   handRaised,
   onToggleHand,
@@ -361,11 +359,6 @@ export function Controls({
                 >
                   <IconHand size={9} />
                   {handsCount > 9 ? '9+' : handsCount}
-                </span>
-              )}
-              {!rosterOpen && rosterBadge > 0 && (
-                <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-0.5 text-[9px] font-bold text-white">
-                  {rosterBadge > 9 ? '9+' : rosterBadge}
                 </span>
               )}
             </span>

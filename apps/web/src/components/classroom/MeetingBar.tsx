@@ -2,17 +2,17 @@
 
 /**
  * Whiteboard meeting column, docked on the right. Same order as the Windows
- * MeetingBar: mic, camera, chat, people/hands, admit, student drawing,
+ * MeetingBar: mic, camera, chat, people/hands, student drawing,
  * mute all, student videos, class info, Stop whiteboard, End.
  * No allow-all-unmute (Nov 25): students are unmuted one at a time
  * from the roster, and only while their camera is on.
  */
 import { useEffect, type ReactNode } from 'react';
 import { notifyFloatBounds } from './FloatingPanel';
-import { IconCam, IconCamOff, IconChat, IconLeave, IconMic, IconMicOff, IconPen, IconScreen, IconSpeakerOff, IconUserPlus, IconUsers, IconVideo } from '@/components/ui/Icons';
+import { IconCam, IconCamOff, IconChat, IconLeave, IconMic, IconMicOff, IconPen, IconScreen, IconSpeakerOff, IconUsers, IconVideo } from '@/components/ui/Icons';
 import { LeaveEndMenu } from './LeaveEndMenu';
 import { FlyoutBar, barBtn, type FlyoutGroup } from '@/lib/whiteboard/FlyoutBar';
-import { ALLOW_GREEN, MEETING_BAR_PX, admitLabel, focusAlertDanger, peopleBadgeCount } from '@/lib/shareChrome';
+import { ALLOW_GREEN, MEETING_BAR_PX, focusAlertDanger, peopleBadgeCount } from '@/lib/shareChrome';
 
 export type MeetingPerson = { id: string; displayName: string };
 
@@ -28,9 +28,6 @@ export function WhiteboardMeetingBar({
   focusAlerts,
   rosterOpen,
   onToggleRoster,
-  waiting,
-  onAdmit,
-  onAdmitAll,
   requests,
   drawers,
   onAllowDraw,
@@ -54,9 +51,6 @@ export function WhiteboardMeetingBar({
   focusAlerts: number;
   rosterOpen: boolean;
   onToggleRoster: () => void;
-  waiting: MeetingPerson[];
-  onAdmit: (id: string) => void;
-  onAdmitAll: () => void;
   requests: MeetingPerson[];
   drawers: MeetingPerson[];
   onAllowDraw: (id: string) => void;
@@ -81,8 +75,6 @@ export function WhiteboardMeetingBar({
     };
   }, []);
   const ic = (node: ReactNode) => node;
-  const waitingN = waiting.length;
-  const oldest = waiting[0];
   const groups: FlyoutGroup[] = [
     {
       id: 'mic',
@@ -119,16 +111,6 @@ export function WhiteboardMeetingBar({
       active: rosterOpen,
       onClick: onToggleRoster,
       testId: 'wbm-people',
-    },
-    {
-      id: 'admit',
-      label: admitLabel(waitingN, oldest?.displayName),
-      icon: ic(<IconUserPlus size={18} />),
-      badge: waitingN,
-      warn: waitingN > 0,
-      disabled: waitingN === 0,
-      onClick: () => (waitingN > 1 ? onAdmitAll() : oldest && onAdmit(oldest.id)),
-      testId: 'wbm-admit',
     },
     {
       id: 'perm',

@@ -164,26 +164,20 @@ teacher's video until the student is back; audio keeps playing.
   See **[docs/SCHOOL_APP_INTEGRATION.md](docs/SCHOOL_APP_INTEGRATION.md)**.
   Divisions may be letters or words ("Mahaveer"), matched case-insensitively.
   The "no class right now" / "class ended" / countdown pages move the student
-  into the waiting room automatically when a class opens.
+  into the class automatically when it opens.
   The school's student ID is the identity key; roll number is display only.
   The student is routed to the class open now for their grade-division
   (combined / all-division and ad-hoc classes included), a countdown for a
-  later class today, or "no class right now". They wait for the teacher to
-  admit them (unless direct entry is on, below); the roster shows name, roll
+  later class today, or "no class right now". The roster shows name, roll
   no, grade-division, timetable and late badges. A student session cannot
   enter another grade-division's class.
   Manual code + name join is off (`ALLOW_MANUAL_STUDENT_JOIN=false`; dev only).
-- **Direct entry** (the teacher switches the waiting room off in the roster or
-  the share controls; remembered for their next class, `WAITING_ROOM_DEFAULT`
-  for teachers who never chose): students go straight into the class with no
-  approval, still muted and only into their own class. That covers late
-  arrivals (no time cut-off while the class runs; they are marked late),
-  students who pressed **Leave** and come back, dropped connections and
-  device switches. Switching it on admits everyone already waiting, and a
-  waiting student who arrived during the switch is let in by the lobby's next
-  check. Classes have no size limit. The one exception:
-  a student the teacher **denied or removed** in this class waits for the
-  teacher again, until the teacher admits them once.
+- **No waiting room** (removed Nov 2026): every student goes straight into
+  their own class with no approval, muted. That covers late arrivals (no time
+  cut-off while the class runs; they are marked late), students who pressed
+  **Leave** and come back, dropped connections and device switches. The
+  teacher's **Remove** takes a student out of the class now; they can join
+  again from the school app. Classes have no size limit.
 - **Attendance** per student per class: first joined, admitted, left, total
   connected time (LiveKit webhook joins/leaves, union across reconnects and
   duplicate tabs), late (after start + `LATE_GRACE_MINUTES`), status
@@ -196,6 +190,18 @@ teacher's video until the student is back; audio keeps playing.
   grade/division dropdown (timetable slots and one-off changes, teacher
   assignments, attendance and student filters, the teacher's ad-hoc start, and
   roster import validation). See **[docs/GRADES_DIVISIONS.md](docs/GRADES_DIVISIONS.md)**.
+- **Whiteboard: one long page** (Nov 2026): fixed width, fixed top edge, and it
+  keeps going as the teacher scrolls down (wheel, two fingers, PgUp/PgDn, the
+  scroll rail, "↑ Top"). Students see the band the teacher is on, scaled to
+  their screen width (taller screens show a little more below). **Insert**
+  takes a picture or a **PDF**: each PDF page (up to 40) becomes a picture,
+  stacked down the board below what is already written; one Undo removes the
+  import. Pictures are uploaded once (`/whiteboard/asset`, kept in Redis for
+  the class, deleted at the end) and fetched by every viewer, so data packets
+  and board snapshots stay small. Export: PNG of what is on screen, PDF of
+  every page cut into screen-high sheets. Teacher notices (raised hands,
+  permissions) float at the bottom right over the board, so the writing area
+  never moves.
 - **Student drawing on the whiteboard**: a student taps the pen ("Request to
   draw on the whiteboard"), the teacher Allows/Revokes in the roster. Only
   while the whiteboard is open (Nov 2026): drawing and annotation on a screen
@@ -266,7 +272,7 @@ curl -s http://localhost:3000/api/health
 2. Dashboard → **Start class** → you land directly in the classroom (camera starts off; turn it on from the dock)
 3. In the classroom header: **Copy invite link** / **Copy code**
 4. **Student** (incognito / second browser) → a signed test link from
-   `node apps/web/scripts/make-join-link.mjs …` (see docs/SCHOOL_APP_INTEGRATION.md §6) → waiting room.
+   `node apps/web/scripts/make-join-link.mjs …` (see docs/SCHOOL_APP_INTEGRATION.md §6) → straight into the class.
    (Or set `ALLOW_MANUAL_STUDENT_JOIN=true` for the old http://localhost:3000/join/{CODE} → name flow.)
 5. Teacher **N waiting · Admit** (or Roster → Admit / Admit all) → student enters class (floating teacher cam + float controls)
 6. Try **Chat**, mute / mute-all, screen share (+ Video mode), the video panel's **‹ / ›** pages, unmute a student to see them in the speaking pop-up
@@ -366,7 +372,7 @@ See `.env.example`. Important:
 | `COOKIE_SECURE` | derived from `APP_URL` | `false` for HTTP / bare IP; `true` behind HTTPS (Caddy) |
 | `NEXTAUTH_SECRET` | generated | JWT signing for admin / teacher sessions |
 | `APP_TIMEZONE` | `Asia/Kolkata` | Time zone of the timetable |
-| `WAITING_ROOM_EARLY_MINUTES` | `10` | A timetabled class can be opened / its waiting room opens this many minutes early |
+| `WAITING_ROOM_EARLY_MINUTES` | `10` | A timetabled class can be opened / students can join this many minutes early (name kept for existing deployments) |
 | `LATE_GRACE_MINUTES` | `5` | Students arriving later than class start + this are marked late |
 | `SCHOOL_APP_JWT_ISSUER` | _(unset)_ | Required `iss` of school-app join tokens (joining is disabled until set) |
 | `SCHOOL_APP_JWT_PUBLIC_KEY` / `SCHOOL_APP_JWT_PUBLIC_KEY_FILE` | _(unset)_ | School app's Ed25519/RSA public key (PEM). Preferred; disables HS256 |

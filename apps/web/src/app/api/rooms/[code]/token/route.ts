@@ -50,7 +50,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     });
   }
   if (participant.role === 'STUDENT' && participant.status === 'WAITING') {
-    return jsonError('Still in waiting room', 403);
+    return jsonError('Not in the class yet', 403);
   }
   if (participant.status === 'LEFT') return jsonError('You have left the class', 403);
 

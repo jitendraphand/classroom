@@ -24,7 +24,7 @@ export function appTimeZone(): string {
   return tz && validTimeZone(tz) ? tz : 'Asia/Kolkata';
 }
 
-/** Waiting room opens this many minutes before a scheduled start. */
+/** Students can join this many minutes before a scheduled start. */
 export function earlyWindowMinutes(): number {
   return intEnv('WAITING_ROOM_EARLY_MINUTES', 10, 0, 120);
 }

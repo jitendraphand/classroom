@@ -20,7 +20,7 @@
  * Not a separate join path: the name + chosen class become the same claims an
  * unsigned school-app link produces (validateUnsignedJoin) and finish with
  * finishStudentJoin; the browser then goes to /student (routing, no-class
- * check, waiting room, admission, one device per student, class-full).
+ * check, admission, one device per student, class-full).
  *
  * Identity (attendance + one device per student) = the typed name within the
  * chosen class, compared case-, accent- and spacing-insensitively:

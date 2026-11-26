@@ -32,3 +32,15 @@ if (!fs.existsSync(pkg)) {
 fs.mkdirSync(out, { recursive: true });
 for (const [from, to] of VOICE_ASSETS) fs.copyFileSync(path.join(pkg, from), path.join(out, to));
 console.log(`copy-voice-assets: ${VOICE_ASSETS.length} files -> public/audio/vendor`);
+
+// Whiteboard PDF import (lib/whiteboard/pdfImport.ts): the pdf.js worker, legacy
+// build (older Safari / Chrome on tablets), served from /pdfjs on demand.
+const pdfWorker = path.join(web, 'node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs');
+if (fs.existsSync(pdfWorker)) {
+  const pdfOut = path.join(web, 'public/pdfjs');
+  fs.mkdirSync(pdfOut, { recursive: true });
+  fs.copyFileSync(pdfWorker, path.join(pdfOut, 'pdf.worker.min.mjs'));
+  console.log('copy-voice-assets: pdf.js worker -> public/pdfjs');
+} else {
+  console.warn('copy-voice-assets: pdfjs-dist is not installed; whiteboard PDF import will be unavailable');
+}

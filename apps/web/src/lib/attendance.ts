@@ -135,7 +135,7 @@ export type ConnectionEvidence = {
 
 /**
  * Did this student really join the class media (LiveKit) at least once?
- * Being admitted is not enough: a student admitted from the waiting room
+ * Being admitted is not enough: a student admitted
  * whose page never connected (closed tab, blocked network) was counted as
  * present before (Nov 7 trial).
  */

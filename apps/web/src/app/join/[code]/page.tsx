@@ -50,7 +50,7 @@ export default function JoinRoomPage() {
   // The class ended (or this seat was closed) while waiting in the lobby.
   const [lobbyEnded, setLobbyEnded] = useState(false);
   const [teacherSession, setTeacherSession] = useState<{ name: string | null } | null>(null);
-  // Pressed Leave in the waiting room: stay out (no polling, no auto-rejoin) until "Rejoin".
+  // Pressed Leave while joining: stay out (no polling, no auto-rejoin) until "Rejoin".
   const [left, setLeft] = useState(() => {
     try {
       // A reload keeps the "left" page for 10 minutes; a later class link starts fresh.
@@ -61,7 +61,7 @@ export default function JoinRoomPage() {
     }
   });
   const [leftSchool, setLeftSchool] = useState(false);
-  useDocumentTitle(waiting ? 'Waiting room' : 'Join class');
+  useDocumentTitle('Join class');
   const [continueAsStudent, setContinueAsStudent] = useState(
     search.get('as') === 'student' || search.get('as') === '1'
   );
@@ -129,7 +129,7 @@ export default function JoinRoomPage() {
     } catch {
       /* ignore */
     }
-    // Cancel the waiting request (the teacher no longer sees this student waiting).
+    // Leave before entering: close this seat.
     await fetch(`/api/rooms/${code}/leave`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => null);
   }
 
@@ -205,7 +205,7 @@ export default function JoinRoomPage() {
       <main className="flex min-h-screen flex-col items-center justify-center gap-4 px-6" data-finished="left" data-testid="left-page">
         <div className="max-w-md rounded-2xl border border-white/10 bg-surface-1 p-8 text-center shadow-lift">
           <p className="font-display text-2xl font-semibold tracking-tight">You left the class</p>
-          <p className="mt-2 text-sm text-slate-400">You are no longer waiting to be admitted. Rejoin when you are ready.</p>
+          <p className="mt-2 text-sm text-slate-400">Rejoin when you are ready: you go straight back into the class.</p>
           <Button className="mt-6" onClick={rejoin} data-testid="rejoin">
             Rejoin
           </Button>
@@ -220,9 +220,9 @@ export default function JoinRoomPage() {
     return (
       <main className="mx-auto flex min-h-screen max-w-lg flex-col items-center justify-center px-5 text-center">
         <Card className="w-full p-10">
-          <h1 className="text-2xl font-semibold">Your waiting request was closed</h1>
-          <p className="mt-3 text-slate-300">Your teacher denied your request or removed you. You are no longer in the class.</p>
-          <Button className="mt-6" onClick={() => { window.location.href = roomInfo.me?.viaSchoolApp ? '/student' : `/join/${code}`; }}>Rejoin through the waiting room</Button>
+          <h1 className="text-2xl font-semibold">You were removed from the class</h1>
+          <p className="mt-3 text-slate-300">Your teacher removed you from this class.</p>
+          <Button className="mt-6" onClick={() => { window.location.href = roomInfo.me?.viaSchoolApp ? '/student' : `/join/${code}`; }}>Join again</Button>
         </Card>
       </main>
     );
@@ -235,7 +235,7 @@ export default function JoinRoomPage() {
           <h1 className="font-display text-2xl font-semibold tracking-tight">Class ended</h1>
           <p className="mt-3 text-slate-300">
             {myName ? `Sorry, ${myName} — ` : ''}
-            <strong className="text-white">{roomInfo?.name || code}</strong> has ended before you were let in.
+            <strong className="text-white">{roomInfo?.name || code}</strong> has ended.
           </p>
           <p className="mt-2 text-sm text-slate-400">You can close this tab.</p>
         </Card>
@@ -262,13 +262,13 @@ export default function JoinRoomPage() {
               <span />
             </span>
           </div>
-          <h1 className="font-display text-2xl font-semibold tracking-tight">Waiting room</h1>
+          <h1 className="font-display text-2xl font-semibold tracking-tight">Joining class</h1>
           <p className="mt-3 text-slate-300">
-            Hi{(roomInfo?.me?.displayName || myName) ? `, ${roomInfo?.me?.displayName || myName}` : ''} — you&apos;re in the
-            lobby for <strong className="text-white">{roomInfo?.name || code}</strong>.
+            Hi{(roomInfo?.me?.displayName || myName) ? `, ${roomInfo?.me?.displayName || myName}` : ''} — taking you into{' '}
+            <strong className="text-white">{roomInfo?.name || code}</strong>.
           </p>
           <p className="mt-2 text-sm text-slate-400">
-            Your teacher will admit you shortly. Keep this tab open.
+            This takes a moment. Keep this tab open.
           </p>
           {error && <p className="mt-3 text-sm text-red-300" role="alert">{error}</p>}
           <WaitingPermissionsCard />
@@ -353,7 +353,7 @@ export default function JoinRoomPage() {
               className="py-3"
               disabled={loading || (!!teacherSession && !continueAsStudent)}
             >
-              {loading ? 'Joining…' : 'Enter waiting room'}
+              {loading ? 'Joining…' : 'Join class'}
             </Button>
           </form>
         )}

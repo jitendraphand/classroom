@@ -39,8 +39,6 @@ export type RoomState = {
   endedBy?: 'teacher' | 'admin';
   public?: boolean;
   maxVisibleVideos: number;
-  /** Waiting room for this class session (teacher toggle; default on). */
-  waitingRoomOn?: boolean;
   isTeacher: boolean;
   teacherName: string;
   teacherGender?: 'male' | 'female' | null;
@@ -74,7 +72,6 @@ export type RoomState = {
     /** 1-based queue position while waiting to speak. */
     micPosition?: number | null;
   } | null;
-  waiting?: ({ id: string; displayName: string } & RosterInfo)[];
   admitted: ({
     focus?: import('@/lib/focusStatus').FocusStatus;
     focusIphone?: boolean;
@@ -123,7 +120,6 @@ export type RoomState = {
   micLimit?: number;
   /** Teacher: students waiting for a speaking slot. */
   micQueue?: { id: string; name: string; source: 'teacher' | 'student'; position: number }[];
-  /** Waiting room: the class cannot take another student. */
   visibleIdentities: string[];
   visibleCount: number;
   raisedHands?: string[];

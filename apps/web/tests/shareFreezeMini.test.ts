@@ -17,9 +17,8 @@ const fhd = { width: 1920, height: 1080 };
 const left = { left: 0, top: 0, width: 1920, height: 1080 };
 const right4k = { left: 1920, top: 0, width: 2560, height: 1600 };
 
-test('mini share toolbar: the smallest useful set; Admit only while someone waits', () => {
-  assert.deepEqual(shareToolbarMiniIds({ waiting: 0 }), ['live', 'mic', 'hands', 'chat', 'more', 'stop']);
-  assert.deepEqual(shareToolbarMiniIds({ waiting: 2 }), ['live', 'mic', 'hands', 'chat', 'admit', 'more', 'stop']);
+test('mini share toolbar: the smallest useful set', () => {
+  assert.deepEqual(shareToolbarMiniIds(), ['live', 'mic', 'hands', 'chat', 'more', 'stop']);
   const hud = src('components/classroom/TeacherShareHud.tsx');
   assert.match(hud, /data-testid="hud-more"/);
   assert.match(hud, /const miniMode = mini && !inline/);

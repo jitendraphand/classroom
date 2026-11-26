@@ -126,7 +126,7 @@ test('speaking pop-up opens with speakers, a close holds until someone new is un
 // Item 1
 test('teacher header: no title/code block; (i) hover info with code, videos, students, live', () => {
   const room = src('components/classroom/ClassroomRoom.tsx');
-  assert.match(room, /\(!isTeacher \|\| waitingCount > 0 \|\| raisedHands\.length > 0\)/);
+  assert.match(room, /\(!isTeacher \|\| raisedHands\.length > 0\)/);
   assert.match(room, /const teacherInfoEl = /);
   for (const k of ['Class code', 'Videos shown', 'Students', 'Status']) assert.match(room, new RegExp(`k: '${k}'`));
   assert.match(room, /info=\{teacherInfoEl\('left'\)\}/);

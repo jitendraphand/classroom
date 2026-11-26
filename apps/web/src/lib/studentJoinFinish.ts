@@ -3,7 +3,7 @@
  * "Join the class" form): per-SID throttle, campus, registry check, student
  * upsert and the student session. Throws JoinTokenError for anything the
  * student should be told about. The caller then sends them to /student, which
- * does routing, the no-class check, the waiting room and admission.
+ * does routing, the no-class check and admission.
  */
 import { clearStudentCookie, setActAsStudent, setPupilCookie } from './auth';
 import { resolveJoinCampus } from './campusLogic';

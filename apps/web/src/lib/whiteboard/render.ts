@@ -4,7 +4,7 @@
  * units through a view transform, so the picture is identical everywhere and
  * only scaled.
  */
-import { LASER_MS, PAGE_H, PAGE_W, triPoints, type Background, type Item, type LaserTrail, type Page, type ShapeItem } from './model';
+import { BOARD_MAX_H, LASER_MS, PAGE_H, PAGE_W, itemBounds, triPoints, type Background, type Item, type LaserTrail, type Page, type ShapeItem } from './model';
 
 export type View = { scale: number; tx: number; ty: number };
 
@@ -14,19 +14,45 @@ export function fitView(boxW: number, boxH: number): View {
   return { scale, tx: (boxW - PAGE_W * scale) / 2, ty: (boxH - PAGE_H * scale) / 2 };
 }
 
+/**
+ * One long page (Nov 2026): the band y..y+h of the page in a box.
+ * - 'edit' (teacher): the page width fills the box; the box height decides how
+ *   much of the page shows below y.
+ * - 'follow' (students, admin): the teacher's whole band fits (width or height,
+ *   whichever is tighter), top-aligned, so a student never misses what the
+ *   teacher sees; a taller screen shows more below it.
+ */
+export function bandView(boxW: number, boxH: number, band: { y: number; h: number }, mode: 'edit' | 'follow'): View {
+  const fitW = boxW / PAGE_W;
+  const scale = Math.max(0.01, mode === 'edit' ? fitW : Math.min(fitW, boxH / Math.max(1, band.h)));
+  return { scale, tx: (boxW - PAGE_W * scale) / 2, ty: -band.y * scale };
+}
+
+/** Visible height of a box in page units (teacher's band height). */
+export function visibleH(v: View, boxH: number): number {
+  return Math.round(boxH / Math.max(0.01, v.scale));
+}
+
 /** Screen point → page point. */
 export function toPage(v: View, x: number, y: number): { x: number; y: number } {
   return { x: (x - v.tx) / v.scale, y: (y - v.ty) / v.scale };
 }
 
 const imgCache = new Map<string, HTMLImageElement>();
+let assetUrl: ((id: string) => string) | null = null;
+/** Where `asset:<id>` images are fetched from (set by the class page: needs the class code). */
+export function setAssetUrlResolver(fn: ((id: string) => string) | null) {
+  assetUrl = fn;
+}
 function imageFor(src: string, onLoad?: () => void): HTMLImageElement | null {
   if (typeof Image === 'undefined') return null;
   let img = imgCache.get(src);
   if (!img) {
+    const url = src.startsWith('asset:') ? assetUrl?.(src.slice(6)) : src;
+    if (!url) return null;
     img = new Image();
     img.onload = () => onLoad?.();
-    img.src = src;
+    img.src = url;
     imgCache.set(src, img);
     if (imgCache.size > 200) imgCache.delete(imgCache.keys().next().value as string);
   }
@@ -37,13 +63,17 @@ export function bgColor(bg: Background): string {
   return bg === 'black' ? '#111418' : '#ffffff';
 }
 
-function drawBackground(ctx: CanvasRenderingContext2D, bg: Background) {
+/** First multiple of `step` after `y0` (patterns stay fixed to the page while it scrolls). */
+const firstStep = (y0: number, step: number) => Math.max(step, Math.ceil(y0 / step) * step);
+
+/** Background of the band y0..y1 (page units). */
+function drawBackground(ctx: CanvasRenderingContext2D, bg: Background, y0 = 0, y1 = PAGE_H) {
   ctx.fillStyle = bgColor(bg);
-  ctx.fillRect(0, 0, PAGE_W, PAGE_H);
+  ctx.fillRect(0, y0, PAGE_W, y1 - y0);
   if (bg === 'dots') {
     ctx.fillStyle = '#b8c2cf';
     const step = 40;
-    for (let y = step; y < PAGE_H; y += step) {
+    for (let y = firstStep(y0, step); y < y1; y += step) {
       for (let x = step; x < PAGE_W; x += step) {
         ctx.beginPath();
         ctx.arc(x, y, 2.2, 0, Math.PI * 2);
@@ -57,14 +87,14 @@ function drawBackground(ctx: CanvasRenderingContext2D, bg: Background) {
     ctx.lineWidth = 1;
     ctx.strokeStyle = '#e4e9f0';
     ctx.beginPath();
-    for (let v = 20; v < PAGE_W; v += 20) if (v % 100) { ctx.moveTo(v, 0); ctx.lineTo(v, PAGE_H); }
-    for (let v = 20; v < PAGE_H; v += 20) if (v % 100) { ctx.moveTo(0, v); ctx.lineTo(PAGE_W, v); }
+    for (let v = 20; v < PAGE_W; v += 20) if (v % 100) { ctx.moveTo(v, y0); ctx.lineTo(v, y1); }
+    for (let v = firstStep(y0, 20); v < y1; v += 20) if (v % 100) { ctx.moveTo(0, v); ctx.lineTo(PAGE_W, v); }
     ctx.stroke();
     ctx.lineWidth = 1.6;
     ctx.strokeStyle = '#b9c6d6';
     ctx.beginPath();
-    for (let v = 100; v < PAGE_W; v += 100) { ctx.moveTo(v, 0); ctx.lineTo(v, PAGE_H); }
-    for (let v = 100; v < PAGE_H; v += 100) { ctx.moveTo(0, v); ctx.lineTo(PAGE_W, v); }
+    for (let v = 100; v < PAGE_W; v += 100) { ctx.moveTo(v, y0); ctx.lineTo(v, y1); }
+    for (let v = firstStep(y0, 100); v < y1; v += 100) { ctx.moveTo(0, v); ctx.lineTo(PAGE_W, v); }
     ctx.stroke();
     return;
   }
@@ -73,22 +103,22 @@ function drawBackground(ctx: CanvasRenderingContext2D, bg: Background) {
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     const step = 60;
-    for (let y = step; y < PAGE_H; y += step) {
+    for (let y = firstStep(y0, step); y < y1; y += step) {
       ctx.moveTo(0, y);
       ctx.lineTo(PAGE_W, y);
     }
     if (bg === 'grid') {
       for (let x = step; x < PAGE_W; x += step) {
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, PAGE_H);
+        ctx.moveTo(x, y0);
+        ctx.lineTo(x, y1);
       }
     }
     ctx.stroke();
     if (bg === 'lined') {
       ctx.strokeStyle = '#f2a7a7';
       ctx.beginPath();
-      ctx.moveTo(120, 0);
-      ctx.lineTo(120, PAGE_H);
+      ctx.moveTo(120, y0);
+      ctx.lineTo(120, y1);
       ctx.stroke();
     }
   }
@@ -237,6 +267,33 @@ export function drawItem(ctx: CanvasRenderingContext2D, it: Item, onImage?: () =
   ctx.restore();
 }
 
+const boundsCache = new WeakMap<Item, { y: number; b: number; n: number }>();
+/** Vertical extent of an item (cached per object; strokes re-measure when they grow). */
+function vExtent(it: Item): { y: number; b: number } {
+  const n = it.k === 'stroke' ? it.pts.length : 0;
+  const c = boundsCache.get(it);
+  if (c && c.n === n) return c;
+  const r = itemBounds(it);
+  const e = { y: r.y, b: r.y + r.h, n };
+  boundsCache.set(it, e);
+  return e;
+}
+
+/** The page band a view shows in a box cssH tall (clamped to the page). */
+export function shownBand(v: View, cssH: number): { y0: number; y1: number } {
+  const y0 = Math.max(0, -v.ty / v.scale);
+  const y1 = Math.min(BOARD_MAX_H, (cssH - v.ty) / v.scale);
+  return { y0, y1: Math.max(y0, y1) };
+}
+
+/** Items that reach into y0..y1 (a long board only draws what is on screen). */
+export function itemsInBand(items: Item[], y0: number, y1: number): Item[] {
+  return items.filter((it) => {
+    const e = vExtent(it);
+    return e.b >= y0 && e.y <= y1;
+  });
+}
+
 /**
  * Draw `page` into `ctx` (canvas of cssW x cssH CSS px at device ratio dpr)
  * through view `v`. `extra` = in-progress items (local preview).
@@ -251,12 +308,13 @@ export function renderPage(
   ctx.fillStyle = opts.outside ?? '#0b0f14';
   ctx.fillRect(0, 0, opts.cssW, opts.cssH);
   ctx.setTransform(opts.dpr * v.scale, 0, 0, opts.dpr * v.scale, opts.dpr * v.tx, opts.dpr * v.ty);
+  const { y0, y1 } = shownBand(v, opts.cssH);
   ctx.save();
   ctx.beginPath();
-  ctx.rect(0, 0, PAGE_W, PAGE_H);
+  ctx.rect(0, 0, PAGE_W, BOARD_MAX_H);
   ctx.clip();
-  drawBackground(ctx, page.bg);
-  for (const it of page.items) drawItem(ctx, it, opts.onImage);
+  drawBackground(ctx, page.bg, Math.floor(y0), Math.ceil(y1));
+  for (const it of itemsInBand(page.items, y0, y1)) drawItem(ctx, it, opts.onImage);
   for (const it of opts.extra ?? []) drawItem(ctx, it, opts.onImage);
   ctx.restore();
 }
@@ -299,13 +357,13 @@ export function drawLaser(ctx: CanvasRenderingContext2D, trail: LaserTrail, v: V
   ctx.restore();
 }
 
-/** Render a page at full page resolution (export). */
-export function renderPageToCanvas(page: Page, canvas: HTMLCanvasElement, onImage?: () => void) {
+/** Render the band y..y+h of a page at full page resolution (export; default the top screen). */
+export function renderPageToCanvas(page: Page, canvas: HTMLCanvasElement, onImage?: () => void, band: { y: number; h: number } = { y: 0, h: PAGE_H }) {
   canvas.width = PAGE_W;
-  canvas.height = PAGE_H;
+  canvas.height = band.h;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
-  renderPage(ctx, page, { scale: 1, tx: 0, ty: 0 }, { cssW: PAGE_W, cssH: PAGE_H, dpr: 1, onImage });
+  renderPage(ctx, page, { scale: 1, tx: 0, ty: -band.y }, { cssW: PAGE_W, cssH: band.h, dpr: 1, onImage });
 }
 
 type LayerCanvas = HTMLCanvasElement | OffscreenCanvas;
@@ -353,7 +411,7 @@ export class LayeredRenderer {
     ctx.setTransform(opts.dpr * v.scale, 0, 0, opts.dpr * v.scale, opts.dpr * v.tx, opts.dpr * v.ty);
     ctx.save();
     ctx.beginPath();
-    ctx.rect(0, 0, PAGE_W, PAGE_H);
+    ctx.rect(0, 0, PAGE_W, BOARD_MAX_H);
     ctx.clip();
     for (const it of live) drawItem(ctx, it, opts.onImage);
     for (const it of opts.extra ?? []) drawItem(ctx, it, opts.onImage);
@@ -372,4 +430,23 @@ function makeLayer(W: number, H: number, like: HTMLCanvasElement | OffscreenCanv
   c.width = W;
   c.height = H;
   return c;
+}
+
+/** Wait (up to `timeoutMs`) until the images of `items` are loaded (export draws them). */
+export async function preloadImages(items: Item[], timeoutMs = 8000): Promise<void> {
+  const waits: Promise<void>[] = [];
+  for (const it of items) {
+    if (it.k !== 'img') continue;
+    waits.push(
+      new Promise<void>((resolve) => {
+        if (imageFor(it.src, () => resolve())) return resolve();
+        const img = imgCache.get(it.src);
+        if (!img) return resolve();
+        img.addEventListener('error', () => resolve(), { once: true });
+        img.addEventListener('load', () => resolve(), { once: true });
+      })
+    );
+  }
+  if (!waits.length) return;
+  await Promise.race([Promise.all(waits).then(() => undefined), new Promise<void>((r) => setTimeout(r, timeoutMs))]);
 }

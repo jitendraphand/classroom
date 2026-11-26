@@ -29,7 +29,7 @@ const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayout
 
 /**
  * Viewport area floats may occupy: below the element marked
- * `data-float-bound="top"` (teacher header with the Admit control), above
+ * `data-float-bound="top"` (teacher header with the raised-hands bar), above
  * `data-float-bound="bottom"` (control bar) and left of
  * `data-float-bound="right"` (phone landscape control rail), so a panel can
  * never hide them.

@@ -8,9 +8,14 @@
  *  - 'edit'     teacher: every tool, selection, laser, pages, background, zoom/pan, image, export
  *  - 'annotate' student allowed to draw: pen colours + erase own strokes
  *  - 'view'     student / admin preview: render only (and the teacher's laser)
- * The page always fits the viewport the same way on every device; zoom/pan is
- * viewer-local (pinch / wheel / drag, Reset button): nothing is sent, and
- * strokes map back through the transform so annotation stays exact.
+ * One long page (Nov 2026): fixed width (PAGE_W) and a fixed top edge; the
+ * teacher scrolls down (wheel, two fingers, Pan tool, PgDn, the scroll bar) and
+ * the page keeps going (to BOARD_MAX_H). The teacher's band is sent as a
+ * `view` op and every student shows that band at their own screen width. On
+ * top of that, zoom/pan is viewer-local (pinch / Ctrl+wheel / drag, Reset
+ * button): nothing is sent, and strokes map back through the transform so
+ * annotation stays exact. Pictures and PDF pages are uploaded once
+ * (`uploadImage`) and referenced as `asset:<id>`.
  *
  * Ink feels immediate: every pointer sample (coalesced events, plus the
  * browser's predicted points) is painted on the next frame, while the network
@@ -18,7 +23,7 @@
  * pen still at the end of a stroke snaps a rough line / box / circle /
  * triangle into a clean shape.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import {
   BACKGROUNDS,
   BATCH_MS,
@@ -26,6 +31,8 @@ import {
   PAGE_W,
   PALETTE,
   PointBatcher,
+  clampScroll,
+  contentBottom,
   currentPage,
   hitItem,
   inkFor,
@@ -33,6 +40,7 @@ import {
   itemBounds,
   itemsInRect,
   newId,
+  pageBand,
   pressurePct,
   transformItem,
   type Background,
@@ -41,7 +49,7 @@ import {
   type ShapeKind,
   type StrokeItem,
 } from './model';
-import { LayeredRenderer, drawLaser, fitView, renderPageToCanvas, toPage, type View } from './render';
+import { LayeredRenderer, bandView, drawLaser, preloadImages, renderPageToCanvas, toPage, visibleH, type View } from './render';
 import { SNAP_HOLD_MS, SNAP_STILL_PX, recognizeShape } from './recognize';
 import { jpegsToPdf } from './pdf';
 import { FlyoutBar, barBtn, type FlyoutGroup } from './FlyoutBar';
@@ -68,6 +76,12 @@ type Props = {
   hideStop?: boolean;
   /** Disable viewer zoom/pan (pinch, wheel, drag, Reset button). Used by the admin observer. */
   disableZoom?: boolean;
+  /**
+   * Teacher: store an image for the class; resolves to the item `src`
+   * (`asset:<id>`) or null when the upload failed. Without it pictures are
+   * embedded as small data URLs and PDF import is not offered.
+   */
+  uploadImage?: (blob: Blob) => Promise<string | null>;
 };
 
 export const WIDTHS = [2, 4, 8, 14, 24];
@@ -112,7 +126,12 @@ function unionBounds(items: Item[]): Box | null {
 
 const xfBox = (b: Box, t: Xf): Box => ({ x: (b.x - t.ox) * t.s + t.ox + t.dx, y: (b.y - t.oy) * t.s + t.oy + t.dy, w: b.w * t.s, h: b.h * t.s });
 
-export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onClose, style, waitingLabel, hideStop, disableZoom = false }: Props) {
+/** Teacher's band leaves at most this often while scrolling. */
+const VIEW_SEND_MS = 100;
+/** PDF pages are placed this wide on the 1920-wide page. */
+const PDF_PAGE_W = 1600;
+
+export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onClose, style, waitingLabel, hideStop, disableZoom = false, uploadImage }: Props) {
   const version = useSyncExternalStore(
     (fn) => session.subscribe(fn),
     () => session.version,
@@ -139,6 +158,10 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
   const [, setStackTick] = useState(0);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const editing = mode !== 'view';
+  // Teacher's scroll position (page units from the top edge); students follow page.y.
+  const [scrollY, setScrollY] = useState(() => pageBand(page).y);
+  const [busy, setBusy] = useState<string | null>(null);
+  const canvasId = useId();
 
   const setTool = (t: Tool) => {
     setToolState(t);
@@ -156,10 +179,17 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
     return () => ro?.disconnect();
   }, []);
 
-  const view: View = useMemo(() => {
-    const base = fitView(size.w, size.h);
-    return { scale: base.scale * zp.s, tx: base.tx * zp.s + zp.x, ty: base.ty * zp.s + zp.y };
-  }, [size.w, size.h, zp]);
+  const followY = page.y ?? 0;
+  const followH = page.vh ?? PAGE_H;
+  const base: View = useMemo(
+    () => (mode === 'edit' ? bandView(size.w, size.h, { y: scrollY, h: PAGE_H }, 'edit') : bandView(size.w, size.h, pageBand({ id: '', bg: 'white', items: [], y: followY, vh: followH }), 'follow')),
+    [mode, size.w, size.h, scrollY, followY, followH]
+  );
+  const view: View = useMemo(() => ({ scale: base.scale * zp.s, tx: base.tx * zp.s + zp.x, ty: base.ty * zp.s + zp.y }), [base, zp]);
+  /** Height of the teacher's band in page units (what students are shown). */
+  const bandH = mode === 'edit' && size.w && size.h ? Math.max(100, visibleH(base, size.h)) : followH;
+  const scrollTo = useCallback((y: number) => setScrollY(clampScroll(y, bandH)), [bandH]);
+  const scrollBy = useCallback((dy: number) => setScrollY((v) => clampScroll(v + dy, bandH)), [bandH]);
   const zoomBy = (factor: number, sx = size.w / 2, sy = size.h / 2) => { if (!disableZoom) setZp((t) => zoomAt(t, factor, sx, sy, size.w, size.h, minZoom)); };
   const resetZoom = () => setZp(ZP_IDENTITY);
 
@@ -339,6 +369,33 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
     [session, onSend]
   );
   const act = useCallback((op: Op) => actAll([op]), [actAll]);
+
+  // Teacher: another page (or a board restored on rejoin) starts where it was left.
+  useEffect(() => {
+    if (mode === 'edit') setScrollY(pageBand(currentPage(session.doc)).y);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, page.id]);
+  // Teacher: tell students which band is on screen (throttled; the last one always leaves).
+  const viewSent = useRef({ key: '', at: 0, timer: 0 });
+  useEffect(() => {
+    if (mode !== 'edit' || !size.w || !size.h) return;
+    const vs = viewSent.current;
+    const go = () => {
+      vs.timer = 0;
+      const pg = currentPage(session.doc);
+      const y = Math.round(clampScroll(scrollY, bandH));
+      const key = `${pg.id}|${y}|${bandH}`;
+      if (key === vs.key) return;
+      vs.key = key;
+      vs.at = Date.now();
+      send([{ k: 'view', p: pg.id, y, h: bandH }]);
+    };
+    if (vs.timer) window.clearTimeout(vs.timer);
+    const wait = VIEW_SEND_MS - (Date.now() - vs.at);
+    if (wait <= 0) go();
+    else vs.timer = window.setTimeout(go, wait);
+  }, [mode, scrollY, bandH, size.w, size.h, page.id, send, session]);
+  useEffect(() => () => window.clearTimeout(viewSent.current.timer), []);
 
   const undo = () => {
     const e = undoRef.current.pop();
@@ -537,7 +594,13 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
       const next = local(e);
       const other = [...pointers.current.entries()].find(([id]) => id !== e.pointerId)?.[1];
       pointers.current.set(e.pointerId, next);
-      if (other) setZp((t) => pinchZP(t, prev, other, next, other, size.w, size.h, minZoom));
+      if (!other) return;
+      if (mode === 'edit') {
+        // Two fingers up/down scroll the long page; spreading them zooms.
+        const dyMid = (next[1] - prev[1]) / 2;
+        setZp((t) => panBy(pinchZP(t, prev, other, next, other, size.w, size.h, minZoom), 0, -dyMid, size.w, size.h, minZoom));
+        if (dyMid) scrollBy(-dyMid / viewRef.current.scale);
+      } else setZp((t) => pinchZP(t, prev, other, next, other, size.w, size.h, minZoom));
       return;
     }
     if (prev) pointers.current.set(e.pointerId, local(e));
@@ -549,7 +612,13 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
     }
     if (!d) return;
     if (d.kind === 'hand') {
-      if (d.panFrom) setZp(panBy(d.panFrom.t, e.clientX - d.panFrom.x, e.clientY - d.panFrom.y, size.w, size.h, minZoom));
+      if (d.panFrom && mode === 'edit') {
+        // Teacher: up/down scrolls the long page, sideways pans a zoomed view.
+        const dx = e.clientX - d.panFrom.x, dy = e.clientY - d.panFrom.y;
+        d.panFrom = { x: e.clientX, y: e.clientY, t: d.panFrom.t };
+        if (dy) scrollBy(-dy / viewRef.current.scale);
+        if (dx) setZp((t) => panBy(t, dx, 0, size.w, size.h, minZoom));
+      } else if (d.panFrom) setZp(panBy(d.panFrom.t, e.clientX - d.panFrom.x, e.clientY - d.panFrom.y, size.w, size.h, minZoom));
       return;
     }
     if (d.kind === 'laser') {
@@ -668,8 +737,12 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
 
   const onWheel = (e: React.WheelEvent) => {
     if (disableZoom) return;
-    // Teacher: Ctrl+wheel (plain wheel is free for the page). Viewers: wheel zooms.
-    if (mode === 'edit' && !(e.ctrlKey || e.metaKey)) return;
+    // Teacher: the wheel scrolls the long page, Ctrl+wheel zooms. Viewers: wheel zooms.
+    if (mode === 'edit' && !(e.ctrlKey || e.metaKey)) {
+      const px = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * size.h : e.deltaY;
+      if (px) scrollBy(px / viewRef.current.scale);
+      return;
+    }
     const [sx, sy] = local(e);
     zoomBy(wheelFactor(e.deltaY, e.deltaMode), sx, sy);
   };
@@ -715,8 +788,9 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
         e.preventDefault();
         deleteSelection();
       } else if (e.key === 'Escape') setSelection([]);
-      else if (e.key === 'PageDown') goPage(1);
-      else if (e.key === 'PageUp') goPage(-1);
+      else if (e.key === 'PageDown') scrollBy(bandH * 0.85);
+      else if (e.key === 'PageUp') scrollBy(-bandH * 0.85);
+      else if (e.key === 'Home' && !mod) scrollTo(0);
       else if (!mod && !e.altKey) {
         const map: Record<string, Tool> = { v: 'select', p: 'pen', h: 'hl', l: 'laser', e: 'eraser', t: 'text' };
         if (map[k]) setTool(map[k]!);
@@ -748,29 +822,87 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
     act({ k: 'add', p: currentPage(session.doc).id, item: { k: 'text', id: newId('t'), by: identity, c: color, size: 24 + width * 4, x: Math.round(at.x), y: Math.round(at.y), text } });
   };
 
+  /** Upload an image (asset) or, without an uploader / on failure, embed a small data URL. */
+  const imageSrc = async (canvas: HTMLCanvasElement): Promise<string> => {
+    if (uploadImage) {
+      const blob: Blob | null = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.85));
+      const src = blob ? await uploadImage(blob).catch(() => null) : null;
+      if (src) return src;
+    }
+    return canvas.toDataURL('image/jpeg', 0.8);
+  };
+
   const insertImage = (file: File) => {
     const reader = new FileReader();
     reader.onload = () => {
       const img = new Image();
       img.onload = () => {
-        const max = 1280;
-        const k = Math.min(1, max / Math.max(img.width, img.height));
-        const c = document.createElement('canvas');
-        c.width = Math.max(1, Math.round(img.width * k));
-        c.height = Math.max(1, Math.round(img.height * k));
-        c.getContext('2d')!.drawImage(img, 0, 0, c.width, c.height);
-        const src = c.toDataURL('image/jpeg', 0.8);
-        const fit = Math.min(1, (PAGE_W * 0.7) / c.width, (PAGE_H * 0.7) / c.height);
-        const w = Math.round(c.width * fit), h = Math.round(c.height * fit);
-        const id = newId('t');
-        act({ k: 'add', p: currentPage(session.doc).id, item: { k: 'img', id, by: identity, src, x: Math.round((PAGE_W - w) / 2), y: Math.round((PAGE_H - h) / 2), w, h } });
-        // Placed in the middle and selected, ready to move or resize.
-        setToolState('select');
-        setSelection([id]);
+        void (async () => {
+          const max = 1600;
+          const k = Math.min(1, max / Math.max(img.width, img.height));
+          const c = document.createElement('canvas');
+          c.width = Math.max(1, Math.round(img.width * k));
+          c.height = Math.max(1, Math.round(img.height * k));
+          c.getContext('2d')!.drawImage(img, 0, 0, c.width, c.height);
+          setBusy('Adding picture…');
+          const src = await imageSrc(c).finally(() => setBusy(null));
+          // In the middle of what the teacher sees, ready to move or resize.
+          const fit = Math.min(1, (PAGE_W * 0.7) / c.width, (bandH * 0.7) / c.height);
+          const w = Math.round(c.width * fit), h = Math.round(c.height * fit);
+          const id = newId('t');
+          act({ k: 'add', p: currentPage(session.doc).id, item: { k: 'img', id, by: identity, src, x: Math.round((PAGE_W - w) / 2), y: Math.round(scrollY + (bandH - h) / 2), w, h } });
+          setToolState('select');
+          setSelection([id]);
+        })();
       };
       img.src = String(reader.result);
     };
     reader.readAsDataURL(file);
+  };
+
+  /**
+   * PDF: every page becomes a picture, stacked down the page below what is
+   * already written; the teacher is taken to the first one. One undo removes
+   * the whole import.
+   */
+  const importPdf = async (file: File) => {
+    if (!uploadImage) return;
+    const pg = currentPage(session.doc);
+    const startY = Math.max(40, contentBottom(pg) + 80);
+    scrollTo(startY - 40);
+    const ops: Op[] = [];
+    let y = startY;
+    try {
+      const { renderPdfPages, PDF_MAX_PAGES } = await import('./pdfImport');
+      setBusy('Opening PDF…');
+      const total = await renderPdfPages(file, async (pic, i, n) => {
+        setBusy(`Adding PDF page ${i + 1} of ${n}…`);
+        const src = await uploadImage(pic.blob).catch(() => null);
+        if (!src) throw new Error('upload');
+        const w = PDF_PAGE_W, h = Math.round((pic.h * PDF_PAGE_W) / pic.w);
+        const op: Op = { k: 'add', p: pg.id, item: { k: 'img', id: newId('t'), by: identity, src, x: Math.round((PAGE_W - w) / 2), y, w, h } };
+        send([op]);
+        ops.push(op);
+        y += h + 40;
+      });
+      setBusy(total > PDF_MAX_PAGES ? `Added the first ${PDF_MAX_PAGES} of ${total} pages` : null);
+      if (total > PDF_MAX_PAGES) window.setTimeout(() => setBusy(null), 5000);
+    } catch (e) {
+      const msg = e instanceof Error && e.message === 'upload' ? 'Could not upload a PDF page. Check the connection and try again.' : 'Could not open this PDF.';
+      setBusy(msg);
+      window.setTimeout(() => setBusy(null), 5000);
+    }
+    if (ops.length) {
+      const ids = ops.map((o) => (o as Extract<Op, { k: 'add' }>).item.id);
+      undoRef.current.push({ redo: ops, undo: [{ k: 'del', p: pg.id, ids }] });
+      redoRef.current = [];
+      setStackTick((n) => n + 1);
+    }
+  };
+
+  const onFile = (f: File) => {
+    if (f.type === 'application/pdf' || /\.pdf$/i.test(f.name)) void importPdf(f);
+    else insertImage(f);
   };
 
   const download = (name: string, url: string) => {
@@ -781,18 +913,26 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
     a.click();
     a.remove();
   };
-  const exportPng = () => {
+  /** What the teacher sees now. */
+  const exportPng = async () => {
+    const pg = currentPage(session.doc);
+    await preloadImages(pg.items);
     const c = document.createElement('canvas');
-    renderPageToCanvas(currentPage(session.doc), c);
+    renderPageToCanvas(pg, c, undefined, { y: Math.round(scrollY), h: bandH });
     download(`whiteboard-page-${session.doc.cur + 1}.png`, c.toDataURL('image/png'));
   };
+  /** Every page, cut into screen-high sheets down to the last thing written. */
   const exportPdf = async () => {
     const pages: { jpeg: Uint8Array; w: number; h: number }[] = [];
     for (const p of session.doc.pages) {
-      const c = document.createElement('canvas');
-      renderPageToCanvas(p, c);
-      const blob: Blob | null = await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.9));
-      if (blob) pages.push({ jpeg: new Uint8Array(await blob.arrayBuffer()), w: PAGE_W, h: PAGE_H });
+      await preloadImages(p.items);
+      const sheets = Math.min(100, Math.max(1, Math.ceil(contentBottom(p) / PAGE_H)));
+      for (let i = 0; i < sheets && pages.length < 300; i++) {
+        const c = document.createElement('canvas');
+        renderPageToCanvas(p, c, undefined, { y: i * PAGE_H, h: PAGE_H });
+        const blob: Blob | null = await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.9));
+        if (blob) pages.push({ jpeg: new Uint8Array(await blob.arrayBuffer()), w: PAGE_W, h: PAGE_H });
+      }
     }
     const pdf = jpegsToPdf(pages);
     const url = URL.createObjectURL(new Blob([pdf as BlobPart], { type: 'application/pdf' }));
@@ -885,10 +1025,10 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
       content: (
         <>
           <div style={{ display: 'flex', gap: 4 }}>
-            <button type="button" style={btn(false)} onClick={() => goPage(-1)} disabled={session.doc.cur === 0} aria-label="Previous page" title="Previous page (PgUp)">
+            <button type="button" style={btn(false)} onClick={() => goPage(-1)} disabled={session.doc.cur === 0} aria-label="Previous page" title="Previous page">
               {icon('prev')}
             </button>
-            <button type="button" style={btn(false)} onClick={() => goPage(1)} disabled={session.doc.cur >= session.doc.pages.length - 1} aria-label="Next page" title="Next page (PgDn)">
+            <button type="button" style={btn(false)} onClick={() => goPage(1)} disabled={session.doc.cur >= session.doc.pages.length - 1} aria-label="Next page" title="Next page">
               {icon('next')}
             </button>
             <button type="button" style={btn(false)} onClick={newPage} aria-label="New page" title="New page">
@@ -922,10 +1062,10 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
           <button type="button" style={btn(false)} onClick={() => zoomBy(1.25)} aria-label="Zoom in" title="Zoom in">
             {icon('zoomIn')}
           </button>
-          <button type="button" style={btn(false)} onClick={() => fileRef.current?.click()} aria-label="Insert image" title="Insert image">
+          <button type="button" style={btn(false)} onClick={() => fileRef.current?.click()} aria-label={uploadImage ? 'Insert image or PDF' : 'Insert image'} title={uploadImage ? 'Insert a picture or a PDF (pages go down the board)' : 'Insert image'} data-testid="wb-insert">
             {icon('image')}
           </button>
-          <button type="button" style={btn(false, { padding: '0 8px' })} onClick={exportPng} aria-label="Export PNG" title="Export this page as PNG">
+          <button type="button" style={btn(false, { padding: '0 8px' })} onClick={() => void exportPng()} aria-label="Export PNG" title="Export what is on screen as PNG">
             {icon('download')} PNG
           </button>
           <button type="button" style={btn(false, { padding: '0 8px' })} onClick={() => void exportPdf()} aria-label="Export PDF" title="Export all pages as PDF">
@@ -969,6 +1109,7 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
       <div ref={wrapRef} style={{ position: 'absolute', inset: 0, left: mode === 'view' ? 0 : barW }}>
         <canvas
           ref={canvasRef}
+          id={canvasId}
           data-testid="wb-canvas"
           style={{ width: '100%', height: '100%', display: 'block', touchAction: disableZoom ? 'auto' : 'none', cursor }}
           onPointerDown={onDown}
@@ -986,6 +1127,21 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
           </button>
         )}
         {selBar}
+        {mode === 'edit' && size.h > 0 && (
+          <ScrollRail
+            top={scrollY}
+            band={bandH}
+            total={Math.max(contentBottom(page) + bandH, scrollY + bandH * 2)}
+            height={size.h}
+            onScroll={scrollTo}
+            controls={canvasId}
+          />
+        )}
+        {busy && (
+          <div role="status" data-testid="wb-busy" style={{ position: 'absolute', left: '50%', top: 10, transform: 'translateX(-50%)', zIndex: 5, padding: '6px 12px', borderRadius: 999, background: 'rgba(17,24,39,0.92)', color: '#e2e8f0', fontSize: 13, border: '1px solid rgba(255,255,255,0.14)', pointerEvents: 'none' }}>
+            {busy}
+          </div>
+        )}
         {textAt && (
           <textarea
             autoFocus
@@ -1017,7 +1173,67 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
           }
         />
       )}
-      <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) insertImage(f); e.target.value = ''; }} />
+      <input ref={fileRef} type="file" data-testid="wb-file" accept={uploadImage ? 'image/png,image/jpeg,image/webp,application/pdf,.pdf' : 'image/png,image/jpeg,image/webp'} style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ''; }} />
     </div>
+  );
+}
+
+/**
+ * Teacher's scroll bar for the long page (right edge): the thumb is the band
+ * on screen; the track grows with the content so there is always room below.
+ * Drag the thumb or press the track; "Top" jumps back to the top edge.
+ */
+function ScrollRail({ top, band, total, height, onScroll, controls }: { top: number; band: number; total: number; height: number; onScroll: (y: number) => void; controls: string }) {
+  const track = Math.max(40, height - 16);
+  const thumb = Math.max(28, (band / total) * track);
+  const at = Math.min(track - thumb, (top / Math.max(1, total - band)) * (track - thumb));
+  const dragRef = useRef<{ y: number; top: number } | null>(null);
+  const toY = (clientY: number, rect: DOMRect) => ((clientY - rect.top - thumb / 2) / Math.max(1, track - thumb)) * (total - band);
+  return (
+    <>
+      <div
+        data-testid="wb-scroll"
+        aria-label="Scroll the board"
+        role="scrollbar"
+        aria-orientation="vertical"
+        aria-valuemin={0}
+        aria-valuemax={Math.round(total - band)}
+        aria-valuenow={Math.round(top)}
+        aria-controls={controls}
+        style={{ position: 'absolute', right: 4, top: 8, width: 12, height: track, zIndex: 4, borderRadius: 6, background: 'rgba(15,23,42,0.18)', touchAction: 'none', cursor: 'pointer' }}
+        onPointerDown={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          const inThumb = e.clientY - rect.top >= at && e.clientY - rect.top <= at + thumb;
+          if (!inThumb) onScroll(toY(e.clientY, rect));
+          dragRef.current = { y: e.clientY, top: inThumb ? top : toY(e.clientY, rect) };
+          try {
+            e.currentTarget.setPointerCapture(e.pointerId);
+          } catch {
+            /* ignore */
+          }
+        }}
+        onPointerMove={(e) => {
+          const d = dragRef.current;
+          if (!d) return;
+          onScroll(d.top + ((e.clientY - d.y) / Math.max(1, track - thumb)) * (total - band));
+        }}
+        onPointerUp={() => (dragRef.current = null)}
+        onPointerCancel={() => (dragRef.current = null)}
+      >
+        <div style={{ position: 'absolute', left: 1, right: 1, top: at, height: thumb, borderRadius: 5, background: 'rgba(37,99,235,0.75)' }} />
+      </div>
+      {top > 1 && (
+        <button
+          type="button"
+          data-testid="wb-scroll-top"
+          onClick={() => onScroll(0)}
+          title="Back to the top of the board (Home)"
+          aria-label="Back to the top of the board"
+          style={{ ...barBtn(false, { minWidth: 38, height: 30, fontSize: 12 }), position: 'absolute', right: 22, top: 8, zIndex: 4, background: 'rgba(17,24,39,0.85)', padding: '0 10px' }}
+        >
+          ↑ Top
+        </button>
+      )}
+    </>
   );
 }

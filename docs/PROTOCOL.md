@@ -62,13 +62,21 @@ polls `/state` every 60 s and students every 60-120 s; pushes do the rest
 
 ## Whiteboard (`wb`)
 
-- Page 1920 x 1080 in every client; students scale it. Up to 50 pages, 4000
-  items per page, 4000 points per stroke.
+- One long page per board page (Nov 2026): 1920 wide, fixed top edge (y = 0),
+  down to `BOARD_MAX_H` (1080 × 200). Up to 50 pages, 4000 items per page,
+  4000 points per stroke.
+- `view` `{p, y, h}`: the band the teacher is looking at (throttled to one per
+  100 ms while scrolling; kept in the page and in snapshots). Students show
+  that band at their own width. Not undoable; students may not send it.
+- `img` items carry `src: "asset:<32 hex>"` (uploaded with
+  `POST /api/rooms/<code>/whiteboard/asset`, raw JPEG/PNG/WebP body ≤ 2 MB,
+  teacher only; `GET …/asset/<id>` for the teacher, admitted students and
+  admins who monitor live classes) or, from older boards, a small `data:` URL.
 - Items: `stroke` (pen/highlighter, optional pressure 0-100), `shape`
   (`line`, `arrow`, `rect`, `ellipse`, `tri`, optional fill), `text`, `img`.
   Every item carries `by` (the author's identity).
 - Ops: `add`, `pts` (live stroke points), `del`, `clear`, `bg`, `newpage`,
-  `delpage`, `go`, `delBy`, `xf` (move/resize).
+  `delpage`, `go`, `delBy`, `xf` (move/resize), `view` (teacher's scroll band).
 - Backgrounds: `white`, `grid`, `lined`, `dots`, `graph`, `black`.
 - The teacher's device is the board's host: it applies ops, answers `req`
   with a `snap` (deflated when `z: 1`, split into `chunk`s of 12,000
@@ -97,11 +105,11 @@ browser sends them, so the apps' own HTTP clients pass as non-browser callers.
 | `POST /api/rooms/<code>/token` | LiveKit token for the teacher identity |
 | `POST /api/rooms/<code>/screen-token` | Windows sidecar token (`__screen`) |
 | `GET /api/rooms/<code>/state` | roster, waiting, hands, settings |
-| `/admit`, `/mute`, `/hand`, `/spotlight`, `/stage`, `/pin-student`, `/video-panel`, `/settings` | teacher actions |
+| `/mute`, `/hand`, `/spotlight`, `/stage`, `/pin-student`, `/video-panel`, `/settings` | teacher actions |
 | `POST /api/rooms/<code>/video-page` `{delta: ±1}` or `{page}` | student-video pages (Prev / Next); answers `{page, pages, pageSize, total, order}`. `/state` carries the same as `videoPage` for the teacher |
 | `POST /api/rooms/<code>/snapshot` `{image: base64, type: image/webp\|image/jpeg}`, `DELETE` | teacher: the latest still of the share for audio-only students (≤350 KB, at most one per 4 s; send only when the picture changed). `GET` (teacher or admitted student, `If-None-Match`) returns it, 204 when none |
 | `/messages` (+ `/messages/stream`) | chat history and sending |
-| `/whiteboard`, `/draw` | board on/off, snapshots, student drawing permission |
+| `/whiteboard`, `/whiteboard/asset`, `/draw` | board on/off, snapshots, board pictures, student drawing permission |
 | `/end`, `/leave` | end the class / leave it running |
 | `GET /api/desktop/windows` | Windows app: latest/minimum version and download link |
 | `GET /api/desktop/android` | Android app: same, from `ANDROID_APP_LATEST`, `_MINIMUM`, `_URL` |

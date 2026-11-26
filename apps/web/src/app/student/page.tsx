@@ -71,7 +71,7 @@ function countdown(ms: number) {
 
 /**
  * Landing page after the school-app link: routes the student to their class's
- * waiting room, a countdown, "class ended" or "no class right now", and moves
+ * class, a countdown, "class ended" or "no class right now", and moves
  * them on automatically when a class opens (see the auto-check below).
  */
 export default function StudentHome() {
@@ -114,7 +114,7 @@ export default function StudentHome() {
    * Auto-check: poll the cheap, read-only GET /api/student/check (10–15 s with
    * jitter; ~4–6 s while checked in and waiting for the teacher; on time for a
    * countdown) and only call the full POST /api/student/route — which checks
-   * the student in and moves them to the waiting room — when the routing
+   * the student in and moves them into the class — when the routing
    * signature changes. Paused while the tab is hidden; checks at once when it
    * becomes visible again.
    */
@@ -213,7 +213,7 @@ export default function StudentHome() {
 
   let body: React.ReactNode;
   if (route.kind === 'room') {
-    body = <p className="text-slate-300">Taking you to the waiting room…</p>;
+    body = <p className="text-slate-300">Taking you to your class…</p>;
   } else if (route.kind === 'waiting_for_teacher') {
     body = (
       <>
@@ -244,7 +244,7 @@ export default function StudentHome() {
           {time(route.cls.start)}–{time(route.cls.end)}
           {route.cls.teacherName ? ` · ${teacherLine(route.cls)}` : ''}
         </p>
-        <p className="mt-6 text-xs uppercase tracking-wider text-slate-500">Waiting room opens in</p>
+        <p className="mt-6 text-xs uppercase tracking-wider text-slate-500">Class opens in</p>
         <p className="mt-1 font-display text-4xl font-bold tabular-nums text-brand-300" aria-live="polite">
           {countdown(left)}
         </p>

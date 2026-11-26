@@ -5,7 +5,7 @@ Students no longer type a class code: the school app sends them to the
 classroom with a join link — either a plain **unsigned link** (default, see
 "Unsigned mode") or a short-lived **signed link** (`SCHOOL_JOIN_MODE=signed`). The classroom trusts the
 student's identity, grade and division from that link, finds the class that is
-on for that grade-division right now and puts the student in its waiting room.
+on for that grade-division right now and puts the student straight into it.
 
 ```
 Student taps "Join class"
@@ -81,9 +81,11 @@ division, and teachers are assigned per campus (`CC · 7-A`).
 > **Impersonation risk.** Nothing in an unsigned link proves it came from the
 > school app. Anyone who knows or guesses a student's SID, grade and division
 > can open the class as that student (and be counted present), or create
-> students that do not exist. The teacher still admits every student from the
-> waiting room, and the per-SID limit caps replaying one ID (for example to
-> keep taking over that student's seat), but neither prevents impersonation. Use non-guessable SIDs, and switch to signed links
+> students that do not exist. There is no waiting room (Nov 2026), so such a
+> visitor enters the class without the teacher seeing them first; the teacher
+> can only Remove them afterwards. The per-SID limit caps replaying one ID
+> (for example to keep taking over that student's seat) but does not prevent
+> impersonation. Use non-guessable SIDs, and switch to signed links
 > (`SCHOOL_JOIN_MODE=signed`, sections 1–3) when the school app can sign.
 
 Unsigned mode needs no `SCHOOL_APP_JWT_*` settings. If they are set, a signed
@@ -307,14 +309,14 @@ the first request and removed from the address bar.
 
 | Situation | Page |
 |---|---|
-| A class for their grade-division is open (teacher started it, or its waiting room opened `WAITING_ROOM_EARLY_MINUTES` before the start; late joining allowed until the class ends) | That class's waiting room. The teacher admits them (no auto-admit). |
-| A class later today | Countdown with subject, teacher and time; it moves on automatically when the waiting room opens |
+| A class for their grade-division is open (teacher started it, or it opened `WAITING_ROOM_EARLY_MINUTES` before the start; late joining allowed until the class ends) | Straight into that class (no waiting room since Nov 2026), muted. |
+| A class later today | Countdown with subject, teacher and time; it moves on automatically when the class opens |
 | Nothing now | "No class right now" + the next scheduled class |
 | Today's class already ended | "Class has ended" + the next one |
 
-Every page except the waiting room keeps checking (a light poll every 10–15 s
+Every page except the class itself keeps checking (a light poll every 10–15 s
 with jitter, ~5 s while waiting for the teacher, paused while the tab is hidden)
-and moves the student into the waiting room as soon as a class opens for their
+and moves the student into the class as soon as a class opens for their
 grade-division — timetabled or ad-hoc — without a new link. The student stays
 signed in while the page is open (the 12 h session is renewed by these checks;
 school-app students are never idle-logged-out).
