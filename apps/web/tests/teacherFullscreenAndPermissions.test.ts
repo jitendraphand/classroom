@@ -51,7 +51,18 @@ test('permission browser detection, per-browser hints, and error classification'
 
   assert.match(permissionDeniedHint('microphone', 'chrome-android'), /tune\/lock/i);
   assert.match(permissionDeniedHint('camera', 'ios-safari'), /Website Settings/i);
-  assert.match(permissionDeniedHint('microphone', 'desktop-chromium'), /site\/tune icon/i);
+  assert.match(permissionDeniedHint('microphone', 'desktop-chromium'), /tune\/lock icon/i);
+  // The device's own setting for the browser is named too (a block there shows no popup).
+  assert.match(permissionDeniedHint('microphone', 'chrome-android'), /Android Settings → Apps → Chrome → Permissions/);
+  assert.match(permissionDeniedHint('camera', 'desktop-chromium'), /Privacy/);
+  // Chrome's "Permission dismissed": no popup on the next try either.
+  assert.equal(classifyMediaError({ name: 'NotAllowedError', message: 'Permission dismissed' }, { permState: 'prompt' }), 'denied');
+  // A retry straight from the tap that still fails: explain how to unblock, not "tap Allow" again.
+  const afterTap = buildMediaIssue({ media: 'microphone', err: { name: 'NotAllowedError' }, permState: 'prompt', afterTap: true, ua: 'Mozilla/5.0 (Linux; Android 14) Chrome/126.0.0.0 Mobile Safari/537.36' });
+  assert.equal(afterTap.kind, 'denied');
+  assert.match(afterTap.title, /blocked/);
+  assert.match(afterTap.message, /did not show the permission popup/);
+  assert.doesNotMatch(afterTap.hint, /when your browser asks/);
 
   assert.equal(classifyMediaError({ name: 'NotAllowedError' }, { permState: 'prompt' }), 'needs-gesture');
   assert.equal(classifyMediaError({ name: 'NotAllowedError' }, { permState: 'denied' }), 'denied');

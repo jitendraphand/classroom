@@ -14,11 +14,11 @@ export const MAX_GRADE_LENGTH = 16;
 /**
  * Longest raw campus / grade / division text an API accepts before it is
  * normalised. Raw input may carry a prefix or spaces ("Grade 7",
- * "Division Science Foundation", "Airport Campus"); the normalisers then cut
+ * "Division A", "Airport Campus"); the normalisers then cut
  * the canonical code to MAX_CAMPUS_LENGTH / MAX_GRADE_LENGTH /
  * MAX_DIVISION_LENGTH, the same limits the admin master list uses. Keep API
  * validators on this constant rather than a smaller literal: a max(16) on the
- * extra-class divisions rejected the 17-letter "SCIENCEFOUNDATION" (Nov 22).
+ * extra-class divisions rejected a 17-letter division name (Nov 22).
  */
 export const MAX_AUDIENCE_INPUT_LENGTH = 64;
 

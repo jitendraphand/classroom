@@ -13,7 +13,7 @@ const STORE_FIRST = 'joinClass.firstName';
 const STORE_LAST = 'joinClass.lastName';
 const STORE_LEGACY_NAME = 'joinClass.name';
 const NOT_AVAILABLE = 'Joining is not available right now. Please ask your teacher.';
-const PICK_ALL = 'Type your first name and last name, and select your grade, campus and foundation.';
+const PICK_ALL = 'Type your first name and last name, and select your campus, grade and division.';
 
 function splitStoredName(name: string): { first: string; last: string } {
   const parts = name.trim().replace(/\s+/g, ' ').split(' ');
@@ -127,8 +127,8 @@ export function JoinClassForm({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const foundations = useMemo(
-    () => (options && grade ? options.foundationsByGrade[grade] ?? [] : []),
+  const divisions = useMemo(
+    () => (options && grade ? options.divisionsByGrade[grade] ?? [] : []),
     [options, grade],
   );
   const available = Boolean(options && options.grades.length && options.campuses.length);
@@ -157,7 +157,7 @@ export function JoinClassForm({
 
   useEffect(() => {
     if (!options || locked.division) return;
-    const list = options.foundationsByGrade[grade] ?? [];
+    const list = options.divisionsByGrade[grade] ?? [];
     setDivision((current) => (current && list.some((d) => d.name === current) ? current : ''));
   }, [options, grade, locked.division]);
 
@@ -171,14 +171,14 @@ export function JoinClassForm({
     const last = lastName.trim().replace(/\s+/g, ' ');
     if (!first) return setError('Type your first name.');
     if (!last) return setError('Type your last name.');
-    if (!grade || !campus || !division) return setError('Select your grade, campus and foundation.');
+    if (!campus || !grade || !division) return setError('Select your campus, grade and division.');
     setBusy(true);
     setError(null);
     try {
       const res = await fetch('/api/join-class', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ firstName: first, lastName: last, grade, campus, foundation: division }),
+        body: JSON.stringify({ firstName: first, lastName: last, campus, grade, division }),
       });
       const data = (await res.json().catch(() => ({}))) as { ok?: boolean; redirect?: string; error?: string };
       if (res.ok && data.ok) {
@@ -235,18 +235,6 @@ export function JoinClassForm({
               }}
             />
             <SelectField
-              id="join-grade"
-              label="Grade"
-              value={grade}
-              locked={locked.grade}
-              options={options!.grades}
-              onChange={(v) => {
-                setGrade(v);
-                clearError();
-              }}
-              placeholder="Select grade"
-            />
-            <SelectField
               id="join-campus"
               label="Campus"
               value={campus}
@@ -259,17 +247,29 @@ export function JoinClassForm({
               placeholder="Select campus"
             />
             <SelectField
-              id="join-foundation"
-              label="Foundation"
+              id="join-grade"
+              label="Grade"
+              value={grade}
+              locked={locked.grade}
+              options={options!.grades}
+              onChange={(v) => {
+                setGrade(v);
+                clearError();
+              }}
+              placeholder="Select grade"
+            />
+            <SelectField
+              id="join-division"
+              label="Division"
               value={division}
               locked={locked.division}
               disabled={!grade}
-              options={foundations}
+              options={divisions}
               onChange={(v) => {
                 setDivision(v);
                 clearError();
               }}
-              placeholder="Select foundation"
+              placeholder={grade ? 'Select division' : 'Select grade first'}
             />
             {error && (
               <p id="join-error" className="text-sm text-danger-fg" role="alert">

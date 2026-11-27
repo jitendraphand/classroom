@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   displayCampusLabel,
-  displayFoundationLabel,
+  displayDivisionLabel,
   displayGradeLabel,
   formatStudentAudience,
   prettifyCode,
@@ -68,6 +68,6 @@ test('label helpers fall back cleanly', () => {
   assert.equal(displayCampusLabel('AIRPORTCAMPUS', labels), 'Airport Campus');
   assert.equal(displayGradeLabel('6', labels), 'Grade 6');
   assert.equal(displayGradeLabel('7', labels), 'Grade 7');
-  assert.equal(displayFoundationLabel('6', 'SPORTSFOUNDATION', labels), 'Sports Foundation');
+  assert.equal(displayDivisionLabel('6', 'SPORTSFOUNDATION', labels), 'Sports Foundation');
   assert.equal(displayCampusLabel('NORTHCAMPUS'), 'North Campus');
 });

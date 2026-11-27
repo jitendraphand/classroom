@@ -4,7 +4,7 @@ import { rosterMicState } from '@/lib/speakingRules';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Avatar } from '@/components/ui/Avatar';
-import { IconCam, IconCamOff, IconChat, IconFilm, IconHand, IconHandDown, IconMic, IconMicLock, IconMicOff, IconPen, IconPin, IconScreen, IconUsers, IconVideo } from '@/components/ui/Icons';
+import { IconCam, IconCamOff, IconChat, IconFilm, IconHand, IconHandDown, IconMic, IconMicLock, IconMicOff, IconPin, IconScreen, IconUsers, IconVideo } from '@/components/ui/Icons';
 import { toolbarInnerSize } from '@/lib/sideWindowGeometry';
 import { closeSideWindow, openSideWindow, sideWindow, SideWindowPortal, useSideWindows } from './shareSideWindows';
 import { sortRoster } from '@/lib/classSlots';
@@ -70,8 +70,6 @@ export type RosterEntry = {
   /** School-app student ID (teacher view only), for search. */
   sid?: string | null;
   /** Asked to draw on the share / drawing now. */
-  drawRequested?: boolean;
-  drawRequestedAt?: number | null;
   drawing?: boolean;
   /** Heartbeat is late, or LiveKit reports the link lost. Still on the roster. */
   reconnecting?: boolean;
@@ -93,8 +91,6 @@ export type TeacherShareHudProps = {
   /** Pin / unpin a student's video in the class panel. */
   onTogglePin?: (participantId: string, pinned: boolean) => void;
   /** Student drawing (whiteboard only; never offered during a screen share). */
-  onAllowDraw?: (participantId: string) => void;
-  onRevokeDraw?: (participantId?: string) => void;
   chatUnread: number;
   chat?: ReactNode;
   onChatOpenChange?: (open: boolean) => void;
@@ -365,8 +361,6 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
     onMuteStudent,
     onMuteAll,
     onLowerHand,
-    onAllowDraw,
-    onRevokeDraw,
     onTogglePin,
     chatUnread,
     chat,
@@ -555,15 +549,10 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                 const focus = focusLabel(s.focus, s.focusIphone);
                 return (
                   <div
-                    className={s.handRaised || s.drawRequested || s.drawing ? 'tsh-person is-raised' : 'tsh-person'}
+                    className={s.handRaised ? 'tsh-person is-raised' : 'tsh-person'}
                     key={s.id}
                     title={s.displayName}
                   >
-                    {(s.drawing || s.drawRequested) && (
-                      <span className="tsh-hand" title={s.drawing ? 'Drawing on your screen' : 'Asks to draw'} aria-label={s.drawing ? 'Drawing' : 'Asks to draw'}>
-                        <IconPen size={12} />
-                      </span>
-                    )}
                     {s.handRaised && (
                       <span className="tsh-hand-badge" title={`Hand raised (${ordinal(handRank.get(s.id) ?? 1)})`} aria-label={`Hand raised, ${ordinal(handRank.get(s.id) ?? 1)}`}>
                         <IconHand size={11} />
@@ -605,22 +594,6 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                         <IconPin size={12} />
                       </button>
                     )}
-                    {s.drawing && onRevokeDraw ? (
-                      <button type="button" className="tsh-btn is-warn" onClick={() => onRevokeDraw(s.id)} title={`Stop ${s.displayName} drawing and clear the drawing`}>
-                        Revoke
-                      </button>
-                    ) : s.drawRequested && onAllowDraw ? (
-                      <>
-                        <button type="button" className="tsh-btn is-on" data-testid="hud-draw-allow" onClick={() => onAllowDraw(s.id)} title={`Let ${s.displayName} draw`}>
-                          Allow
-                        </button>
-                        {onRevokeDraw && (
-                          <button type="button" className="tsh-btn" data-testid="hud-draw-deny" onClick={() => onRevokeDraw(s.id)} title={`Turn down ${s.displayName}'s request to draw`}>
-                            Deny
-                          </button>
-                        )}
-                      </>
-                    ) : null}
                     {s.handRaised && (
                       <button
                         type="button"
@@ -655,7 +628,6 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
       : shareToolbarMiniIds()
     : toolbarIds;
   const sepBefore = new Set<string>(miniMode ? [] : shareToolbarSeparators(toolbarIds).map((s) => s.before));
-  const drawAsk = students.filter((s) => s.drawRequested && !s.drawing).length;
   const chatShown = panel === 'chat' || !!chatWin;
   const rosterShown = panel === 'roster' || !!rosterWin;
   const shareControl = (id: ShareToolbarId | ShareMiniId): ReactNode => {
@@ -776,7 +748,7 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
             aria-pressed={rosterShown}
             onClick={() => toggleSide('roster')}
             aria-label={rosterShown ? 'Close roster' : 'Open roster'}
-            title={drawAsk ? `Roster: ${drawAsk} asking to draw` : 'Roster'}
+            title="Roster"
           >
             <IconUsers size={14} />
             {focusAlertCount > 0 ? (
@@ -789,7 +761,6 @@ export function TeacherShareHud(props: TeacherShareHudProps) {
                 ⛶{badgeText(focusAlertCount)}
               </span>
             ) : null}
-            {drawAsk > 0 ? <span className="tsh-pen-dot" aria-hidden /> : null}
           </button>
         );
       case 'stop':

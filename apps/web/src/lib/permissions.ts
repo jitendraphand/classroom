@@ -46,19 +46,22 @@ export function detectPermissionBrowser(ua: string, maxTouchPoints = 0): Permiss
 
 export function permissionDeniedHint(media: MediaKind, browser: PermissionBrowserKind): string {
   const label = media === 'camera' ? 'Camera' : 'Microphone';
+  // Two places can block it: the site setting in the browser, and the device's
+  // own setting for the browser app (Nov 27: both are named, because a block in
+  // the device settings never shows a popup either).
   switch (browser) {
     case 'chrome-android':
-      return `Tap the tune/lock icon to the left of the address bar → Permissions → turn ${label} on, then tap Try again.`;
+      return `Tap the tune/lock icon to the left of the address bar → Permissions → ${label} → Allow (or "Reset permissions"). If it is already allowed: Android Settings → Apps → Chrome → Permissions → ${label} → Allow. Then tap Try again.`;
     case 'ios-safari':
-      return `Tap "aA" or the lock icon in the address bar → Website Settings → ${label} → Allow (or check Settings → Safari → ${label}), then tap Try again.`;
+      return `Tap "aA" in the address bar → Website Settings → ${label} → Allow. Also check Settings → Safari → ${label} → Allow (or Settings → Chrome → ${label} for Chrome). Then tap Try again.`;
     case 'desktop-chromium':
-      return `Click the site/tune icon on the left of the address bar → allow ${label}, then click Try again.`;
+      return `Click the tune/lock icon on the left of the address bar → ${label} → Allow (or "Reset permission"), then reload. Also check the computer's privacy settings (Windows: Settings → Privacy → ${label}; Mac: System Settings → Privacy & Security → ${label} → your browser).`;
     case 'firefox':
-      return `Click the blocked ${label.toLowerCase()} icon in the address bar → clear the block, then click Try again.`;
+      return `Click the crossed-out ${label.toLowerCase()} icon in the address bar → remove the block, then click Try again. Also check the computer's privacy settings for ${label.toLowerCase()} access.`;
     case 'safari-mac':
-      return `Open Safari → Settings for This Website → set ${label} to Allow, then click Try again.`;
+      return `Safari → Settings for This Website → ${label} → Allow. Also check System Settings → Privacy & Security → ${label} → Safari. Then click Try again.`;
     default:
-      return `Allow ${label.toLowerCase()} access for this site in your browser settings, then tap Try again.`;
+      return `Allow ${label.toLowerCase()} for this site in your browser's settings, and for the browser in your device's privacy settings, then tap Try again.`;
   }
 }
 
@@ -70,11 +73,15 @@ export function classifyMediaError(
   if (opts?.hasMediaDevices === false) return 'unsupported';
   const name =
     err && typeof err === 'object' && 'name' in err ? String((err as { name: unknown }).name) : '';
-  const msg = err instanceof Error ? err.message : String(err || '');
+  const msg =
+    err && typeof err === 'object' && 'message' in err ? String((err as { message: unknown }).message) : String(err || '');
 
   if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
     // If the browser's permission state is NOT 'denied' (e.g. 'prompt' or Safari 'unknown')
     // and getUserMedia failed outside a tap gesture, a direct tap often succeeds.
+    // Chrome: "Permission dismissed" (the popup was closed, or Chrome stopped
+    // showing it after several closes): no popup comes on the next try either.
+    if (/dismiss/i.test(msg)) return 'denied';
     if (opts?.permState === 'prompt') return 'needs-gesture';
     if (/gesture|user activation/i.test(msg)) return 'needs-gesture';
     return 'denied';
@@ -99,6 +106,12 @@ export function buildMediaIssue(opts: {
   hasMediaDevices?: boolean;
   /** True when the teacher unmuted a student and mic capture hit a non-denied block. */
   unmutedPrompt?: boolean;
+  /**
+   * The request came straight from the user's tap and still failed: the
+   * browser is not going to show a popup, so explain how to unblock it
+   * instead of "tap Allow when your browser asks" again (Nov 27).
+   */
+  afterTap?: boolean;
 }): MediaAccessIssue {
   const label = opts.media === 'camera' ? 'Camera' : 'Microphone';
   const lower = label.toLowerCase();
@@ -115,6 +128,17 @@ export function buildMediaIssue(opts: {
       hasMediaDevices: opts.hasMediaDevices,
       permState: opts.permState,
     });
+  }
+
+  if (opts.afterTap && (kind === 'needs-gesture' || kind === 'denied')) {
+    return {
+      media: opts.media,
+      kind: 'denied',
+      title: `${label} is blocked`,
+      message: `Your browser did not show the permission popup: the ${lower} is blocked for this site or for the browser. You stay in the class either way.`,
+      hint: permissionDeniedHint(opts.media, browser),
+      canRetry: true,
+    };
   }
 
   if (kind === 'needs-gesture' || (opts.unmutedPrompt && kind === 'denied' && opts.permState !== 'denied')) {
@@ -298,6 +322,45 @@ export async function withPermissionPrompt<T>(fn: () => Promise<T>): Promise<T> 
   } finally {
     end();
   }
+}
+
+/**
+ * Retry button (Nov 27): ask for ONE permission straight from the tap.
+ * getUserMedia is called before anything is awaited, so the browser still
+ * sees the tap (Safari and a quiet Chrome refuse without one, showing no
+ * popup). If it fails anyway, the issue says how to unblock it.
+ */
+export function requestPermissionFromTap(media: MediaKind): Promise<{ ok: true } | { ok: false; issue: MediaAccessIssue }> {
+  const secure = typeof window === 'undefined' ? true : window.isSecureContext !== false;
+  const hasDevices = typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
+  if (!secure || !hasDevices) {
+    return Promise.resolve({ ok: false, issue: buildMediaIssue({ media, secureContext: secure, hasMediaDevices: hasDevices }) });
+  }
+  const end = permissionGrace.beginPrompt();
+  let request: Promise<MediaStream>;
+  try {
+    request = navigator.mediaDevices.getUserMedia(media === 'camera' ? { video: true, audio: false } : { audio: true, video: false });
+  } catch (err) {
+    request = Promise.reject(err);
+  }
+  return request.then(
+    (stream) => {
+      end();
+      stream.getTracks().forEach((t) => {
+        try {
+          t.stop();
+        } catch {
+          /* ignore */
+        }
+      });
+      return { ok: true as const };
+    },
+    async (err) => {
+      end();
+      const post = await queryMediaPermission(media);
+      return { ok: false as const, issue: buildMediaIssue({ media, err, permState: post.state, afterTap: true }) };
+    }
+  );
 }
 
 /**

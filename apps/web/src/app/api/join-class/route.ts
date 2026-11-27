@@ -21,7 +21,7 @@ import { finishStudentJoin } from '@/lib/studentJoinFinish';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-/** POST { firstName, lastName, grade, campus, foundation } → session set, `{ ok, redirect: '/student' }`. */
+/** POST { firstName, lastName, campus, grade, division } → session set, `{ ok, redirect: '/student' }`. */
 /**
  * A name nobody has used in this class yet creates a `WEB-…` student: cap how
  * many a class gains per day (SEC-03). Known names (returning students,

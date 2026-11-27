@@ -154,8 +154,9 @@ test('admin students search matches name or student ID case-insensitively', () =
 });
 
 test('draw request banner clears when the student is allowed; in-tab dock is top-left', () => {
+  // No draw requests any more (Nov 27): no request banner either.
   const room = classroomViewSource();
-  assert.match(room, /stillAsking/);
+  assert.doesNotMatch(room, /stillAsking|asks to draw/);
   const hud = src('components/classroom/TeacherShareHud.tsx');
   assert.match(hud, /share_controls_v2/);
   assert.match(hud, /data-testid="share-inline-dock"/);

@@ -168,10 +168,9 @@ test('students cannot flood the teacher with hand or draw-request toggles', () =
   assert.equal(STUDENT_ACTION_LIMITS.drawRequest.limit, 20);
   assert.equal(studentActionKey('hand', 'p1'), 'ratelimit:student:hand:p1');
   assert.match(src('app/api/rooms/[code]/hand/route.ts'), /studentActionLimited\('hand', me\.id\)[\s\S]*429/);
+  // Students cannot ask to draw any more (Nov 27): the request is refused outright.
   const draw = src('app/api/rooms/[code]/draw/route.ts');
-  assert.match(draw, /studentActionLimited\('drawRequest', me\.id\)[\s\S]*429/);
-  // Stroke points are not limited (one approved drawer).
-  assert.doesNotMatch(draw, /studentActionLimited\('pts'/);
+  assert.match(draw, /if \(body\.action === 'request'\) \{[\s\S]*?403\)/);
 });
 
 // ---------------------------------------------------------------- SEC-02 / SEC-03

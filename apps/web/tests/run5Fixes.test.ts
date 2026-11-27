@@ -107,11 +107,11 @@ test('whiteboard mode: meeting bar stops the board; roster chips can allow and d
   assert.match(bar, /aria-label="Stop whiteboard sharing"/);
   // Leave and End class share one menu (LeaveEndMenu).
   assert.match(bar, /<LeaveEndMenu onLeave=\{onLeave\} onEnd=\{onEndClass\}/);
-  assert.match(bar, /wbm-draw-allow/);
-  assert.match(bar, /wbm-draw-deny/);
+  // Annotation is turned on from the roster; the bar lists who annotates and can stop them.
+  assert.match(bar, /wbm-draw-stop/);
+  assert.doesNotMatch(bar, /wbm-draw-allow|wbm-draw-deny/);
   const hud = src('components/classroom/TeacherShareHud.tsx');
-  assert.match(hud, /hud-draw-allow/);
-  assert.match(hud, /hud-draw-deny/);
+  assert.doesNotMatch(hud, /hud-draw-allow|hud-draw-deny|drawRequested/);
   const wbRoute = src('app/api/rooms/[code]/whiteboard/route.ts');
   assert.match(wbRoute, /endDrawingSession/);
 });

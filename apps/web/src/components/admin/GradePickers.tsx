@@ -24,7 +24,7 @@ import {
 } from '@/lib/grades';
 import type { GradeOption } from '@/lib/gradeMasterLogic';
 import type { CampusOption } from '@/lib/campusLogic';
-import { displayCampusLabel, displayFoundationLabel, displayGradeLabel } from '@/lib/audienceLabels';
+import { displayCampusLabel, displayDivisionLabel, displayGradeLabel } from '@/lib/audienceLabels';
 import { addAssignments } from '@/lib/assignmentPick';
 import { sortGradeOptions } from '@/lib/gradeOrder';
 
@@ -430,7 +430,7 @@ export function AssignmentsPicker({ value, onChange, options }: { value: string;
   const labels = { campuses: options.campuses, grades: options.grades };
   const chipLabel = (a: Assignment) =>
     `${displayCampusLabel(a.campus, labels)} · ${displayGradeLabel(a.grade, labels)} · ${
-      a.division === ALL_DIVISIONS ? 'All divisions' : displayFoundationLabel(a.grade, a.division, labels)
+      a.division === ALL_DIVISIONS ? 'All divisions' : displayDivisionLabel(a.grade, a.division, labels)
     }`;
   const known = (a: Assignment) => {
     const g = options.grades.find((x) => x.name === a.grade);

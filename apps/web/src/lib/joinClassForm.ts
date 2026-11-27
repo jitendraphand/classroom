@@ -6,15 +6,16 @@
  * src/app/api/join-class/, src/components/joinClass/, tests/joinClassForm.test.ts,
  * and the "Join the class" button in src/app/page.tsx.
  *
- * The student types a first name and last name and picks grade (6–10), campus
- * (Airport, City, Osmanpura) and foundation (Science, Sports, Civil, Fine Arts).
- * The dropdowns start on a "Select …" placeholder; only a join link that
- * already carries Grade, Campus or Foundation/Division is preselected and
- * locked. Foundation is the school's name for a division and is stored as one.
+ * The student types a first name and last name, then picks campus, grade and
+ * division (Nov 27: "foundation" removed; one filter, division). Every choice
+ * comes from the admin's master lists: active campuses, active grades, and the
+ * active divisions of the chosen grade (Admin → Grades & divisions). The
+ * dropdowns start on a "Select …" placeholder; only a join link that already
+ * carries Campus, Grade or Division is preselected and locked.
  * The two name parts are stored as the existing combined `name` ("First Last")
  * so returning students still match. The server resolves the three class
  * choices against the admin master lists (canonical names such as
- * AIRPORTCAMPUS / 7 / SCIENCEFOUNDATION) and ignores any other class the
+ * AIRPORTCAMPUS / 7 / A) and ignores any other class the
  * browser might send.
  *
  * Not a separate join path: the name + chosen class become the same claims an
@@ -42,7 +43,7 @@ import { validateUnsignedJoin, type SchoolJoinMode } from './schoolJoin';
 import { JoinTokenError, type JoinClaims, type JoinErrorCode } from './schoolJwt';
 
 /** Default selection when the student (or the link) does not pick a class. */
-export const JOIN_CLASS_DEFAULT = { grade: '7', campus: 'Airport Campus', division: 'Science Foundation' } as const;
+export const JOIN_CLASS_DEFAULT = { grade: '7', campus: 'Airport Campus', division: 'A' } as const;
 /** @deprecated Use JOIN_CLASS_DEFAULT. Kept so older tests and comments still compile. */
 export const JOIN_CLASS_FIXED = JOIN_CLASS_DEFAULT;
 
@@ -58,13 +59,6 @@ export const JOIN_CAMPUS_LABELS = [
   { key: 'AIRPORT', label: 'Airport Campus' },
   { key: 'CITY', label: 'City Campus' },
   { key: 'OSMANPURA', label: 'Osmanpura Campus' },
-] as const;
-
-export const JOIN_FOUNDATION_LABELS = [
-  { key: 'SCIENCEFOUNDATION', label: 'Science Foundation' },
-  { key: 'SPORTSFOUNDATION', label: 'Sports Foundation' },
-  { key: 'CIVILFOUNDATION', label: 'Civil Foundation' },
-  { key: 'FINEARTSFOUNDATION', label: 'Fine Arts Foundation' },
 ] as const;
 
 export const FIRST_MAX = 50;
@@ -86,7 +80,8 @@ export type JoinChoice = { name: string; label: string };
 export type JoinFormOptions = {
   grades: JoinChoice[];
   campuses: JoinChoice[];
-  foundationsByGrade: Record<string, JoinChoice[]>;
+  /** Active divisions of each grade (canonical grade name → choices). */
+  divisionsByGrade: Record<string, JoinChoice[]>;
 };
 
 export type JoinFormLocked = { grade: boolean; campus: boolean; division: boolean };
@@ -98,10 +93,10 @@ export type JoinFormPrefill = {
   locked: JoinFormLocked;
 };
 
+/** Divisions are never seeded (Nov 27): the admin creates them. */
 export type JoinAudiencePlan = {
   gradesToAdd: { name: string; label: string; sortOrder: number }[];
   campusesToAdd: { name: string; label: string; sortOrder: number }[];
-  divisionsToAdd: { gradeName: string; name: string; label: string }[];
 };
 
 const collapse = (s: string) => s.trim().replace(/\s+/g, ' ');
@@ -156,7 +151,7 @@ function matchDivision(
 /**
  * Find a class in the master lists (active rows only). Grade: name or label
  * with the same grade number. Campus: name or label equal ignoring case,
- * spaces and a trailing "Campus". Division / foundation (within that grade):
+ * spaces and a trailing "Campus". Division (within that grade):
  * name or label equal ignoring case (and the inner spaces the canonical name
  * drops). `null` when any of the three is missing.
  */
@@ -189,51 +184,39 @@ export function resolveFixedClass(
   return resolveJoinClass(grades, campuses, fixed);
 }
 
-function advertisedGrades(grades: MasterGrade[]): JoinChoice[] {
-  const out: JoinChoice[] = [];
-  const seen = new Set<string>();
-  for (const want of JOIN_GRADE_LABELS) {
-    const g = matchGrade(grades, want.key);
-    if (!g || seen.has(g.name)) continue;
-    seen.add(g.name);
-    out.push({ name: g.name, label: showGradeLabel(g.name, g.label || want.label) });
-  }
-  return out;
+/** Every active grade, in the admin's order. */
+function activeGrades(grades: MasterGrade[]): JoinChoice[] {
+  return [...grades]
+    .filter((g) => g.active)
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, undefined, { numeric: true }))
+    .map((g) => ({ name: g.name, label: showGradeLabel(g.name, g.label || g.name) }));
 }
 
-function advertisedCampuses(campuses: MasterCampus[]): JoinChoice[] {
-  const out: JoinChoice[] = [];
-  const seen = new Set<string>();
-  for (const want of JOIN_CAMPUS_LABELS) {
-    const c = matchCampus(campuses, want.label);
-    if (!c || seen.has(c.name)) continue;
-    seen.add(c.name);
-    out.push({ name: c.name, label: c.label || want.label });
-  }
-  return out;
+/** Every active campus, in the admin's order. */
+function activeCampuses(campuses: MasterCampus[]): JoinChoice[] {
+  return [...campuses]
+    .filter((c) => c.active)
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name))
+    .map((c) => ({ name: c.name, label: c.label || c.name }));
 }
 
-function advertisedFoundations(grade: MasterGrade): JoinChoice[] {
-  const out: JoinChoice[] = [];
-  const seen = new Set<string>();
-  for (const want of JOIN_FOUNDATION_LABELS) {
-    const d = matchDivision(grade.divisions, want.label);
-    if (!d || seen.has(d.name)) continue;
-    seen.add(d.name);
-    out.push({ name: d.name, label: d.label || want.label });
-  }
-  return out;
+/** Every active division of a grade, by label ("A", "B", … or names). */
+function activeDivisions(grade: MasterGrade): JoinChoice[] {
+  return grade.divisions
+    .filter((d) => d.active)
+    .map((d) => ({ name: d.name, label: d.label || d.name }))
+    .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
 }
 
-/** Active advertised grade / campus / foundation choices from the master lists. */
+/** The form's choices: everything active in the admin's master lists. */
 export function joinOptionsFromMaster(grades: MasterGrade[], campuses: MasterCampus[]): JoinFormOptions {
-  const list = advertisedGrades(grades);
-  const foundationsByGrade: Record<string, JoinChoice[]> = {};
+  const list = activeGrades(grades);
+  const divisionsByGrade: Record<string, JoinChoice[]> = {};
   for (const g of list) {
-    const row = matchGrade(grades, g.name);
-    foundationsByGrade[g.name] = row ? advertisedFoundations(row) : [];
+    const row = grades.find((x) => x.name === g.name);
+    divisionsByGrade[g.name] = row ? activeDivisions(row) : [];
   }
-  return { grades: list, campuses: advertisedCampuses(campuses), foundationsByGrade };
+  return { grades: list, campuses: activeCampuses(campuses), divisionsByGrade };
 }
 
 function includeChoice(list: JoinChoice[], choice: JoinChoice): JoinChoice[] {
@@ -243,8 +226,7 @@ function includeChoice(list: JoinChoice[], choice: JoinChoice): JoinChoice[] {
 
 /**
  * Build the form model: advertised dropdowns, plus any class a join link
- * already names (even if it is outside the usual 6–10 / three campuses /
- * four foundations), which is then preselected and locked.
+ * already names, which is then preselected and locked.
  */
 export function joinFormModel(
   grades: MasterGrade[],
@@ -261,8 +243,8 @@ export function joinFormModel(
       name: linkGrade.name,
       label: showGradeLabel(linkGrade.name, linkGrade.label || linkGrade.name),
     });
-    if (!options.foundationsByGrade[linkGrade.name]) {
-      options.foundationsByGrade[linkGrade.name] = advertisedFoundations(linkGrade);
+    if (!options.divisionsByGrade[linkGrade.name]) {
+      options.divisionsByGrade[linkGrade.name] = activeDivisions(linkGrade);
     }
   }
 
@@ -275,13 +257,13 @@ export function joinFormModel(
     });
   }
 
-  // A foundation in the link is only locked when the grade is also named:
-  // the same label exists on every advertised grade, so we cannot guess.
+  // A division in the link is only locked when the grade is also named:
+  // the same label ("A") can exist on every grade, so we cannot guess.
   const linkDiv = link.division && linkGrade ? matchDivision(linkGrade.divisions, link.division) : undefined;
   if (linkDiv && linkGrade) {
     locked.division = true;
-    const current = options.foundationsByGrade[linkGrade.name] ?? [];
-    options.foundationsByGrade[linkGrade.name] = includeChoice(current, {
+    const current = options.divisionsByGrade[linkGrade.name] ?? [];
+    options.divisionsByGrade[linkGrade.name] = includeChoice(current, {
       name: linkDiv.name,
       label: linkDiv.label || linkDiv.name,
     });
@@ -299,53 +281,29 @@ export function joinFormModel(
 }
 
 /**
- * What to add to the master lists so the join form (and teacher/admin
- * dropdowns) offer grades 6–10, the three campuses and the four foundations.
- * Existing rows are matched by key (so AIRPORTCAMPUS and a "CITY" campus
- * labelled "City Campus" are reused, never duplicated or renamed). Inactive
- * rows are left inactive and not re-created.
+ * First-run convenience: grades 6–10 and the school's three campuses are
+ * added when missing, so a new server has something to pick. Divisions are
+ * never added (Nov 27): the admin creates them (Admin → Grades & divisions).
+ * Existing rows are matched by key and never renamed; inactive rows stay
+ * inactive and are not re-created.
  */
 export function planJoinAudience(grades: MasterGrade[], campuses: MasterCampus[]): JoinAudiencePlan {
   const gradesToAdd: JoinAudiencePlan['gradesToAdd'] = [];
   const campusesToAdd: JoinAudiencePlan['campusesToAdd'] = [];
-  const divisionsToAdd: JoinAudiencePlan['divisionsToAdd'] = [];
-
-  const gradeNames: { key: string; name: string }[] = [];
   for (const want of JOIN_GRADE_LABELS) {
-    const existing = matchGrade(grades, want.key, false);
-    if (existing) {
-      gradeNames.push({ key: want.key, name: existing.name });
-      continue;
-    }
-    const name = normalizeGrade(want.key);
-    gradesToAdd.push({ name, label: want.label, sortOrder: Number(want.key) * 10 });
-    gradeNames.push({ key: want.key, name });
+    if (matchGrade(grades, want.key, false)) continue;
+    gradesToAdd.push({ name: normalizeGrade(want.key), label: want.label, sortOrder: Number(want.key) * 10 });
   }
-
   for (const want of JOIN_CAMPUS_LABELS) {
     if (matchCampus(campuses, want.label, false)) continue;
     const maxOrder = Math.max(0, ...campuses.map((c) => c.sortOrder), ...campusesToAdd.map((c) => c.sortOrder));
     campusesToAdd.push({ name: normalizeCampus(want.label), label: want.label, sortOrder: maxOrder + 10 });
   }
-
-  const allGrades: MasterGrade[] = [
-    ...grades,
-    ...gradesToAdd.map((g) => ({ id: g.name, name: g.name, label: g.label, sortOrder: g.sortOrder, active: true, divisions: [] })),
-  ];
-  for (const g of gradeNames) {
-    const row = matchGrade(allGrades, g.name, false);
-    if (!row) continue;
-    for (const want of JOIN_FOUNDATION_LABELS) {
-      if (matchDivision(row.divisions, want.label, false)) continue;
-      divisionsToAdd.push({ gradeName: row.name, name: normalizeDivision(want.label), label: want.label });
-    }
-  }
-
-  return { gradesToAdd, campusesToAdd, divisionsToAdd };
+  return { gradesToAdd, campusesToAdd };
 }
 
 export function planAddsAnything(plan: JoinAudiencePlan): boolean {
-  return plan.gradesToAdd.length + plan.campusesToAdd.length + plan.divisionsToAdd.length > 0;
+  return plan.gradesToAdd.length + plan.campusesToAdd.length > 0;
 }
 
 /** "  asha   patil " → "asha patil". */
@@ -412,8 +370,8 @@ export function splitName(name: string): { firstName: string; lastName: string }
 }
 
 export const NOT_AVAILABLE = 'Joining is not available right now. Please ask your teacher.';
-export const PICK_CLASS = 'Pick your grade, campus and foundation.';
-export const UNKNOWN_CLASS = 'That grade, campus or foundation is not available. Pick from the list or ask your teacher.';
+export const PICK_CLASS = 'Pick your campus, grade and division.';
+export const UNKNOWN_CLASS = 'That campus, grade or division is not available. Pick from the list or ask your teacher.';
 
 /** Friendly text for the form (the school-app wording in JOIN_ERROR_TEXT talks about links). */
 export const FORM_ERROR_TEXT: Partial<Record<JoinErrorCode | 'ambiguous' | 'pick_class' | 'unknown_class', string>> & {
@@ -449,11 +407,12 @@ function readClassFields(body: Record<string, unknown>): { grade: string; campus
   return {
     grade: str(body.grade),
     campus: str(body.campus),
-    division: str(body.foundation) || str(body.division),
+    // `foundation` is the field name older pages sent.
+    division: str(body.division) || str(body.foundation),
   };
 }
 
-/** POST `{ firstName, lastName, grade, campus, foundation }` → `{ ok, redirect }` or `{ error, field? }`. */
+/** POST `{ firstName, lastName, campus, grade, division }` → `{ ok, redirect }` or `{ error, field? }`. */
 export async function handleJoinForm(body: unknown, deps: JoinFormDeps): Promise<Response> {
   if (deps.mode !== 'unsigned') return json({ error: FORM_ERROR_TEXT.unsigned_disabled }, 403);
   if (deps.limited && (await deps.limited())) return json({ error: FORM_ERROR_TEXT.rate_limited }, 429);
@@ -462,7 +421,7 @@ export async function handleJoinForm(body: unknown, deps: JoinFormDeps): Promise
   if ('error' in checked) return json({ error: checked.error, field: checked.field }, 400);
   const picked = readClassFields(b);
   if (!picked.grade || !picked.campus || !picked.division) {
-    return json({ error: PICK_CLASS, field: !picked.grade ? 'grade' : !picked.campus ? 'campus' : 'foundation' }, 400);
+    return json({ error: PICK_CLASS, field: !picked.campus ? 'campus' : !picked.grade ? 'grade' : 'division' }, 400);
   }
   try {
     const grades = await deps.grades();

@@ -63,7 +63,7 @@ test('students can draw on the whiteboard only, never on a screen share', () => 
   assert.match(route, /Students can draw on the whiteboard only\./);
   assert.doesNotMatch(route, /function sharing\(/);
   const room = classroomViewSource();
-  assert.match(room, /const sharingNow = isTeacher \? wbOpen : !!state\?\.whiteboard;/);
+  assert.match(room, /const myDrawState: 'off' \| 'drawing' = state\?\.me\?\.canDraw \? 'drawing' : 'off';/);
   for (const f of ['components/classroom/AnnotateTools.tsx', 'components/classroom/TeacherInk.tsx', 'components/classroom/ShareDrawing.tsx', 'lib/teacherInk.ts']) {
     assert.equal(fs.existsSync(path.join(__dirname, '..', 'src', f)), false, f);
   }

@@ -32,7 +32,11 @@
 
 export const DRAW_TOPIC = 'draw';
 /** How long an allow lasts (the teacher can allow again to extend). */
-export const DRAW_ALLOW_MS = 3 * 60 * 1000;
+/**
+ * How long an annotation permission lasts: the rest of the class (Nov 27: the
+ * teacher turns it on and off from the roster; it also ends when the board closes).
+ */
+export const DRAW_ALLOW_MS = 6 * 60 * 60 * 1000;
 /** Client batching interval for points (~12 batches per second). */
 export const DRAW_SEND_MS = 80;
 export const MAX_STROKES = 400;

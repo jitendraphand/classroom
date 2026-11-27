@@ -23,11 +23,11 @@ export async function register() {
       if (planAddsAnything(plan)) {
         console.info(
           '[join-class] added missing options:',
-          `${plan.gradesToAdd.length} grade(s), ${plan.campusesToAdd.length} campus(es), ${plan.divisionsToAdd.length} foundation(s)`,
+          `${plan.gradesToAdd.length} grade(s), ${plan.campusesToAdd.length} campus(es)`,
         );
       }
     } catch (e) {
-      console.error('[join-class] could not seed grade/campus/foundation options:', e instanceof Error ? e.message : e);
+      console.error('[join-class] could not seed grade/campus options:', e instanceof Error ? e.message : e);
     }
     try {
       const { schoolJoinModeFromEnv, signedModeProblem } = await import('./lib/schoolJoin');

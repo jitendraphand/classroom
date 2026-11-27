@@ -1,9 +1,11 @@
 # Student drawing on the shared screen & one student layout
 
-> **Nov 2026:** drawing on a screen share was removed. Students can ask to draw
-> only while the whiteboard is open (`/draw` answers 409 otherwise), and the
-> teacher has no annotation on a share. The share-drawing sections below are
-> history; the layout sections still apply.
+> **Nov 2026:** drawing on a screen share was removed, and students can no
+> longer ask to draw: the teacher turns annotation on for a student from the
+> roster (pen button by each name), on the whiteboard only (`/draw` answers
+> 403 to a request and 409 to a stroke outside the board). It lasts until the
+> teacher stops it or closes the board. The request and share-drawing sections
+> below are history; the layout sections still apply.
 
 ## Student freehand drawing (replaces the old teacher annotation, which is removed)
 

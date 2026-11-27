@@ -1,6 +1,6 @@
 /**
- * Student-facing labels for campus, grade and foundation/division.
- * Stored values stay the canonical codes (AIRPORTCAMPUS, 6, SPORTSFOUNDATION);
+ * Student-facing labels for campus, grade and division.
+ * Stored values stay the canonical codes (AIRPORTCAMPUS, 6, A);
  * this module only formats them for display. Pure, unit-tested.
  */
 import {
@@ -19,7 +19,10 @@ export type AudienceLabels = {
   grades?: AudienceLabelGrade[];
 };
 
-/** Known words used to insert spaces in compact codes such as AIRPORTCAMPUS. */
+/**
+ * Known words used to insert spaces in compact codes such as AIRPORTCAMPUS
+ * (some also appear in division names kept from older data).
+ */
 const KNOWN_WORDS = [
   'FOUNDATION',
   'CAMPUS',
@@ -43,8 +46,8 @@ function titleWord(w: string): string {
 }
 
 /**
- * "AIRPORTCAMPUS" → "Airport Campus", "SPORTSFOUNDATION" → "Sports Foundation",
- * "FINEARTSFOUNDATION" → "Fine Arts Foundation". Short codes ("CC", "A") stay
+ * "AIRPORTCAMPUS" → "Airport Campus", "OSMANPURACAMPUS" → "Osmanpura Campus".
+ * Short codes ("CC", "A") stay
  * as stored. Codes that already contain spaces are trimmed only.
  */
 export function prettifyCode(raw: string): string {
@@ -98,7 +101,7 @@ export function displayGradeLabel(grade: string, labels?: AudienceLabels): strin
   return prettifyCode(text);
 }
 
-export function displayFoundationLabel(grade: string, division: string, labels?: AudienceLabels): string {
+export function displayDivisionLabel(grade: string, division: string, labels?: AudienceLabels): string {
   const d = normalizeDivision(division);
   if (!d || d === ALL_DIVISIONS) return '';
   const g = normalizeGrade(grade);
@@ -110,7 +113,7 @@ export function displayFoundationLabel(grade: string, division: string, labels?:
 }
 
 /**
- * "Airport Campus · Grade 6 · Sports Foundation".
+ * "Airport Campus · Grade 6 · A".
  * `allDivisions` → "Airport Campus · Grade 6 · all divisions".
  */
 export function formatStudentAudience(
@@ -128,11 +131,11 @@ export function formatStudentAudience(
   if (allDivisions) {
     parts.push('all divisions');
   } else {
-    const foundations = [...divisions]
-      .map((d) => displayFoundationLabel(grade, d, labels))
+    const shown = [...divisions]
+      .map((d) => displayDivisionLabel(grade, d, labels))
       .filter(Boolean)
       .sort((a, b) => a.localeCompare(b));
-    if (foundations.length) parts.push([...new Set(foundations)].join(', '));
+    if (shown.length) parts.push([...new Set(shown)].join(', '));
   }
   return parts.join(' · ');
 }
@@ -159,7 +162,7 @@ export function audienceLabelsFromMaster(
   };
 }
 
-/** "Airport Campus · Grade 7 · Foundation A" for one student (readable, Nov 25). */
+/** "Airport Campus · Grade 7 · A" for one student (readable, Nov 25). */
 export function studentPlaceLabel(
   st: { campus: string; grade: string; division: string },
   labels?: AudienceLabels
@@ -167,7 +170,7 @@ export function studentPlaceLabel(
   return [
     displayCampusLabel(st.campus, labels),
     displayGradeLabel(st.grade, labels),
-    displayFoundationLabel(st.grade, st.division, labels),
+    displayDivisionLabel(st.grade, st.division, labels),
   ]
     .filter(Boolean)
     .join(' · ');

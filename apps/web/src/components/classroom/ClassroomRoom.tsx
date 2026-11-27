@@ -75,7 +75,7 @@ import { exitFullscreenIfActive, useStudentFocus } from './useStudentFocus';
 
 import { useScreenWakeLock } from './useScreenWakeLock';
 import { PermissionBanner } from './PermissionBanner';
-import { queryMediaPermission, requestSeparatePermission, type MediaAccessIssue } from '@/lib/permissions';
+import { queryMediaPermission, requestPermissionFromTap, requestSeparatePermission, type MediaAccessIssue } from '@/lib/permissions';
 import { countFocusAlerts, focusLabel, fullscreenGate, fullscreenGateText, isFocusAlert } from '@/lib/focusStatus';
 import { FloatingPanel } from './FloatingPanel';
 import { WB_TOOL_CLEAR_PX, shareControlsPlacement, showLocalSharePreview } from '@/lib/floatGeometry';
@@ -2448,47 +2448,17 @@ function RoomInner({
   );
   // —— Student drawing permission: whiteboard only (drawActions.ts, lib/drawLogic.ts) ——
   const drawActions = useDrawingActions(code);
-  // Students may ask to draw on the whiteboard only (drawing on a screen
-  // share was removed, Nov 26; the server refuses it too).
-  const sharingNow = isTeacher ? wbOpen : !!state?.whiteboard;
-  const [drawOverride, setDrawOverride] = useState<'off' | 'requested' | 'drawing' | null>(null);
-  const serverDrawState: 'off' | 'requested' | 'drawing' = state?.me?.canDraw
-    ? 'drawing'
-    : state?.me?.drawRequested
-      ? 'requested'
-      : 'off';
-  useEffect(() => {
-    if (drawOverride !== null && drawOverride === serverDrawState) setDrawOverride(null);
-  }, [drawOverride, serverDrawState]);
-  const myDrawState = drawOverride ?? serverDrawState;
-  // Tell a student when their drawing stops without them asking (teacher
-  // revoked it, the time ran out, or the share stopped).
-  const prevServerDraw = useRef(serverDrawState);
+  // Annotation (Nov 27): the teacher lets a student annotate the whiteboard
+  // from the roster; students cannot ask. Allowed students get the
+  // annotation tools on their board.
+  const myDrawState: 'off' | 'drawing' = state?.me?.canDraw ? 'drawing' : 'off';
+  const prevServerDraw = useRef(myDrawState);
   useEffect(() => {
     const prev = prevServerDraw.current;
-    prevServerDraw.current = serverDrawState;
-    if (isTeacher || prev !== 'drawing' || serverDrawState === 'drawing') return;
-    if (drawOverride === 'off') return; // I pressed Stop drawing myself.
-    setHudNotice('Your teacher stopped your drawing.');
-  }, [isTeacher, serverDrawState, drawOverride]);
-  async function toggleDraw() {
-    if (isTeacher) return;
-    const prev = myDrawState;
-    if (prev === 'drawing') {
-      setDrawOverride('off');
-      const res = await roomFetch(code, '/draw', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'release' }),
-      }).catch(() => null);
-      if (!res?.ok) setDrawOverride(null);
-    } else {
-      setDrawOverride(prev === 'requested' ? 'off' : 'requested');
-      const err = await drawActions.request(prev !== 'requested');
-      if (err) setDrawOverride(null);
-    }
-    refresh();
-  }
+    prevServerDraw.current = myDrawState;
+    if (isTeacher || prev === myDrawState) return;
+    setHudNotice(myDrawState === 'drawing' ? 'Your teacher lets you annotate the whiteboard. Use the pen on the left.' : 'Your teacher turned off annotation for you.');
+  }, [isTeacher, myDrawState]);
   async function allowDrawing(participantId: string) {
     const err = await drawActions.allow(participantId);
     if (err) setHudNotice(err);
@@ -2499,40 +2469,7 @@ function RoomInner({
     if (err) setHudNotice(err);
     refresh();
   }
-  // Teacher: a toast for each new request to draw (in this tab and in share controls).
-  const drawRequesters = useMemo(
-    () =>
-      (state?.admitted ?? [])
-        .filter((p) => p.role === 'STUDENT' && p.drawRequested)
-        .sort((a, b) => (a.drawRequestedAt ?? 0) - (b.drawRequestedAt ?? 0)),
-    [state?.admitted]
-  );
-  const seenDrawReq = useRef<Set<string>>(new Set());
-  const [drawToast, setDrawToast] = useState<{ id: string; name: string } | null>(null);
-  useEffect(() => {
-    if (!isTeacher) return;
-    const ids = new Set(drawRequesters.map((p) => p.id));
-    const fresh = drawRequesters.find((p) => !seenDrawReq.current.has(p.id));
-    seenDrawReq.current = ids;
-    if (fresh) {
-      setDrawToast({ id: fresh.id, name: fresh.displayName });
-      setHudNotice(`${fresh.displayName} asks to draw on your screen. Allow in the roster.`);
-      return;
-    }
-    if (drawToast && !ids.has(drawToast.id)) setDrawToast(null);
-    setHudNotice((n) => {
-      if (!n || !n.includes(' asks to draw on your screen.')) return n;
-      const stillAsking = drawRequesters.find((p) => n.startsWith(p.displayName));
-      if (stillAsking) return n;
-      const next = drawRequesters[0];
-      return next ? `${next.displayName} asks to draw on your screen. Allow in the roster.` : '';
-    });
-  }, [isTeacher, drawRequesters, drawToast]);
-  useEffect(() => {
-    if (!drawToast) return;
-    const t = window.setTimeout(() => setDrawToast(null), 12_000);
-    return () => window.clearTimeout(t);
-  }, [drawToast]);
+
 
   // Student: the measured height of the controls box, as --student-controls-h
   // on the stage. On a portrait phone the controls are a row at the bottom and
@@ -2649,8 +2586,6 @@ function RoomInner({
     showScreenShare: isTeacher,
     handRaised,
     onToggleHand: isTeacher ? undefined : toggleHand,
-    drawState: !isTeacher && sharingNow ? myDrawState : undefined,
-    onToggleDraw: isTeacher ? undefined : () => void toggleDraw(),
     dataSaver: isTeacher ? undefined : dataSaver,
     onCycleDataSaver: isTeacher ? undefined : () => setDataSaver(nextDataSaver(dataSaver)),
   };
@@ -2734,15 +2669,22 @@ function RoomInner({
             micOn || micIssue?.kind === 'denied' ? micIssue : null,
           ].filter((x): x is MediaAccessIssue => !!x)}
           onRetryCamera={() => {
-            setCamIssue(null);
-            setCamOn(true);
-            setCamRetryTick((t) => t + 1);
+            // Ask straight from this tap (lib/permissions requestPermissionFromTap).
+            void requestPermissionFromTap('camera').then((r) => {
+              if (!r.ok) return setCamIssue(r.issue);
+              setCamIssue(null);
+              setCamOn(true);
+              setCamRetryTick((t) => t + 1);
+            });
           }}
           onRetryMic={() => {
             primeVoiceAudio(false);
-            setMicIssue(null);
-            setMicOn(true);
-            setMicRetryTick((t) => t + 1);
+            void requestPermissionFromTap('microphone').then((r) => {
+              if (!r.ok) return setMicIssue(r.issue);
+              setMicIssue(null);
+              setMicOn(true);
+              setMicRetryTick((t) => t + 1);
+            });
           }}
           onDismissCamera={() => setCamIssue(null)}
           onDismissMic={() => setMicIssue(null)}
@@ -3138,26 +3080,6 @@ function RoomInner({
           </button>
         </div>
       )}
-      {isTeacher && drawToast && (
-        <div className="teacher-toast z-[120]" role="status">
-          <IconPen size={16} className="shrink-0 text-amber-300" />
-          <span className="flex-1">
-            <b>{drawToast.name}</b> asks to draw on your screen
-          </span>
-          <Button
-            size="sm"
-            onClick={() => {
-              void allowDrawing(drawToast.id);
-              setDrawToast(null);
-            }}
-          >
-            Allow
-          </Button>
-          <button type="button" className="text-xs text-slate-400 hover:text-white" onClick={() => setDrawToast(null)} aria-label="Dismiss">
-            ✕
-          </button>
-        </div>
-      )}
       {isTeacher && positionToast && (
         <div className="teacher-toast teacher-toast-left" role="status" data-testid="share-position-toast">
           <span className="flex-1">{MONITOR_POSITION_HINT}</span>
@@ -3201,15 +3123,22 @@ function RoomInner({
           micOn ? micIssue : null,
         ].filter((x): x is MediaAccessIssue => !!x)}
         onRetryCamera={() => {
-          setCamIssue(null);
-          setCamOn(true);
-          setCamRetryTick((t) => t + 1);
+          // Ask straight from this tap (lib/permissions requestPermissionFromTap).
+          void requestPermissionFromTap('camera').then((r) => {
+            if (!r.ok) return setCamIssue(r.issue);
+            setCamIssue(null);
+            setCamOn(true);
+            setCamRetryTick((t) => t + 1);
+          });
         }}
         onRetryMic={() => {
           primeVoiceAudio(true);
-          setMicIssue(null);
-          setMicOn(true);
-          setMicRetryTick((t) => t + 1);
+          void requestPermissionFromTap('microphone').then((r) => {
+            if (!r.ok) return setMicIssue(r.issue);
+            setMicIssue(null);
+            setMicOn(true);
+            setMicRetryTick((t) => t + 1);
+          });
         }}
         onDismissCamera={() => setCamIssue(null)}
         onDismissMic={() => setMicIssue(null)}
@@ -3348,15 +3277,11 @@ function RoomInner({
                 return (
                   <li
                     key={p.id}
-                    className={cn('roster-row', (raised || p.drawRequested || p.drawing) && 'roster-row-raised')}
+                    className={cn('roster-row', (raised || p.drawing) && 'roster-row-raised')}
                     title={rosterLabel(p)}
                   >
-                    {(p.drawing || p.drawRequested) && (
-                      <span
-                        className={cn('roster-hand', p.drawing && 'text-sky-300')}
-                        title={p.drawing ? 'Drawing on your screen' : 'Asks to draw'}
-                        aria-label={p.drawing ? 'Drawing on your screen' : 'Asks to draw'}
-                      >
+                    {p.drawing && (
+                      <span className="roster-hand text-sky-300" title="Annotating the whiteboard" aria-label="Annotating the whiteboard">
                         <IconPen size={13} />
                       </span>
                     )}
@@ -3433,15 +3358,23 @@ function RoomInner({
                           <IconHandDown size={14} />
                         </RosterIconButton>
                       )}
-                      {p.drawing ? (
-                        <button type="button" className="roster-chip roster-chip-red" onClick={() => void revokeDrawing(p.id)}>
-                          Revoke
-                        </button>
-                      ) : p.drawRequested ? (
-                        <button type="button" className="roster-chip roster-chip-warn" onClick={() => void allowDrawing(p.id)}>
-                          Allow
-                        </button>
-                      ) : null}
+                      {/* Annotation is the teacher's choice (Nov 27): students cannot ask. */}
+                      <RosterIconButton
+                        label={
+                          p.drawing
+                            ? `Stop ${p.displayName} annotating`
+                            : wbOpen
+                              ? `Let ${p.displayName} annotate the whiteboard`
+                              : 'Open the whiteboard to let students annotate'
+                        }
+                        tone={p.drawing ? 'on' : 'plain'}
+                        pressed={!!p.drawing}
+                        disabled={!p.drawing && !wbOpen}
+                        testId="roster-annotate"
+                        onClick={() => void (p.drawing ? revokeDrawing(p.id) : allowDrawing(p.id))}
+                      >
+                        <IconPen size={13} />
+                      </RosterIconButton>
                       <RosterIconButton
                         label={state?.spotlight?.participantId === p.id ? `Stop spotlight on ${p.displayName}` : `Spotlight ${p.displayName} (shown large to the class)`}
                         tone={state?.spotlight?.participantId === p.id ? 'on' : 'plain'}
@@ -3618,13 +3551,9 @@ function RoomInner({
           focusAlerts={focusAlertCount}
           rosterOpen={rosterOpen}
           onToggleRoster={() => setRosterOpen((v) => !v)}
-          requests={(state?.admitted ?? [])
-            .filter((p) => p.role === 'STUDENT' && p.drawRequested && !p.drawing && !isRosterDropped(p.livekitIdentity, droppedStudents, Date.now()))
-            .map((p) => ({ id: p.id, displayName: rosterLabel(p) }))}
           drawers={(state?.admitted ?? [])
             .filter((p) => p.role === 'STUDENT' && p.drawing && !isRosterDropped(p.livekitIdentity, droppedStudents, Date.now()))
             .map((p) => ({ id: p.id, displayName: rosterLabel(p) }))}
-          onAllowDraw={(id) => void allowDrawing(id)}
           onRevokeDraw={(id) => void revokeDrawing(id)}
           onMuteAll={() => void muteAllStudents()}
           info={teacherInfoEl('left')}

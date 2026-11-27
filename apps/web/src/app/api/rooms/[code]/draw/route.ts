@@ -4,7 +4,6 @@ import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { getAdminSession, resolveRoomAccess } from '@/lib/auth';
 import { jsonError, jsonOk } from '@/lib/response';
-import { studentActionLimited } from '@/lib/rateLimit';
 import { ensureRedis } from '@/lib/redis';
 import { cleanPoints, isDrawColor, validStrokeId } from '@/lib/drawLogic';
 import {
@@ -133,12 +132,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ code: s
     const me = access.mode === 'student' ? access.student : null;
     if (!me || me.roomId !== room.id || me.role !== 'STUDENT' || me.status !== 'ADMITTED') return jsonError('Not admitted', 403);
 
-    if (body.action === 'request' || body.action === 'cancel') {
-      if (await studentActionLimited('drawRequest', me.id)) {
-        return jsonError('Too many requests. Wait a moment and try again.', 429);
-      }
-      if (body.action === 'request' && !(await whiteboardOpen(code))) return jsonError(DRAW_WHITEBOARD_ONLY, 409);
-      await setDrawRequest(code, me.id, body.action === 'request');
+    if (body.action === 'request') {
+      // Nov 27: students cannot ask; the teacher lets them annotate from the roster.
+      return jsonError('Your teacher turns on annotation for you from the roster.', 403);
+    }
+    if (body.action === 'cancel') {
+      await setDrawRequest(code, me.id, false); // an old request left by an earlier version
       return jsonOk({ ok: true });
     }
 

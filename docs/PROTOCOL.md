@@ -51,7 +51,7 @@ Every packet is UTF-8 JSON with `v: 1`.
 | --- | --- | --- | --- |
 | `wb` | teacher; server (relayed student ops, snapshot requests) | `ops` `{ops, by?}`, `snap` `{doc, z}`, `chunk` `{id, i, n, d}`, `req` `{to}`, `end`, `laser` `{pts}` | `lib/whiteboard/model.ts` |
 | `chat` | server; teacher (`senderRole: TEACHER`) | stored chat message (scope everyone / private) | `lib/realtimePackets.ts` |
-| `cls-signal` | server | `hand` `{raised, participantId}`, `draw-req` `{on, participantId}`, `draw-allow` `{on, participantId, identity, name, until}` | `lib/realtimePackets.ts` |
+| `cls-signal` | server | `hand` `{raised, participantId}`, `draw-req` `{on, participantId}` (no longer sent: students cannot ask, Nov 2026), `draw-allow` `{on, participantId, identity, name, until}` | `lib/realtimePackets.ts` |
 | `cls-state` | server | `state` `{spread}` (refetch `/state` within `spread` ms), `mute` `{muted}` (to the named students) | `lib/roomNudge.ts`, `lib/pollPolicy.ts` |
 | `draw` | server | legacy stroke relay (`pts`, `del`, `clear`); since Nov 2026 `/draw` accepts strokes only while the whiteboard is open and no client draws them on a screen share | `lib/drawLogic.ts` |
 | `cls-snap` | server | `{v: 1, ver}`: a new slide snapshot exists (`ver` = its version, `0` = cleared); audio-only students then `GET /snapshot` | `lib/slideSnapshot.ts` |

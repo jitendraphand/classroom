@@ -12,7 +12,7 @@ import { notifyFloatBounds } from './FloatingPanel';
 import { IconCam, IconCamOff, IconChat, IconLeave, IconMic, IconMicOff, IconPen, IconScreen, IconSpeakerOff, IconUsers, IconVideo } from '@/components/ui/Icons';
 import { LeaveEndMenu } from './LeaveEndMenu';
 import { FlyoutBar, barBtn, type FlyoutGroup } from '@/lib/whiteboard/FlyoutBar';
-import { ALLOW_GREEN, MEETING_BAR_PX, focusAlertDanger, peopleBadgeCount } from '@/lib/shareChrome';
+import { MEETING_BAR_PX, focusAlertDanger, peopleBadgeCount } from '@/lib/shareChrome';
 
 export type MeetingPerson = { id: string; displayName: string };
 
@@ -28,9 +28,7 @@ export function WhiteboardMeetingBar({
   focusAlerts,
   rosterOpen,
   onToggleRoster,
-  requests,
   drawers,
-  onAllowDraw,
   onRevokeDraw,
   onMuteAll,
   info,
@@ -51,9 +49,7 @@ export function WhiteboardMeetingBar({
   focusAlerts: number;
   rosterOpen: boolean;
   onToggleRoster: () => void;
-  requests: MeetingPerson[];
   drawers: MeetingPerson[];
-  onAllowDraw: (id: string) => void;
   onRevokeDraw: (id?: string) => void;
   /** Mutes every student (one-way; unmuting is per student). */
   onMuteAll: () => void;
@@ -114,31 +110,20 @@ export function WhiteboardMeetingBar({
     },
     {
       id: 'perm',
-      label: requests.length ? `${requests.length} asking to draw` : 'Student drawing',
+      label: drawers.length ? `${drawers.length} annotating` : 'Student annotation',
       icon: ic(<IconPen size={18} />),
-      badge: requests.length,
+      badge: drawers.length,
       active: drawers.length > 0,
       testId: 'wbm-perm',
       content: (
         <>
-          {!requests.length && !drawers.length ? (
-            <span style={{ color: '#94a3b8', fontSize: 12, padding: 6, width: 160 }}>No requests. Students ask with their pen button.</span>
+          {!drawers.length ? (
+            <span style={{ color: '#94a3b8', fontSize: 12, padding: 6, width: 170 }}>Nobody is annotating. Let a student annotate from the roster (pen button by their name).</span>
           ) : null}
-          {requests.map((p) => (
-            <span key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#e2e8f0', fontSize: 12 }}>
-              <span style={{ flex: 1, minWidth: 80 }}>{p.displayName}</span>
-              <button type="button" style={barBtn(false, { background: ALLOW_GREEN })} data-testid="wbm-draw-allow" title={`Let ${p.displayName} draw on the board`} onClick={() => onAllowDraw(p.id)}>
-                Allow
-              </button>
-              <button type="button" style={barBtn()} data-testid="wbm-draw-deny" title={`Decline ${p.displayName}`} onClick={() => onRevokeDraw(p.id)}>
-                Deny
-              </button>
-            </span>
-          ))}
           {drawers.map((p) => (
             <span key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#e2e8f0', fontSize: 12 }}>
               <span style={{ flex: 1, minWidth: 80 }}>✎ {p.displayName}</span>
-              <button type="button" style={barBtn(false, { background: '#b91c1c' })} onClick={() => onRevokeDraw(p.id)}>
+              <button type="button" style={barBtn(false, { background: '#b91c1c' })} data-testid="wbm-draw-stop" onClick={() => onRevokeDraw(p.id)}>
                 Stop
               </button>
             </span>

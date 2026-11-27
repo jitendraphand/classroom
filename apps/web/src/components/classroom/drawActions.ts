@@ -4,8 +4,8 @@ import { useCallback } from 'react';
 import { roomFetch } from '@/lib/classroomClient';
 
 /**
- * Student drawing permission (whiteboard only): request / cancel (student),
- * allow / revoke / clear (teacher). Returns an error message or null.
+ * Whiteboard annotation permission, teacher only: allow / revoke / clear
+ * (students cannot ask, Nov 27). Returns an error message or null.
  * Drawing on a screen share was removed (Nov 26): the server refuses it.
  */
 export function useDrawingActions(code: string) {
@@ -27,6 +27,5 @@ export function useDrawingActions(code: string) {
     allow: (participantId: string) => call({ action: 'allow', participantId }),
     revoke: (participantId?: string) => call({ action: 'revoke', participantId }),
     clear: () => call({ action: 'clear' }),
-    request: (on: boolean) => call({ action: on ? 'request' : 'cancel' }),
   };
 }

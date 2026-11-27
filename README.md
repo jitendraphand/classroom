@@ -202,11 +202,23 @@ teacher's video until the student is back; audio keeps playing.
   every page cut into screen-high sheets. Teacher notices (raised hands,
   permissions) float at the bottom right over the board, so the writing area
   never moves.
-- **Student drawing on the whiteboard**: a student taps the pen ("Request to
-  draw on the whiteboard"), the teacher Allows/Revokes in the roster. Only
-  while the whiteboard is open (Nov 2026): drawing and annotation on a screen
-  share (tab, window or entire screen) were removed for teacher and students,
-  and `/draw` answers 409 to a request or stroke during a share. **One student layout** on every
+- **Student annotation on the whiteboard** (Nov 2026): the teacher decides.
+  Every student row in the roster has a pen button: **Let <name> annotate**
+  turns the pen tools on for that student only, and the same button stops it
+  (the whiteboard meeting bar also lists who is annotating). Students have no
+  button to ask. It lasts until the teacher stops it or closes the board, and
+  works only while the whiteboard is open (drawing on a screen share was
+  removed). The teacher's board has no zoom; it only scrolls.
+- **Join form** (temporary, until the school app signs links): first name,
+  last name, then **campus, grade, division**, all from the admin's master
+  lists (Admin → Grades & divisions). There is no "foundation": a division is
+  whatever the admin names it (A, B, Mahaveer…). Only grades 6–10 and the three
+  campuses are created on a new server; divisions are never created
+  automatically.
+- **Camera / microphone permission**: "Allow camera / microphone" asks the
+  browser straight from the tap. If the browser still shows no popup (it was
+  blocked, or Chrome stopped asking after the popup was closed a few times),
+  the notice says so and gives the steps for that browser and device. **One student layout** on every
   device/OS/browser (right-side control panel, floating teacher video, floating
   chat). See **[docs/STUDENT_DRAWING_AND_LAYOUT.md](docs/STUDENT_DRAWING_AND_LAYOUT.md)**.
 - **Absent is only known for known students**: a student exists in the system

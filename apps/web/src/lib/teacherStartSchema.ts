@@ -5,7 +5,7 @@ import { MAX_AUDIENCE_INPUT_LENGTH } from './grades';
  * Body of POST /api/teacher/sessions/start: a timetabled occurrence or an
  * ad-hoc ("extra") class. Campus / grade / division accept raw text up to
  * MAX_AUDIENCE_INPUT_LENGTH; startAdHocClass normalises them to the master
- * list's canonical codes (divisions up to 32 letters, e.g. SCIENCEFOUNDATION).
+ * list's canonical codes (divisions up to 32 letters).
  */
 export const startClassSchema = z.discriminatedUnion('kind', [
   z.object({

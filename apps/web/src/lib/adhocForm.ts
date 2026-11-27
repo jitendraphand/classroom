@@ -2,8 +2,8 @@
  * Ad-hoc ("extra") class form on the teacher dashboard. Pure, unit-tested.
  *
  * Nov 25: a teacher picks ONE grade and any combination of the campuses the
- * admin assigned for that grade, and any combination of its divisions
- * (foundations). The server checks the same rule (canTeachAudience over every
+ * admin assigned for that grade, and any combination of its divisions.
+ * The server checks the same rule (canTeachAudience over every
  * campus): each chosen division must be assigned in each chosen campus.
  */
 export type AdhocGradeChoice = {

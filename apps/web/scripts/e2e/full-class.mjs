@@ -73,8 +73,16 @@ const adminCtx = await ctx(); const admin = await adminCtx.newPage(); watch(admi
 await step('admin: sign in (forced password change)', async () => (await login(admin, 'admin@school.test', adminPw)).replace(BASE, ''));
 await shot(admin, '01-admin-home');
 let teacherPw;
-await step('admin: create teacher (Grade 6 Science Foundation, Airport Campus)', async () => {
-  const r = await admin.request.post(`${BASE}/api/admin/teachers`, { data: { name: 'Test Teacher', email: 'teacher@school.test', gender: 'female', assignments: '6-SCIENCEFOUNDATION', campus: 'AIRPORTCAMPUS' } });
+await step('admin: adds division A to Grade 6 (divisions are the admin\'s; nothing is seeded)', async () => {
+  const list = await (await admin.request.get(`${BASE}/api/admin/grades`)).json();
+  const g6 = (list.grades || list).find((g) => g.name === '6');
+  if (!g6) throw new Error('no grade 6');
+  if ((g6.divisions || []).length) throw new Error(`divisions were seeded: ${g6.divisions.map((d) => d.name)}`);
+  const r = await admin.request.post(`${BASE}/api/admin/grades/${g6.id}/divisions`, { data: { name: 'A' } });
+  return r.ok() ? 'created; no foundation divisions seeded' : (() => { throw new Error(`${r.status()}`); })();
+});
+await step('admin: create teacher (Grade 6 division A, Airport Campus)', async () => {
+  const r = await admin.request.post(`${BASE}/api/admin/teachers`, { data: { name: 'Test Teacher', email: 'teacher@school.test', gender: 'female', assignments: '6-A', campus: 'AIRPORTCAMPUS' } });
   const j = await r.json(); teacherPw = j.temporaryPassword || j.password || j.tempPassword;
   if (!r.ok() || !teacherPw) throw new Error(`${r.status()} ${JSON.stringify(Object.keys(j))}`);
   return 'created';
@@ -96,7 +104,7 @@ await step('teacher: start an extra class from the dashboard', async () => {
   if (await btn.isEnabled().catch(() => false)) {
     await Promise.all([teacher.waitForURL(/\/classroom\//, { timeout: 20000 }), btn.click()]);
   } else {
-    const r = await teacher.request.post(`${BASE}/api/teacher/sessions/start`, { data: { kind: 'adhoc', campuses: ['AIRPORTCAMPUS'], grade: '6', divisions: ['SCIENCEFOUNDATION'], subject: 'Science revision' } });
+    const r = await teacher.request.post(`${BASE}/api/teacher/sessions/start`, { data: { kind: 'adhoc', campuses: ['AIRPORTCAMPUS'], grade: '6', divisions: ['A'], subject: 'Science revision' } });
     const j = await r.json(); if (!r.ok()) throw new Error(JSON.stringify(j));
     await teacher.goto(`${BASE}/classroom/${j.code || j.room?.code}`);
     return 'started via API (button disabled: form needed choices)';
@@ -114,7 +122,7 @@ await step('teacher: dock shows (no waiting-room or Admit controls)', async () =
 });
 
 // ---------- Students ----------
-const studentLink = (sid, first, last) => `${BASE}/join?FirstName=${first}&LastName=${last}&SID=${sid}&Grade=6&Division=SCIENCEFOUNDATION&Campus=AIRPORTCAMPUS`;
+const studentLink = (sid, first, last) => `${BASE}/join?FirstName=${first}&LastName=${last}&SID=${sid}&Grade=6&Division=A&Campus=AIRPORTCAMPUS`;
 const students = [];
 for (const [sid, first, last] of [['GOS000101', 'Arohi', 'Patil'], ['GOS000102', 'Kabir', 'Shah'], ['GOS000103', 'Meera', 'Iyer']]) {
   const c = await ctx({ viewport: sid === 'GOS000103' ? { width: 390, height: 844 } : { width: 1280, height: 720 } });
@@ -237,6 +245,10 @@ await shot(teacher, '08-teacher-chat');
 
 // ---------- Whiteboard ----------
 await teacher.keyboard.press('Escape').catch(() => {});
+await step('students have no Draw / annotate request button', async () => {
+  const n = await students[0].p.getByRole('button', { name: /Request to draw|draw on the whiteboard/i }).count();
+  return n === 0 ? 'none' : (() => { throw new Error(`${n} buttons`); })();
+});
 await step('teacher: open whiteboard', async () => {
   await teacher.getByRole('button', { name: /Share a whiteboard/i }).first().click();
   await teacher.locator('[data-testid=wb-host]').waitFor({ timeout: 10000 });
@@ -249,6 +261,8 @@ await step('whiteboard: pick red, check the student board has no red yet', async
   await teacher.getByRole('button', { name: 'Colour and size' }).first().click();
   await teacher.getByRole('radio', { name: 'Colour #e53935' }).first().click();
   await teacher.keyboard.press('Escape');
+  await students[0].p.locator('[data-whiteboard] canvas').waitFor({ timeout: 15000 });
+  await students[0].p.waitForTimeout(1000);
   const n = await inkPixels(students[0].p);
   return n === 0 ? 'baseline 0 red pixels' : (() => { throw new Error(`baseline ${n}`); })();
 });
@@ -334,6 +348,27 @@ await step('student: follows the teacher down the page and sees the PDF', async 
   return img > 20 ? `${img} blue pixels of the PDF's rule on the student board` : (() => { throw new Error(`blue pixels ${img}`); })();
 });
 await shot(students[0].p, '12-student-wb');
+await step('whiteboard: teacher has no zoom controls', async () => {
+  const n = await teacher.locator('[data-testid=wb-host]').getByRole('button', { name: /Zoom in|Zoom out|Fit page/ }).count();
+  return n === 0 ? 'no zoom buttons' : (() => { throw new Error(`${n}`); })();
+});
+await step('annotate: teacher lets one student annotate from the roster; only that student gets the tools', async () => {
+  const roster = teacher.locator('[data-testid=wbm-people]');
+  if (!(await teacher.getByTestId('roster-annotate').count())) await roster.click();
+  await teacher.waitForTimeout(800);
+  const btn = teacher.getByRole('button', { name: /^Let Meera Iyer annotate the whiteboard$/ });
+  await btn.click({ timeout: 8000 });
+  await students[2].p.waitForTimeout(4000);
+  const meera = await students[2].p.locator('[data-whiteboard="annotate"]').count();
+  const arohi = await students[0].p.locator('[data-whiteboard="annotate"]').count();
+  return meera === 1 && arohi === 0 ? 'Meera has the pen tools; Arohi does not' : (() => { throw new Error(`meera=${meera} arohi=${arohi}`); })();
+});
+await shot(students[2].p, '12b-student-annotating');
+await step('annotate: teacher turns it off again', async () => {
+  await teacher.getByRole('button', { name: /^Stop Meera Iyer annotating$/ }).click({ timeout: 8000 });
+  await students[2].p.waitForTimeout(4000);
+  return (await students[2].p.locator('[data-whiteboard="annotate"]').count()) === 0 ? 'tools gone' : false;
+});
 await step('whiteboard: stop', async () => {
   await teacher.locator('[data-testid=wbm-stop]').click({ timeout: 8000 });
   await teacher.locator('[data-testid=wb-host]').waitFor({ state: 'detached', timeout: 8000 }); return 'closed';
@@ -377,6 +412,24 @@ await step('admin: live classes page lists the class', async () => {
   const t = await admin.content(); return t.includes(code) || /Science/i.test(t) ? 'listed' : false;
 });
 await shot(admin, '14-admin-live');
+
+// ---------- Join form (name, campus, grade, division) ----------
+await step('join form: name, then campus, grade, division; no foundation; joins the class', async () => {
+  const c = await ctx(); const p = await c.newPage();
+  await p.goto(`${BASE}/join-class`);
+  const ids = await p.evaluate(() => [...document.querySelectorAll('select')].map((x) => x.id));
+  if (ids.join(',') !== 'join-campus,join-grade,join-division') throw new Error(`order ${ids}`);
+  if (/foundation/i.test(await p.content())) throw new Error('mentions foundation');
+  await p.fill('#join-first-name', 'Riya'); await p.fill('#join-last-name', 'Desai');
+  await p.selectOption('#join-campus', 'AIRPORTCAMPUS');
+  await p.selectOption('#join-grade', '6');
+  const divs = await p.evaluate(() => [...document.querySelectorAll('#join-division option')].map((o) => o.value).filter(Boolean));
+  await p.selectOption('#join-division', 'A');
+  await p.getByRole('button', { name: 'Join' }).click();
+  await p.waitForURL(/\/classroom\//, { timeout: 25000 });
+  await c.close();
+  return `divisions offered: ${divs}; joined`;
+});
 
 // ---------- End ----------
 await step('teacher ends the class for everyone', async () => {

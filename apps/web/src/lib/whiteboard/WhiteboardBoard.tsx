@@ -176,7 +176,7 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
   const [fill, setFill] = useState(false);
   // Viewer-local zoom / pan on top of the fitted page (lib/zoomPan.ts).
   const [zp, setZp] = useState<ZoomPan>(ZP_IDENTITY);
-  const minZoom = mode === 'edit' ? 0.5 : 1;
+  const minZoom = 1;
   const pointers = useRef(new Map<number, [number, number]>());
   const [preview, setPreview] = useState<Item[]>([]);
   const [textAt, setTextAt] = useState<{ x: number; y: number; sx: number; sy: number } | null>(null);
@@ -219,7 +219,8 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
   const bandH = mode === 'edit' && size.w && size.h ? Math.max(100, visibleH(base, size.h)) : followH;
   const scrollTo = useCallback((y: number) => setScrollY(clampScroll(y, bandH)), [bandH]);
   const scrollBy = useCallback((dy: number) => setScrollY((v) => clampScroll(v + dy, bandH)), [bandH]);
-  const zoomBy = (factor: number, sx = size.w / 2, sy = size.h / 2) => { if (!disableZoom) setZp((t) => zoomAt(t, factor, sx, sy, size.w, size.h, minZoom)); };
+  // Teachers have no zoom (Nov 27): the page is always the full width; they only scroll.
+  const zoomBy = (factor: number, sx = size.w / 2, sy = size.h / 2) => { if (!disableZoom && mode !== 'edit') setZp((t) => zoomAt(t, factor, sx, sy, size.w, size.h, minZoom)); };
   const resetZoom = () => setZp(ZP_IDENTITY);
 
   // Selection: ids still on the current page (a remote delete or a page change drops them).
@@ -616,9 +617,8 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
       pointers.current.set(e.pointerId, next);
       if (!other) return;
       if (mode === 'edit') {
-        // Two fingers up/down scroll the long page; spreading them zooms.
+        // Teacher: two fingers only scroll the long page (no zoom).
         const dyMid = (next[1] - prev[1]) / 2;
-        setZp((t) => panBy(pinchZP(t, prev, other, next, other, size.w, size.h, minZoom), 0, -dyMid, size.w, size.h, minZoom));
         if (dyMid) scrollBy(-dyMid / viewRef.current.scale);
       } else setZp((t) => pinchZP(t, prev, other, next, other, size.w, size.h, minZoom));
       return;
@@ -633,11 +633,10 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
     if (!d) return;
     if (d.kind === 'hand') {
       if (d.panFrom && mode === 'edit') {
-        // Teacher: up/down scrolls the long page, sideways pans a zoomed view.
-        const dx = e.clientX - d.panFrom.x, dy = e.clientY - d.panFrom.y;
+        // Teacher: up/down scrolls the long page (no zoom, so nothing to pan sideways).
+        const dy = e.clientY - d.panFrom.y;
         d.panFrom = { x: e.clientX, y: e.clientY, t: d.panFrom.t };
         if (dy) scrollBy(-dy / viewRef.current.scale);
-        if (dx) setZp((t) => panBy(t, dx, 0, size.w, size.h, minZoom));
       } else if (d.panFrom) setZp(panBy(d.panFrom.t, e.clientX - d.panFrom.x, e.clientY - d.panFrom.y, size.w, size.h, minZoom));
       return;
     }
@@ -757,8 +756,8 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
 
   const onWheel = (e: React.WheelEvent) => {
     if (disableZoom) return;
-    // Teacher: the wheel scrolls the long page, Ctrl+wheel zooms. Viewers: wheel zooms.
-    if (mode === 'edit' && !(e.ctrlKey || e.metaKey)) {
+    // Teacher: the wheel (with or without Ctrl) only scrolls the long page. Viewers: wheel zooms.
+    if (mode === 'edit') {
       const px = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * size.h : e.deltaY;
       if (px) scrollBy(px / viewRef.current.scale);
       return;
@@ -1067,21 +1066,12 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
     },
     {
       id: 'view',
-      label: 'Zoom, pan, image and export',
+      label: 'Pan, image and export',
       icon: icon('view'),
       active: isTool('hand'),
       content: (
         <>
           {toolBtn('hand')}
-          <button type="button" style={btn(false)} onClick={() => zoomBy(1 / 1.25)} aria-label="Zoom out" title="Zoom out (Ctrl+wheel)">
-            {icon('zoomOut')}
-          </button>
-          <button type="button" style={btn(false)} onClick={resetZoom} aria-label="Fit page" title="Fit page">
-            {Math.round(zp.s * 100)}%
-          </button>
-          <button type="button" style={btn(false)} onClick={() => zoomBy(1.25)} aria-label="Zoom in" title="Zoom in">
-            {icon('zoomIn')}
-          </button>
           <button type="button" style={btn(false)} onClick={() => fileRef.current?.click()} aria-label={uploadImage ? 'Insert image or PDF' : 'Insert image'} title={uploadImage ? 'Insert a picture or a PDF (pages go down the board)' : 'Insert image'} data-testid="wb-insert">
             {icon('image')}
           </button>

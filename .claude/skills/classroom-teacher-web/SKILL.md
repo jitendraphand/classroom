@@ -44,6 +44,7 @@ and the test ids; the layout changes between phone, tablet and desktop.
 | Whiteboard | **Share a whiteboard (students see it live)** / **Stop whiteboard sharing** |
 | People | **Open roster** (shows "(n raised hands)"); search **Search students**; long lists show **Show N more** (`[data-testid=roster-more]`) |
 | Entry | No waiting room: students enter on their own. **Remove** (roster) takes one out; they may join again |
+| Student annotation | roster pen button per student (`roster-annotate`): **Let <name> annotate the whiteboard** / **Stop <name> annotating**; only while the whiteboard is open; students cannot ask |
 | Raised hands | toast `[data-testid=raised-hands-toast]` with **Let <name> speak** (unmutes and lowers the hand) |
 | Chat | **Open chat**; **Send to** (everyone, or one student for a private reply); **Chat message**, **Send message** |
 | Everyone quiet | **Mute all** / **Unmute all** |
@@ -54,7 +55,7 @@ and the test ids; the layout changes between phone, tablet and desktop.
 
 The board fills the screen (`[data-testid=wb-host]`); the meeting bar on the
 right (`[data-testid=meeting-bar]`) keeps mic, camera, chat, people,
-student drawing (`wbm-draw-allow` / `wbm-draw-deny`), **Stop whiteboard**
+student annotation (`wbm-perm`: who is annotating, **Stop** per student), **Stop whiteboard**
 (`wbm-stop`) and **End class** (`wbm-end`).
 
 Left tool column (groups open a flyout):
@@ -69,7 +70,7 @@ Left tool column (groups open a flyout):
 | **Colour and size** | palette, **Thickness** |
 | **Undo (Ctrl+Z)**, **Redo (Ctrl+Y)** | |
 | **Pages and background** | **Previous page**, **Next page**, **New page**, **Background**: white, grid, lined, dots, graph, black |
-| **Zoom, pan, image and export** | hand, **Zoom in** / **Zoom out** (Ctrl+wheel), **Fit page**, **Insert image or PDF** (`wb-insert`; file input `wb-file`, PDF pages stack down the board), **Export PNG** (what is on screen), **Export PDF** (all, screen-high sheets) |
+| **Pan, image and export** | hand (scrolls; the teacher board has no zoom), **Insert image or PDF** (`wb-insert`; file input `wb-file`, PDF pages stack down the board), **Export PNG** (what is on screen), **Export PDF** (all, screen-high sheets) |
 
 One long page: 1920 wide, fixed top edge, runs far down. Scroll with the
 wheel, two fingers, PgUp / PgDn, the rail `[data-testid=wb-scroll]` or

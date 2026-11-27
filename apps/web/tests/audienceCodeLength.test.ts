@@ -65,13 +65,13 @@ test('SCIENCEFOUNDATION survives normalisation, matching and assignment checks',
   assert.ok(canTeachAudience(assignments, 'AIRPORTCAMPUS', '7', ['SCIENCEFOUNDATION'], false));
 });
 
-test('student join paths accept Science Foundation', () => {
+test('student join paths accept long division names (older data)', () => {
   const c = validateUnsignedJoin({ sid: 'GROK-TEST-1', firstName: 'Asha', grade: '7', division: 'Science Foundation', campus: 'Airport Campus' });
   assert.equal(c.division, 'SCIENCEFOUNDATION');
   assert.equal(c.campus, 'AIRPORTCAMPUS');
   const grades = [{ name: '7', label: 'Grade 7', active: true, sortOrder: 0, divisions: [{ name: 'SCIENCEFOUNDATION', label: 'Science Foundation', active: true, sortOrder: 0 }] }] as never;
   const campuses = [{ name: 'AIRPORTCAMPUS', label: 'Airport Campus', active: true, sortOrder: 0 }] as never;
-  const fixed = resolveFixedClass(grades, campuses, JOIN_CLASS_FIXED);
+  const fixed = resolveFixedClass(grades, campuses, { ...JOIN_CLASS_FIXED, division: 'Science Foundation' });
   assert.ok(fixed);
   assert.equal(fixed.division, 'SCIENCEFOUNDATION');
   assert.match(formStudentId(fixed, 'Asha Patil'), /^WEB-[0-9a-f]{20}$/);
