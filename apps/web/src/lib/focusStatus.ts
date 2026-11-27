@@ -88,9 +88,20 @@ export function fullscreenGateText(opts: { status: FocusStatus; everFullscreen: 
   };
 }
 
-/** iPhone / iPod (not iPad: iPadOS Safari has element fullscreen and uses the normal flow). */
+/** iPhone / iPod. */
 export function isIPhoneUA(ua: string): boolean {
   return /iPhone|iPod/i.test(ua);
+}
+
+/**
+ * iPhone or iPad (iPadOS Safari reports a Mac user agent; it is told apart by
+ * its touch screen). The class never uses the Fullscreen API there (Nov 27):
+ * iPadOS Safari's element fullscreen blocks typing (Apple Pencil handwriting
+ * counts as typing: "Typing is not allowed in full-screen websites") and a
+ * swipe on a scrolling list (roster, chat) pulls it out of fullscreen.
+ */
+export function isAppleTouchDevice(ua: string, maxTouchPoints = 0): boolean {
+  return /iPhone|iPod|iPad/i.test(ua) || (/Macintosh/i.test(ua) && maxTouchPoints > 1);
 }
 
 /**

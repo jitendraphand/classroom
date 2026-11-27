@@ -124,41 +124,6 @@ function drawBackground(ctx: CanvasRenderingContext2D, bg: Background, y0 = 0, y
   }
 }
 
-/** Width of a pressure stroke at pressure `pr` (0–100): 35 % of the pen width at zero, 125 % at full. */
-export function widthAt(w: number, pr: number): number {
-  return w * (0.35 + (0.9 * pr) / 100);
-}
-
-/**
- * Stylus stroke: the same midpoint-smoothed path as a plain stroke, drawn as
- * one segment per point so the width follows the pressure.
- */
-function drawPressureStroke(ctx: CanvasRenderingContext2D, p: number[], pr: number[], w: number) {
-  const n = p.length / 2;
-  if (n === 1) {
-    ctx.beginPath();
-    ctx.arc(p[0]!, p[1]!, widthAt(w, pr[0]!) / 2, 0, Math.PI * 2);
-    ctx.fill();
-    return;
-  }
-  let sx = p[0]!, sy = p[1]!;
-  for (let i = 1; i < n - 1; i++) {
-    const mx = (p[2 * i]! + p[2 * i + 2]!) / 2, my = (p[2 * i + 1]! + p[2 * i + 3]!) / 2;
-    ctx.lineWidth = widthAt(w, pr[i]!);
-    ctx.beginPath();
-    ctx.moveTo(sx, sy);
-    ctx.quadraticCurveTo(p[2 * i]!, p[2 * i + 1]!, mx, my);
-    ctx.stroke();
-    sx = mx;
-    sy = my;
-  }
-  ctx.lineWidth = widthAt(w, pr[n - 1]!);
-  ctx.beginPath();
-  ctx.moveTo(sx, sy);
-  ctx.lineTo(p[2 * n - 2]!, p[2 * n - 1]!);
-  ctx.stroke();
-}
-
 /** Outline of a closed shape (rect, ellipse, triangle) as the current path. */
 function shapePath(ctx: CanvasRenderingContext2D, it: ShapeItem) {
   ctx.beginPath();
@@ -187,10 +152,6 @@ export function drawItem(ctx: CanvasRenderingContext2D, it: Item, onImage?: () =
       }
       ctx.lineWidth = it.w;
       const p = it.pts;
-      if (it.pr && it.tool === 'pen' && it.pr.length === p.length / 2) {
-        drawPressureStroke(ctx, p, it.pr, it.w);
-        break;
-      }
       if (p.length === 2) {
         ctx.beginPath();
         ctx.arc(p[0]!, p[1]!, it.w / 2, 0, Math.PI * 2);

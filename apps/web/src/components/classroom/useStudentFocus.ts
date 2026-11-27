@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { roomFetch } from '@/lib/classroomClient';
-import { computeFocusStatus, isIPhoneUA, type FocusStatus } from '@/lib/focusStatus';
+import { isAppleTouchDevice, computeFocusStatus, isIPhoneUA, type FocusStatus } from '@/lib/focusStatus';
 import { permissionGrace } from '@/lib/permissions';
 
 type WebkitDoc = Document & {
@@ -14,6 +14,8 @@ type WebkitEl = HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | 
 
 export function fullscreenSupported(): boolean {
   if (typeof document === 'undefined') return false;
+  // iPad / iPhone: never (see isAppleTouchDevice): treated like no fullscreen.
+  if (typeof navigator !== 'undefined' && isAppleTouchDevice(navigator.userAgent || '', navigator.maxTouchPoints || 0)) return false;
   const d = document as WebkitDoc;
   return !!(d.fullscreenEnabled || d.webkitFullscreenEnabled);
 }

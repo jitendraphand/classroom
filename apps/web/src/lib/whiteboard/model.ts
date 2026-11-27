@@ -37,11 +37,6 @@ export type StrokeItem = {
   w: number;
   /** Flat [x0,y0,x1,y1,...] integers in page units. */
   pts: number[];
-  /**
-   * Stylus pressure per point, 0–100 (one per x,y pair). Pen strokes drawn
-   * with a stylus only; absent = constant width (mouse, finger, old clients).
-   */
-  pr?: number[];
 };
 export type ShapeKind = 'line' | 'arrow' | 'rect' | 'ellipse' | 'tri';
 export const SHAPE_KINDS: ShapeKind[] = ['line', 'arrow', 'rect', 'ellipse', 'tri'];
@@ -74,7 +69,7 @@ export type Doc = { v: 1; pages: Page[]; cur: number };
 
 export type Op =
   | { k: 'add'; p: string; item: Item }
-  | { k: 'pts'; p: string; id: string; pts: number[]; pr?: number[] }
+  | { k: 'pts'; p: string; id: string; pts: number[] }
   | { k: 'del'; p: string; ids: string[] }
   | { k: 'clear'; p: string }
   | { k: 'bg'; p: string; bg: Background }
@@ -121,12 +116,6 @@ const clampN = (n: unknown, lo: number, hi: number) => {
   return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : lo;
 };
 
-/** Pressure list: 0–100 integers, at most `max` entries. */
-export function cleanPr(raw: unknown, max = MAX_POINTS_PER_STROKE): number[] | undefined {
-  if (!Array.isArray(raw) || !raw.length) return undefined;
-  return raw.slice(0, max).map((n) => clampN(n, 0, 100));
-}
-
 function cleanPts(raw: unknown, max = MAX_POINTS_PER_STROKE * 2): number[] | null {
   if (!Array.isArray(raw)) return null;
   const out: number[] = [];
@@ -149,10 +138,8 @@ export function cleanItem(raw: unknown): Item | null {
       const pts = cleanPts(o.pts);
       if (!pts) return null;
       const tool = o.tool === 'hl' ? 'hl' : 'pen';
+      // Constant width (Nov 27: stylus pressure removed; `pr` from older clients is dropped).
       const out: StrokeItem = { k: 'stroke', id, by, tool, c, w: clampN(o.w, 1, 80), pts };
-      // Pressure only for pen strokes, exactly one value per point.
-      const pr = tool === 'pen' ? cleanPr(o.pr, pts.length / 2) : undefined;
-      if (pr && pr.length === pts.length / 2) out.pr = pr;
       return out;
     }
     case 'line':
@@ -226,12 +213,6 @@ export function applyOp(doc: Doc, op: Op): boolean {
       if (!s || s.k !== 'stroke') return false;
       const pts = cleanPts(op.pts, Math.max(0, MAX_POINTS_PER_STROKE * 2 - s.pts.length));
       if (!pts?.length) return false;
-      if (s.pr) {
-        // Keep one pressure per point: missing values repeat the last one.
-        const add = cleanPr(op.pr, pts.length / 2) ?? [];
-        const last = s.pr[s.pr.length - 1] ?? 50;
-        for (let i = 0; i < pts.length / 2; i++) s.pr.push(add[i] ?? add[add.length - 1] ?? last);
-      }
       s.pts.push(...pts);
       return true;
     }
@@ -320,7 +301,7 @@ export function transformItem(it: Item, t: { s: number; ox: number; oy: number; 
   switch (it.k) {
     case 'stroke': {
       const pts = it.pts.map((v, i) => (i % 2 ? Y(v) : X(v)));
-      return { ...it, pts, w: clampN(it.w * t.s, 1, 80), ...(it.pr ? { pr: [...it.pr] } : {}) };
+      return { ...it, pts, w: clampN(it.w * t.s, 1, 80) };
     }
     case 'text':
       return { ...it, x: X(it.x), y: Y(it.y), size: clampN(it.size * t.s, 8, 400) };
@@ -490,44 +471,28 @@ export function itemsInRect(page: Page, x1: number, y1: number, x2: number, y2: 
  */
 export class PointBatcher {
   private pending: number[] = [];
-  private pressure: number[] = [];
   private last: [number, number] | null = null;
-  /** `withPressure`: the stroke carries pressure (a stylus); every point then needs one. */
   constructor(
     readonly page: string,
-    readonly id: string,
-    readonly withPressure = false
+    readonly id: string
   ) {}
-  /** `p` = pressure 0–1 (stylus); ignored unless the stroke has pressure. */
-  push(x: number, y: number, p = 0.5) {
+  push(x: number, y: number) {
     const rx = Math.round(x), ry = Math.round(y);
     // Identical to the last point (also across flushes): nothing to add.
     if (this.last && this.last[0] === rx && this.last[1] === ry) return;
     this.last = [rx, ry];
     this.pending.push(rx, ry);
-    if (this.withPressure) this.pressure.push(pressurePct(p));
   }
   /** Points not yet flushed (drawn locally at once, before the next batch leaves). */
   peek(): number[] {
     return this.pending;
   }
-  /** Pressure of the points not yet flushed (empty without pressure). */
-  peekPressure(): number[] {
-    return this.pressure;
-  }
   flush(): Op | null {
     if (!this.pending.length) return null;
     const op: Op = { k: 'pts', p: this.page, id: this.id, pts: this.pending };
-    if (this.withPressure) op.pr = this.pressure;
     this.pending = [];
-    this.pressure = [];
     return op;
   }
-}
-
-/** Stylus pressure 0–1 → the 0–100 integer stored per point. */
-export function pressurePct(p: number): number {
-  return clampN((Number.isFinite(p) ? p : 0.5) * 100, 0, 100);
 }
 
 /** Laser pointer: how long a trail point stays visible. */

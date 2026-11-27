@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   BACKGROUNDS,
   LASER_MS,
@@ -11,52 +12,40 @@ import {
   emptyDoc,
   hitItem,
   inverseOf,
-  pressurePct,
   transformItem,
   type Item,
   type Op,
 } from '../src/lib/whiteboard/model';
-import { widthAt } from '../src/lib/whiteboard/render';
 import { recognizeShape, resample } from '../src/lib/whiteboard/recognize';
 import { WhiteboardSession, laserPacket } from '../src/lib/whiteboard/session';
 import { sanitizeStudentOps } from '../src/lib/whiteboardServer';
 
-const stroke = (pts: number[], pr?: number[]): Item => ({ k: 'stroke', id: 'a1', by: 't', tool: 'pen', c: '#111111', w: 4, pts, ...(pr ? { pr } : {}) });
+const stroke = (pts: number[]): Item => ({ k: 'stroke', id: 'a1', by: 't', tool: 'pen', c: '#111111', w: 4, pts });
 
-test('pressure: kept for pen strokes with one value per point, dropped otherwise', () => {
-  const ok = cleanItem(stroke([0, 0, 10, 10], [20, 140]));
-  assert.deepEqual((ok as { pr?: number[] }).pr, [20, 100]);
-  const wrongLength = cleanItem(stroke([0, 0, 10, 10], [20]));
-  assert.equal((wrongLength as { pr?: number[] }).pr, undefined);
-  const hl = cleanItem({ ...stroke([0, 0, 10, 10], [20, 30]), tool: 'hl' });
-  assert.equal((hl as { pr?: number[] }).pr, undefined);
-  assert.equal(pressurePct(0.42), 42);
-  assert.equal(pressurePct(NaN), 50);
-  assert.ok(widthAt(10, 0) < widthAt(10, 50) && widthAt(10, 50) < widthAt(10, 100));
-});
-
-test('pressure: appended points keep the arrays aligned, missing values repeat the last', () => {
+test('no stylus pressure (Nov 27): even-width lines; `pr` from older clients is dropped', () => {
+  const old = cleanItem({ ...stroke([0, 0, 10, 10]), pr: [20, 100] }) as Record<string, unknown>;
+  assert.equal('pr' in old, false);
   const doc = emptyDoc();
   const p = doc.pages[0]!.id;
-  applyOp(doc, { k: 'add', p, item: stroke([0, 0], [30]) });
-  applyOp(doc, { k: 'pts', p, id: 'a1', pts: [5, 5, 6, 6], pr: [60, 70] });
-  applyOp(doc, { k: 'pts', p, id: 'a1', pts: [7, 7] });
-  const s = doc.pages[0]!.items[0] as { pts: number[]; pr: number[] };
-  assert.equal(s.pts.length / 2, s.pr.length);
-  assert.deepEqual(s.pr, [30, 60, 70, 70]);
+  applyOp(doc, { k: 'add', p, item: stroke([0, 0]) });
+  applyOp(doc, { k: 'pts', p, id: 'a1', pts: [5, 5], pr: [60] } as unknown as Op);
+  assert.equal('pr' in (doc.pages[0]!.items[0] as Record<string, unknown>), false);
+  const board = readFileSync('src/lib/whiteboard/WhiteboardBoard.tsx', 'utf8');
+  assert.doesNotMatch(board, /\.pressure\b|withPressure|pressurePct/);
+  assert.doesNotMatch(readFileSync('src/lib/whiteboard/render.ts', 'utf8'), /drawPressureStroke|widthAt/);
 });
 
-test('batcher: pressure only when the stroke has it, duplicates dropped across flushes', () => {
-  const b = new PointBatcher('p', 's1', true);
-  b.push(1, 1, 0.5);
-  b.push(1, 1, 0.9);
-  b.push(2, 2, 0.25);
+test('batcher: duplicates dropped across flushes', () => {
+  const b = new PointBatcher('p', 's1');
+  b.push(1, 1);
+  b.push(1, 1);
+  b.push(2, 2);
   assert.deepEqual(b.peek(), [1, 1, 2, 2]);
-  assert.deepEqual(b.flush(), { k: 'pts', p: 'p', id: 's1', pts: [1, 1, 2, 2], pr: [50, 25] });
-  b.push(2, 2, 1);
+  assert.deepEqual(b.flush(), { k: 'pts', p: 'p', id: 's1', pts: [1, 1, 2, 2] });
+  b.push(2, 2);
   assert.equal(b.flush(), null);
   const plain = new PointBatcher('p', 's2');
-  plain.push(3, 3, 0.7);
+  plain.push(3, 3);
   assert.deepEqual(plain.flush(), { k: 'pts', p: 'p', id: 's2', pts: [3, 3] });
 });
 
@@ -79,10 +68,9 @@ test('xf: move and resize selected items, undo restores them exactly', () => {
 
 test('xf: strokes, text and images scale with the selection', () => {
   const t = { s: 0.5, ox: 0, oy: 0, dx: 10, dy: 20 };
-  const s = transformItem(stroke([100, 100, 200, 300], [10, 90]), t) as { pts: number[]; w: number; pr: number[] };
+  const s = transformItem(stroke([100, 100, 200, 300]), t) as { pts: number[]; w: number };
   assert.deepEqual(s.pts, [60, 70, 110, 170]);
   assert.equal(s.w, 2);
-  assert.deepEqual(s.pr, [10, 90]);
   const txt = transformItem({ k: 'text', id: 'x', by: 't', c: '#111111', size: 40, x: 100, y: 100, text: 'a' }, t) as { size: number; x: number };
   assert.deepEqual([txt.size, txt.x], [20, 60]);
 });
@@ -118,9 +106,9 @@ test('laser: trail fades after LASER_MS; packets reach the session without chang
   assert.deepEqual(s.laser.pts.map((p) => [p.x, p.y]), [[100, 201]]);
 });
 
-test('student relay: pressure passes through with the points', () => {
+test('student relay: points pass, pressure is dropped', () => {
   const ops = sanitizeStudentOps([{ k: 'pts', p: 'p1', id: 's9', pts: [1, 2, 3, 4], pr: [10, 200] }], 'student_x');
-  assert.deepEqual(ops, [{ k: 'pts', p: 'p1', id: 's9', pts: [1, 2, 3, 4], pr: [10, 100] }]);
+  assert.deepEqual(ops, [{ k: 'pts', p: 'p1', id: 's9', pts: [1, 2, 3, 4] }]);
 });
 
 const circle = (cx: number, cy: number, r: number, n = 60, wobble = 0) => {

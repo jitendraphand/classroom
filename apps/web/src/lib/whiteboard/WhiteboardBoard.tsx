@@ -19,7 +19,8 @@
  *
  * Ink feels immediate: every pointer sample (coalesced events, plus the
  * browser's predicted points) is painted on the next frame, while the network
- * still gets one `pts` op per BATCH_MS. A stylus records pressure. Holding the
+ * still gets one `pts` op per BATCH_MS. Lines have an even width (no stylus
+ * pressure: Nov 27). Holding the
  * pen still at the end of a stroke snaps a rough line / box / circle /
  * triangle into a clean shape.
  */
@@ -41,7 +42,6 @@ import {
   itemsInRect,
   newId,
   pageBand,
-  pressurePct,
   transformItem,
   type Background,
   type Item,
@@ -126,6 +126,9 @@ function unionBounds(items: Item[]): Box | null {
 
 const xfBox = (b: Box, t: Xf): Box => ({ x: (b.x - t.ox) * t.s + t.ox + t.dx, y: (b.y - t.oy) * t.s + t.oy + t.dy, w: b.w * t.s, h: b.h * t.s });
 
+/** No text selection, no iOS long-press menu or magnifier on the board. */
+const NO_SELECT: CSSProperties = { userSelect: 'none', WebkitUserSelect: 'none', WebkitTouchCallout: 'none' } as CSSProperties;
+
 /** Teacher's band leaves at most this often while scrolling. */
 const VIEW_SEND_MS = 100;
 /** PDF pages are placed this wide on the 1920-wide page. */
@@ -138,6 +141,32 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
     () => session.version
   );
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  // iPad (Apple Pencil / long press): no text selection, no Copy / Translate
+  // menu and no magnifier while writing. Only the text tool's box may select.
+  useEffect(() => {
+    const root = rootRef.current;
+    const doc = root?.ownerDocument;
+    if (!root || !doc) return;
+    const block = (e: Event) => {
+      const t = e.target as Node | null;
+      if (!t || !root.contains(t)) return;
+      const tag = (t as HTMLElement).tagName;
+      if (tag === 'TEXTAREA' || tag === 'INPUT') return;
+      e.preventDefault();
+    };
+    doc.addEventListener('selectstart', block);
+    // A selection that started elsewhere must not grow across the board.
+    const clear = () => {
+      const sel = doc.getSelection();
+      if (sel && !sel.isCollapsed && sel.anchorNode && root.contains(sel.anchorNode)) sel.removeAllRanges();
+    };
+    doc.addEventListener('selectionchange', clear);
+    return () => {
+      doc.removeEventListener('selectstart', block);
+      doc.removeEventListener('selectionchange', clear);
+    };
+  }, []);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [tool, setToolState] = useState<Tool>('pen');
@@ -245,13 +274,7 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
     if (!it || it.k !== 'stroke') return [];
     const n = it.pts.length;
     const pts = [it.pts[n - 2]!, it.pts[n - 1]!, ...pend, ...pred];
-    const tail: StrokeItem = { ...it, id: 'live-tail', pts };
-    if (it.pr) {
-      const last = it.pr[it.pr.length - 1] ?? 50;
-      const pp = d.batcher.peekPressure();
-      tail.pr = [last, ...pp, ...pred.filter((_, i) => i % 2 === 0).map(() => pp[pp.length - 1] ?? last)];
-    } else delete tail.pr;
-    return [tail];
+    return [{ ...it, id: 'live-tail', pts }];
   };
 
   paintRef.current = () => {
@@ -538,12 +561,9 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
     if (t === 'pen' || t === 'hl') {
       const id = newId(mode === 'edit' ? 't' : 's');
       const w = t === 'hl' ? width * 3 : width;
-      // A stylus records pressure (pen strokes only; the highlighter stays even).
-      const withPressure = t === 'pen' && e.pointerType === 'pen';
       const item: StrokeItem = { k: 'stroke', id, by: identity, tool: t, c: color, w, pts: [Math.round(pt.x), Math.round(pt.y)] };
-      if (withPressure) item.pr = [pressurePct(e.pressure)];
       send([{ k: 'add', p: pg.id, item }]);
-      const batcher = new PointBatcher(pg.id, id, withPressure);
+      const batcher = new PointBatcher(pg.id, id);
       const timer = window.setInterval(() => flushPts(), BATCH_MS);
       drag.current = { kind: t, batcher, item, timer };
       armSnap(pt.x, pt.y, true);
@@ -633,7 +653,7 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
       const list = typeof ne.getCoalescedEvents === 'function' ? ne.getCoalescedEvents() : [];
       for (const ce of list.length ? list : [ne]) {
         const p = pageXY(ce.clientX, ce.clientY);
-        d.batcher.push(p.x, p.y, ce.pressure);
+        d.batcher.push(p.x, p.y);
       }
       const pred = typeof ne.getPredictedEvents === 'function' ? ne.getPredictedEvents() : [];
       d.predicted = pred.slice(0, 3).flatMap((pe) => {
@@ -1105,7 +1125,7 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
   }
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', background: '#0b0f14', overflow: 'hidden', ...style }} data-whiteboard={mode}>
+    <div ref={rootRef} style={{ position: 'relative', width: '100%', height: '100%', background: '#0b0f14', overflow: 'hidden', ...NO_SELECT, ...style }} data-whiteboard={mode} onContextMenu={(e) => e.preventDefault()}>
       <div ref={wrapRef} style={{ position: 'absolute', inset: 0, left: mode === 'view' ? 0 : barW }}>
         <canvas
           ref={canvasRef}
@@ -1146,7 +1166,7 @@ export function WhiteboardBoard({ session, mode, identity, onSend, onLaser, onCl
           <textarea
             autoFocus
             data-testid="wb-text"
-            style={{ position: 'absolute', left: textAt.sx, top: textAt.sy, minWidth: 200, minHeight: 40, font: `${(24 + width * 4) * view.scale}px system-ui`, color, background: 'rgba(255,255,255,0.85)', border: '1px dashed #2563eb', outline: 'none', zIndex: 3 }}
+            style={{ userSelect: 'text', WebkitUserSelect: 'text', position: 'absolute', left: textAt.sx, top: textAt.sy, minWidth: 200, minHeight: 40, font: `${(24 + width * 4) * view.scale}px system-ui`, color, background: 'rgba(255,255,255,0.85)', border: '1px dashed #2563eb', outline: 'none', zIndex: 3 }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();

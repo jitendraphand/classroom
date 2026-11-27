@@ -72,7 +72,7 @@ polls `/state` every 60 s and students every 60-120 s; pushes do the rest
   `POST /api/rooms/<code>/whiteboard/asset`, raw JPEG/PNG/WebP body ≤ 2 MB,
   teacher only; `GET …/asset/<id>` for the teacher, admitted students and
   admins who monitor live classes) or, from older boards, a small `data:` URL.
-- Items: `stroke` (pen/highlighter, optional pressure 0-100), `shape`
+- Items: `stroke` (pen/highlighter, even width; stylus pressure was removed Nov 2026 and an old `pr` field is dropped), `shape`
   (`line`, `arrow`, `rect`, `ellipse`, `tri`, optional fill), `text`, `img`.
   Every item carries `by` (the author's identity).
 - Ops: `add`, `pts` (live stroke points), `del`, `clear`, `bg`, `newpage`,
