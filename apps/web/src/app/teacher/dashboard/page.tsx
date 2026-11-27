@@ -17,7 +17,6 @@ import { adhocCampuses, adhocDivisions, adhocGrades, adhocProblem, type AdhocGra
 import { TeacherInsights } from '@/components/teacher/TeacherInsights';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { formatDate, formatTime } from '@/lib/timeFormat';
-import { enterTeacherFullscreenOnGesture } from '@/components/classroom/useTeacherFullscreen';
 import { exitFullscreenIfActive } from '@/components/classroom/useStudentFocus';
 
 type Me = { role: string; name?: string; email?: string; permanentCode?: string; mustChangePassword?: boolean; adminAvailable?: boolean };
@@ -144,13 +143,11 @@ export default function TeacherDashboard() {
   const [adhocError, setAdhocError] = useState('');
 
   async function go(code: string) {
-    void enterTeacherFullscreenOnGesture();
     await claimTeacherTab(code);
     router.push(`/classroom/${code}`);
   }
 
   async function start(body: Record<string, unknown>, id: string) {
-    void enterTeacherFullscreenOnGesture();
     setLastStart(id);
     setBusy(id);
     setError('');

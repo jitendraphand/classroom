@@ -72,7 +72,6 @@ import { useChatThread } from './chatThread';
 // Chat UI loads on first open (the thread hook above keeps unread counts live).
 const ChatView = dynamic(() => import('./Chat').then((m) => m.ChatView), { ssr: false });
 import { exitFullscreenIfActive, useStudentFocus } from './useStudentFocus';
-import { useTeacherFullscreen } from './useTeacherFullscreen';
 
 import { useScreenWakeLock } from './useScreenWakeLock';
 import { PermissionBanner } from './PermissionBanner';
@@ -917,7 +916,6 @@ function RoomInner({
   const [micIssue, setMicIssue] = useState<MediaAccessIssue | null>(null);
   const [camRetryTick, setCamRetryTick] = useState(0);
   const [micRetryTick, setMicRetryTick] = useState(0);
-  const [shareStarting, setShareStarting] = useState(false);
   useScreenWakeLock(true);
   const [hudOpen, setHudOpen] = useState(false);
   const [hudNotice, setHudNotice] = useState('');
@@ -1019,10 +1017,8 @@ function RoomInner({
   const rawStage = state?.stageMode ?? 'idle';
   // Whiteboard product surface removed — treat legacy redis value as idle.
   const stageMode: 'idle' | 'screen' = rawStage === 'screen' ? 'screen' : 'idle';
-  const teacherFs = useTeacherFullscreen({
-    enabled: isTeacher,
-    sharing: screenOn || stageMode === 'screen' || shareStarting,
-  });
+  // Teachers are never asked or forced into fullscreen (Nov 27), on any
+  // device or browser; students keep their fullscreen rules (useStudentFocus).
   // Stable arrays (same contents → same identity) so the children's LiveKit
   // listeners are not torn down and re-added on every render of this view.
   const teacherKey = (state?.admitted ?? [])
@@ -1696,7 +1692,6 @@ function RoomInner({
     }
 
     shareStartRef.current = true;
-    setShareStarting(true);
     const controlsPromise = beginShareControls();
     const streamPromise = captureScreen(videoModeRef.current);
 
@@ -1705,7 +1700,6 @@ function RoomInner({
       stream = await streamPromise;
     } catch (e) {
       shareStartRef.current = false;
-      setShareStarting(false);
       const controls = await controlsPromise.catch(() => null);
       controls?.close();
       console.warn('screen share', e);
@@ -1744,7 +1738,6 @@ function RoomInner({
     if (!media || media.readyState === 'ended') {
       dropShareAudio();
       shareStartRef.current = false;
-      setShareStarting(false);
       try {
         media?.stop();
       } catch {
@@ -1913,7 +1906,6 @@ function RoomInner({
     } catch (e) {
       shareWantedRef.current = false;
       shareStartRef.current = false;
-      setShareStarting(false);
       dropShareAudio();
       try {
         media.stop();
@@ -1979,7 +1971,6 @@ function RoomInner({
     setChatOpen(false);
     setRosterOpen(false);
     shareStartRef.current = false;
-    setShareStarting(false);
     await postStage('screen');
 
     const onMediaEnded = () => {
@@ -3223,85 +3214,6 @@ function RoomInner({
         onDismissCamera={() => setCamIssue(null)}
         onDismissMic={() => setMicIssue(null)}
       />
-
-      {teacherFs.gate === 'cover' && teacherFs.text && (
-        <div
-          data-testid="teacher-fullscreen-cover"
-          data-no-auto-fullscreen
-          className="fixed inset-0 z-[150] flex items-center justify-center bg-slate-950/85 px-6 backdrop-blur-sm"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Return to full screen"
-        >
-          <div className="w-full max-w-md rounded-2xl border border-white/15 bg-surface-1 p-7 text-center shadow-lift">
-            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-brand-500/20 text-brand-300">
-              <IconScreen size={24} />
-            </div>
-            <h2 className="font-display text-xl font-semibold text-white">
-              {teacherFs.text.title}
-            </h2>
-            <p className="mt-2 text-sm text-slate-300">
-              {teacherFs.text.body}
-            </p>
-            <div className="mt-5 flex flex-wrap justify-center gap-2.5">
-              <Button
-                data-no-auto-fullscreen
-                onClick={() => void teacherFs.returnToFullscreen()}
-              >
-                {teacherFs.text.buttonLabel}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {(teacherFs.gate === 'prompt' || teacherFs.gate === 'share-reminder' || teacherFs.gate === 'iphone-hint') && teacherFs.text && (
-        <div
-          data-testid={
-            teacherFs.gate === 'prompt'
-              ? 'teacher-fullscreen-prompt'
-              : teacherFs.gate === 'share-reminder'
-                ? 'teacher-fullscreen-share-reminder'
-                : 'teacher-fullscreen-iphone-hint'
-          }
-          data-no-auto-fullscreen
-          role="status"
-          className="fixed left-1/2 top-3 z-[140] flex max-w-lg -translate-x-1/2 flex-wrap items-center justify-center gap-2.5 rounded-xl border border-brand-400/35 bg-surface-1/95 px-3.5 py-2 text-xs text-slate-100 shadow-lift backdrop-blur"
-          style={wbOpen ? { marginRight: MEETING_BAR_PX / 2 } : undefined}
-        >
-          <span>{teacherFs.text.body}</span>
-          {teacherFs.gate !== 'iphone-hint' && (
-            <button
-              type="button"
-              data-no-auto-fullscreen
-              onClick={() => void teacherFs.returnToFullscreen()}
-              className="rounded-lg bg-brand-500 px-3 py-1 font-semibold text-white transition hover:bg-brand-400"
-            >
-              {teacherFs.text.buttonLabel}
-            </button>
-          )}
-          {teacherFs.gate === 'share-reminder' && (
-            <button
-              type="button"
-              data-no-auto-fullscreen
-              onClick={teacherFs.dismiss}
-              className="rounded px-2 py-1 text-slate-300 hover:underline"
-            >
-              Dismiss
-            </button>
-          )}
-          {teacherFs.gate === 'iphone-hint' && (
-            <button
-              type="button"
-              data-no-auto-fullscreen
-              onClick={teacherFs.dismiss}
-              className="rounded-lg bg-white/15 px-3 py-1 font-semibold text-white hover:bg-white/25"
-            >
-              {teacherFs.text.buttonLabel}
-            </button>
-          )}
-        </div>
-      )}
 
       </div>
       {/* Main stage — screen share fills the middle when active */}

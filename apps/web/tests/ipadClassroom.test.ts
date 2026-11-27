@@ -17,19 +17,15 @@ test('iPad and iPhone are detected (iPadOS reports a Mac UA; told apart by touch
   assert.equal(isIPhoneUA(IPAD_DESKTOP_UA), false); // the iPhone-only hint stays iPhone-only
 });
 
-test('fullscreen stays on iPad; typing leaves it first, the next tap brings it back', () => {
+test('students: fullscreen stays on iPad; typing leaves it first, the next tap brings it back', () => {
   const focus = readFileSync('src/components/classroom/useStudentFocus.ts', 'utf8');
   const i = focus.indexOf('export function fullscreenSupported()');
   assert.doesNotMatch(focus.slice(i, focus.indexOf('\n}', i)), /isAppleTouchDevice/); // not switched off
-  for (const f of ['src/components/classroom/useStudentFocus.ts', 'src/components/classroom/useTeacherFullscreen.ts']) {
+  for (const f of ['src/components/classroom/useStudentFocus.ts']) {
     const src = readFileSync(f, 'utf8');
     assert.match(src, /installTypingGuard\(document, \(\) => \{/, f);
     assert.match(src, /typingHold\.active\(\)/, f);
   }
-  const teacher = readFileSync('src/components/classroom/useTeacherFullscreen.ts', 'utf8');
-  assert.match(teacher, /permissionGrace: permGrace \|\| typing/); // no cover while typing
-  assert.match(teacher, /setCoverDismissed\(true\);\n\s+void exitFullscreenIfActive\(\)/); // small bar after
-  assert.match(teacher, /if \(appleTouch && isEditableTarget\(target\)\) return;/);
   const css = readFileSync('src/app/globals.css', 'utf8');
   assert.match(css, /html,\nbody \{\n  overscroll-behavior: none;/);
   assert.match(css, /\.overflow-y-auto,[\s\S]*?overscroll-behavior: contain;/);

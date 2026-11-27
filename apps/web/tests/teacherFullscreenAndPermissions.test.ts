@@ -3,14 +3,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  isAndroidWebView,
-  isElectronApp,
-  isStandalonePWA,
-  isTeacherFullscreenExempt,
-  teacherFullscreenGate,
-  teacherFullscreenText,
-} from '../src/lib/teacherFullscreen';
-import {
   buildMediaIssue,
   classifyMediaError,
   createPermissionGraceTracker,
@@ -22,77 +14,13 @@ import {
 const ROOT = path.resolve(__dirname, '..');
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 
-test('teacher fullscreen exemptions: Electron, Android WebView, and installed PWA', () => {
-  assert.equal(isElectronApp({ ua: 'Mozilla/5.0 Electron/31.2.0 Chrome/126.0.0.0' }), true);
-  assert.equal(isElectronApp({ ua: 'Mozilla/5.0 Chrome/126.0.0.0', hasElectronProcess: true }), true);
-  assert.equal(isElectronApp({ ua: 'Mozilla/5.0 Chrome/126.0.0.0 Safari/537.36' }), false);
-
-  assert.equal(
-    isAndroidWebView({ ua: 'Mozilla/5.0 (Linux; Android 14; Pixel 8; wv) AppleWebKit/537.36 Chrome/126.0 Mobile Safari/537.36' }),
-    true
-  );
-  assert.equal(
-    isAndroidWebView({ ua: 'Mozilla/5.0 (Linux; Android 13; SM-X200) AppleWebKit/537.36 Version/4.0 Chrome/120.0.0.0 Safari/537.36' }),
-    true
-  );
-  assert.equal(isAndroidWebView({ ua: 'Mozilla/5.0 Chrome/126.0', hasAndroidBridge: true }), true);
-  assert.equal(
-    isAndroidWebView({ ua: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36' }),
-    false
-  );
-
-  assert.equal(isStandalonePWA({ navigatorStandalone: true }), true);
-  assert.equal(isStandalonePWA({ displayModeStandalone: true }), true);
-  assert.equal(isStandalonePWA({}), false);
-
-  assert.equal(
-    isTeacherFullscreenExempt({ ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0.0.0 Safari/537.36' }),
-    false
-  );
-  assert.equal(
-    isTeacherFullscreenExempt({ ua: 'Mozilla/5.0 (iPad; CPU OS 17_5 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1' }),
-    false
-  );
-});
-
-test('teacherFullscreenGate handles prompt, exit cover, share exemption, iPhone hint, and permission grace', () => {
-  const base = {
-    exempt: false,
-    fullscreenSupported: true,
-    isFullscreen: false,
-    everFullscreen: false,
-    iphone: false,
-    sharing: false,
-    permissionGrace: false,
-    coverDismissed: false,
-    shareReminderDismissed: false,
-    iphoneHintDismissed: false,
-  };
-
-  assert.equal(teacherFullscreenGate({ ...base, exempt: true }), 'off');
-  assert.equal(teacherFullscreenGate({ ...base, isFullscreen: true }), 'off');
-  assert.equal(teacherFullscreenGate({ ...base, permissionGrace: true, everFullscreen: true }), 'off');
-  assert.equal(teacherFullscreenGate(base), 'prompt');
-  assert.equal(teacherFullscreenGate({ ...base, everFullscreen: true }), 'cover');
-  assert.equal(teacherFullscreenGate({ ...base, everFullscreen: true, coverDismissed: true }), 'prompt');
-  assert.equal(teacherFullscreenGate({ ...base, everFullscreen: true, sharing: true }), 'share-reminder');
-  assert.equal(
-    teacherFullscreenGate({ ...base, everFullscreen: true, sharing: true, shareReminderDismissed: true }),
-    'off'
-  );
-  assert.equal(teacherFullscreenGate({ ...base, fullscreenSupported: false, iphone: true }), 'iphone-hint');
-  assert.equal(
-    teacherFullscreenGate({ ...base, fullscreenSupported: false, iphone: true, iphoneHintDismissed: true }),
-    'off'
-  );
-  assert.equal(teacherFullscreenGate({ ...base, fullscreenSupported: false, iphone: false }), 'off');
-
-  for (const gate of ['prompt', 'cover', 'share-reminder', 'iphone-hint'] as const) {
-    const copy = teacherFullscreenText(gate);
-    assert.ok(copy.title.length > 0);
-    assert.ok(copy.body.length > 0);
-    assert.ok(copy.buttonLabel.length > 0);
-  }
+test('teachers are never forced into fullscreen (Nov 27): no auto entry, cover or prompt', () => {
+  const room = read('src/components/classroom/ClassroomRoom.tsx');
+  assert.doesNotMatch(room, /useTeacherFullscreen|teacher-fullscreen-cover|teacher-fullscreen-prompt|teacherFs\./);
+  assert.doesNotMatch(read('src/app/teacher/dashboard/page.tsx'), /enterTeacherFullscreenOnGesture|enterFullscreen/);
+  assert.equal(fs.existsSync(path.join(process.cwd(), 'src/components/classroom/useTeacherFullscreen.ts')), false);
+  // Students keep their fullscreen rules.
+  assert.match(read('src/components/classroom/useStudentFocus.ts'), /export async function enterFullscreen|export function enterFullscreen/);
 });
 
 test('permission browser detection, per-browser hints, and error classification', () => {
@@ -228,10 +156,8 @@ test('requestSeparatePermission requests camera and microphone independently and
 
 test('classroom, dashboard, and waiting-room wiring invariants hold', () => {
   const room = read('src/components/classroom/ClassroomRoom.tsx');
-  assert.match(room, /useTeacherFullscreen\(/);
   assert.match(room, /useScreenWakeLock\(/);
   assert.match(room, /<PermissionBanner/);
-  assert.match(room, /teacher-fullscreen-cover/);
   assert.match(room, /exitFullscreenIfActive\(\)/);
   assert.match(room, /requestSeparatePermission\('microphone'\)/);
   assert.match(room, /primeVoiceAudio\(isTeacher\)/);
@@ -247,9 +173,6 @@ test('classroom, dashboard, and waiting-room wiring invariants hold', () => {
   assert.match(pub, /withPermissionPrompt/);
   assert.match(pub, /devicechange/);
   assert.match(pub, /pageshow/);
-
-  const dash = read('src/app/teacher/dashboard/page.tsx');
-  assert.match(dash, /enterTeacherFullscreenOnGesture\(\)/);
 
   const joinPage = read('src/app/join/[code]/page.tsx');
   assert.match(joinPage, /<WaitingPermissionsCard \/>/);
