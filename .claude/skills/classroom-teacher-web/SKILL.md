@@ -1,6 +1,6 @@
 ---
 name: classroom-teacher-web
-description: Operate the classroom web app as a teacher by driving a browser (Playwright, Chrome automation or computer use) - sign in, start or re-enter a class, admit students, manage mic/camera/noise removal, roster and raised hands, chat, share screen, run the whiteboard, end the class. Use when asked to teach, demo, test or rehearse a class in the web app UI, or to automate a teacher flow there. For teaching through tools without a browser, use the classroom-ai-teacher skill.
+description: Operate the classroom web app as a teacher by driving a browser (Playwright, Chrome automation or computer use) - sign in, start or re-enter a class, manage mic/camera/noise removal, roster and raised hands, chat, share screen, run the whiteboard, end the class. Use when asked to teach, demo, test or rehearse a class in the web app UI, or to automate a teacher flow there. For teaching through tools without a browser, use the classroom-ai-teacher skill.
 ---
 
 # Teaching in the classroom web app (browser)
@@ -43,18 +43,17 @@ and the test ids; the layout changes between phone, tablet and desktop.
 | Share screen | **Share screen** / **Stop sharing screen**; controls pop out in a small window (or the in-tab dock `[data-testid=share-inline-dock]`) |
 | Whiteboard | **Share a whiteboard (students see it live)** / **Stop whiteboard sharing** |
 | People | **Open roster** (shows "(n raised hands)"); search **Search students**; long lists show **Show N more** (`[data-testid=roster-more]`) |
-| Admit | **Admit all (n)** in the waiting banner, or **Admit** per student in the roster |
+| Entry | No waiting room: students enter on their own. **Remove** (roster) takes one out; they may join again |
 | Raised hands | toast `[data-testid=raised-hands-toast]` with **Let <name> speak** (unmutes and lowers the hand) |
 | Chat | **Open chat**; **Send to** (everyone, or one student for a private reply); **Chat message**, **Send message** |
 | Everyone quiet | **Mute all** / **Unmute all** |
 | Videos | **Video panel** (`[data-testid=video-panel]`), **Rotate video sample** |
-| Leave (only you) | **Leave class** |
-| End for everyone | **End class**, then the dialog `[data-testid=end-class-confirm]` -> **End class** (or **Cancel**); the summary is `[data-testid=class-summary]` |
+| Leave / End | one **Leave** button (`[data-testid=leave-end]`) opens a menu: **Leave class** (`leave-end-leave`, only you) or **End class for everyone** (`leave-end-end`), then the dialog `[data-testid=end-class-confirm]` -> **End class**; the summary is `[data-testid=class-summary]` |
 
 ## Whiteboard
 
 The board fills the screen (`[data-testid=wb-host]`); the meeting bar on the
-right (`[data-testid=meeting-bar]`) keeps mic, camera, chat, people, admit,
+right (`[data-testid=meeting-bar]`) keeps mic, camera, chat, people,
 student drawing (`wbm-draw-allow` / `wbm-draw-deny`), **Stop whiteboard**
 (`wbm-stop`) and **End class** (`wbm-end`).
 
@@ -69,11 +68,14 @@ Left tool column (groups open a flyout):
 | **Erase** (E) | eraser, area eraser, **Clear page** |
 | **Colour and size** | palette, **Thickness** |
 | **Undo (Ctrl+Z)**, **Redo (Ctrl+Y)** | |
-| **Pages and background** | **Previous page** (PgUp), **Next page** (PgDn), **New page**, **Background**: white, grid, lined, dots, graph, black |
-| **Zoom, pan, image and export** | hand, **Zoom in** / **Zoom out** (Ctrl+wheel), **Fit page**, **Insert image**, **Export PNG**, **Export PDF** |
+| **Pages and background** | **Previous page**, **Next page**, **New page**, **Background**: white, grid, lined, dots, graph, black |
+| **Zoom, pan, image and export** | hand, **Zoom in** / **Zoom out** (Ctrl+wheel), **Fit page**, **Insert image or PDF** (`wb-insert`; file input `wb-file`, PDF pages stack down the board), **Export PNG** (what is on screen), **Export PDF** (all, screen-high sheets) |
 
-Page coordinates are 1920 x 1080 whatever the screen size; students see the
-same page scaled.
+One long page: 1920 wide, fixed top edge, runs far down. Scroll with the
+wheel, two fingers, PgUp / PgDn, the rail `[data-testid=wb-scroll]` or
+**Back to the top of the board** (`wb-scroll-top`, Home). Students see the
+band the teacher is on, scaled to their width. Raised hands and notices
+float at the bottom right and never move the board.
 
 ## Checking what students see
 
