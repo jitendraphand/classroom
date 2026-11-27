@@ -963,6 +963,8 @@ function RoomInner({
   const [maskActive, setMaskActive] = useState(false);
   /** Entire-screen share on Chrome/Edge: students see a frozen picture while this tab is in front. */
   const [shareFreeze, setShareFreeze] = useState(false);
+  /** Floats on the whiteboard keep clear of its tool column (left) and meeting bar (right). */
+  const wbFloatInsets = useCallback(() => ({ left: WB_TOOL_CLEAR_PX, right: MEETING_BAR_PX }), []);
   const wbAssetUrl = useCallback((id: string) => roomApiUrl(code, `/whiteboard/asset/${id}`), [code]);
   const [maskFallback, setMaskFallback] = useState<MaskFallback>('');
   /** One-time Wayland position note. The yellow strip under the pill is not used. */
@@ -3215,6 +3217,7 @@ function RoomInner({
           width={320}
           height={480}
           defaultPos={() => ({ x: Math.max(8, window.innerWidth - 340), y: 72 })}
+          extraInsets={wbOpen ? wbFloatInsets : undefined}
         >
           <div className="flex h-full min-h-0 flex-col space-y-3 overflow-hidden">
             <div className="flex shrink-0 flex-wrap items-center gap-2" data-no-drag>
@@ -3407,8 +3410,10 @@ function RoomInner({
           height={420}
           defaultPos={() => ({
             x: Math.max(8, window.innerWidth - 340),
-            y: Math.max(8, window.innerHeight - 540),
+            // Whiteboard: near the top, not at the bottom of a tall tablet screen.
+            y: wbOpen ? 72 : Math.max(8, window.innerHeight - 540),
           })}
+          extraInsets={wbOpen ? wbFloatInsets : undefined}
           badge={
             chatUnread > 0 || raisedHands.length > 0 ? (
               <span className="inline-flex items-center gap-1">

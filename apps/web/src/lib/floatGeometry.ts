@@ -322,3 +322,64 @@ export function whiteboardShareDockPos(
   );
   return { x: placed.x, y: placed.y };
 }
+
+/** A remembered spot is only reused when the pane still fits there whole (Nov 27). */
+export function fitsAt(pos: FloatPos, size: FloatSize, viewport: FloatSize, insets: Partial<FloatInsets> = {}): boolean {
+  const c = clampFloat(pos, size, viewport, insets);
+  return Math.abs(c.x - pos.x) <= 1 && Math.abs(c.y - pos.y) <= 1;
+}
+
+function overlapArea(a: FloatRect, b: FloatRect): number {
+  const w = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+  const h = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+  return w > 0 && h > 0 ? w * h : 0;
+}
+
+/**
+ * Where to open a float so it does not land on another open one (Nov 27: on a
+ * whiteboard the roster, chat and video panel all opened stacked in one
+ * corner). Tries the wanted spot, the top and bottom right corners and a
+ * cascade; picks the first that covers nothing, else any free spot in the
+ * area (closest to the wanted one, so the left edge with the whiteboard's
+ * tool menus is used last), else the least covered. Always inside the area.
+ */
+export function findFreeSpot(
+  want: FloatPos,
+  size: FloatSize,
+  viewport: FloatSize,
+  others: FloatRect[],
+  insets: Partial<FloatInsets> = {}
+): FloatPos {
+  const clamp = (p: FloatPos) => clampFloat(p, size, viewport, insets);
+  const t = (insets.top ?? 0) + FLOAT_MARGIN;
+  const l = (insets.left ?? 0) + FLOAT_MARGIN;
+  const r = viewport.w - (insets.right ?? 0) - FLOAT_MARGIN - size.w;
+  const b = viewport.h - (insets.bottom ?? 0) - FLOAT_MARGIN - size.h;
+  // Right side first: the left edge holds the whiteboard's tool menus. A
+  // free spot elsewhere is found by the scan below, closest to `want`.
+  const candidates: FloatPos[] = [want, { x: r, y: t }, { x: r, y: b }];
+  for (let i = 1; i <= 6; i++) candidates.push({ x: r - i * 36, y: t + i * 36 });
+  const area = Math.max(1, size.w * size.h);
+  const coverAt = (c: FloatPos) => others.reduce((sum, o) => sum + overlapArea({ x: c.x, y: c.y, w: size.w, h: size.h }, o), 0) / area;
+  let best: { pos: FloatPos; cover: number } | null = null;
+  for (const c of candidates.map(clamp)) {
+    const cover = coverAt(c);
+    if (cover === 0) return c;
+    if (!best || cover < best.cover) best = { pos: c, cover };
+  }
+  // No usual spot is free: scan the area for one that is (closest to the
+  // wanted spot), else keep the least covered one.
+  const step = 16;
+  const start = clamp(want);
+  let free: { pos: FloatPos; d: number } | null = null;
+  for (let y = t; y <= Math.max(t, b); y += step) {
+    for (let x = l; x <= Math.max(l, r); x += step) {
+      const c = clamp({ x, y });
+      if (coverAt(c) > 0) continue;
+      const d = Math.hypot(c.x - start.x, c.y - start.y);
+      if (!free || d < free.d) free = { pos: c, d };
+    }
+  }
+  if (free) return free.pos;
+  return best!.pos;
+}

@@ -13,10 +13,13 @@ import {
 import { cn } from '@/lib/cn';
 import {
   clampFloat,
+  findFreeSpot,
+  fitsAt,
   isDrag,
   parseStoredPos,
   type FloatInsets,
   type FloatPos,
+  type FloatRect,
 } from '@/lib/floatGeometry';
 
 export type { FloatPos } from '@/lib/floatGeometry';
@@ -57,6 +60,35 @@ export const FLOAT_BOUNDS_EVENT = 'classroom:float-bounds';
 export function notifyFloatBounds() {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new Event(FLOAT_BOUNDS_EVENT));
+}
+
+/**
+ * Stacking order of the open floats in this page (Nov 27): the one opened or
+ * touched last is on top, so a newly opened roster never hides under the
+ * chat. z-index 46… stays below the whiteboard meeting bar (110) and toasts.
+ */
+const FLOAT_Z_BASE = 46;
+const floatStack: HTMLElement[] = [];
+function raiseFloat(el: HTMLElement) {
+  const i = floatStack.indexOf(el);
+  if (i >= 0) floatStack.splice(i, 1);
+  floatStack.push(el);
+  for (let k = floatStack.length - 1; k >= 0; k--) {
+    if (!floatStack[k]!.isConnected) floatStack.splice(k, 1);
+  }
+  floatStack.forEach((f, k) => {
+    f.style.zIndex = String(FLOAT_Z_BASE + k);
+  });
+}
+
+/** The other open floats in this page (to open a new one in a free spot). */
+function otherFloatRects(self: HTMLElement | null): FloatRect[] {
+  if (typeof document === 'undefined') return [];
+  return [...document.querySelectorAll<HTMLElement>('[data-float-pane]')]
+    .filter((el) => el !== self)
+    .map((el) => el.getBoundingClientRect())
+    .filter((r) => r.width > 0 && r.height > 0)
+    .map((r) => ({ x: r.left, y: r.top, w: r.width, h: r.height }));
 }
 
 function viewportSize() {
@@ -154,12 +186,48 @@ export function useFloatDrag(opts: {
     setPos((prev) => (prev && prev.x === next.x && prev.y === next.y ? prev : next));
   }, [clampNow]);
 
-  // Restore (or default) before paint so the panel does not jump.
+  // Restore (or default) before paint so the panel does not jump. A stored
+  // spot from another screen size that no longer fits whole is dropped, and
+  // the pane opens where it covers no other open float (Nov 27).
   useIsoLayoutEffect(() => {
+    const el = paneRef.current;
+    const inMain = !!el && el.ownerDocument === document;
+    if (el && inMain) {
+      el.dataset.floatPane = id;
+      raiseFloat(el);
+    }
     const stored = parseStoredPos(readFloatPref(id));
-    desired.current = stored ?? defaultRef.current();
+    let want = stored ?? defaultRef.current();
+    if (el && inMain) {
+      const r = el.getBoundingClientRect();
+      const size = { w: r.width, h: r.height };
+      const base = floatInsets();
+      const extra = extraRef.current?.() ?? {};
+      const insets = {
+        top: Math.max(base.top, extra.top ?? 0),
+        right: Math.max(base.right, extra.right ?? 0),
+        bottom: Math.max(base.bottom, extra.bottom ?? 0),
+        left: Math.max(base.left, extra.left ?? 0),
+      };
+      if (size.w && size.h) {
+        if (stored && !fitsAt(stored, size, viewportSize(), insets)) want = defaultRef.current();
+        want = findFreeSpot(want, size, viewportSize(), otherFloatRects(el), insets);
+      }
+    }
+    desired.current = want;
     apply();
-  }, [id, insetKey, apply]);
+  }, [id, insetKey, apply, paneRef]);
+
+  // Touching a float brings it to the front.
+  useEffect(() => {
+    const el = paneRef.current;
+    if (!el || el.ownerDocument !== document) return;
+    const front = () => raiseFloat(el);
+    el.addEventListener('pointerdown', front, true);
+    // Closed panes drop out of the order by themselves (raiseFloat skips
+    // detached ones); a re-render must not remove this one.
+    return () => el.removeEventListener('pointerdown', front, true);
+  });
 
   useEffect(() => {
     const onChange = () => apply();
@@ -281,6 +349,8 @@ type FloatingPanelProps = {
   onClose?: () => void;
   /** Start minimized */
   defaultMinimized?: boolean;
+  /** Extra no-go margins (e.g. the whiteboard tool column on the left). */
+  extraInsets?: () => Partial<FloatInsets>;
 };
 
 /**
@@ -299,6 +369,7 @@ export function FloatingPanel({
   open = true,
   onClose,
   defaultMinimized = false,
+  extraInsets,
 }: FloatingPanelProps) {
   if (!open) return null;
   return (
@@ -313,6 +384,7 @@ export function FloatingPanel({
       className={className}
       onClose={onClose}
       defaultMinimized={defaultMinimized}
+      extraInsets={extraInsets}
     >
       {children}
     </FloatingPanelInner>
@@ -331,6 +403,7 @@ function FloatingPanelInner({
   className,
   onClose,
   defaultMinimized = false,
+  extraInsets,
 }: Omit<FloatingPanelProps, 'open'>) {
   const paneRef = useRef<HTMLDivElement | null>(null);
   const [minimized, setMinimized] = useState(() => {
@@ -340,7 +413,7 @@ function FloatingPanelInner({
     return defaultMinimized;
   });
 
-  const { pos, maxH, maxW, handleProps, reclamp } = useFloatDrag({ id: storageKey, paneRef, defaultPos });
+  const { pos, maxH, maxW, handleProps, reclamp } = useFloatDrag({ id: storageKey, paneRef, defaultPos, extraInsets, insetKey: extraInsets ? 'extra' : '' });
 
   useEffect(() => {
     writeFloatPref(`${storageKey}.min`, minimized ? '1' : '0');
