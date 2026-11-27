@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { roomFetch } from '@/lib/classroomClient';
 import { isAppleTouchDevice, computeFocusStatus, isIPhoneUA, type FocusStatus } from '@/lib/focusStatus';
+import { installTypingGuard, isEditableTarget, typingHold } from '@/lib/fullscreenTyping';
 import { permissionGrace } from '@/lib/permissions';
 
 type WebkitDoc = Document & {
@@ -14,8 +15,6 @@ type WebkitEl = HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | 
 
 export function fullscreenSupported(): boolean {
   if (typeof document === 'undefined') return false;
-  // iPad / iPhone: never (see isAppleTouchDevice): treated like no fullscreen.
-  if (typeof navigator !== 'undefined' && isAppleTouchDevice(navigator.userAgent || '', navigator.maxTouchPoints || 0)) return false;
   const d = document as WebkitDoc;
   return !!(d.fullscreenEnabled || d.webkitFullscreenEnabled);
 }
@@ -150,6 +149,9 @@ export function useStudentFocus(code: string, enabled: boolean) {
     const update = () => {
       if (isFullscreenNow()) setEverFullscreen(true);
       const next = readStatus();
+      // iPad typing (lib/fullscreenTyping): fullscreen was left on purpose so
+      // the keyboard works; not a "left fullscreen" alert.
+      if ((next === 'left' || next === 'away') && typingHold.active()) return;
 
       if (next !== 'away' && awayTimer.current) {
         window.clearTimeout(awayTimer.current);
@@ -196,6 +198,24 @@ export function useStudentFocus(code: string, enabled: boolean) {
       if (permissionGrace.isActive()) return;
       if (fullscreenSupported() && !isFullscreenNow()) void enterFullscreen().then(update);
     };
+    // iPad / iPhone: leave fullscreen before the keyboard opens; the first tap
+    // after typing (not in a text field) brings it back.
+    const appleTouch = isAppleTouchDevice(navigator.userAgent || '', navigator.maxTouchPoints || 0);
+    let typedOut = false;
+    const offTypingGuard = appleTouch
+      ? installTypingGuard(document, () => {
+          if (isFullscreenNow()) typedOut = true;
+          void exitFullscreenIfActive();
+        })
+      : () => undefined;
+    const offTyping = typingHold.subscribe(update);
+    const onTapAfterTyping = (ev: Event) => {
+      if (!typedOut || typingHold.active() || isEditableTarget(ev.target)) return;
+      if ((ev.target as Element | null)?.closest?.('[data-no-auto-fullscreen]')) return;
+      typedOut = false;
+      if (fullscreenSupported() && !isFullscreenNow()) void enterFullscreen().then(update);
+    };
+    document.addEventListener('pointerdown', onTapAfterTyping);
     const offGrace = permissionGrace.subscribe(() => {
       if (permissionGrace.isActive()) scheduleGraceRecheck();
       else update();
@@ -208,6 +228,9 @@ export function useStudentFocus(code: string, enabled: boolean) {
     document.addEventListener('keydown', onGesture, { once: true });
     return () => {
       offGrace();
+      offTypingGuard();
+      offTyping();
+      document.removeEventListener('pointerdown', onTapAfterTyping);
       clearTimers();
       document.removeEventListener('fullscreenchange', update);
       document.removeEventListener('webkitfullscreenchange', update);

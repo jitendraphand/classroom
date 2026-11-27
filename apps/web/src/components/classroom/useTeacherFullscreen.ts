@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { isIPhoneUA } from '@/lib/focusStatus';
+import { isAppleTouchDevice, isIPhoneUA } from '@/lib/focusStatus';
+import { installTypingGuard, isEditableTarget, typingHold } from '@/lib/fullscreenTyping';
 import { permissionGrace } from '@/lib/permissions';
 import {
   isTeacherFullscreenExempt,
@@ -51,6 +52,8 @@ export function useTeacherFullscreen(opts: { enabled: boolean; sharing: boolean 
   const [isFullscreen, setIsFullscreen] = useState(isFullscreenNow);
   const [everFullscreen, setEverFullscreen] = useState(isFullscreenNow);
   const [permGrace, setPermGrace] = useState(() => permissionGrace.isActive());
+  /** iPad: a text field is in use, so fullscreen is off on purpose (lib/fullscreenTyping). */
+  const [typing, setTyping] = useState(() => typingHold.active());
   const [coverDismissed, setCoverDismissed] = useState(false);
   const [shareReminderDismissed, setShareReminderDismissed] = useState(false);
   const [iphoneHintDismissed, setIphoneHintDismissed] = useState(false);
@@ -104,12 +107,29 @@ export function useTeacherFullscreen(opts: { enabled: boolean; sharing: boolean 
       });
     }
 
+    // iPad / iPhone: leave fullscreen before the keyboard opens (Safari
+    // refuses typing in it); the first tap after typing brings it back.
+    const appleTouch = isAppleTouchDevice(navigator.userAgent || '', navigator.maxTouchPoints || 0);
+    let typedOut = false;
+    const offTypingGuard = appleTouch
+      ? installTypingGuard(document, () => {
+          if (isFullscreenNow()) typedOut = true;
+          // After typing: the small "return to full screen" bar, never the blocking cover.
+          setCoverDismissed(true);
+          void exitFullscreenIfActive();
+        })
+      : () => undefined;
+    const offTyping = typingHold.subscribe(() => setTyping(typingHold.active()));
+
     const onGesture = (ev: Event) => {
-      if (sharing || permissionGrace.isActive()) return;
+      if (sharing || permissionGrace.isActive() || typingHold.active()) return;
       const target = ev.target as Element | null;
       // Never consume the click gesture that getDisplayMedia / permissions / End / Leave need.
       if (target?.closest?.('[data-no-auto-fullscreen]')) return;
-      if (!isFullscreenNow() && !everFullscreen) {
+      // A tap into a text field on an iPad must not re-enter fullscreen.
+      if (appleTouch && isEditableTarget(target)) return;
+      if (!isFullscreenNow() && (!everFullscreen || typedOut)) {
+        typedOut = false;
         void enterFullscreen().then((ok) => {
           if (ok) {
             setEverFullscreen(true);
@@ -130,6 +150,8 @@ export function useTeacherFullscreen(opts: { enabled: boolean; sharing: boolean 
 
     return () => {
       offGrace();
+      offTypingGuard();
+      offTyping();
       if (graceTimer.current) window.clearTimeout(graceTimer.current);
       document.removeEventListener('fullscreenchange', sync);
       document.removeEventListener('webkitfullscreenchange', sync);
@@ -148,7 +170,7 @@ export function useTeacherFullscreen(opts: { enabled: boolean; sharing: boolean 
         everFullscreen,
         iphone,
         sharing,
-        permissionGrace: permGrace,
+        permissionGrace: permGrace || typing,
         coverDismissed,
         shareReminderDismissed,
         iphoneHintDismissed,

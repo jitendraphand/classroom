@@ -1095,3 +1095,18 @@ html.has-draw-toolbar .control-status-pill {
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
 }
+
+/* iPad / iPhone fullscreen (Nov 27): a swipe that reaches the end of a list
+   (roster, chat, panels) must not carry on to the page, where iPadOS Safari
+   treats it as "leave fullscreen" (and other browsers bounce the page). */
+html,
+body {
+  overscroll-behavior: none;
+}
+.overflow-y-auto,
+.overflow-auto,
+.overflow-scroll,
+.overflow-y-scroll,
+.tsh-scroll {
+  overscroll-behavior: contain;
+}
